@@ -171,6 +171,11 @@ function normalizeShot(shot: Shot): Shot {
     productionShotId: normalizeProductionShotId(shot.productionShotId),
     cameraKeyframes: (shot.cameraKeyframes ?? []).map((keyframe) => ({
       ...keyframe,
+      easing: keyframe.easing === 'easeIn'
+        || keyframe.easing === 'easeOut'
+        || keyframe.easing === 'easeInOut'
+        ? keyframe.easing
+        : 'linear',
       objectOverrides: normalizeShotObjectOverrides(keyframe.objectOverrides),
     })),
     objectOverrides: normalizeShotObjectOverrides(shot.objectOverrides),

@@ -18,7 +18,16 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { CameraData, PeopleExportMode, SceneObject, Shot, ShotStatus, Transform, Vec3 } from '../../domain/types';
+import {
+  CameraData,
+  CameraKeyframeEasing,
+  PeopleExportMode,
+  SceneObject,
+  Shot,
+  ShotStatus,
+  Transform,
+  Vec3,
+} from '../../domain/types';
 import {
   DEFAULT_CAMERA_LENS_MM,
   DEFAULT_CAMERA_HEIGHT_METERS,
@@ -34,12 +43,17 @@ import {
   DEFAULT_CAMERA_MOVE_DURATION_SECONDS,
   MAX_CAMERA_MOVE_DURATION_SECONDS,
   MIN_CAMERA_MOVE_DURATION_SECONDS,
+  CAMERA_KEYFRAME_EASING_OPTIONS,
   CameraMoveKeyframeSlot,
   getCameraMoveDurationSeconds,
   getSortedCameraKeyframes,
   hasRenderableCameraMove,
+  insertIntermediateCameraKeyframe,
+  removeIntermediateCameraKeyframe,
   setTwoPointCameraKeyframe,
+  updateCameraKeyframeEasing,
   updateCameraMoveDuration,
+  updateIntermediateCameraKeyframeTime,
 } from '../../engine/cameraKeyframes';
 import {
   getCameraMoveDownloadName,
@@ -264,6 +278,10 @@ export function ShotsWorkspace() {
     ? videoDurationSeconds
     : storedCameraMoveDurationSeconds;
   const cameraMoveReady = hasRenderableCameraMove(cameraMoveKeyframes);
+  const intermediateCameraMoveKeyframes = cameraMoveReady
+    ? cameraMoveKeyframes.slice(1, -1)
+    : [];
+  const cameraMoveEasing = cameraMoveKeyframes[0]?.easing ?? 'linear';
   const cameraMoveAsset = selectedShot?.assets.cameraMoveVideoAssetId
     ? project.assets.assets[selectedShot.assets.cameraMoveVideoAssetId]
     : undefined;
@@ -435,6 +453,41 @@ export function ShotsWorkspace() {
     // Keep main shutter phase in sync with advanced drawer Set Start / Set End.
     setVideoPhase(videoPhaseFromKeyframes(nextKeyframes));
   }, [cameraMoveDurationSeconds, getEffectiveCamera, selectedShot, updateCameraMoveKeyframes]);
+
+  const captureIntermediateCameraMoveKeyframe = useCallback(() => {
+    if (!selectedShot || !hasRenderableCameraMove(selectedShot.cameraKeyframes)) return;
+    const camera = getEffectiveCamera();
+    if (!camera) return;
+    const latest = useContinuityStore.getState().project;
+    const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
+    updateCameraMoveKeyframes(insertIntermediateCameraKeyframe({
+      keyframes: latestShot.cameraKeyframes,
+      camera,
+      objectOverrides: snapshotStageableObjectOverrides(latest, latestShot),
+    }));
+  }, [getEffectiveCamera, selectedShot, updateCameraMoveKeyframes]);
+
+  const changeCameraMoveEasing = useCallback((easing: CameraKeyframeEasing) => {
+    if (!selectedShot) return;
+    updateCameraMoveKeyframes(updateCameraKeyframeEasing(selectedShot.cameraKeyframes, easing));
+  }, [selectedShot, updateCameraMoveKeyframes]);
+
+  const changeIntermediateCameraMoveKeyframeTime = useCallback((keyframeId: string, timeSeconds: number) => {
+    if (!selectedShot) return;
+    updateCameraMoveKeyframes(updateIntermediateCameraKeyframeTime(
+      selectedShot.cameraKeyframes,
+      keyframeId,
+      timeSeconds,
+    ));
+  }, [selectedShot, updateCameraMoveKeyframes]);
+
+  const deleteIntermediateCameraMoveKeyframe = useCallback((keyframeId: string) => {
+    if (!selectedShot) return;
+    updateCameraMoveKeyframes(removeIntermediateCameraKeyframe(
+      selectedShot.cameraKeyframes,
+      keyframeId,
+    ));
+  }, [selectedShot, updateCameraMoveKeyframes]);
 
   const changeCameraMoveDuration = useCallback((durationSeconds: number) => {
     if (!selectedShot) return;
@@ -1865,6 +1918,83 @@ export function ShotsWorkspace() {
                     Set End
                   </IconButton>
                 </div>
+                <div className="rounded-lg border border-subtle bg-panel p-3" data-camera-keyframe-editor>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-primary">In-between keyframes</p>
+                      <p className="mt-0.5 text-xs text-secondary">
+                        Fly to another pose, then capture it between Start and End.
+                      </p>
+                    </div>
+                    <IconButton
+                      onClick={captureIntermediateCameraMoveKeyframe}
+                      disabled={!cameraMoveReady}
+                      aria-label="Add in-between keyframe"
+                      title={cameraMoveReady ? 'Capture current pose in the largest open time gap' : 'Set Start and End first'}
+                      data-camera-keyframe-add
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add
+                    </IconButton>
+                  </div>
+                  {!cameraMoveReady && (
+                    <p className="mt-2 text-xs text-muted">Set Start and End to add points between them.</p>
+                  )}
+                  {intermediateCameraMoveKeyframes.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {intermediateCameraMoveKeyframes.map((keyframe, index) => (
+                        <div
+                          key={keyframe.id}
+                          className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised px-2 py-2"
+                          data-camera-intermediate-keyframe
+                        >
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium text-primary">
+                            Point {index + 1}
+                          </span>
+                          <label className="flex items-center gap-1 text-xs text-muted">
+                            <span className="sr-only">Time for point {index + 1}</span>
+                            <TextInput
+                              type="number"
+                              min={0.01}
+                              max={Math.max(0.01, cameraMoveDurationSeconds - 0.01)}
+                              step="0.1"
+                              value={Number(keyframe.timeSeconds.toFixed(2))}
+                              onChange={(event) => changeIntermediateCameraMoveKeyframeTime(
+                                keyframe.id,
+                                Number(event.target.value),
+                              )}
+                              className="w-20 px-2 py-1.5 text-xs"
+                              aria-label={`Time for point ${index + 1}`}
+                            />
+                            s
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => deleteIntermediateCameraMoveKeyframe(keyframe.id)}
+                            className="rounded-md p-1.5 text-muted transition hover:bg-surface-hover hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-[var(--accent-glow)]"
+                            aria-label={`Delete point ${index + 1}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Field
+                  label="Motion easing"
+                  hint="Applies the same natural timing curve between every keyframe."
+                >
+                  <Select
+                    value={cameraMoveEasing}
+                    onChange={(event) => changeCameraMoveEasing(event.target.value as CameraKeyframeEasing)}
+                    data-camera-keyframe-easing
+                  >
+                    {CAMERA_KEYFRAME_EASING_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
+                </Field>
                 <Field
                   label="Duration Seconds"
                   hint="Also available as quick picks on the Video camera chrome while recording."

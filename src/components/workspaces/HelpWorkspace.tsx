@@ -238,7 +238,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
             <p className="doc-lead">Treat Shots like a live phone camera inside the graybox. The viewfinder stays live after capture so you can move directly to the next composition.</p>
             <FeatureGrid items={[
               ['Still mode', 'Fly the camera, set the FOV, and press Capture at 4K (3840×2160) by default. A persisted thumbnail is added to the library.'],
-              ['Video mode', 'Press record for the start keyframe, fly to the end, press stop, then Render MP4 for a smooth fog-free 1080p30 H.264 file (Resolve-safe). Quick Preview keeps the older real-time recorder as a fallback.'],
+              ['Video mode', 'Press record for the start keyframe, fly to the end, press stop, then Render MP4 for a smooth fog-free 1080p30 H.264 file (Resolve-safe). For a multi-point move, use Camera Settings to capture, retime, or remove in-between keyframes and choose a motion-easing curve. Quick Preview keeps the older real-time recorder as a fallback.'],
               ['Shot library', 'Open the bottom-left thumbnail to review, rename, duplicate, or delete captured shots.'],
               ['Camera settings', 'Fine-tune FOV, duration, keyframes, preview downloads, and pano matching.'],
             ]} />

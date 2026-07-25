@@ -90,6 +90,31 @@ describe('project workflow logic', () => {
     expect(parsed.shots[0].exportSettings.includeCameraMoveReferenceFrames).toBe(true);
   });
 
+  it('defaults legacy or invalid camera-keyframe easing to linear', () => {
+    const project = createDefaultProject();
+    project.shots[0].cameraKeyframes = [
+      {
+        id: 'keyframe_legacy',
+        label: 'Start',
+        timeSeconds: 0,
+        camera: project.shots[0].camera,
+      },
+      {
+        id: 'keyframe_invalid',
+        label: 'End',
+        timeSeconds: 3,
+        camera: project.shots[0].camera,
+        easing: 'spring' as never,
+      },
+    ];
+
+    const parsed = parseProject(JSON.stringify(project));
+    expect(parsed.shots[0].cameraKeyframes.map((keyframe) => keyframe.easing)).toEqual([
+      'linear',
+      'linear',
+    ]);
+  });
+
   it('normalizes legacy pano references without rotation', () => {
     const project = createDefaultProject();
     const asset = createPanoAsset({

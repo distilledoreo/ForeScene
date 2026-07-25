@@ -505,6 +505,17 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('useContinuityStore.getState().project');
   });
 
+  it('keeps intermediate video keyframes discoverable in the advanced drawer', () => {
+    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    expect(shots).toContain('data-camera-keyframe-editor');
+    expect(shots).toContain('data-camera-keyframe-add');
+    expect(shots).toContain('data-camera-intermediate-keyframe');
+    expect(shots).toContain('data-camera-keyframe-easing');
+    expect(shots).toContain('Add in-between keyframe');
+    expect(shots).toContain('updateIntermediateCameraKeyframeTime');
+    expect(shots).toContain('removeIntermediateCameraKeyframe');
+  });
+
   it('keeps export multi-select reconciled and add-camera local to export', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
     const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');

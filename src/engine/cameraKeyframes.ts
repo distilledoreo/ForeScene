@@ -1,4 +1,9 @@
-import { CameraData, CameraKeyframe, ShotObjectOverrides } from '../domain/types';
+import {
+  CameraData,
+  CameraKeyframe,
+  CameraKeyframeEasing,
+  ShotObjectOverrides,
+} from '../domain/types';
 import { createCameraKeyframe } from '../domain/defaults';
 
 export const DEFAULT_CAMERA_MOVE_DURATION_SECONDS = 3;
@@ -6,6 +11,16 @@ export const MIN_CAMERA_MOVE_DURATION_SECONDS = 0.5;
 export const MAX_CAMERA_MOVE_DURATION_SECONDS = 30;
 
 export type CameraMoveKeyframeSlot = 'start' | 'end';
+
+export const CAMERA_KEYFRAME_EASING_OPTIONS: readonly {
+  value: CameraKeyframeEasing;
+  label: string;
+}[] = [
+  { value: 'linear', label: 'Linear' },
+  { value: 'easeIn', label: 'Ease in' },
+  { value: 'easeOut', label: 'Ease out' },
+  { value: 'easeInOut', label: 'Ease in & out' },
+];
 
 export interface CameraMoveReferenceFrame {
   id: 'start' | 'mid' | 'end';
@@ -49,6 +64,7 @@ export function setTwoPointCameraKeyframe(params: {
     label,
     timeSeconds,
     camera: params.camera,
+    easing: params.keyframes.find((keyframe) => keyframe.label.toLowerCase() === label.toLowerCase())?.easing,
     objectOverrides: params.objectOverrides,
   });
   const filtered = params.keyframes.filter((keyframe) => keyframe.label.toLowerCase() !== label.toLowerCase());
@@ -60,10 +76,114 @@ export function updateCameraMoveDuration(
   durationSeconds: number,
 ): CameraKeyframe[] {
   const duration = clampDuration(durationSeconds);
-  return getSortedCameraKeyframes(keyframes.map((keyframe) => {
-    if (keyframe.label.toLowerCase() !== 'end') return keyframe;
-    return { ...keyframe, timeSeconds: duration };
+  const sorted = getSortedCameraKeyframes(keyframes);
+  if (sorted.length < 2) return sorted;
+  const firstTime = sorted[0].timeSeconds;
+  const oldDuration = Math.max(
+    sorted[sorted.length - 1].timeSeconds - firstTime,
+    Number.EPSILON,
+  );
+  return sorted.map((keyframe, index) => ({
+    ...keyframe,
+    timeSeconds: index === sorted.length - 1
+      ? duration
+      : ((keyframe.timeSeconds - firstTime) / oldDuration) * duration,
   }));
+}
+
+export function insertIntermediateCameraKeyframe(params: {
+  keyframes: readonly CameraKeyframe[];
+  camera: CameraData;
+  objectOverrides?: ShotObjectOverrides;
+}): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(params.keyframes);
+  if (!hasRenderableCameraMove(sorted)) return sorted;
+
+  let gapStartIndex = 0;
+  let largestGap = -1;
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    const gap = sorted[index + 1].timeSeconds - sorted[index].timeSeconds;
+    if (gap > largestGap) {
+      largestGap = gap;
+      gapStartIndex = index;
+    }
+  }
+
+  const usedNumbers = new Set(
+    sorted
+      .map((keyframe) => /^Keyframe (\d+)$/i.exec(keyframe.label)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map(Number),
+  );
+  let labelNumber = 1;
+  while (usedNumbers.has(labelNumber)) labelNumber += 1;
+
+  const before = sorted[gapStartIndex];
+  const after = sorted[gapStartIndex + 1];
+  const inserted = createCameraKeyframe({
+    label: `Keyframe ${labelNumber}`,
+    timeSeconds: before.timeSeconds + ((after.timeSeconds - before.timeSeconds) / 2),
+    camera: params.camera,
+    easing: before.easing ?? 'linear',
+    objectOverrides: params.objectOverrides,
+  });
+  return getSortedCameraKeyframes([...sorted, inserted]);
+}
+
+export function updateIntermediateCameraKeyframeTime(
+  keyframes: readonly CameraKeyframe[],
+  keyframeId: string,
+  timeSeconds: number,
+): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  if (sorted.length < 3 || !Number.isFinite(timeSeconds)) return sorted;
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  if (keyframeId === first.id || keyframeId === last.id) return sorted;
+  const margin = Math.min(0.01, (last.timeSeconds - first.timeSeconds) / 4);
+  const clamped = Math.max(first.timeSeconds + margin, Math.min(last.timeSeconds - margin, timeSeconds));
+  return getSortedCameraKeyframes(sorted.map((keyframe) => (
+    keyframe.id === keyframeId ? { ...keyframe, timeSeconds: clamped } : keyframe
+  )));
+}
+
+export function removeIntermediateCameraKeyframe(
+  keyframes: readonly CameraKeyframe[],
+  keyframeId: string,
+): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  if (sorted.length <= 2) return sorted;
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  if (keyframeId === first.id || keyframeId === last.id) return sorted;
+  return sorted.filter((keyframe) => keyframe.id !== keyframeId);
+}
+
+export function updateCameraKeyframeEasing(
+  keyframes: readonly CameraKeyframe[],
+  easing: CameraKeyframeEasing,
+): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  return sorted.map((keyframe, index) => (
+    index < sorted.length - 1 ? { ...keyframe, easing } : keyframe
+  ));
+}
+
+export function applyCameraKeyframeEasing(
+  easing: CameraKeyframeEasing | undefined,
+  progress: number,
+): number {
+  const t = Math.max(0, Math.min(1, progress));
+  switch (easing) {
+    case 'easeIn':
+      return t * t;
+    case 'easeOut':
+      return 1 - ((1 - t) * (1 - t));
+    case 'easeInOut':
+      return t * t * (3 - (2 * t));
+    default:
+      return t;
+  }
 }
 
 export function getCameraMoveReferenceFrames(
@@ -116,7 +236,10 @@ export function interpolateCameraKeyframes(
   const start = sorted[Math.max(0, nextIndex - 1)];
   const end = sorted[nextIndex];
   const span = Math.max(end.timeSeconds - start.timeSeconds, Number.EPSILON);
-  const t = (timeSeconds - start.timeSeconds) / span;
+  const t = applyCameraKeyframeEasing(
+    start.easing,
+    (timeSeconds - start.timeSeconds) / span,
+  );
 
   return {
     position: lerpVec3(start.camera.position, end.camera.position, t),

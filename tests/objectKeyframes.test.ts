@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
-import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
+import {
+  setTwoPointCameraKeyframe,
+  updateCameraKeyframeEasing,
+} from '../src/engine/cameraKeyframes';
 import {
   cameraKeyframesHaveObjectAnimation,
   interpolateObjectOverrides,
@@ -197,5 +200,10 @@ describe('object keyframes', () => {
 
     const early = interpolateObjectOverrides(keyframes, 0.4, {}, project.scene.objects);
     expect(early[prop.id]?.visible).toBe(true);
+
+    const eased = updateCameraKeyframeEasing(keyframes, 'easeIn');
+    const easedMid = interpolateObjectOverrides(eased, 1, {}, project.scene.objects);
+    expect(easedMid[prop.id]?.transform?.position[0]).toBeCloseTo(1);
+    expect(easedMid[prop.id]?.transform?.rotation[1]).toBeCloseTo(22.5);
   });
 });

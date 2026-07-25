@@ -147,11 +147,15 @@ export interface CameraData {
   far: number;
 }
 
+export type CameraKeyframeEasing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+
 export interface CameraKeyframe {
   id: string;
   label: string;
   timeSeconds: number;
   camera: CameraData;
+  /** Easing applied from this keyframe to the next one. */
+  easing?: CameraKeyframeEasing;
   /**
    * Optional staged-object snapshot captured with this keyframe.
    * Used to animate props/people between start and end during camera-move video export.

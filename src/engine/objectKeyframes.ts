@@ -12,7 +12,7 @@ import {
   cloneTransform,
   resolveSceneObjectsForShot,
 } from './shotSceneState';
-import { getSortedCameraKeyframes } from './cameraKeyframes';
+import { applyCameraKeyframeEasing, getSortedCameraKeyframes } from './cameraKeyframes';
 
 export function cloneShotObjectOverrides(
   overrides: ShotObjectOverrides | undefined,
@@ -93,7 +93,10 @@ export function interpolateObjectOverrides(
   const start = sorted[Math.max(0, nextIndex - 1)];
   const end = sorted[nextIndex];
   const span = Math.max(end.timeSeconds - start.timeSeconds, Number.EPSILON);
-  const t = (timeSeconds - start.timeSeconds) / span;
+  const t = applyCameraKeyframeEasing(
+    start.easing,
+    (timeSeconds - start.timeSeconds) / span,
+  );
 
   const startOverrides = resolveKeyframeOverrides(start, fallback);
   const endOverrides = resolveKeyframeOverrides(end, fallback);
