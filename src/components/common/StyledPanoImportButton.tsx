@@ -2,12 +2,12 @@ import React, { useRef, useState } from 'react';
 import { ImagePlus, LoaderCircle } from 'lucide-react';
 import { STYLED_PANO } from '../../domain/copy';
 import { analyzeEquirectImage, EQUIRECT_ASPECT, isAspectRatio, preparePanoImport } from '../../engine/panoImage';
-import { readFileAsDataUrl } from '../../engine/projectIO';
+import { readFileAsDataUrl } from '../../engine/fileTransfers';
 import {
   resolveStyledImportMode,
   styledImportActionHint,
   styledImportActionLabel,
-} from '../../engine/multiOriginProjection';
+} from '../../engine/panoProjectionCore';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { IconButton } from './Field';
 

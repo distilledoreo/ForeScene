@@ -1,8 +1,8 @@
 import { objectDisplayName } from '../domain/defaults';
 import { AssetRegistry, ProjectAsset, SceneObject, SceneObjectType, Vec3 } from '../domain/types';
 import { createId } from '../utils/ids';
-import { snapBuildPoint } from './sandbox';
-import { MODEL_ASSET_URI_PREFIX, PANOREF_MESH_MIME } from './importedMesh';
+import { snapBuildPoint } from './sandboxCore';
+import { MODEL_ASSET_URI_PREFIX, PANOREF_MESH_MIME } from './importedMeshConstants';
 
 export const BUILD_CLIPBOARD_KIND = 'panoref/build-objects';
 export const BUILD_CLIPBOARD_VERSION = 2;

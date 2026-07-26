@@ -19,7 +19,7 @@ import {
   type ShotStillViewSelection,
 } from '../../domain/shotStillViews';
 import { LocationProject, Shot } from '../../domain/types';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 
 export interface ShotMediaModalProps {
   open: boolean;

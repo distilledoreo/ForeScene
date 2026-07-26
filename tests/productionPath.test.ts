@@ -20,6 +20,8 @@ describe('workflow guidance UI', () => {
     expect(app).toContain('data-project-import-input');
     expect(app).toContain('data-project-export-button');
     expect(app).toContain('data-project-name-input');
+    expect(app).toContain('const saveProject');
+    expect(app).toContain('loadProjectIo');
     expect(app).toContain('downloadProject(project)');
     expect(app).toContain('accept=".json,.zip,.panoref-project,application/json,application/zip"');
     expect(app).toContain('Project opened:');
@@ -30,7 +32,7 @@ describe('workflow guidance UI', () => {
     expect(app).toContain('setProjectMenuOpen(false)');
     expect(app).toContain("event.key === 'Escape'");
     expect(app).toMatch(/label="Open Project"[\s\S]*openProjectPicker\(\)/);
-    expect(app).toMatch(/label="Save Project"[\s\S]*downloadProject\(project\)/);
+    expect(app).toMatch(/label="Save Project"[\s\S]*saveProject\(\)/);
   });
 
   it('uses progressive disclosure layouts with shot filmstrip and precision drawer', () => {

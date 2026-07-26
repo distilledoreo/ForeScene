@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import {
   Box,
   Circle,
@@ -43,7 +44,7 @@ import {
   originMoveWarningMessage,
   resolveStyledImportMode,
   shouldWarnOnOriginMove,
-} from '../../engine/multiOriginProjection';
+} from '../../engine/panoProjectionCore';
 import {
   CLICK_ONLY_BUILD_PRIMITIVES,
   HOTKEYED_BUILD_PRIMITIVES,
@@ -63,9 +64,8 @@ import {
   MIN_BUILD_RENDER_DISTANCE,
 } from '../../engine/viewport';
 import { downloadPanoImage } from '../../engine/panoImage';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 import { canUseProjectedAppearance } from '../../engine/projectedStyle';
-import { renderProjectedEquirectangularPano } from '../../engine/renderers';
 import {
   CHECKERBOARD_TILE_METERS,
   defaultSecondaryColor,
@@ -166,7 +166,46 @@ export function BuildWorkspace() {
     buildHistoryPast,
     buildHistoryFuture,
     pendingSecondCapturePlan,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    selectedObjectIds: state.selectedObjectIds,
+    buildClipboard: state.buildClipboard,
+    buildMode: state.buildMode,
+    activePrimitive: state.activePrimitive,
+    gridSnap: state.gridSnap,
+    setBuildMode: state.setBuildMode,
+    setActivePrimitive: state.setActivePrimitive,
+    setGridSnap: state.setGridSnap,
+    placeObject: state.placeObject,
+    selectObject: state.selectObject,
+    selectObjectRange: state.selectObjectRange,
+    selectAllObjects: state.selectAllObjects,
+    clearObjectSelection: state.clearObjectSelection,
+    setBuildClipboard: state.setBuildClipboard,
+    updateObject: state.updateObject,
+    moveObjectToGroundPoint: state.moveObjectToGroundPoint,
+    duplicateSelectedObjects: state.duplicateSelectedObjects,
+    pasteBuildObjects: state.pasteBuildObjects,
+    removeSelectedObjects: state.removeSelectedObjects,
+    nudgeSelectedObjects: state.nudgeSelectedObjects,
+    translateSelectedObjectsBy: state.translateSelectedObjectsBy,
+    rotateSelectedObjectsBy: state.rotateSelectedObjectsBy,
+    scaleSelectedObjectsBy: state.scaleSelectedObjectsBy,
+    toggleSelectedVisibility: state.toggleSelectedVisibility,
+    toggleSelectedLocked: state.toggleSelectedLocked,
+    showAllObjects: state.showAllObjects,
+    setPanoOrigin: state.setPanoOrigin,
+    setPanoRotation: state.setPanoRotation,
+    renderGrayboxPano: state.renderGrayboxPano,
+    isRenderingGraybox: state.isRenderingGraybox,
+    beginBuildHistoryBatch: state.beginBuildHistoryBatch,
+    endBuildHistoryBatch: state.endBuildHistoryBatch,
+    undoBuild: state.undoBuild,
+    redoBuild: state.redoBuild,
+    buildHistoryPast: state.buildHistoryPast,
+    buildHistoryFuture: state.buildHistoryFuture,
+    pendingSecondCapturePlan: state.pendingSecondCapturePlan,
+  })));
   const canUndo = buildHistoryPast.length > 0;
   const canRedo = buildHistoryFuture.length > 0;
 
@@ -205,6 +244,7 @@ export function BuildWorkspace() {
         await new Promise<void>((resolve) => {
           window.requestAnimationFrame(() => resolve());
         });
+        const { renderProjectedEquirectangularPano } = await import('../../engine/renderers');
         const render = await renderProjectedEquirectangularPano(project, undefined, undefined, theme);
         await downloadPanoImage(
           render.dataUrl,

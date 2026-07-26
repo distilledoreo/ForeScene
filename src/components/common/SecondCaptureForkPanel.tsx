@@ -2,12 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Download, LoaderCircle, MapPin, Sparkles, Wrench } from 'lucide-react';
 import { useThemeStore } from '../../state/useThemeStore';
 import { useContinuityStore } from '../../state/useContinuityStore';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 import { downloadPanoImage } from '../../engine/panoImage';
 import {
   createPendingSecondCapturePlan,
   primaryStyledPano,
-} from '../../engine/multiOriginProjection';
+} from '../../engine/panoProjectionCore';
 import {
   estimateRemainingSeconds,
   formatDurationSeconds,

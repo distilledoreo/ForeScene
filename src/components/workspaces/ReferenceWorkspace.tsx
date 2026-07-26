@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import { Check, FileDown, Hand, Settings, Sparkles, Star, Trash2 } from 'lucide-react';
 import { STYLED_PANO } from '../../domain/copy';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { preparePanoImport, downloadPanoImage } from '../../engine/panoImage';
-import { downloadDataUrl, readFileAsDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl, readFileAsDataUrl } from '../../engine/fileTransfers';
 import { getLatestGrayboxPano, getPanoAsset, listGrayboxPanos, resolveCompareGraybox } from '../../domain/selectors';
 import { ReferenceAlignmentPanel } from '../common/ReferenceAlignmentPanel';
 import { ProjectedStylePanel } from '../common/ProjectedStylePanel';
@@ -20,8 +21,8 @@ import {
   countStyledPanoramas,
   resolveStyledImportMode,
   styledImportActionHint,
-} from '../../engine/multiOriginProjection';
-import { isEligibleProjectedStylePano } from '../../engine/projectedStyle';
+} from '../../engine/panoProjectionCore';
+import { isEligibleProjectedStylePano } from '../../engine/panoProjectionCore';
 import {
   hasReferenceCandidate,
   hasStyledCanonicalPano,
@@ -55,7 +56,25 @@ export function ReferenceWorkspace() {
     requestAlignmentRetryModal,
     setWorkspace,
     setPendingSecondCapturePlan,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    activePanoId: state.activePanoId,
+    panoView: state.panoView,
+    pendingSecondCapturePlan: state.pendingSecondCapturePlan,
+    setActivePano: state.setActivePano,
+    setPanoView: state.setPanoView,
+    updatePanoReference: state.updatePanoReference,
+    updateProjectSettings: state.updateProjectSettings,
+    setPanoOrigin: state.setPanoOrigin,
+    importStyledPano: state.importStyledPano,
+    removePanoReference: state.removePanoReference,
+    approveGrayboxForReference: state.approveGrayboxForReference,
+    acceptReferenceAlignment: state.acceptReferenceAlignment,
+    requestAlignmentIntro: state.requestAlignmentIntro,
+    requestAlignmentRetryModal: state.requestAlignmentRetryModal,
+    setWorkspace: state.setWorkspace,
+    setPendingSecondCapturePlan: state.setPendingSecondCapturePlan,
+  })));
   const activePano = project.panoRefs.find((pano) => pano.id === activePanoId) ?? project.panoRefs.find((pano) => pano.isCanonical);
   const activeAsset = activePano ? project.assets.assets[activePano.imageAssetId] : undefined;
   const compareGraybox = resolveCompareGraybox(project, activePano);

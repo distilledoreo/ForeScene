@@ -1,4 +1,4 @@
-import { Euler, LocationProject, PanoReference, SceneObject, Shot, Transform, Vec3 } from '../domain/types';
+import { Euler, LocationProject, PanoReference, ProjectAsset, SceneObject, Shot, Transform, Vec3 } from '../domain/types';
 import { normalizeProductionShotId } from '../domain/shotIdentity';
 import {
   DEFAULT_CAMERA_HEIGHT_METERS,
@@ -6,16 +6,87 @@ import {
   normalizeProjectWorkflow,
 } from '../domain/defaults';
 import JSZip from 'jszip';
-import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
+import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
+import { dataUrlToBlob, readFileAsText } from './fileTransfers';
 import { getReferencedProjectAssetIds, pruneUnreferencedProjectAssets } from './projectAssets';
 import { deleteModelAsset, getModelAsset, putModelAssets } from './modelAssetStore';
+import {
+  PROJECT_ASSET_URI_PREFIX,
+  getProjectAssetBlob,
+  putProjectAssetBlobs,
+  registerProjectAssetBlob,
+  resolveProjectAssetUri,
+} from './projectAssetStore';
 
 const PROJECT_MANIFEST = 'project.json';
 const DEFAULT_SCENE_PANO_ORIGIN: Vec3 = [0, DEFAULT_CAMERA_HEIGHT_METERS, 0];
 const DEFAULT_SCENE_PANO_ROTATION: Euler = [0, 0, 0];
 
 export function serializeProject(project: LocationProject): string {
-  return JSON.stringify(pruneUnreferencedProjectAssets(project), null, 2);
+  return JSON.stringify(createPortableProject(project), null, 2);
+}
+
+function createPortableProject(project: LocationProject): LocationProject {
+  const portable = structuredClone(pruneUnreferencedProjectAssets(project));
+  for (const asset of Object.values(portable.assets.assets)) {
+    if (asset.storageKey) asset.uri = `${PROJECT_ASSET_URI_PREFIX}${asset.storageKey}`;
+  }
+  return portable;
+}
+
+function storageKeyForAsset(project: LocationProject, asset: ProjectAsset): string {
+  return asset.storageKey ?? `project/${project.id}/asset/${asset.id}`;
+}
+
+function isRasterOrVideoAsset(asset: ProjectAsset): boolean {
+  return asset.type === 'image' || asset.type === 'video';
+}
+
+function portableStorageKey(asset: ProjectAsset): string | undefined {
+  if (asset.storageKey) return asset.storageKey;
+  return asset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)
+    ? asset.uri.slice(PROJECT_ASSET_URI_PREFIX.length)
+    : undefined;
+}
+
+/** Convert older in-manifest base64 raster/video assets into package entries. */
+function migratePortableInlineProjectAssets(project: LocationProject): Map<string, Blob> {
+  const migrated = new Map<string, Blob>();
+  for (const asset of Object.values(project.assets.assets)) {
+    if (!isRasterOrVideoAsset(asset) || !asset.uri.startsWith('data:')) continue;
+    const storageKey = storageKeyForAsset(project, asset);
+    const blob = dataUrlToBlob(asset.uri);
+    migrated.set(storageKey, blob);
+    registerProjectAssetBlob(storageKey, blob);
+    asset.storageKey = storageKey;
+    asset.uri = `${PROJECT_ASSET_URI_PREFIX}${storageKey}`;
+  }
+  return migrated;
+}
+
+async function hydrateProjectAssetUris(project: LocationProject): Promise<LocationProject> {
+  const writes: Array<{ key: string; blob: Blob }> = [];
+  for (const asset of Object.values(project.assets.assets)) {
+    if (!isRasterOrVideoAsset(asset)) continue;
+    if (asset.uri.startsWith('data:')) {
+      const storageKey = storageKeyForAsset(project, asset);
+      writes.push({ key: storageKey, blob: dataUrlToBlob(asset.uri) });
+      asset.storageKey = storageKey;
+      asset.uri = `${PROJECT_ASSET_URI_PREFIX}${storageKey}`;
+      continue;
+    }
+    const storageKey = portableStorageKey(asset);
+    if (storageKey) asset.storageKey = storageKey;
+  }
+  await putProjectAssetBlobs(writes);
+
+  for (const asset of Object.values(project.assets.assets)) {
+    if (!isRasterOrVideoAsset(asset) || !asset.storageKey) continue;
+    const uri = await resolveProjectAssetUri(asset);
+    if (!uri) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+    asset.uri = uri;
+  }
+  return project;
 }
 
 export function parseProject(json: string): LocationProject {
@@ -200,7 +271,8 @@ function normalizeShot(shot: Shot): Shot {
 }
 
 export async function createProjectPackage(project: LocationProject): Promise<Blob> {
-  const portable = structuredClone(pruneUnreferencedProjectAssets(project));
+  const portable = createPortableProject(project);
+  const migratedProjectAssetBlobs = migratePortableInlineProjectAssets(portable);
   const migratedBytes = new Map<string, ArrayBuffer>();
   const legacyPrefix = 'data:application/vnd.panoref.graybox-mesh;base64,';
   for (const asset of Object.values(portable.assets.assets)) {
@@ -212,7 +284,11 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
     asset.uri = `${MODEL_ASSET_URI_PREFIX}${key}`;
   }
   const binaryAssets = Object.values(portable.assets.assets).filter((asset) => asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX));
-  if (binaryAssets.length === 0) return new Blob([serializeProject(portable)], { type: 'application/json' });
+  const storedProjectAssets = Object.values(portable.assets.assets)
+    .filter((asset) => isRasterOrVideoAsset(asset) && portableStorageKey(asset));
+  if (binaryAssets.length === 0 && storedProjectAssets.length === 0) {
+    return new Blob([serializeProject(portable)], { type: 'application/json' });
+  }
   const zip = new JSZip();
   zip.file(PROJECT_MANIFEST, serializeProject(portable));
   for (const asset of binaryAssets) {
@@ -221,11 +297,20 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
     if (!bytes) throw new Error(`Cannot save project: binary model asset ${asset.name} is missing.`);
     zip.file(`model-assets/${encodeURIComponent(key)}.bin`, bytes);
   }
+  for (const asset of storedProjectAssets) {
+    const key = portableStorageKey(asset);
+    if (!key) continue;
+    const blob = migratedProjectAssetBlobs.get(key) ?? await getProjectAssetBlob(key);
+    if (!blob) throw new Error(`Cannot save project: binary asset ${asset.name} is missing.`);
+    zip.file(`project-assets/${encodeURIComponent(key)}.bin`, await blob.arrayBuffer());
+  }
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
 }
 
 export async function readProjectFile(file: File): Promise<LocationProject> {
-  if (!file.name.toLowerCase().endsWith('.zip') && !file.name.toLowerCase().endsWith('.panoref-project')) return parseProject(await file.text());
+  if (!file.name.toLowerCase().endsWith('.zip') && !file.name.toLowerCase().endsWith('.panoref-project')) {
+    return hydrateProjectAssetUris(parseProject(await file.text()));
+  }
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const manifest = zip.file(PROJECT_MANIFEST);
   if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
@@ -241,7 +326,20 @@ export async function readProjectFile(file: File): Promise<LocationProject> {
       }),
   );
   await putModelAssets(modelWrites);
-  return project;
+  const projectAssetWrites = await Promise.all(
+    Object.values(project.assets.assets)
+      .filter((asset) => isRasterOrVideoAsset(asset) && portableStorageKey(asset))
+      .map(async (asset) => {
+        const key = portableStorageKey(asset);
+        if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+        const entry = zip.file(`project-assets/${encodeURIComponent(key)}.bin`);
+        if (!entry) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+        asset.storageKey = key;
+        return { key, blob: new Blob([await entry.async('arraybuffer')], { type: asset.mimeType }) };
+      }),
+  );
+  await putProjectAssetBlobs(projectAssetWrites);
+  return hydrateProjectAssetUris(project);
 }
 
 export async function downloadProject(project: LocationProject) {
@@ -262,71 +360,10 @@ export async function downloadProject(project: LocationProject) {
  * Trigger a browser download from a Blob. Prefer this for video / large files —
  * large `data:` URLs as `<a href>` often fail silently in Chromium.
  */
-export function downloadBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  // Delay revoke so the browser can finish starting the download.
-  window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
-}
-
-/** Convert a data URL to a Blob (supports base64 and URL-encoded payloads). */
-export function dataUrlToBlob(dataUrl: string): Blob {
-  const comma = dataUrl.indexOf(',');
-  if (comma < 0) {
-    throw new Error('Invalid data URL.');
-  }
-  const header = dataUrl.slice(0, comma);
-  const payload = dataUrl.slice(comma + 1);
-  const mimeMatch = header.match(/^data:([^;,]+)/i);
-  const mimeType = mimeMatch?.[1] ?? 'application/octet-stream';
-  const isBase64 = /;base64/i.test(header);
-  if (isBase64) {
-    const binary = atob(payload);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return new Blob([bytes], { type: mimeType });
-  }
-  return new Blob([decodeURIComponent(payload)], { type: mimeType });
-}
-
-export function downloadDataUrl(dataUrl: string, fileName: string) {
-  // Always route data URLs through a blob object URL — video MP4 data URLs are
-  // multi‑MB and routinely fail when assigned to an anchor href.
-  if (dataUrl.startsWith('data:')) {
-    downloadBlob(dataUrlToBlob(dataUrl), fileName);
-    return;
-  }
-  const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = fileName;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-export function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsText(file);
-  });
-}
+export {
+  dataUrlToBlob,
+  downloadBlob,
+  downloadDataUrl,
+  readFileAsDataUrl,
+  readFileAsText,
+} from './fileTransfers';

@@ -86,6 +86,11 @@ describe('rendered shot output', () => {
     expect(storeSource).toContain('useThemeStore.getState().theme');
     expect(storeSource).not.toContain('renderGrayboxEquirectangularPano(state.project, 2048, 1024)');
     expect(storeSource).not.toMatch(/renderGrayboxPano:[\s\S]*downloadDataUrl/);
+    expect(storeSource).toContain('storeProjectAssetBlob');
+    expect(storeSource).toContain('render.blob');
+    expect(source).toContain('const cubeFaceSize = Math.min(1024, Math.max(512, Math.round(width / 4)));');
+    expect(source).toContain('generateMipmaps: false');
+    expect(source).toContain("canvasToBlob(renderer.domElement, 'image/png')");
   });
 
   it('defaults shots, letterboxed panos, and simple viewer downloads to 4K UHD', () => {
@@ -155,10 +160,12 @@ describe('rendered shot output', () => {
   it('applies linked pano rotation to local reference exports', () => {
     const source = readFileSync(new URL('../src/engine/packageExport.ts', import.meta.url), 'utf8');
     expect(source).toContain('renderPanoPerspectiveCrop(linkedPanoAsset.uri, shot.panoCrop, linkedPano.rotation)');
-    expect(source).toContain('renderPanoCubemapFaces(cubemapSourcePano.asset.uri');
+    expect(source).toContain('renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri');
     expect(source).toContain('panoRotation: cubemapSourcePano.pano.rotation');
     expect(source).toContain('inputs/cubemap/');
-    expect(source).toContain('stitchCubemapFacesCrossAsync');
+    expect(source).toContain('onFaceRendered: async (face, rendered) =>');
+    expect(source).toContain('rendered.blob');
+    expect(source).toContain('stitchCubemapFaceBlobsCrossAsync');
     expect(source).not.toContain('stitchCubemapVisibleFacesAsync');
     expect(source).not.toContain('cubemap_visible');
   });

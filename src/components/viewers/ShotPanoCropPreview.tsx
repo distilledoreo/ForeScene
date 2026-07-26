@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Euler, PanoCropSettings } from '../../domain/types';
-import { renderPanoPerspectiveCrop } from '../../engine/renderers';
 
 const PREVIEW_MAX_WIDTH = 640;
+const PREVIEW_DEBOUNCE_MS = 140;
 
 export function ShotPanoCropPreview({
   imageUrl,
@@ -28,6 +28,7 @@ export function ShotPanoCropPreview({
   useEffect(() => {
     if (!imageUrl || !crop || disabledReason) {
       setPreviewUrl(undefined);
+      setIsRendering(false);
       return;
     }
 
@@ -39,17 +40,27 @@ export function ShotPanoCropPreview({
     };
 
     let cancelled = false;
-    setIsRendering(true);
-    void renderPanoPerspectiveCrop(imageUrl, previewCrop, panoRotation)
-      .then((result) => {
-        if (!cancelled) setPreviewUrl(result.dataUrl);
-      })
-      .finally(() => {
-        if (!cancelled) setIsRendering(false);
-      });
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      setIsRendering(true);
+      void (async () => {
+        const { renderPanoPerspectiveCrop } = await import('../../engine/renderers');
+        return renderPanoPerspectiveCrop(imageUrl, previewCrop, panoRotation);
+      })()
+        .then((result) => {
+          if (!cancelled) setPreviewUrl(result.dataUrl);
+        })
+        .catch(() => {
+          // Keep the last successful crop visible; exports still report renderer errors directly.
+        })
+        .finally(() => {
+          if (!cancelled) setIsRendering(false);
+        });
+    }, PREVIEW_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
   }, [
     imageUrl,

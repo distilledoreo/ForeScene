@@ -1,6 +1,6 @@
 import type { LocationProject, Vec3 } from '../domain/types';
 import type { SceneVisualTheme } from './sceneObjects';
-import { primaryStyledPano } from './multiOriginProjection';
+import { primaryStyledPano } from './panoProjectionCore';
 import {
   extractCoverageScene,
   runCoverageOptimization,

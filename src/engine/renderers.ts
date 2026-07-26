@@ -12,7 +12,9 @@ import {
   type CameraMoveCubemapFaceId,
 } from './cameraMoveCubemap';
 import { DEFAULT_GRAYBOX_PANO_HEIGHT, DEFAULT_GRAYBOX_PANO_WIDTH } from '../domain/defaults';
-import { ensureHumanMannequinModel } from './humanMannequinModel';
+import { ensureHumanMannequinForProject } from './humanMannequinModel';
+import { applyFlyCameraToPerspectiveCamera } from './flyCamera';
+export { applyFlyCameraToPerspectiveCamera } from './flyCamera';
 import { resolveProjectedProjectorAssets } from './multiOriginProjection';
 import {
   canUseProjectedAppearance,
@@ -36,7 +38,7 @@ import {
   type ProjectorOcclusionMap,
   type ProjectorOcclusionSet,
 } from './projectorOcclusion';
-import { degreesToRadians, flyCameraFromCamera, type FlyCameraState } from './sync';
+import { degreesToRadians, flyCameraFromCamera } from './sync';
 import { computeGrayboxPanoFarPlane } from './sceneBounds';
 import { createFinalRenderSceneOptions } from './finalRenderProfile';
 import {
@@ -51,7 +53,6 @@ import { findSceneObjectMesh } from './transformGizmo';
 import type { PeopleRenderVariant } from './peopleExport';
 import {
   clampShotNearClip,
-  DEFAULT_SHOT_NEAR_CLIP_METERS,
 } from './cameraClipping';
 import { computeCameraMoveClippingRange } from './exportClipping';
 import {
@@ -68,6 +69,12 @@ import {
 
 export interface ImageRenderResult {
   dataUrl: string;
+  width: number;
+  height: number;
+}
+
+export interface BlobImageRenderResult {
+  blob: Blob;
   width: number;
   height: number;
 }
@@ -91,6 +98,25 @@ export interface VideoRenderResult {
 export interface PanoCubemapRenderResult {
   faceSize: number;
   faces: Record<CameraMoveCubemapFaceId, ImageRenderResult>;
+}
+
+/**
+ * Binary cubemap output for export paths. Keeping the PNGs as Blobs avoids the
+ * 33% base64 expansion while the six faces are assembled into a package.
+ */
+export interface PanoCubemapBlobRenderResult {
+  faceSize: number;
+  faces: Record<CameraMoveCubemapFaceId, BlobImageRenderResult>;
+}
+
+export interface PanoCubemapRenderOptions {
+  faceSize?: number;
+  panoRotation?: Euler;
+  /** Called after each face is rendered, before the next WebGL context starts. */
+  onFaceRendered?: (
+    face: CameraMoveCubemapFaceId,
+    result: BlobImageRenderResult,
+  ) => void | Promise<void>;
 }
 
 export type CameraMoveExportPhase =
@@ -209,12 +235,17 @@ function captureEquirectangularFromOrigin(
   project: LocationProject,
   width: number,
   height: number,
-): string {
-  const cubeFaceSize = Math.min(2048, Math.max(512, Math.round(width / 2)));
+): Promise<Blob> {
+  // A 1024px cube face matches the angular sample density of a 4096px-wide
+  // equirect. The previous 2048px faces were a 4x color-target oversample.
+  const cubeFaceSize = Math.min(1024, Math.max(512, Math.round(width / 4)));
   const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(cubeFaceSize, {
     type: THREE.UnsignedByteType,
-    generateMipmaps: true,
-    minFilter: THREE.LinearMipmapLinearFilter,
+    generateMipmaps: false,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    stencilBuffer: false,
   });
   const cubeCamera = new THREE.CubeCamera(
     0.1,
@@ -270,14 +301,15 @@ function captureEquirectangularFromOrigin(
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
   panoScene.add(plane);
 
-  renderer.setSize(width, height, false);
-  renderer.render(panoScene, panoCamera);
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-
-  cubeRenderTarget.dispose();
-  material.dispose();
-  plane.geometry.dispose();
-  return dataUrl;
+  try {
+    renderer.setSize(width, height, false);
+    renderer.render(panoScene, panoCamera);
+    return canvasToBlob(renderer.domElement, 'image/png');
+  } finally {
+    cubeRenderTarget.dispose();
+    material.dispose();
+    plane.geometry.dispose();
+  }
 }
 
 export async function renderGrayboxEquirectangularPano(
@@ -285,8 +317,8 @@ export async function renderGrayboxEquirectangularPano(
   width = DEFAULT_GRAYBOX_PANO_WIDTH,
   height = DEFAULT_GRAYBOX_PANO_HEIGHT,
   theme: SceneVisualTheme = 'light',
-): Promise<ImageRenderResult> {
-  await ensureHumanMannequinModel();
+): Promise<BlobImageRenderResult> {
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const scene = buildScene(project, {
     showHelpers: false,
@@ -294,10 +326,10 @@ export async function renderGrayboxEquirectangularPano(
     theme,
     fog: false,
   });
-  const dataUrl = captureEquirectangularFromOrigin(renderer, scene, project, width, height);
+  const blob = await captureEquirectangularFromOrigin(renderer, scene, project, width, height);
   disposeScene(scene);
   disposeRenderer(renderer);
-  return { dataUrl, width, height };
+  return { blob, width, height };
 }
 
 export async function renderShotFrame(
@@ -445,7 +477,7 @@ async function renderShotCameraMoveMp4Deterministic(
     throw new Error('MP4 export was cancelled.');
   }
 
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   let projectedResources: ProjectedSceneResources | undefined;
   let scene: THREE.Scene | undefined;
@@ -600,7 +632,7 @@ async function renderShotCameraMoveMp4QuickPreview(
     message: 'Preparing scene',
   });
 
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   let projectedResources: ProjectedSceneResources | undefined;
   if (appearance === 'projected') {
@@ -777,26 +809,6 @@ async function renderShotCameraMoveMp4QuickPreview(
   };
 }
 
-export function applyFlyCameraToPerspectiveCamera(
-  camera: THREE.PerspectiveCamera,
-  fly: FlyCameraState,
-  fovDegrees: number,
-  aspect: number,
-  near = DEFAULT_SHOT_NEAR_CLIP_METERS,
-  far = 200,
-) {
-  camera.fov = fovDegrees;
-  camera.aspect = aspect;
-  camera.near = near;
-  camera.far = far;
-  camera.position.set(fly.position[0], fly.position[1], fly.position[2]);
-  camera.rotation.order = 'YXZ';
-  camera.rotation.y = THREE.MathUtils.degToRad(fly.yawDegrees);
-  camera.rotation.x = THREE.MathUtils.degToRad(fly.pitchDegrees);
-  camera.rotation.z = 0;
-  camera.updateProjectionMatrix();
-}
-
 function renderCameraMoveFrame(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
@@ -863,7 +875,7 @@ export async function renderViewportClay(
   width: number,
   height: number,
 ): Promise<ImageRenderResult> {
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const scene = buildScene(project, createFinalRenderSceneOptions());
   const clipping = computeCameraMoveClippingRange({
@@ -925,7 +937,7 @@ export async function loadProjectedSceneResources(
   const pano = assets.primary;
   const imageUrl = assets.primaryUrl;
 
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const texture = await acquireProjectedStyleTexture(imageUrl);
   if (!texture) return undefined;
 
@@ -1022,7 +1034,7 @@ export async function renderProjectedEquirectangularPano(
   height = DEFAULT_GRAYBOX_PANO_HEIGHT,
   theme: SceneVisualTheme = 'light',
 ): Promise<ImageRenderResult> {
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const resources = await loadProjectedSceneResources(renderer, project);
   if (!resources) {
@@ -1041,7 +1053,7 @@ export async function renderProjectedEquirectangularPano(
     appearance: 'projected',
     projected: resources.options,
   });
-  const dataUrl = captureEquirectangularFromOrigin(renderer, scene, project, width, height);
+  const dataUrl = await blobToDataUrl(await captureEquirectangularFromOrigin(renderer, scene, project, width, height));
   disposeScene(scene);
   resources.dispose();
   disposeRenderer(renderer);
@@ -1058,7 +1070,7 @@ export async function renderViewportProjected(
   width: number,
   height: number,
 ): Promise<ImageRenderResult> {
-  await ensureHumanMannequinModel();
+  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const resources = await loadProjectedSceneResources(renderer, project);
   if (!resources) {
@@ -1202,38 +1214,71 @@ export async function renderPanoPerspectiveCrop(
 
 export async function renderPanoCubemapFaces(
   imageUrl: string,
-  options: {
-    faceSize?: number;
-    panoRotation?: Euler;
-  } = {},
+  options: PanoCubemapRenderOptions = {},
 ): Promise<PanoCubemapRenderResult> {
+  const cubemap = await renderPanoCubemapFacesAsBlobs(imageUrl, options);
+  const faces = {} as Record<CameraMoveCubemapFaceId, ImageRenderResult>;
+
+  for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+    const rendered = cubemap.faces[face];
+    faces[face] = {
+      dataUrl: await blobToDataUrl(rendered.blob),
+      width: rendered.width,
+      height: rendered.height,
+    };
+  }
+
+  return { faceSize: cubemap.faceSize, faces };
+}
+
+/**
+ * Render faces one at a time and retain PNG Blobs for memory-sensitive export
+ * flows. The source panorama is decoded once instead of once per face.
+ */
+export async function renderPanoCubemapFacesAsBlobs(
+  imageUrl: string,
+  options: PanoCubemapRenderOptions = {},
+): Promise<PanoCubemapBlobRenderResult> {
   const faceSize = options.faceSize ?? DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE;
-  const renderedFaces = await Promise.all(
-    CAMERA_MOVE_CUBEMAP_FACES.map(async (face) => [
-      face,
-      await renderPanoCubemapFace(imageUrl, face, faceSize, options.panoRotation ?? [0, 0, 0]),
-    ] as const),
-  );
+  const sourceImage = await loadImage(imageUrl);
+  const faces = {} as Record<CameraMoveCubemapFaceId, BlobImageRenderResult>;
+
+  try {
+    for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+      const rendered = await renderPanoCubemapFaceBlob(
+        sourceImage,
+        face,
+        faceSize,
+        options.panoRotation ?? [0, 0, 0],
+      );
+      faces[face] = rendered;
+      await options.onFaceRendered?.(face, rendered);
+    }
+  } finally {
+    // Drop a potentially large data-URI reference as soon as every face has been drawn.
+    sourceImage.src = '';
+  }
 
   return {
     faceSize,
-    faces: Object.fromEntries(renderedFaces) as Record<CameraMoveCubemapFaceId, ImageRenderResult>,
+    faces,
   };
 }
 
-async function renderPanoCubemapFace(
-  imageUrl: string,
+async function renderPanoCubemapFaceBlob(
+  sourceImage: HTMLImageElement,
   face: CameraMoveCubemapFaceId,
   faceSize: number,
   panoRotation: Euler,
-): Promise<ImageRenderResult> {
+): Promise<BlobImageRenderResult> {
   const renderer = createRenderer(faceSize, faceSize);
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  const texture = await loadTexture(imageUrl);
+  const texture = new THREE.Texture(sourceImage);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
   const material = new THREE.ShaderMaterial({
     uniforms: {
       panoMap: { value: texture },
@@ -1288,15 +1333,19 @@ async function renderPanoCubemapFace(
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
   scene.add(plane);
 
-  renderer.render(scene, camera);
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-
-  plane.geometry.dispose();
-  material.dispose();
-  texture.dispose();
-  disposeRenderer(renderer);
-
-  return { dataUrl, width: faceSize, height: faceSize };
+  try {
+    renderer.render(scene, camera);
+    return {
+      blob: await canvasToBlob(renderer.domElement, 'image/png'),
+      width: faceSize,
+      height: faceSize,
+    };
+  } finally {
+    plane.geometry.dispose();
+    material.dispose();
+    texture.dispose();
+    disposeRenderer(renderer);
+  }
 }
 
 function createRenderer(width: number, height: number): THREE.WebGLRenderer {
@@ -1327,6 +1376,23 @@ function loadTexture(imageUrl: string): Promise<THREE.Texture> {
   });
 }
 
+function loadImage(imageUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to load panorama image.'));
+    image.src = imageUrl;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not encode rendered image.'));
+    }, type);
+  });
+}
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -3,6 +3,7 @@ import { createSceneObject } from '../src/domain/defaults';
 import {
   rotateSelectedObjects,
   scaleSelectedObjects,
+  selectionBounds,
   selectionPivot,
   toggleSelectedId,
   translateSelectedObjects,
@@ -39,5 +40,25 @@ describe('Build multi-selection math', () => {
     const scaled = scaleSelectedObjects([a, b], [a.id, b.id], [2, 1, 2], [0, 0, 0]);
     expect(scaled.map((object) => object.transform.position[0])).toEqual([-2, 2]);
     expect(scaled[0].dimensions[0]).toBe(a.dimensions[0] * 2);
+  });
+
+  it('keeps the store-safe pivot identical to Three.js transformed bounds', () => {
+    const a = createSceneObject('box', 1);
+    const b = createSceneObject('arch', 2);
+    a.transform.position = [-1.2, 0.4, 2.7];
+    a.transform.rotation = [27, -41, 13];
+    a.transform.scale = [1.3, 0.7, 1.8];
+    b.transform.position = [3.1, -0.6, -1.4];
+    b.transform.rotation = [-18, 63, 31];
+    b.transform.scale = [0.8, 1.6, 0.9];
+
+    const bounds = selectionBounds([a, b]);
+    const expected = [
+      (bounds.min.x + bounds.max.x) / 2,
+      (bounds.min.y + bounds.max.y) / 2,
+      (bounds.min.z + bounds.max.z) / 2,
+    ];
+    const actual = selectionPivot([a, b]);
+    actual.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 10));
   });
 });

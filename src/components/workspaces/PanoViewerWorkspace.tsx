@@ -2,8 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Download, ImagePlus, Loader2 } from 'lucide-react';
 import { Euler, PanoViewState } from '../../domain/types';
 import { preparePanoImport } from '../../engine/panoImage';
-import { downloadDataUrl, readFileAsDataUrl } from '../../engine/projectIO';
-import { renderPanoPerspectiveCrop } from '../../engine/renderers';
+import { downloadDataUrl, readFileAsDataUrl } from '../../engine/fileTransfers';
 import { PrimaryCTA } from '../common/PrimaryCTA';
 import { PanoViewer } from '../viewers/PanoViewer';
 import { FullBleedLayout } from './WorkspaceShell';
@@ -56,6 +55,7 @@ export function PanoViewerWorkspace() {
     try {
       const width = DEFAULT_DOWNLOAD_WIDTH;
       const height = DEFAULT_DOWNLOAD_HEIGHT;
+      const { renderPanoPerspectiveCrop } = await import('../../engine/renderers');
       const frame = await renderPanoPerspectiveCrop(
         imageUrl,
         {

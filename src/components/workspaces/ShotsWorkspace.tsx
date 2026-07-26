@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import {
   Check,
   ChevronLeft,
@@ -63,7 +64,7 @@ import {
   getProjectedStillDownloadName,
   getViewportStillDownloadName,
 } from '../../engine/exportNaming';
-import { downloadBlob, downloadDataUrl } from '../../engine/projectIO';
+import { downloadBlob, downloadDataUrl } from '../../engine/fileTransfers';
 import {
   canUseRenderMp4Export,
   getSupportedCameraMoveMp4MimeType,
@@ -178,7 +179,26 @@ export function ShotsWorkspace() {
     endShotCameraHistoryBatch,
     undoShotCamera,
     redoShotCamera,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    selectedShotId: state.selectedShotId,
+    addCamera: state.addCamera,
+    selectShot: state.selectShot,
+    updateShot: state.updateShot,
+    removeShot: state.removeShot,
+    toggleShotLandmark: state.toggleShotLandmark,
+    shotCameraFlying: state.shotCameraFlying,
+    setShotCameraFlying: state.setShotCameraFlying,
+    landShotFraming: state.landShotFraming,
+    attachCameraMoveVideoToShot: state.attachCameraMoveVideoToShot,
+    attachViewportRenderToShot: state.attachViewportRenderToShot,
+    setWorkspace: state.setWorkspace,
+    setActivePano: state.setActivePano,
+    beginShotCameraHistoryBatch: state.beginShotCameraHistoryBatch,
+    endShotCameraHistoryBatch: state.endShotCameraHistoryBatch,
+    undoShotCamera: state.undoShotCamera,
+    redoShotCamera: state.redoShotCamera,
+  })));
   const shotCameraHistoryRestoreGeneration = useContinuityStore(
     (state) => state.shotCameraHistoryRestoreGeneration,
   );

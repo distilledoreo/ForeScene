@@ -16,12 +16,10 @@ import {
   Upload,
 } from 'lucide-react';
 import { Workspace } from './domain/types';
-import { downloadProject, readProjectFile } from './engine/projectIO';
 import { useAppModeStore } from './state/useAppModeStore';
 import { useContinuityStore } from './state/useContinuityStore';
 import { useThemeStore } from './state/useThemeStore';
 import { ModeChooser } from './components/common/ModeChooser';
-import { WorkflowGuidance } from './components/common/WorkflowGuidance';
 import SplashScreen from './components/common/SplashScreen';
 import { TextInput } from './components/common/Field';
 
@@ -31,6 +29,14 @@ const ShotsWorkspace = lazy(() => import('./components/workspaces/ShotsWorkspace
 const ExportWorkspace = lazy(() => import('./components/workspaces/ExportWorkspace').then((m) => ({ default: m.ExportWorkspace })));
 const PanoViewerWorkspace = lazy(() => import('./components/workspaces/PanoViewerWorkspace').then((m) => ({ default: m.PanoViewerWorkspace })));
 const HelpWorkspace = lazy(() => import('./components/workspaces/HelpWorkspace').then((m) => ({ default: m.HelpWorkspace })));
+const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance').then((m) => ({ default: m.WorkflowGuidance })));
+
+let projectIoPromise: Promise<typeof import('./engine/projectIO')> | undefined;
+
+function loadProjectIo() {
+  projectIoPromise ??= import('./engine/projectIO');
+  return projectIoPromise;
+}
 
 const workspaceItems: Array<{ id: Workspace; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'build', label: 'Build', icon: Boxes },
@@ -61,16 +67,16 @@ export default function App() {
     tone: 'success' | 'error';
     message: string;
   }>();
-  const { theme, toggleTheme } = useThemeStore();
-  const { appMode, setAppMode } = useAppModeStore();
-  const {
-    project,
-    workspace,
-    setWorkspace,
-    setProject,
-    updateProjectInfo,
-    requestObjectiveModal,
-  } = useContinuityStore();
+  const theme = useThemeStore((state) => state.theme);
+  const toggleTheme = useThemeStore((state) => state.toggleTheme);
+  const appMode = useAppModeStore((state) => state.appMode);
+  const setAppMode = useAppModeStore((state) => state.setAppMode);
+  const project = useContinuityStore((state) => state.project);
+  const workspace = useContinuityStore((state) => state.workspace);
+  const setWorkspace = useContinuityStore((state) => state.setWorkspace);
+  const setProject = useContinuityStore((state) => state.setProject);
+  const updateProjectInfo = useContinuityStore((state) => state.updateProjectInfo);
+  const requestObjectiveModal = useContinuityStore((state) => state.requestObjectiveModal);
 
   const isPanoViewer = appMode === 'panoViewer';
   const isContinuityStage = appMode === 'continuity';
@@ -78,12 +84,14 @@ export default function App() {
 
   const openProjectPicker = () => {
     setProjectImportStatus(undefined);
+    void loadProjectIo();
     fileRef.current?.click();
   };
 
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
+      const { readProjectFile } = await loadProjectIo();
       const importedProject = await readProjectFile(file);
       setProject(importedProject);
       setAppMode('continuity');
@@ -101,6 +109,17 @@ export default function App() {
     } finally {
       if (fileRef.current) fileRef.current.value = '';
     }
+  };
+
+  const saveProject = () => {
+    void loadProjectIo()
+      .then(({ downloadProject }) => downloadProject(project))
+      .catch((error) => {
+        setProjectImportStatus({
+          tone: 'error',
+          message: error instanceof Error ? `Could not save project: ${error.message}` : 'Could not save project.',
+        });
+      });
   };
 
   useEffect(() => {
@@ -252,7 +271,7 @@ export default function App() {
                         icon={<FileJson className="h-4 w-4" />}
                         label="Save Project"
                         onClick={() => {
-                          downloadProject(project);
+                          saveProject();
                           setProjectMenuOpen(false);
                         }}
                       />
@@ -300,7 +319,7 @@ export default function App() {
                   </HeaderToolbarButton>
                   <span className="h-4 w-px shrink-0 self-center bg-border-subtle/70" aria-hidden />
                   <HeaderToolbarButton
-                    onClick={() => downloadProject(project)}
+                    onClick={saveProject}
                     title="Save project"
                     data-project-export-button
                   >
@@ -390,7 +409,11 @@ export default function App() {
         </div>
       )}
 
-      {isContinuityStage && !helpOpen && <WorkflowGuidance />}
+      {isContinuityStage && !helpOpen && (
+        <Suspense fallback={null}>
+          <WorkflowGuidance />
+        </Suspense>
+      )}
 
       <ModeChooser visible={showModeChooser} />
       <SplashScreen onDismissed={() => setSplashDone(true)} />

@@ -33,7 +33,7 @@ import {
   primaryStyledPano,
   resolveStyledImportMode,
   type PendingSecondCapturePlan,
-} from '../engine/multiOriginProjection';
+} from '../engine/panoProjectionCore';
 import { findGrayboxNearOrigin } from '../domain/selectors';
 import {
   getCanonicalPano,
@@ -46,6 +46,7 @@ import {
   multiplyScalar,
 } from '../engine/sync';
 import { pruneUnreferencedProjectAssets } from '../engine/projectAssets';
+import { storeProjectAssetBlob, storeProjectAssetDataUrl } from '../engine/projectAssetStore';
 import {
   BUILD_HISTORY_COALESCE_MS,
   type BuildHistoryMode,
@@ -70,7 +71,7 @@ import {
 } from '../engine/shotCameraHistory';
 
 import { useThemeStore } from './useThemeStore';
-import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../engine/sandbox';
+import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../engine/sandboxCore';
 import { normalizeWorkspace } from '../engine/workflow';
 import {
   BuildClipboardPayload,
@@ -85,7 +86,7 @@ import {
   SelectionMode,
   toggleSelectedId,
   translateSelectedObjects,
-} from '../engine/buildSelection';
+} from '../engine/buildSelectionMath';
 
 export type BuildMode = 'select' | 'place' | 'pano_origin';
 export type { BuildHistoryMode };
@@ -868,13 +869,13 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       const theme = useThemeStore.getState().theme;
       const { renderGrayboxEquirectangularPano } = await import('../engine/renderers');
       const render = await renderGrayboxEquirectangularPano(state.project, undefined, undefined, theme);
-      const asset = createPanoAsset({
+      const asset = storeProjectAssetBlob(state.project.id, createPanoAsset({
         name: 'global_graybox.png',
-        uri: render.dataUrl,
+        uri: '',
         width: render.width,
         height: render.height,
         metadata: { source: 'graybox_scene', theme },
-      });
+      }), render.blob);
       const captureOrigin = [...state.project.scene.panoOrigin] as Vec3;
       const hadOnlyGrayboxCanonical = state.project.panoRefs.every(
         (existing) => !existing.isCanonical || existing.type === 'graybox_render',
@@ -930,13 +931,13 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     }
   },
   importCanonicalPano: (params) => set((state) => {
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name,
       uri: params.dataUrl,
       width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
       height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
       metadata: { source: 'user_import' },
-    });
+    }));
     const graybox = findGrayboxNearOrigin(state.project, state.project.scene.panoOrigin);
     const pano = createPanoReference({
       name: params.name.replace(/\.[^.]+$/, '') || 'Styled Reference',
@@ -978,13 +979,13 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
             (pano) => pano.isCanonical && pano.type !== 'graybox_render',
           )
           ?? current.project.panoRefs.find((pano) => pano.type !== 'graybox_render');
-        const asset = createPanoAsset({
+        const asset = storeProjectAssetDataUrl(current.project.id, createPanoAsset({
           name: params.name,
           uri: params.dataUrl,
           width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
           height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
           metadata: { source: 'user_import' },
-        });
+        }));
         const plan = current.pendingSecondCapturePlan;
         const frozenOrigin = plan
           ? [...plan.origin] as Vec3
@@ -1278,7 +1279,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const state = get();
     const shot = state.project.shots.find((item) => item.id === shotId);
     if (!shot) throw new Error('Select a shot before exporting a camera move MP4.');
-    const asset = createVideoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createVideoAsset({
       name: params.name || `shot_${shot.shotNumber}_camera_move.mp4`,
       uri: params.dataUrl,
       mimeType: params.mimeType,
@@ -1295,7 +1296,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         ...(params.resolutionPreset ? { resolutionPreset: params.resolutionPreset } : {}),
         ...(params.validated !== undefined ? { validated: params.validated } : {}),
       },
-    });
+    }));
     set((current) => ({
       project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,
@@ -1325,7 +1326,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     if (!shot) throw new Error('Select a shot before attaching a viewport render.');
     const stillView = params.stillView ?? { appearance: 'clay' as const, people: 'with_people' as const };
     const assetKey = shotStillViewAssetKey(stillView);
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name || `shot_${shot.shotNumber}_viewport.png`,
       uri: params.dataUrl,
       width: params.width,
@@ -1336,7 +1337,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         stillAppearance: stillView.appearance,
         stillPeople: stillView.people,
       },
-    });
+    }));
     set((current) => {
       const shots = current.project.shots.map((item) => item.id === shot.id
         ? {
@@ -1366,7 +1367,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const state = get();
     const shot = state.project.shots.find((item) => item.id === shotId);
     if (!shot) throw new Error('Select a shot before importing an AI result frame.');
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name || `shot_${shot.shotNumber}_ai_result_frame.png`,
       uri: params.dataUrl,
       width: params.width ?? shot.exportSettings.width,
@@ -1375,7 +1376,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         source: 'external_ai_image_generator',
         shotId: shot.id,
       },
-    });
+    }));
     set((current) => ({
       project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,

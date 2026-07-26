@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { Euler, PanoViewState } from '../../domain/types';
 import { panoYawToThreeJsYawDegrees } from '../../engine/sync';
@@ -8,6 +8,8 @@ const THEME_COLORS = {
   light: { empty: 0xe4e7e5, background: 0xf4f6f4 },
   dark: { empty: 0x243040, background: 0x0f1419 },
 } as const;
+
+const MAX_INTERACTIVE_PIXEL_RATIO = 1.5;
 
 export function PanoViewer({
   imageUrl,
@@ -37,14 +39,23 @@ export function PanoViewer({
   const activeSphereRef = useRef<THREE.Mesh | null>(null);
   const compareSphereRef = useRef<THREE.Mesh | null>(null);
   const frameRef = useRef<number>(0);
+  const renderFrameRef = useRef<() => void>(() => {});
   const dragRef = useRef({ active: false, x: 0, y: 0 });
+
+  const requestRender = useCallback(() => {
+    if (frameRef.current) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = 0;
+      renderFrameRef.current();
+    });
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_INTERACTIVE_PIXEL_RATIO));
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(THEME_COLORS[theme].background, 1);
     renderer.autoClear = false;
@@ -72,11 +83,11 @@ export function PanoViewer({
       cameraRef.current.aspect = containerRef.current.clientWidth / containerRef.current.clientHeight;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      requestRender();
     };
     window.addEventListener('resize', onResize);
 
-    const animate = () => {
-      frameRef.current = requestAnimationFrame(animate);
+    renderFrameRef.current = () => {
       if (!cameraRef.current || !rendererRef.current || !activeSceneRef.current || !compareSceneRef.current) return;
 
       rendererRef.current.clear(true, true, true);
@@ -91,17 +102,19 @@ export function PanoViewer({
       configureCamera(cameraRef.current, viewRef.current, activeRotationRef.current);
       rendererRef.current.render(activeSceneRef.current, cameraRef.current);
     };
-    animate();
+    requestRender();
 
     return () => {
-      cancelAnimationFrame(frameRef.current);
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+      renderFrameRef.current = () => {};
       window.removeEventListener('resize', onResize);
       disposeMesh(compareSphere);
       disposeMesh(activeSphere);
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [theme]);
+  }, [requestRender, theme]);
 
   const viewRef = useRef(view);
   const activeRotationRef = useRef(panoRotation);
@@ -110,20 +123,25 @@ export function PanoViewer({
   const opacityRef = useRef(compareOpacity);
   useEffect(() => {
     viewRef.current = view;
-  }, [view]);
+    requestRender();
+  }, [requestRender, view]);
   useEffect(() => {
     activeRotationRef.current = panoRotation;
-  }, [panoRotation]);
+    requestRender();
+  }, [panoRotation, requestRender]);
   useEffect(() => {
     compareRotationRef.current = compareRotation;
-  }, [compareRotation]);
+    requestRender();
+  }, [compareRotation, requestRender]);
   useEffect(() => {
     compareImageUrlRef.current = compareImageUrl;
-  }, [compareImageUrl]);
+    requestRender();
+  }, [compareImageUrl, requestRender]);
   useEffect(() => {
     opacityRef.current = clamp01(compareOpacity);
     updateLayerOpacity(activeSphereRef.current?.material, compareImageUrl ? opacityRef.current : 1, Boolean(compareImageUrl));
-  }, [compareImageUrl, compareOpacity]);
+    requestRender();
+  }, [compareImageUrl, compareOpacity, requestRender]);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,11 +152,12 @@ export function PanoViewer({
       opacity: compareImageUrl ? opacityRef.current : 1,
       transparent: Boolean(compareImageUrl),
       isCancelled: () => cancelled,
+      onMaterialReady: requestRender,
     });
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, compareImageUrl, theme]);
+  }, [compareImageUrl, imageUrl, requestRender, theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,11 +168,12 @@ export function PanoViewer({
       opacity: 1,
       transparent: false,
       isCancelled: () => cancelled,
+      onMaterialReady: requestRender,
     });
     return () => {
       cancelled = true;
     };
-  }, [compareImageUrl, theme]);
+  }, [compareImageUrl, requestRender, theme]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -173,6 +193,7 @@ export function PanoViewer({
         yawDegrees: viewRef.current.yawDegrees - dx * factor,
         pitchDegrees: Math.max(-89, Math.min(89, viewRef.current.pitchDegrees - dy * factor)),
       });
+      requestRender();
     };
     const onPointerUp = (event: PointerEvent) => {
       dragRef.current.active = false;
@@ -181,6 +202,7 @@ export function PanoViewer({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       onViewChange({ fovDegrees: Math.max(18, Math.min(120, viewRef.current.fovDegrees + event.deltaY * 0.04)) });
+      requestRender();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -196,22 +218,26 @@ export function PanoViewer({
         case 'ArrowLeft':
           event.preventDefault();
           onViewChange({ yawDegrees: viewRef.current.yawDegrees - step });
+          requestRender();
           break;
         case 'ArrowRight':
           event.preventDefault();
           onViewChange({ yawDegrees: viewRef.current.yawDegrees + step });
+          requestRender();
           break;
         case 'ArrowUp':
           event.preventDefault();
           onViewChange({
             pitchDegrees: Math.max(-89, Math.min(89, viewRef.current.pitchDegrees + step)),
           });
+          requestRender();
           break;
         case 'ArrowDown':
           event.preventDefault();
           onViewChange({
             pitchDegrees: Math.max(-89, Math.min(89, viewRef.current.pitchDegrees - step)),
           });
+          requestRender();
           break;
         case '+':
         case '=':
@@ -219,6 +245,7 @@ export function PanoViewer({
           onViewChange({
             fovDegrees: Math.max(18, Math.min(120, viewRef.current.fovDegrees - fovStep)),
           });
+          requestRender();
           break;
         case '-':
         case '_':
@@ -226,6 +253,7 @@ export function PanoViewer({
           onViewChange({
             fovDegrees: Math.max(18, Math.min(120, viewRef.current.fovDegrees + fovStep)),
           });
+          requestRender();
           break;
         default:
           break;
@@ -244,7 +272,7 @@ export function PanoViewer({
       container.removeEventListener('wheel', onWheel);
       container.removeEventListener('keydown', onKeyDown);
     };
-  }, [onViewChange]);
+  }, [onViewChange, requestRender]);
 
   return (
     <div
@@ -286,11 +314,12 @@ function setPanoSphereMaterial(params: {
   opacity: number;
   transparent: boolean;
   isCancelled: () => boolean;
+  onMaterialReady: () => void;
 }) {
   if (!params.sphere) return;
   if (!params.imageUrl) {
     const material = new THREE.MeshBasicMaterial({ color: THEME_COLORS[params.theme].empty });
-    setSphereMaterial(params.sphere, material, params.isCancelled);
+    setSphereMaterial(params.sphere, material, params.isCancelled, params.onMaterialReady);
     return;
   }
   new THREE.TextureLoader().load(params.imageUrl, (texture) => {
@@ -303,11 +332,16 @@ function setPanoSphereMaterial(params: {
       transparent: params.transparent,
       depthWrite: !params.transparent,
     });
-    setSphereMaterial(params.sphere, material, params.isCancelled);
+    setSphereMaterial(params.sphere, material, params.isCancelled, params.onMaterialReady);
   });
 }
 
-function setSphereMaterial(sphere: THREE.Mesh, material: THREE.Material, isCancelled: () => boolean) {
+function setSphereMaterial(
+  sphere: THREE.Mesh,
+  material: THREE.Material,
+  isCancelled: () => boolean,
+  onMaterialReady: () => void,
+) {
   if (isCancelled()) {
     disposeMaterial(material);
     return;
@@ -315,6 +349,7 @@ function setSphereMaterial(sphere: THREE.Mesh, material: THREE.Material, isCance
   const oldMaterial = sphere.material;
   sphere.material = material;
   disposeMaterial(oldMaterial);
+  onMaterialReady();
 }
 
 function updateLayerOpacity(

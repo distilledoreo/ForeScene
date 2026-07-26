@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import type { PeopleExportMode } from '../../domain/types';
 import { Archive, Check, Download, FileJson, FolderArchive, Settings, X } from 'lucide-react';
 import { getShotDisplayName, getShotPrimaryLabel } from '../../domain/shotIdentity';
@@ -35,7 +36,16 @@ export function ExportWorkspace() {
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    selectedShotId: state.selectedShotId,
+    selectShot: state.selectShot,
+    addCamera: state.addCamera,
+    updateShot: state.updateShot,
+    isExportingPackage: state.isExportingPackage,
+    setExportingPackage: state.setExportingPackage,
+    markFinalPackageExported: state.markFinalPackageExported,
+  })));
   const [lastExport, setLastExport] = useState<string[]>([]);
   const [selectedShotIds, setSelectedShotIds] = useState<Set<string>>(() => new Set(project.shots.map((shot) => shot.id)));
   const [settingsOpen, setSettingsOpen] = useState(false);
