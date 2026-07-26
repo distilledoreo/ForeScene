@@ -194,7 +194,7 @@ export class ProjectPersistenceController {
    * snapshot remains the active, fully validated recovery point.
    */
   async runDestructiveMutation(
-    projectBeforeMutation: LocationProject,
+    _projectBeforeMutation: LocationProject,
     reason: string,
     mutate: () => void | Promise<void>,
     getCurrentProject: () => LocationProject,
@@ -202,8 +202,11 @@ export class ProjectPersistenceController {
     if (this.disposed) return undefined;
     this.clearTimer();
     return this.enqueue(async () => {
+      // Capture the pre-change state only after earlier queued persistence work
+      // has completed. The caller's original object may be stale by this point.
+      const projectBeforeMutation = cloneProject(getCurrentProject());
       this.emit({ status: 'saving', message: 'Creating a recovery point before this change…', criticalWrite: true });
-      const snapshot = await createProjectSnapshot(cloneProject(projectBeforeMutation), reason);
+      const snapshot = await createProjectSnapshot(projectBeforeMutation, reason);
       this.emit({
         status: 'saving',
         message: 'Applying protected project change…',
