@@ -80,6 +80,7 @@ import { getCameraMoveReferenceFrames } from '../../engine/cameraKeyframes';
 import { isShotFramingAccepted } from '../../engine/workflow';
 import { getPanoMatchQuality, resolveShotLinkedPano } from '../../engine/sync';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { Field, IconButton, Panel, Select, TextArea, TextInput } from '../common/Field';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
@@ -93,11 +94,17 @@ import { canUseProjectedAppearance } from '../../engine/projectedStyle';
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
+  getStageableObjectsForShot,
   getSceneObjectStagingRole,
   resolveProjectForShot,
   updateShotObjectOverrides,
 } from '../../engine/shotSceneState';
 import { getPeopleRenderVariants, getPeopleVariantPath } from '../../engine/peopleExport';
+import {
+  createCameraMoveExportPasses,
+  getCameraMoveExportCompletionMessage,
+  runCameraMoveExportPasses,
+} from '../../engine/cameraMoveExportPasses';
 import { snapshotStageableObjectOverrides } from '../../engine/objectKeyframes';
 import {
   type ShotStillViewSelection,
@@ -199,6 +206,7 @@ export function ShotsWorkspace() {
     undoShotCamera: state.undoShotCamera,
     redoShotCamera: state.redoShotCamera,
   })));
+  const flushProject = useProjectSafetyStore((state) => state.flushProject);
   const shotCameraHistoryRestoreGeneration = useContinuityStore(
     (state) => state.shotCameraHistoryRestoreGeneration,
   );
@@ -217,7 +225,7 @@ export function ShotsWorkspace() {
     ? shotSceneProject.scene.objects.find((object) => object.id === stagedObjectId)
     : undefined;
   const stageableObjects = useMemo(
-    () => shotSceneProject.scene.objects.filter((object) => object.visible && canStageObjectPerShot(object)),
+    () => getStageableObjectsForShot(shotSceneProject.scene.objects),
     [shotSceneProject.scene.objects],
   );
   const linkedPano = selectedShot ? resolveShotLinkedPano(project, selectedShot) : undefined;
@@ -237,6 +245,7 @@ export function ShotsWorkspace() {
   const [cameraMoveProgress, setCameraMoveProgress] = useState(0);
   const [cameraMoveProgressMessage, setCameraMoveProgressMessage] = useState('Preparing scene');
   const [cameraMoveError, setCameraMoveError] = useState<string | undefined>();
+  const [cameraMoveNotice, setCameraMoveNotice] = useState<string | undefined>();
   const [snapshotError, setSnapshotError] = useState<string | undefined>();
   const cameraMoveAbortRef = useRef<{ cancelled: boolean; abort?: () => void }>({ cancelled: false });
   const [videoExportMode, setVideoExportMode] = useState<'render' | 'quickPreview'>('render');
@@ -283,12 +292,6 @@ export function ShotsWorkspace() {
     };
   }, [getEffectiveCamera, selectedShot]);
 
-  const exportFrameFileName = selectedShot
-    ? getViewportStillDownloadName(selectedShot)
-    : 'camera_frame.png';
-  const cameraMoveFileName = selectedShot
-    ? getCameraMoveDownloadName(selectedShot)
-    : 'camera_move.mp4';
   const cameraMoveKeyframes = useMemo(
     () => getSortedCameraKeyframes(selectedShot?.cameraKeyframes ?? []),
     [selectedShot?.cameraKeyframes],
@@ -352,6 +355,7 @@ export function ShotsWorkspace() {
     setCameraMoveProgress(0);
     setCameraMoveProgressMessage('Preparing scene');
     setCameraMoveError('MP4 export was cancelled.');
+    setCameraMoveNotice(undefined);
   }, []);
 
   const setShotFramePreview = useCallback((shotId: string, dataUrl: string) => {
@@ -391,18 +395,27 @@ export function ShotsWorkspace() {
   const exportCameraFrame = useCallback(async () => {
     const previewShot = getPreviewShot();
     if (!previewShot) return;
-    const peopleMode = previewShot.exportSettings.peopleExportMode;
-    const variants = getPeopleRenderVariants(peopleMode);
     setIsExportingFrame(true);
+    setSnapshotError(undefined);
     try {
+      if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before rendering a still.');
+      // A downloaded still must be traceable to a durable project state, not
+      // merely the transient editor state that happened to be on screen.
+      updateShot(previewShot.id, { camera: previewShot.camera });
+      await flushProject('Verified save before still render');
+      const renderProject = useContinuityStore.getState().project;
+      const renderShot = renderProject.shots.find((shot) => shot.id === previewShot.id) ?? previewShot;
+      const peopleMode = renderShot.exportSettings.peopleExportMode;
+      const variants = getPeopleRenderVariants(peopleMode);
+      const viewportFileName = getViewportStillDownloadName(renderShot);
       for (const variant of variants) {
-        const frame = await renderShotFrame(project, previewShot, { peopleVariant: variant });
-        const clayName = getPeopleVariantPath(exportFrameFileName, variant, peopleMode);
+        const frame = await renderShotFrame(renderProject, renderShot, { peopleVariant: variant });
+        const clayName = getPeopleVariantPath(viewportFileName, variant, peopleMode);
         const stillPeople = variant === 'clean_plate' ? 'clean_plate' as const : 'with_people' as const;
         if (variant === 'with_people' || variants.length === 1) {
-          setShotFramePreview(previewShot.id, frame.dataUrl);
+          setShotFramePreview(renderShot.id, frame.dataUrl);
         }
-        attachViewportRenderToShot(previewShot.id, {
+        attachViewportRenderToShot(renderShot.id, {
           name: clayName,
           dataUrl: frame.dataUrl,
           width: frame.width,
@@ -410,14 +423,12 @@ export function ShotsWorkspace() {
           stillView: { appearance: 'clay', people: stillPeople },
         });
         downloadDataUrl(frame.dataUrl, clayName);
-        if (canUseProjectedAppearance(project)) {
+        if (canUseProjectedAppearance(renderProject)) {
           try {
-            const projected = await renderShotProjectedFrame(project, previewShot, { peopleVariant: variant });
-            const baseProjectedName = selectedShot
-              ? getProjectedStillDownloadName(selectedShot)
-              : exportFrameFileName.replace(/\.png$/i, '_projected.png');
+            const projected = await renderShotProjectedFrame(renderProject, renderShot, { peopleVariant: variant });
+            const baseProjectedName = getProjectedStillDownloadName(renderShot);
             const projectedName = getPeopleVariantPath(baseProjectedName, variant, peopleMode);
-            attachViewportRenderToShot(previewShot.id, {
+            attachViewportRenderToShot(renderShot.id, {
               name: projectedName,
               dataUrl: projected.dataUrl,
               width: projected.width,
@@ -430,16 +441,16 @@ export function ShotsWorkspace() {
           }
         }
       }
-      if (!shotCameraFlying) updateShot(previewShot.id, { status: 'exported' });
+      if (!shotCameraFlying) updateShot(renderShot.id, { status: 'exported' });
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'Could not save the project before rendering this still.');
     } finally {
       setIsExportingFrame(false);
     }
   }, [
     attachViewportRenderToShot,
-    exportFrameFileName,
+    flushProject,
     getPreviewShot,
-    project,
-    selectedShot,
     setShotFramePreview,
     shotCameraFlying,
     updateShot,
@@ -456,6 +467,7 @@ export function ShotsWorkspace() {
     });
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);
+    setCameraMoveNotice(undefined);
   }, [selectedShot, updateShot]);
 
   const captureCameraMoveKeyframe = useCallback((slot: CameraMoveKeyframeSlot) => {
@@ -543,91 +555,109 @@ export function ShotsWorkspace() {
       return;
     }
 
-    const variants = getPeopleRenderVariants(selectedShot.exportSettings.peopleExportMode);
-    const dualProjectedVideo = canUseProjectedAppearance(project);
-    const totalPasses = variants.length * (dualProjectedVideo ? 2 : 1);
+    const shotId = selectedShot.id;
     const abortController = new AbortController();
     cameraMoveAbortRef.current = { cancelled: false, abort: () => abortController.abort() };
     setIsExportingCameraMove(true);
     setCameraMoveProgress(0);
     setCameraMoveProgressMessage('Preparing scene');
     setCameraMoveError(undefined);
+    setCameraMoveNotice(undefined);
 
     try {
-      let pass = 0;
-      for (const variant of variants) {
-        const video = await renderShotCameraMoveMp4(project, selectedShot, {
-          mode: videoExportMode,
-          resolutionPreset: videoResolutionPreset,
-          frameRate: 30,
-          appearance: 'clay',
-          peopleVariant: variant,
-          includeDataUrl: true,
-          signal: abortController.signal,
-          onProgress: (progress) => {
-            const value = typeof progress === 'number' ? progress : progress.progress;
-            const message = typeof progress === 'number' ? 'Rendering clay motion' : progress.message;
-            setCameraMoveProgress((pass + value) / totalPasses);
-            setCameraMoveProgressMessage(message);
-          },
-        });
-        if (cameraMoveAbortRef.current.cancelled) return;
-        if (!video.dataUrl) throw new Error('Camera move export did not produce a persistable video URI.');
-        const clayName = getPeopleVariantPath(
-          cameraMoveFileName,
-          variant,
-          selectedShot.exportSettings.peopleExportMode,
-        );
-        if (variant === 'with_people' || variants.length === 1) {
-          const asset = attachCameraMoveVideoToShot(selectedShot.id, {
-            name: clayName,
-            dataUrl: video.dataUrl,
-            mimeType: video.mimeType,
-            width: video.width,
-            height: video.height,
-            durationSeconds: video.durationSeconds,
-            frameRate: video.frameRate,
-            encodeMode: video.encodeMode ?? videoExportMode,
-            codecString: video.codecString,
-            frameCount: video.frameCount,
-            resolutionPreset: videoResolutionPreset,
-          });
-          setCameraMovePreviewUrl(asset.uri);
-        }
-        downloadBlob(video.blob, clayName);
-        pass += 1;
-
-        if (dualProjectedVideo) {
-          const projectedVideo = await renderShotCameraMoveMp4(project, selectedShot, {
+      if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before rendering MP4.');
+      // Lock the render inputs to a verified local revision before expensive
+      // encoding begins. The generated video can then be reproduced after a
+      // reload from the same saved controls and source media.
+      await flushProject('Verified save before video render');
+      const renderProject = useContinuityStore.getState().project;
+      const renderShot = renderProject.shots.find((shot) => shot.id === shotId);
+      if (!renderShot) throw new Error('The selected shot changed before MP4 rendering could begin.');
+      const variants = getPeopleRenderVariants(renderShot.exportSettings.peopleExportMode);
+      const passes = createCameraMoveExportPasses(
+        variants,
+        canUseProjectedAppearance(renderProject),
+      );
+      const totalPasses = passes.length;
+      const results = await runCameraMoveExportPasses(
+        passes,
+        async (pass, passIndex) => {
+          const video = await renderShotCameraMoveMp4(renderProject, renderShot, {
             mode: videoExportMode,
             resolutionPreset: videoResolutionPreset,
             frameRate: 30,
-            appearance: 'projected',
-            peopleVariant: variant,
-            occlusionFilter: videoExportMode === 'render' ? 'fast' : 'soft',
-            includeDataUrl: false,
+            appearance: pass.appearance,
+            peopleVariant: pass.peopleVariant,
+            occlusionFilter: pass.appearance === 'projected' && videoExportMode === 'render' ? 'fast' : undefined,
+            includeDataUrl: pass.appearance === 'clay',
             signal: abortController.signal,
             onProgress: (progress) => {
               const value = typeof progress === 'number' ? progress : progress.progress;
-              const message = typeof progress === 'number' ? 'Rendering projected motion' : progress.message;
-              setCameraMoveProgress((pass + value) / totalPasses);
+              const message = typeof progress === 'number'
+                ? `Rendering ${pass.appearance} motion`
+                : progress.message;
+              setCameraMoveProgress((passIndex + value) / totalPasses);
               setCameraMoveProgressMessage(message);
             },
           });
-          if (cameraMoveAbortRef.current.cancelled) return;
-          downloadBlob(
-            projectedVideo.blob,
-            getPeopleVariantPath(
-              getProjectedCameraMoveDownloadName(selectedShot),
-              variant,
-              selectedShot.exportSettings.peopleExportMode,
-            ),
-          );
-          pass += 1;
-        }
-      }
+          if (cameraMoveAbortRef.current.cancelled) return video;
+
+          if (pass.appearance === 'clay') {
+            if (!video.dataUrl) throw new Error('Camera move export did not produce a persistable video URI.');
+            const clayName = getPeopleVariantPath(
+              getCameraMoveDownloadName(renderShot),
+              pass.peopleVariant,
+              renderShot.exportSettings.peopleExportMode,
+            );
+            if (pass.peopleVariant === 'with_people' || variants.length === 1) {
+              const asset = attachCameraMoveVideoToShot(renderShot.id, {
+                name: clayName,
+                dataUrl: video.dataUrl,
+                mimeType: video.mimeType,
+                width: video.width,
+                height: video.height,
+                durationSeconds: video.durationSeconds,
+                frameRate: video.frameRate,
+                encodeMode: video.encodeMode ?? videoExportMode,
+                codecString: video.codecString,
+                frameCount: video.frameCount,
+                resolutionPreset: videoResolutionPreset,
+              });
+              setCameraMovePreviewUrl(asset.uri);
+            }
+            downloadBlob(video.blob, clayName);
+          } else {
+            downloadBlob(
+              video.blob,
+              getPeopleVariantPath(
+                getProjectedCameraMoveDownloadName(renderShot),
+                pass.peopleVariant,
+                renderShot.exportSettings.peopleExportMode,
+              ),
+            );
+          }
+          setCameraMoveProgress((passIndex + 1) / totalPasses);
+          return video;
+        },
+        () => cameraMoveAbortRef.current.cancelled || abortController.signal.aborted,
+      );
+      if (results.cancelled) return;
+
+      const completionMessage = getCameraMoveExportCompletionMessage(
+        results.completed.length,
+        totalPasses,
+        results.failures,
+      );
       setCameraMoveProgress(1);
-      setCameraMoveProgressMessage('Complete');
+      if (results.failures.length === 0) {
+        setCameraMoveProgressMessage('Complete');
+      } else if (results.completed.length === 0) {
+        setCameraMoveProgressMessage(completionMessage);
+        setCameraMoveError(completionMessage);
+      } else {
+        setCameraMoveProgressMessage(completionMessage);
+        setCameraMoveNotice(completionMessage);
+      }
     } catch (error) {
       if (!cameraMoveAbortRef.current.cancelled) {
         setCameraMoveError(error instanceof Error ? error.message : 'MP4 export failed.');
@@ -637,10 +667,9 @@ export function ShotsWorkspace() {
     }
   }, [
     attachCameraMoveVideoToShot,
-    cameraMoveFileName,
     canExportVideo,
     canRenderMp4,
-    project,
+    flushProject,
     selectedShot,
     supportedMp4MimeType,
     videoExportMode,
@@ -969,6 +998,7 @@ export function ShotsWorkspace() {
     });
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);
+    setCameraMoveNotice(undefined);
     draftCameraRef.current = pose;
     setVideoPhase('stop');
     setLandFlash(true);
@@ -1037,6 +1067,7 @@ export function ShotsWorkspace() {
     setVideoPhase('record');
     updateCameraMoveKeyframes([]);
     setCameraMoveError(undefined);
+    setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
   }, [selectedShot, startFlyCamera, updateCameraMoveKeyframes, videoDurationSeconds]);
 
@@ -1058,6 +1089,7 @@ export function ShotsWorkspace() {
     updateCameraMoveKeyframes([]);
     setVideoPhase('record');
     setCameraMoveError(undefined);
+    setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
   }, [selectedShot, startFlyCamera, updateCameraMoveKeyframes]);
 
@@ -1397,12 +1429,14 @@ export function ShotsWorkspace() {
                     key={object.id}
                     type="button"
                     onClick={() => selectStagedObject(object.id)}
+                    title={object.visible ? undefined : 'Hidden in this shot'}
                     className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition ${
                       stagedObjectId === object.id ? 'bg-white text-black' : 'bg-white/5 text-white/85 hover:bg-white/10'
-                    }`}
+                    } ${object.visible ? '' : 'opacity-55'}`}
                   >
                     <span className="truncate">{object.name}</span>
-                    <span className="ml-2 shrink-0 text-[10px] uppercase tracking-wide opacity-60">
+                    <span className="ml-2 flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide opacity-60">
+                      {!object.visible && <EyeOff className="h-3 w-3" aria-label="Hidden in this shot" />}
                       {getSceneObjectStagingRole(object)}
                     </span>
                   </button>
@@ -1609,13 +1643,13 @@ export function ShotsWorkspace() {
             </div>
           )}
 
-          {captureMode === 'video' && (!canExportVideo || cameraMoveError) && (
+          {captureMode === 'video' && (!canExportVideo || cameraMoveError || cameraMoveNotice) && (
             <p
               role="alert"
               data-shots-camera-move-status
               className="pointer-events-auto max-w-md rounded-lg border border-amber-200/70 bg-black/65 px-3 py-2 text-center text-xs text-amber-100 shadow-soft backdrop-blur-sm"
             >
-              {cameraMoveError ?? 'MP4 export is not supported in this browser. Try Chrome or Edge.'}
+              {cameraMoveError ?? cameraMoveNotice ?? 'MP4 export is not supported in this browser. Try Chrome or Edge.'}
             </p>
           )}
 
@@ -2092,6 +2126,9 @@ export function ShotsWorkspace() {
                 {cameraMoveError && (
                   <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{cameraMoveError}</p>
                 )}
+                {cameraMoveNotice && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">{cameraMoveNotice}</p>
+                )}
                 {cameraMovePreviewUrl && (
                   <video src={cameraMovePreviewUrl} controls className="aspect-video w-full rounded-lg border border-subtle" />
                 )}
@@ -2100,7 +2137,7 @@ export function ShotsWorkspace() {
 
             <button
               type="button"
-              onClick={() => removeShot(selectedShot.id)}
+              onClick={() => handleRequestDeleteShot(selectedShot)}
               disabled={project.shots.length <= 1}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 transition hover:bg-red-50 disabled:opacity-45"
             >

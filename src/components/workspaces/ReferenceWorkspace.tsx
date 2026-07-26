@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import { Check, FileDown, Hand, Settings, Sparkles, Star, Trash2 } from 'lucide-react';
+import type { PanoReference } from '../../domain/types';
 import { STYLED_PANO } from '../../domain/copy';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { preparePanoImport, downloadPanoImage } from '../../engine/panoImage';
@@ -104,6 +105,15 @@ export function ReferenceWorkspace() {
   };
 
   const importPanoImage = async (params: { name: string; dataUrl: string; width: number; height: number }) => {
+    const currentCanonical = project.panoRefs.find((pano) => pano.isCanonical);
+    if (importMode === 'replace' && currentCanonical) {
+      const affectedShots = project.shots.filter((shot) => (
+        shot.linkedPanoId === currentCanonical.id || shot.panoCrop?.panoId === currentCanonical.id
+      )).length;
+      if (!window.confirm(
+        `Replace the current canonical panorama? ${affectedShots} shot${affectedShots === 1 ? '' : 's'} will use the replacement. A local recovery point will be kept before the change.`,
+      )) return;
+    }
     const prepared = await preparePanoImport(params.dataUrl, params.width, params.height);
     const mode = importStyledPano({
       name: params.name,
@@ -115,6 +125,18 @@ export function ReferenceWorkspace() {
         : undefined,
     });
     if (mode === 'add_secondary') setPendingSecondCapturePlan(undefined);
+  };
+
+  const confirmRemovePano = (pano: PanoReference): boolean => {
+    const affectedShots = project.shots.filter((shot) => (
+      shot.linkedPanoId === pano.id || shot.panoCrop?.panoId === pano.id
+    )).length;
+    const label = pano.type === 'ai_global_reference' || pano.type === 'external_reference'
+      ? 'uploaded panorama'
+      : 'panorama reference';
+    return window.confirm(
+      `Remove this ${label}? ${affectedShots} shot${affectedShots === 1 ? '' : 's'} will be re-linked or cleared. A local recovery point will be kept before removal.`,
+    );
   };
 
   const loadAttachedReference = async () => {
@@ -586,10 +608,7 @@ export function ReferenceWorkspace() {
                     aria-label={`Remove ${pano.name}`}
                     data-remove-pano={pano.id}
                     onClick={() => {
-                      const label = isUploaded ? 'uploaded pano' : 'pano reference';
-                      if (!window.confirm(`Remove this ${label}? Shots will re-link to the remaining canonical pano if one exists.`)) {
-                        return;
-                      }
+                      if (!confirmRemovePano(pano)) return;
                       removePanoReference(pano.id);
                     }}
                     className="inline-flex shrink-0 items-center justify-center px-2.5 text-secondary transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
@@ -614,7 +633,7 @@ export function ReferenceWorkspace() {
               {(activePano.type === 'ai_global_reference' || activePano.type === 'external_reference') && (
                 <IconButton
                   onClick={() => {
-                    if (!window.confirm('Remove this uploaded pano reference?')) return;
+                    if (!confirmRemovePano(activePano)) return;
                     removePanoReference(activePano.id);
                   }}
                   className="w-full border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400"

@@ -33,8 +33,8 @@ describe('binary model asset storage', () => {
     const blob = await createProjectPackage(project);
     resetModelAssetStoreForTests();
     const reopened = await readProjectFile(new File([blob], 'scene.panoref-project'));
-    expect(reopened.assets.assets.mesh.uri).toBe(`${MODEL_ASSET_URI_PREFIX}project/mesh`);
-    expect(await getModelAsset('project/mesh')).toBeTruthy();
+    expect(reopened.assets.assets.mesh.uri.startsWith(`${MODEL_ASSET_URI_PREFIX}import/`)).toBe(true);
+    expect(await getModelAsset(reopened.assets.assets.mesh.uri.slice(MODEL_ASSET_URI_PREFIX.length))).toBeTruthy();
   });
 
   it('migrates legacy base64 geometry into a binary package on save', async () => {
@@ -81,5 +81,30 @@ describe('binary model asset storage', () => {
     ], 'broken.panoref-project'))).rejects.toThrow('binary model asset second.panoref-mesh');
 
     expect(Array.from(new Uint8Array((await getModelAsset('existing/key'))!))).toEqual([9]);
+  });
+
+  it('stages valid imported model data under a fresh key instead of overwriting an open project key', async () => {
+    await putModelAsset('project/shared-mesh', new Uint8Array([9, 9, 9]).buffer);
+    const project = createDefaultProject();
+    project.assets.assets.mesh = {
+      id: 'mesh',
+      type: 'model',
+      name: 'shared.panoref-mesh',
+      uri: `${MODEL_ASSET_URI_PREFIX}project/shared-mesh`,
+      createdAt: new Date().toISOString(),
+    };
+    project.scene.objects.push({ id: 'model-object', name: 'Model', type: 'imported_model', transform: createTransform(), dimensions: [1, 1, 0.001], category: 'architecture', locked: false, visible: true, modelAssetId: 'mesh' });
+    const zip = new JSZip();
+    zip.file('project.json', JSON.stringify(project));
+    zip.file(`model-assets/${encodeURIComponent('project/shared-mesh')}.bin`, new Uint8Array([1, 2, 3]));
+
+    const imported = await readProjectFile(new File([
+      await zip.generateAsync({ type: 'blob' }),
+    ], 'replacement.panoref-project'));
+    const importedKey = imported.assets.assets.mesh.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+
+    expect(Array.from(new Uint8Array((await getModelAsset('project/shared-mesh'))!))).toEqual([9, 9, 9]);
+    expect(importedKey).not.toBe('project/shared-mesh');
+    expect(Array.from(new Uint8Array((await getModelAsset(importedKey))!))).toEqual([1, 2, 3]);
   });
 });

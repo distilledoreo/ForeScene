@@ -9,10 +9,17 @@ export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 
 const memoryBlobs = new Map<string, Blob>();
 const objectUrls = new Map<string, string>();
+const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
+let nextBlobWriteFailureForTests: Error | undefined;
 
 export interface ProjectAssetBlobWrite {
   key: string;
   blob: Blob;
+}
+
+export interface ProjectAssetPersistenceFailure {
+  key: string;
+  error: unknown;
 }
 
 function openDatabase(): Promise<IDBDatabase | undefined> {
@@ -41,9 +48,20 @@ function makeObjectUrl(key: string, blob: Blob): string {
 }
 
 function persistProjectAssetBlob(key: string, blob: Blob) {
-  void putProjectAssetBlobs([{ key, blob }]).catch(() => {
-    // The in-memory blob remains available for this session and save/export.
+  void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
+    // The in-memory blob remains usable for the current session, but this is
+    // now observable by the project safety controller instead of being a
+    // silent durability failure.
+    for (const listener of persistenceFailureListeners) listener({ key, error });
   });
+}
+
+/** Observe asynchronous cache-write failures from synchronous asset actions. */
+export function subscribeProjectAssetPersistenceFailures(
+  listener: (event: ProjectAssetPersistenceFailure) => void,
+): () => void {
+  persistenceFailureListeners.add(listener);
+  return () => persistenceFailureListeners.delete(listener);
 }
 
 export function createProjectAssetStorageKey(projectId: string, assetId: string): string {
@@ -83,6 +101,11 @@ export function registerProjectAssetBlob(key: string, blob: Blob): string {
 
 export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
   if (entries.length === 0) return;
+  if (nextBlobWriteFailureForTests) {
+    const error = nextBlobWriteFailureForTests;
+    nextBlobWriteFailureForTests = undefined;
+    throw error;
+  }
   const db = await openDatabase();
   if (!db) {
     for (const entry of entries) memoryBlobs.set(entry.key, entry.blob);
@@ -116,6 +139,21 @@ export async function getProjectAssetBlob(key: string): Promise<Blob | undefined
     });
     if (blob) memoryBlobs.set(key, blob);
     return blob;
+  } finally {
+    db.close();
+  }
+}
+
+/** List local keys for diagnostics and deferred, revision-aware cleanup. */
+export async function listProjectAssetBlobKeys(): Promise<string[]> {
+  const db = await openDatabase();
+  if (!db) return [...memoryBlobs.keys()];
+  try {
+    return await new Promise<string[]>((resolve, reject) => {
+      const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys();
+      request.onsuccess = () => resolve(request.result.filter((key): key is string => typeof key === 'string'));
+      request.onerror = () => reject(request.error ?? new Error('Could not list local project assets.'));
+    });
   } finally {
     db.close();
   }
@@ -157,6 +195,13 @@ export function resetProjectAssetStoreForTests() {
   }
   memoryBlobs.clear();
   objectUrls.clear();
+  persistenceFailureListeners.clear();
+  nextBlobWriteFailureForTests = undefined;
+}
+
+/** Deterministically exercise a durable binary-write failure in regression tests. */
+export function failNextProjectAssetBlobWriteForTests(message = 'Injected project asset storage write failure.'): void {
+  nextBlobWriteFailureForTests = new Error(message);
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {

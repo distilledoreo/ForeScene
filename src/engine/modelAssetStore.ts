@@ -3,6 +3,7 @@ const STORE_NAME = 'mesh-binaries';
 const DATABASE_VERSION = 1;
 
 const memoryAssets = new Map<string, ArrayBuffer>();
+const memoryAssetVersions = new Map<string, number>();
 
 function cloneBuffer(buffer: ArrayBuffer): ArrayBuffer {
   return buffer.slice(0);
@@ -22,11 +23,21 @@ function openDatabase(): Promise<IDBDatabase | undefined> {
 
 export function registerModelAssetBytes(key: string, bytes: ArrayBuffer): void {
   memoryAssets.set(key, cloneBuffer(bytes));
+  memoryAssetVersions.set(key, (memoryAssetVersions.get(key) ?? 0) + 1);
+}
+
+function cacheModelAssetBytes(key: string, bytes: ArrayBuffer): void {
+  memoryAssets.set(key, cloneBuffer(bytes));
 }
 
 export function getRegisteredModelAssetBytes(key: string): ArrayBuffer | undefined {
   const bytes = memoryAssets.get(key);
   return bytes ? cloneBuffer(bytes) : undefined;
+}
+
+/** Changes whenever a local model key is explicitly replaced. */
+export function getModelAssetVersion(key: string): number | undefined {
+  return memoryAssetVersions.get(key);
 }
 
 export interface ModelAssetWrite {
@@ -106,8 +117,23 @@ export async function getModelAsset(key: string): Promise<ArrayBuffer | undefine
       request.onsuccess = () => resolve(request.result instanceof ArrayBuffer ? request.result : undefined);
       request.onerror = () => reject(request.error ?? new Error('Could not read model geometry.'));
     });
-    if (value) registerModelAssetBytes(key, value);
+    if (value) cacheModelAssetBytes(key, value);
     return value;
+  } finally {
+    db.close();
+  }
+}
+
+/** List local binary geometry keys for diagnostics and deferred cleanup. */
+export async function listModelAssetKeys(): Promise<string[]> {
+  const db = await openDatabase();
+  if (!db) return [...memoryAssets.keys()];
+  try {
+    return await new Promise<string[]>((resolve, reject) => {
+      const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys();
+      request.onsuccess = () => resolve(request.result.filter((key): key is string => typeof key === 'string'));
+      request.onerror = () => reject(request.error ?? new Error('Could not list model geometry.'));
+    });
   } finally {
     db.close();
   }
@@ -139,4 +165,5 @@ export async function hydrateModelAssetKeys(keys: readonly string[]): Promise<st
 
 export function resetModelAssetStoreForTests(): void {
   memoryAssets.clear();
+  memoryAssetVersions.clear();
 }

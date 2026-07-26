@@ -42,6 +42,7 @@ import { degreesToRadians, flyCameraFromCamera } from './sync';
 import { computeGrayboxPanoFarPlane } from './sceneBounds';
 import { createFinalRenderSceneOptions } from './finalRenderProfile';
 import {
+  getSceneObjectStagingRole,
   resolveProjectForAnimatedCameraMove,
   resolveProjectForShot,
 } from './shotSceneState';
@@ -397,6 +398,7 @@ export async function renderShotCameraMoveMp4(
       includeDataUrl: options.includeDataUrl === true,
       animateObjects,
       sourceProject: project,
+      peopleVariant: options.peopleVariant,
     });
   }
 
@@ -416,6 +418,7 @@ export async function renderShotCameraMoveMp4(
     includeDataUrl: options.includeDataUrl === true,
     animateObjects,
     sourceProject: project,
+    peopleVariant: options.peopleVariant,
   });
 }
 
@@ -437,6 +440,8 @@ interface CameraMoveRenderContext {
   animateObjects?: boolean;
   /** Original project (pre-shot resolve) for base object transforms during animation. */
   sourceProject?: LocationProject;
+  /** Must reach each frame so clean-plate visibility cannot be overridden by a keyframe. */
+  peopleVariant: PeopleRenderVariant | undefined;
 }
 
 async function renderShotCameraMoveMp4Deterministic(
@@ -458,6 +463,7 @@ async function renderShotCameraMoveMp4Deterministic(
     includeDataUrl = false,
     animateObjects = false,
     sourceProject,
+    peopleVariant,
   } = ctx;
 
   if (!preset) {
@@ -544,6 +550,7 @@ async function renderShotCameraMoveMp4Deterministic(
             ? {
               shot,
               baseObjects: (sourceProject ?? project).scene.objects,
+              peopleVariant,
             }
             : undefined,
         );
@@ -620,6 +627,7 @@ async function renderShotCameraMoveMp4QuickPreview(
     includeDataUrl = false,
     animateObjects = false,
     sourceProject,
+    peopleVariant,
   } = ctx;
 
   if (!mimeType) {
@@ -743,6 +751,7 @@ async function renderShotCameraMoveMp4QuickPreview(
             ? {
               shot,
               baseObjects: (sourceProject ?? project).scene.objects,
+              peopleVariant,
             }
             : undefined,
         );
@@ -809,7 +818,8 @@ async function renderShotCameraMoveMp4QuickPreview(
   };
 }
 
-function renderCameraMoveFrame(
+/** Render one camera-move frame; exported for frame-level MP4 integration coverage. */
+export function renderCameraMoveFrame(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
@@ -821,6 +831,7 @@ function renderCameraMoveFrame(
   objectAnimation?: {
     shot: Pick<Shot, 'objectOverrides'>;
     baseObjects: LocationProject['scene']['objects'];
+    peopleVariant: PeopleRenderVariant | undefined;
   },
 ) {
   const cameraData = interpolateCameraKeyframes(keyframes, timeSeconds);
@@ -844,6 +855,7 @@ function renderCameraMoveFrame(
         objectAnimation.baseObjects,
       ),
       objectAnimation.baseObjects,
+      objectAnimation.peopleVariant,
     );
   }
 
@@ -854,6 +866,7 @@ function applyAnimatedObjectOverridesToScene(
   scene: THREE.Scene,
   overrides: ReturnType<typeof interpolateObjectOverrides>,
   baseObjects: LocationProject['scene']['objects'],
+  peopleVariant: PeopleRenderVariant | undefined,
 ) {
   const baseById = new Map(baseObjects.map((object) => [object.id, object]));
   for (const [objectId, override] of Object.entries(overrides)) {
@@ -864,7 +877,11 @@ function applyAnimatedObjectOverridesToScene(
     const transform = override.transform ?? base.transform;
     applySceneObjectPose(node, transform, {
       applyScale: !sceneObjectUsesProceduralScale(base.type),
-      visible: override.visible ?? base.visible,
+      // Keyframe snapshots retain source visibility, so they must never
+      // reverse the clean-plate rule after the scene has been resolved.
+      visible: peopleVariant === 'clean_plate' && getSceneObjectStagingRole(base) === 'person'
+        ? false
+        : (override.visible ?? base.visible),
     });
   }
 }

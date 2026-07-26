@@ -15,6 +15,7 @@ import {
 } from '../../engine/packageExport';
 import { getExportSelectionWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../../engine/warnings';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Field, IconButton, Select, TextInput } from '../common/Field';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
@@ -46,6 +47,7 @@ export function ExportWorkspace() {
     setExportingPackage: state.setExportingPackage,
     markFinalPackageExported: state.markFinalPackageExported,
   })));
+  const flushProject = useProjectSafetyStore((state) => state.flushProject);
   const [lastExport, setLastExport] = useState<string[]>([]);
   const [selectedShotIds, setSelectedShotIds] = useState<Set<string>>(() => new Set(project.shots.map((shot) => shot.id)));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -167,13 +169,17 @@ export function ExportWorkspace() {
   };
 
   const exportSelectedShots = async () => {
-    const shotsToExport = project.shots.filter((shot) => selectedShotIds.has(shot.id));
-    if (shotsToExport.length === 0) return;
-    const controller = beginExport();
-    setExportingShotId(shotsToExport[0]?.id);
+    let controller: AbortController | undefined;
     try {
+      if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before exporting a package.');
+      await flushProject('Verified save before package export');
+      const exportProject = useContinuityStore.getState().project;
+      const shotsToExport = exportProject.shots.filter((shot) => selectedShotIds.has(shot.id));
+      if (shotsToExport.length === 0) return;
+      controller = beginExport();
+      setExportingShotId(shotsToExport[0]?.id);
       // One download for N shots — avoids browser multi-download blocking.
-      const result = await buildMultiShotPackage(project, shotsToExport, {
+      const result = await buildMultiShotPackage(exportProject, shotsToExport, {
         signal: controller.signal,
         onProgress: handlePackageProgress,
       });
@@ -198,7 +204,7 @@ export function ExportWorkspace() {
       }
       finishExport('complete');
     } catch (error) {
-      if (isPackageExportCancelled(error) || controller.signal.aborted) {
+      if (isPackageExportCancelled(error) || controller?.signal.aborted) {
         finishExport('cancelled');
         if (mountedRef.current) {
           setExportProgress((current) => (
@@ -209,23 +215,32 @@ export function ExportWorkspace() {
         }
         return;
       }
-      finishExport('failed', error instanceof Error ? error.message : 'Export failed.');
+      if (controller) finishExport('failed', error instanceof Error ? error.message : 'Export failed.');
+      else {
+        setExportUiPhase('failed');
+        setExportError(error instanceof Error ? error.message : 'Export failed.');
+      }
     }
   };
 
   const exportShot = async () => {
-    if (!selectedShot) return;
-    const controller = beginExport();
-    setExportingShotId(selectedShot.id);
+    let controller: AbortController | undefined;
     try {
-      const result = await buildShotPackage(project, selectedShot, {
+      if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before exporting a package.');
+      await flushProject('Verified save before package export');
+      const exportProject = useContinuityStore.getState().project;
+      const shotToExport = exportProject.shots.find((shot) => shot.id === selectedShot?.id);
+      if (!shotToExport) return;
+      controller = beginExport();
+      setExportingShotId(shotToExport.id);
+      const result = await buildShotPackage(exportProject, shotToExport, {
         signal: controller.signal,
         onProgress: handlePackageProgress,
       });
       downloadBlob(result.blob, result.fileName);
       setLastExport(result.manifestPaths);
-      updateShot(selectedShot.id, { status: 'exported' });
-      markFinalPackageExported(selectedShot.id);
+      updateShot(shotToExport.id, { status: 'exported' });
+      markFinalPackageExported(shotToExport.id);
       if (mountedRef.current) {
         setExportProgress((current) => (
           current
@@ -235,15 +250,15 @@ export function ExportWorkspace() {
                 progress: 1,
                 currentShot: 1,
                 totalShots: 1,
-                shotId: selectedShot.id,
-                shotName: getShotExportProgressLabel(selectedShot),
+                shotId: shotToExport.id,
+                shotName: getShotExportProgressLabel(shotToExport),
                 message: 'Package downloaded',
               }
         ));
       }
       finishExport('complete');
     } catch (error) {
-      if (isPackageExportCancelled(error) || controller.signal.aborted) {
+      if (isPackageExportCancelled(error) || controller?.signal.aborted) {
         finishExport('cancelled');
         if (mountedRef.current) {
           setExportProgress((current) => (
@@ -254,7 +269,11 @@ export function ExportWorkspace() {
         }
         return;
       }
-      finishExport('failed', error instanceof Error ? error.message : 'Export failed.');
+      if (controller) finishExport('failed', error instanceof Error ? error.message : 'Export failed.');
+      else {
+        setExportUiPhase('failed');
+        setExportError(error instanceof Error ? error.message : 'Export failed.');
+      }
     }
   };
 

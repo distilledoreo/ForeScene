@@ -339,6 +339,20 @@ export function BuildWorkspace() {
     if (removeSelectedObjects()) setClipboardStatus(`Cut ${selectedObjects.length} object${selectedObjects.length === 1 ? '' : 's'}.`);
   }, [copySelection, removeSelectedObjects, selectedObjects.length, selectionHasLocked]);
 
+  const requestDeleteSelection = useCallback(() => {
+    if (selectedObjects.length === 0) return false;
+    if (selectionHasLocked) {
+      setClipboardStatus('Unlock the selection before deleting it.');
+      return false;
+    }
+    const count = selectedObjects.length;
+    const label = `${count} selected object${count === 1 ? '' : 's'}`;
+    if (!window.confirm(`Delete ${label}? A local recovery point will be kept so this can be restored later.`)) return false;
+    if (!removeSelectedObjects()) return false;
+    setClipboardStatus(`Deleted ${label}.`);
+    return true;
+  }, [removeSelectedObjects, selectedObjects.length, selectionHasLocked]);
+
   const pasteSelection = useCallback(async (inPlace = false) => {
     let payload = buildClipboard;
     try {
@@ -487,9 +501,7 @@ useEffect(() => {
       if (command.kind === 'toggle-lock') toggleSelectedLocked();
       if (command.kind === 'toggle-visibility') toggleSelectedVisibility();
       if (command.kind === 'toggle-precision') setPrecisionOpen((open) => !open);
-      if (command.kind === 'delete' && !removeSelectedObjects() && selectionHasLocked) {
-        setClipboardStatus('Unlock the selection before deleting it.');
-      }
+      if (command.kind === 'delete') requestDeleteSelection();
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -505,7 +517,7 @@ useEffect(() => {
     pasteSelection,
     project.scene.objects,
     redoBuild,
-    removeSelectedObjects,
+    requestDeleteSelection,
     requestFrame,
     rotateSelected,
     scaleSelected,
@@ -829,9 +841,7 @@ useEffect(() => {
                 <QuickAction title={selectionAllHidden ? 'Show (H)' : 'Hide (H)'} onClick={() => toggleSelectedVisibility()}>
                   {selectionAllHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </QuickAction>
-                <QuickAction title="Delete" danger onClick={() => {
-                  if (!removeSelectedObjects()) setClipboardStatus('Unlock the selection before deleting it.');
-                }}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
+                <QuickAction title="Delete" danger onClick={requestDeleteSelection}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
               </div>
               {layersOpen && (
                 <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-subtle pt-3">

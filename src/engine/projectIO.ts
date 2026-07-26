@@ -8,8 +8,8 @@ import {
 import JSZip from 'jszip';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import { dataUrlToBlob, readFileAsText } from './fileTransfers';
-import { getReferencedProjectAssetIds, pruneUnreferencedProjectAssets } from './projectAssets';
-import { deleteModelAsset, getModelAsset, putModelAssets } from './modelAssetStore';
+import { pruneUnreferencedProjectAssets } from './projectAssets';
+import { getModelAsset, putModelAssets } from './modelAssetStore';
 import {
   PROJECT_ASSET_URI_PREFIX,
   getProjectAssetBlob,
@@ -307,10 +307,44 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
 }
 
-export async function readProjectFile(file: File): Promise<LocationProject> {
+interface ValidatedProjectFileContents {
+  project: LocationProject;
+  isPackage: boolean;
+  modelWrites: Array<{ key: string; bytes: ArrayBuffer }>;
+  projectAssetWrites: Array<{ key: string; blob: Blob }>;
+}
+
+function assertNonEmptyBinary(name: string, byteLength: number): void {
+  if (byteLength <= 0) throw new Error(`Project package contains an empty binary asset ${name}.`);
+}
+
+function createImportNamespace(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function importedPayloadKey(projectId: string, importNamespace: string, kind: 'asset' | 'model', sourceKey: string): string {
+  return `import/${projectId}/${importNamespace}/${kind}/${encodeURIComponent(sourceKey)}`;
+}
+
+async function inspectProjectFile(file: File): Promise<ValidatedProjectFileContents> {
   if (!file.name.toLowerCase().endsWith('.zip') && !file.name.toLowerCase().endsWith('.panoref-project')) {
-    return hydrateProjectAssetUris(parseProject(await file.text()));
+    const project = parseProject(await file.text());
+    for (const asset of Object.values(project.assets.assets)) {
+      if (isRasterOrVideoAsset(asset) && asset.uri.startsWith('data:')) {
+        assertNonEmptyBinary(asset.name, dataUrlToBlob(asset.uri).size);
+        continue;
+      }
+      if (isRasterOrVideoAsset(asset) && portableStorageKey(asset)) {
+        throw new Error(`Project JSON references local binary asset ${asset.name}. Import its portable project backup instead.`);
+      }
+      if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
+        throw new Error(`Project JSON references local model asset ${asset.name}. Import its portable project backup instead.`);
+      }
+    }
+    return { project, isPackage: false, modelWrites: [], projectAssetWrites: [] };
   }
+
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const manifest = zip.file(PROJECT_MANIFEST);
   if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
@@ -322,10 +356,11 @@ export async function readProjectFile(file: File): Promise<LocationProject> {
         const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
         const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
         if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
-        return { key, bytes: await entry.async('arraybuffer') };
+        const bytes = await entry.async('arraybuffer');
+        assertNonEmptyBinary(asset.name, bytes.byteLength);
+        return { key, bytes };
       }),
   );
-  await putModelAssets(modelWrites);
   const projectAssetWrites = await Promise.all(
     Object.values(project.assets.assets)
       .filter((asset) => isRasterOrVideoAsset(asset) && portableStorageKey(asset))
@@ -334,18 +369,103 @@ export async function readProjectFile(file: File): Promise<LocationProject> {
         if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
         const entry = zip.file(`project-assets/${encodeURIComponent(key)}.bin`);
         if (!entry) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+        const bytes = await entry.async('arraybuffer');
+        assertNonEmptyBinary(asset.name, bytes.byteLength);
         asset.storageKey = key;
-        return { key, blob: new Blob([await entry.async('arraybuffer')], { type: asset.mimeType }) };
+        return { key, blob: new Blob([bytes], { type: asset.mimeType }) };
       }),
   );
-  await putProjectAssetBlobs(projectAssetWrites);
-  return hydrateProjectAssetUris(project);
+  return { project, isPackage: true, modelWrites, projectAssetWrites };
+}
+
+/** Parse and verify a backup before any project state or local storage is replaced. */
+export async function validateProjectFile(file: File): Promise<LocationProject> {
+  const contents = await inspectProjectFile(file);
+  return contents.project;
+}
+
+/** Verify a generated package without importing it into local asset storage. */
+export async function validateProjectPackage(blob: Blob): Promise<void> {
+  if (blob.type === 'application/json') {
+    parseProject(await blob.text());
+    return;
+  }
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+  const manifest = zip.file(PROJECT_MANIFEST);
+  if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
+  const project = parseProject(await manifest.async('text'));
+  for (const asset of Object.values(project.assets.assets)) {
+    if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
+      const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+      const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
+      if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
+      assertNonEmptyBinary(asset.name, (await entry.async('arraybuffer')).byteLength);
+      continue;
+    }
+    if (isRasterOrVideoAsset(asset) && portableStorageKey(asset)) {
+      const key = portableStorageKey(asset);
+      if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+      const entry = zip.file(`project-assets/${encodeURIComponent(key)}.bin`);
+      if (!entry) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+      assertNonEmptyBinary(asset.name, (await entry.async('arraybuffer')).byteLength);
+    }
+  }
+}
+
+export async function readProjectFile(file: File): Promise<LocationProject> {
+  const contents = await inspectProjectFile(file);
+  const importNamespace = createImportNamespace();
+  if (!contents.isPackage) {
+    // Inline legacy JSON is copied under a fresh import namespace so it cannot
+    // overwrite a currently open project with the same ids.
+    for (const asset of Object.values(contents.project.assets.assets)) {
+      if (!isRasterOrVideoAsset(asset) || !asset.uri.startsWith('data:')) continue;
+      asset.storageKey = importedPayloadKey(contents.project.id, importNamespace, 'asset', asset.id);
+    }
+    return hydrateProjectAssetUris(contents.project);
+  }
+  const importedModelKeys = new Map(contents.modelWrites.map((entry) => [
+    entry.key,
+    importedPayloadKey(contents.project.id, importNamespace, 'model', entry.key),
+  ]));
+  const importedProjectAssetKeys = new Map(contents.projectAssetWrites.map((entry) => [
+    entry.key,
+    importedPayloadKey(contents.project.id, importNamespace, 'asset', entry.key),
+  ]));
+  for (const asset of Object.values(contents.project.assets.assets)) {
+    if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
+      const sourceKey = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+      const importedKey = importedModelKeys.get(sourceKey);
+      if (!importedKey) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
+      asset.uri = `${MODEL_ASSET_URI_PREFIX}${importedKey}`;
+      continue;
+    }
+    if (isRasterOrVideoAsset(asset)) {
+      const sourceKey = portableStorageKey(asset);
+      if (!sourceKey) continue;
+      const importedKey = importedProjectAssetKeys.get(sourceKey);
+      if (!importedKey) throw new Error(`Project package is missing binary asset ${asset.name}.`);
+      asset.storageKey = importedKey;
+      asset.uri = `${PROJECT_ASSET_URI_PREFIX}${importedKey}`;
+    }
+  }
+  // Each payload class is staged only after the full package has been checked.
+  // The active project is not changed by this function; callers promote it only
+  // after a separate verified revision has committed.
+  await putModelAssets(contents.modelWrites.map((entry) => ({
+    ...entry,
+    key: importedModelKeys.get(entry.key)!,
+  })));
+  await putProjectAssetBlobs(contents.projectAssetWrites.map((entry) => ({
+    ...entry,
+    key: importedProjectAssetKeys.get(entry.key)!,
+  })));
+  return hydrateProjectAssetUris(contents.project);
 }
 
 export async function downloadProject(project: LocationProject) {
   const blob = await createProjectPackage(project);
-  const referenced = getReferencedProjectAssetIds(project);
-  await Promise.all(Object.values(project.assets.assets).filter((asset) => asset.type === 'model' && !referenced.has(asset.id) && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)).map((asset) => deleteModelAsset(asset.uri.slice(MODEL_ASSET_URI_PREFIX.length))));
+  await validateProjectPackage(blob);
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

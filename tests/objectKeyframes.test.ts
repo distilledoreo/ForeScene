@@ -206,4 +206,32 @@ describe('object keyframes', () => {
     expect(easedMid[prop.id]?.transform?.position[0]).toBeCloseTo(1);
     expect(easedMid[prop.id]?.transform?.rotation[1]).toBeCloseTo(22.5);
   });
+
+  it('uses the shortest rotation path across the 360-degree seam', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    const prop = createSceneObject('box', 1);
+    project.scene.objects.push(prop);
+
+    const keyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: shot.camera,
+        durationSeconds: 2,
+        objectOverrides: {
+          [prop.id]: { transform: { ...prop.transform, rotation: [0, 350, 0] } },
+        },
+      }),
+      slot: 'end',
+      camera: shot.camera,
+      durationSeconds: 2,
+      objectOverrides: {
+        [prop.id]: { transform: { ...prop.transform, rotation: [0, 10, 0] } },
+      },
+    });
+
+    const mid = interpolateObjectOverrides(keyframes, 1, {}, project.scene.objects);
+    expect(mid[prop.id]?.transform?.rotation[1]).toBeCloseTo(360);
+  });
 });

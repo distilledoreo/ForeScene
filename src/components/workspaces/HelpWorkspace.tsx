@@ -265,7 +265,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
 
           <DocSection id="projects" visible={visibleIds.has('projects')} title="Project files" eyebrow="Save editable state">
             <div className="grid gap-4 sm:grid-cols-2">
-              <InfoCard icon={<FileJson />} title="Project JSON" text="Use Open Project and Save Project in the header. JSON stores scene objects, references, shots, settings, workflow checkpoints, and embedded asset data." />
+              <InfoCard icon={<FileJson />} title="Project backups" text="Use Import Project Backup and Export Project Backup in the header. Backups are validated before import and include scene objects, references, shots, settings, workflow checkpoints, and local binary media." />
               <InfoCard icon={<Upload />} title="Export ZIP" text="The export package is a handoff artifact, not an editable project. Keep the JSON if you expect to revise the location later." />
             </div>
             <Tip>Project data stays local to the browser until you explicitly open, save, or download a file.</Tip>

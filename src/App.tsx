@@ -1,23 +1,31 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Boxes,
   BookOpen,
   Camera,
   ChevronDown,
   Clapperboard,
+  CloudCheck,
+  CloudOff,
   Compass,
   FileJson,
   FolderOpen,
   Globe,
   Moon,
   Package,
+  RotateCcw,
   Save,
+  ShieldCheck,
   Sun,
   Upload,
 } from 'lucide-react';
-import { Workspace } from './domain/types';
+import type { Workspace } from './domain/types';
+import type { ProjectPersistenceController } from './engine/projectPersistenceController';
+import type { ProjectSaveStatus } from './engine/projectSafety';
 import { useAppModeStore } from './state/useAppModeStore';
 import { useContinuityStore } from './state/useContinuityStore';
+import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
 import { ModeChooser } from './components/common/ModeChooser';
 import SplashScreen from './components/common/SplashScreen';
@@ -30,12 +38,25 @@ const ExportWorkspace = lazy(() => import('./components/workspaces/ExportWorkspa
 const PanoViewerWorkspace = lazy(() => import('./components/workspaces/PanoViewerWorkspace').then((m) => ({ default: m.PanoViewerWorkspace })));
 const HelpWorkspace = lazy(() => import('./components/workspaces/HelpWorkspace').then((m) => ({ default: m.HelpWorkspace })));
 const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance').then((m) => ({ default: m.WorkflowGuidance })));
+const ProjectSafetyDialog = lazy(() => import('./components/common/ProjectSafetyDialog').then((m) => ({ default: m.ProjectSafetyDialog })));
 
 let projectIoPromise: Promise<typeof import('./engine/projectIO')> | undefined;
+let projectPersistencePromise: Promise<typeof import('./engine/projectPersistenceController')> | undefined;
+let projectSafetyPromise: Promise<typeof import('./engine/projectSafety')> | undefined;
 
 function loadProjectIo() {
   projectIoPromise ??= import('./engine/projectIO');
   return projectIoPromise;
+}
+
+function loadProjectPersistence() {
+  projectPersistencePromise ??= import('./engine/projectPersistenceController');
+  return projectPersistencePromise;
+}
+
+function loadProjectSafety() {
+  projectSafetyPromise ??= import('./engine/projectSafety');
+  return projectSafetyPromise;
 }
 
 const workspaceItems: Array<{ id: Workspace; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -47,6 +68,16 @@ const workspaceItems: Array<{ id: Workspace; label: string; icon: React.Componen
 
 const IMPORT_STATUS_DISMISS_MS = 4000;
 const SPLASH_SEEN_KEY = 'panoref-splash-seen';
+
+function projectSaveStatusLabel(status: ProjectSaveStatus): string {
+  switch (status) {
+    case 'saved': return 'Saved locally';
+    case 'saving': return 'Saving locally';
+    case 'recovered': return 'Recovered locally';
+    case 'failed': return 'Local save failed';
+    default: return 'Unsaved changes';
+  }
+}
 
 function hasSeenSplash(): boolean {
   if (typeof window === 'undefined') return true;
@@ -60,8 +91,10 @@ function hasSeenSplash(): boolean {
 export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
+  const persistenceControllerRef = useRef<ProjectPersistenceController>();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const [projectImportStatus, setProjectImportStatus] = useState<{
     tone: 'success' | 'error';
@@ -77,27 +110,62 @@ export default function App() {
   const setProject = useContinuityStore((state) => state.setProject);
   const updateProjectInfo = useContinuityStore((state) => state.updateProjectInfo);
   const requestObjectiveModal = useContinuityStore((state) => state.requestObjectiveModal);
+  const projectSaveStatus = useProjectSafetyStore((state) => state.status);
+  const projectSaveMessage = useProjectSafetyStore((state) => state.message);
+  const projectLastSavedAt = useProjectSafetyStore((state) => state.lastSavedAt);
+  const criticalProjectWrite = useProjectSafetyStore((state) => state.criticalWrite);
+  const setPersistenceState = useProjectSafetyStore((state) => state.setPersistenceState);
+  const setRecovered = useProjectSafetyStore((state) => state.setRecovered);
+  const setFlushProject = useProjectSafetyStore((state) => state.setFlushProject);
 
   const isPanoViewer = appMode === 'panoViewer';
   const isContinuityStage = appMode === 'continuity';
   const showModeChooser = splashDone && appMode === null && !helpOpen;
 
   const openProjectPicker = () => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before opening another project.',
+      });
+      return;
+    }
     setProjectImportStatus(undefined);
     void loadProjectIo();
     fileRef.current?.click();
+  };
+
+  const navigateWorkspace = (nextWorkspace: Workspace) => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before navigating away.',
+      });
+      return;
+    }
+    setWorkspace(nextWorkspace);
   };
 
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
       const { readProjectFile } = await loadProjectIo();
+      const controller = persistenceControllerRef.current;
+      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+      await controller.createSnapshot(useContinuityStore.getState().project, 'Before opening another project');
       const importedProject = await readProjectFile(file);
+      // The imported package has been validated before this point. Stage its
+      // recovery revision before replacing the live Zustand project.
+      await controller.commitProject(importedProject, {
+        kind: 'import',
+        reason: `Imported project: ${importedProject.name}`,
+      });
+      controller.ignoreNextProjectChange(importedProject);
       setProject(importedProject);
       setAppMode('continuity');
       setProjectImportStatus({
         tone: 'success',
-        message: `Project opened: ${importedProject.name}`,
+        message: `Project opened: ${importedProject.name}. Verified locally for recovery.`,
       });
     } catch (error) {
       setProjectImportStatus({
@@ -112,15 +180,144 @@ export default function App() {
   };
 
   const saveProject = () => {
-    void loadProjectIo()
-      .then(({ downloadProject }) => downloadProject(project))
-      .catch((error) => {
+    void (async () => {
+      try {
+        const controller = persistenceControllerRef.current;
+        if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+        await controller.flush('Manual save before backup export');
+        const { downloadProject } = await loadProjectIo();
+        const project = useContinuityStore.getState().project;
+        await downloadProject(project);
+        setProjectImportStatus({
+          tone: 'success',
+          message: 'Verified project backup downloaded.',
+        });
+      } catch (error) {
         setProjectImportStatus({
           tone: 'error',
           message: error instanceof Error ? `Could not save project: ${error.message}` : 'Could not save project.',
         });
-      });
+      }
+    })();
   };
+
+  const createProjectSnapshot = async (reason: string) => {
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    await controller.createSnapshot(useContinuityStore.getState().project, reason);
+  };
+
+  const restoreProjectSnapshot = async (revisionId: string) => {
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const { restoreProjectRevision } = await loadProjectSafety();
+    const currentProject = useContinuityStore.getState().project;
+    const restored = await restoreProjectRevision(currentProject.id, revisionId);
+    controller.adoptVerifiedProject(restored.project, {
+      revisionId: restored.revision.id,
+      savedAt: restored.revision.createdAt,
+      message: `Restored recovery point: ${restored.revision.reason}.`,
+      recovered: true,
+    });
+    setProject(restored.project);
+    setProjectImportStatus({
+      tone: 'success',
+      message: `Restored snapshot: ${restored.revision.reason}`,
+    });
+  };
+
+  const applyProjectHealthRepair = async (repairedProject: typeof project) => {
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    await controller.createSnapshot(useContinuityStore.getState().project, 'Before repairing project health');
+    await controller.commitProject(repairedProject, {
+      kind: 'autosave',
+      reason: 'Project health safe repair',
+    });
+    controller.ignoreNextProjectChange(repairedProject);
+    setProject(repairedProject);
+    setProjectImportStatus({ tone: 'success', message: 'Safe project health repairs were saved locally.' });
+  };
+
+  useEffect(() => {
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    let unsubscribeAssetFailures: (() => void) | undefined;
+    const projectAtStartup = useContinuityStore.getState().project;
+
+    void (async () => {
+      try {
+        const [persistenceModule, safetyModule, assetStoreModule] = await Promise.all([
+          loadProjectPersistence(),
+          loadProjectSafety(),
+          import('./engine/projectAssetStore'),
+        ]);
+        if (!active) return;
+
+        const recovered = await safetyModule.recoverLatestProject();
+        if (!active) return;
+        const controller = new persistenceModule.ProjectPersistenceController({
+          onStateChange: setPersistenceState,
+        });
+        persistenceControllerRef.current = controller;
+        setFlushProject((reason) => controller.flush(reason));
+
+        const currentProject = useContinuityStore.getState().project;
+        if (recovered && currentProject === projectAtStartup) {
+          controller.start(recovered.project, {
+            recovered: true,
+            revisionId: recovered.revision.id,
+            savedAt: recovered.revision.createdAt,
+          });
+          setProject(recovered.project);
+          setAppMode('continuity');
+          setRecovered({
+            message: recovered.recoveredPreviousRevision
+              ? 'Recovered the previous verified project revision after finding an incomplete save.'
+              : 'Recovered the latest verified local project.',
+            revisionId: recovered.revision.id,
+            savedAt: recovered.revision.createdAt,
+          });
+        } else {
+          controller.start(currentProject);
+        }
+
+        unsubscribe = useContinuityStore.subscribe((next, previous) => {
+          if (next.project !== previous.project) controller.noteProjectChange(next.project, previous.project);
+        });
+        unsubscribeAssetFailures = assetStoreModule.subscribeProjectAssetPersistenceFailures((event) => {
+          controller.reportAssetPersistenceFailure(event.error);
+        });
+      } catch (error) {
+        setPersistenceState({
+          status: 'failed',
+          message: error instanceof Error
+            ? `Local recovery could not start: ${error.message}`
+            : 'Local recovery could not start.',
+          criticalWrite: false,
+        });
+      }
+    })();
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+      unsubscribeAssetFailures?.();
+      setFlushProject(undefined);
+      persistenceControllerRef.current?.dispose();
+      persistenceControllerRef.current = undefined;
+    };
+  }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered]);
+
+  useEffect(() => {
+    const preventUnsafeClose = (event: BeforeUnloadEvent) => {
+      if (!criticalProjectWrite && projectSaveStatus !== 'unsaved' && projectSaveStatus !== 'saving' && projectSaveStatus !== 'failed') return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnsafeClose);
+    return () => window.removeEventListener('beforeunload', preventUnsafeClose);
+  }, [criticalProjectWrite, projectSaveStatus]);
 
   useEffect(() => {
     if (!projectImportStatus) return;
@@ -226,6 +423,12 @@ export default function App() {
                         data-project-name-input
                         className="mt-1 h-8 border-subtle bg-surface-raised px-2 py-1 text-sm font-semibold"
                       />
+                      <div className="mt-2">
+                        <ProjectSaveStatusIndicator
+                          status={projectSaveStatus}
+                          message={projectSaveMessage}
+                        />
+                      </div>
                       <div className="mt-1 text-xs text-secondary">Project actions</div>
                     </div>
                   )}
@@ -261,15 +464,23 @@ export default function App() {
                       />
                       <ProjectMenuButton
                         icon={<FolderOpen className="h-4 w-4" />}
-                        label="Open Project"
+                        label="Import Project Backup"
                         onClick={() => {
                           openProjectPicker();
                           setProjectMenuOpen(false);
                         }}
                       />
                       <ProjectMenuButton
+                        icon={<ShieldCheck className="h-4 w-4" />}
+                        label="Project Safety & Recovery"
+                        onClick={() => {
+                          setProjectSafetyOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                      />
+                      <ProjectMenuButton
                         icon={<FileJson className="h-4 w-4" />}
-                        label="Save Project"
+                        label="Export Project Backup"
                         onClick={() => {
                           saveProject();
                           setProjectMenuOpen(false);
@@ -279,7 +490,7 @@ export default function App() {
                         icon={<Package className="h-4 w-4" />}
                         label="Package Export"
                         onClick={() => {
-                          setWorkspace('export');
+                          navigateWorkspace('export');
                           setHelpOpen(false);
                           setProjectMenuOpen(false);
                         }}
@@ -314,13 +525,20 @@ export default function App() {
             >
               {!isPanoViewer && !helpOpen && (
                 <>
-                  <HeaderToolbarButton onClick={openProjectPicker} title="Open project">
+                  <div
+                    className="hidden h-11 items-center border-r border-subtle/70 px-2 md:flex"
+                    title={projectSaveMessage ?? projectSaveStatusLabel(projectSaveStatus)}
+                    data-project-save-status={projectSaveStatus}
+                  >
+                    <ProjectSaveStatusIndicator status={projectSaveStatus} compact />
+                  </div>
+                  <HeaderToolbarButton onClick={openProjectPicker} title="Import project backup">
                     <FolderOpen className="h-4 w-4" />
                   </HeaderToolbarButton>
                   <span className="h-4 w-px shrink-0 self-center bg-border-subtle/70" aria-hidden />
                   <HeaderToolbarButton
                     onClick={saveProject}
-                    title="Save project"
+                    title="Export verified project backup"
                     data-project-export-button
                   >
                     <Save className="h-4 w-4" />
@@ -347,7 +565,7 @@ export default function App() {
                   return (
                     <button
                       key={item.id}
-                      onClick={() => setWorkspace(item.id)}
+                      onClick={() => navigateWorkspace(item.id)}
                       className="group relative z-10 flex min-w-20 flex-col items-center gap-1.5"
                       aria-current={active ? 'page' : undefined}
                     >
@@ -378,7 +596,7 @@ export default function App() {
                   return (
                     <button
                       key={item.id}
-                      onClick={() => setWorkspace(item.id)}
+                      onClick={() => navigateWorkspace(item.id)}
                       className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium transition ${
                         active ? 'bg-[var(--accent)] text-white' : 'bg-surface-overlay/80 text-secondary backdrop-blur-sm'
                       }`}
@@ -409,6 +627,21 @@ export default function App() {
         </div>
       )}
 
+      {projectSafetyOpen && (
+        <Suspense fallback={null}>
+          <ProjectSafetyDialog
+            open={projectSafetyOpen}
+            project={project}
+            lastSavedAt={projectLastSavedAt}
+            onClose={() => setProjectSafetyOpen(false)}
+            onCreateSnapshot={createProjectSnapshot}
+            onRestoreRevision={restoreProjectSnapshot}
+            onApplyRepair={applyProjectHealthRepair}
+            onExportBackup={saveProject}
+          />
+        </Suspense>
+      )}
+
       {isContinuityStage && !helpOpen && (
         <Suspense fallback={null}>
           <WorkflowGuidance />
@@ -416,8 +649,51 @@ export default function App() {
       )}
 
       <ModeChooser visible={showModeChooser} />
-      <SplashScreen onDismissed={() => setSplashDone(true)} />
+  <SplashScreen onDismissed={() => setSplashDone(true)} />
     </div>
+  );
+}
+
+function ProjectSaveStatusIndicator({
+  status,
+  message,
+  compact = false,
+}: {
+  status: ProjectSaveStatus;
+  message?: string;
+  compact?: boolean;
+}) {
+  const label = projectSaveStatusLabel(status);
+  const Icon = status === 'saved'
+    ? CloudCheck
+    : status === 'saving'
+      ? Save
+      : status === 'recovered'
+        ? RotateCcw
+        : status === 'failed'
+          ? CloudOff
+          : AlertTriangle;
+  const tone = status === 'saved'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : status === 'saving'
+      ? 'text-accent'
+      : status === 'recovered'
+        ? 'text-sky-600 dark:text-sky-400'
+        : status === 'failed'
+          ? 'text-red-600 dark:text-red-400'
+          : 'text-amber-600 dark:text-amber-400';
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1.5 text-xs font-medium ${tone}`}
+      role={status === 'failed' ? 'alert' : 'status'}
+      aria-live="polite"
+    >
+      <Icon className={`h-3.5 w-3.5 shrink-0 ${status === 'saving' ? 'animate-pulse' : ''}`} aria-hidden />
+      <span className={compact ? 'hidden lg:inline' : 'truncate'}>{label}</span>
+      {!compact && message && message !== label && (
+        <span className="truncate font-normal text-secondary">— {message}</span>
+      )}
+    </span>
   );
 }
 

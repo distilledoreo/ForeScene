@@ -180,9 +180,9 @@ function lerpTransform(start: Transform, end: Transform, t: number): Transform {
       lerp(start.position[2], end.position[2], t),
     ],
     rotation: [
-      lerp(start.rotation[0], end.rotation[0], t),
-      lerp(start.rotation[1], end.rotation[1], t),
-      lerp(start.rotation[2], end.rotation[2], t),
+      lerpShortestAngleDegrees(start.rotation[0], end.rotation[0], t),
+      lerpShortestAngleDegrees(start.rotation[1], end.rotation[1], t),
+      lerpShortestAngleDegrees(start.rotation[2], end.rotation[2], t),
     ],
     scale: [
       lerp(start.scale[0], end.scale[0], t),
@@ -194,4 +194,10 @@ function lerpTransform(start: Transform, end: Transform, t: number): Transform {
 
 function lerp(start: number, end: number, t: number): number {
   return start + (end - start) * t;
+}
+
+/** Interpolate Euler components through the nearest equivalent angle. */
+function lerpShortestAngleDegrees(start: number, end: number, t: number): number {
+  const delta = ((end - start + 180) % 360 + 360) % 360 - 180;
+  return start + delta * t;
 }

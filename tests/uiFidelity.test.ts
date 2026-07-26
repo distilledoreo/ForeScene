@@ -516,6 +516,14 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('removeIntermediateCameraKeyframe');
   });
 
+  it('keeps hidden staged objects recoverable from the staging list', () => {
+    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    expect(shots).toContain('getStageableObjectsForShot');
+    expect(shots).toContain("title={object.visible ? undefined : 'Hidden in this shot'}");
+    expect(shots).toContain('aria-label="Hidden in this shot"');
+    expect(shots).toContain("object.visible ? '' : 'opacity-55'");
+  });
+
   it('keeps export multi-select reconciled and add-camera local to export', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
     const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');

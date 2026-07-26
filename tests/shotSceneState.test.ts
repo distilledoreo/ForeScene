@@ -3,6 +3,7 @@ import { createDefaultProject, createSceneObject } from '../src/domain/defaults'
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
+  getStageableObjectsForShot,
   getSceneObjectStagingRole,
   resolveProjectForShot,
   updateShotObjectOverrides,
@@ -65,5 +66,21 @@ describe('per-shot scene state', () => {
     shot.objectOverrides = updateShotObjectOverrides(shot, prop, { visible: false });
     expect(shot.objectOverrides[prop.id]?.visible).toBe(false);
     expect(clearShotObjectOverride(shot, prop.id)).toEqual({});
+  });
+
+  it('keeps objects hidden for a shot in the staging recovery list', () => {
+    const project = createDefaultProject();
+    const hiddenProp = createSceneObject('box', 1);
+    hiddenProp.stagingRole = 'prop';
+    project.scene.objects.push(hiddenProp);
+    const shot = project.shots[0];
+    shot.objectOverrides = updateShotObjectOverrides(shot, hiddenProp, { visible: false });
+
+    const resolved = resolveProjectForShot(project, shot);
+    const hidden = resolved.scene.objects.find((object) => object.id === hiddenProp.id);
+    const stageable = getStageableObjectsForShot(resolved.scene.objects);
+
+    expect(hidden?.visible).toBe(false);
+    expect(stageable.map((object) => object.id)).toContain(hiddenProp.id);
   });
 });
