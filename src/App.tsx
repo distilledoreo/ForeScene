@@ -73,6 +73,7 @@ export default function App() {
   } = useContinuityStore();
 
   const isPanoViewer = appMode === 'panoViewer';
+  const isContinuityStage = appMode === 'continuity';
   const showModeChooser = splashDone && appMode === null && !helpOpen;
 
   const openProjectPicker = () => {
@@ -152,14 +153,14 @@ export default function App() {
             <HelpWorkspace onClose={() => setHelpOpen(false)} />
           ) : isPanoViewer ? (
             <PanoViewerWorkspace />
-          ) : (
+          ) : isContinuityStage ? (
             <>
               {workspace === 'build' && <BuildWorkspace />}
               {workspace === 'reference' && <ReferenceWorkspace />}
               {workspace === 'shots' && <ShotsWorkspace />}
               {workspace === 'export' && <ExportWorkspace />}
             </>
-          )}
+          ) : null}
         </Suspense>
       </main>
 
@@ -317,7 +318,7 @@ export default function App() {
             </div>
           </div>
 
-          {!isPanoViewer && !helpOpen && (
+          {isContinuityStage && !helpOpen && (
             <>
               <nav className="pointer-events-auto absolute left-1/2 top-5 hidden w-[min(700px,56vw)] -translate-x-1/2 items-start justify-between md:flex">
                 <span className="absolute left-8 right-8 top-[22px] h-px bg-border-subtle/80" aria-hidden />
@@ -389,7 +390,7 @@ export default function App() {
         </div>
       )}
 
-      {!isPanoViewer && !helpOpen && <WorkflowGuidance />}
+      {isContinuityStage && !helpOpen && <WorkflowGuidance />}
 
       <ModeChooser visible={showModeChooser} />
       <SplashScreen onDismissed={() => setSplashDone(true)} />

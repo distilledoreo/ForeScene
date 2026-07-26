@@ -54,4 +54,32 @@ describe('binary model asset storage', () => {
     project.scene.objects.push({ id: 'model-object', name: 'Model', type: 'imported_model', transform: createTransform(), dimensions: [1, 1, 0.001], category: 'architecture', locked: false, visible: true, modelAssetId: 'mesh' });
     await expect(createProjectPackage(project)).rejects.toThrow('binary model asset missing.panoref-mesh is missing');
   });
+
+  it('does not overwrite existing model storage when another package binary is missing', async () => {
+    await putModelAsset('existing/key', new Uint8Array([9]).buffer);
+    const project = createDefaultProject();
+    project.assets.assets.first = {
+      id: 'first',
+      type: 'model',
+      name: 'first.panoref-mesh',
+      uri: `${MODEL_ASSET_URI_PREFIX}existing/key`,
+      createdAt: new Date(0).toISOString(),
+    };
+    project.assets.assets.second = {
+      id: 'second',
+      type: 'model',
+      name: 'second.panoref-mesh',
+      uri: `${MODEL_ASSET_URI_PREFIX}missing/key`,
+      createdAt: new Date(0).toISOString(),
+    };
+    const zip = new JSZip();
+    zip.file('project.json', JSON.stringify(project));
+    zip.file(`model-assets/${encodeURIComponent('existing/key')}.bin`, new Uint8Array([1, 2, 3]));
+
+    await expect(readProjectFile(new File([
+      await zip.generateAsync({ type: 'blob' }),
+    ], 'broken.panoref-project'))).rejects.toThrow('binary model asset second.panoref-mesh');
+
+    expect(Array.from(new Uint8Array((await getModelAsset('existing/key'))!))).toEqual([9]);
+  });
 });

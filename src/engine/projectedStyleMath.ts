@@ -142,7 +142,14 @@ float sampleProjectorVisibility(
 ) {
   vec3 projectorOffset = worldPosition - projectorOrigin;
   float fragmentDistance = length(projectorOffset);
-  vec3 direction = normalize(projectorOffset);
+  // Explicitly initialize before the zero-distance guard. Some ANGLE shader
+  // compilers otherwise warn that the generated helper can read an undefined
+  // normalized direction, even though normal fragments never hit this case.
+  vec3 direction = vec3(0.0, 0.0, 1.0);
+  if (fragmentDistance <= 0.000001) {
+    return 1.0;
+  }
+  direction = projectorOffset / fragmentDistance;
 
   float effectiveBias = baseBias
     + fragmentDistance * 0.01
@@ -163,8 +170,10 @@ float sampleProjectorVisibility(
 
   // Soft edges: five-tap angular filter (viewport quality).
   vec3 helperAxis = abs(direction.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-  vec3 tangent = normalize(cross(helperAxis, direction));
-  vec3 bitangent = normalize(cross(direction, tangent));
+  vec3 tangent = vec3(1.0, 0.0, 0.0);
+  vec3 bitangent = vec3(0.0, 0.0, 1.0);
+  tangent = normalize(cross(helperAxis, direction));
+  bitangent = normalize(cross(direction, tangent));
 
   float texelAngle = 2.0 / max(faceSize, 1.0);
   float offsetAngle = texelAngle * max(softness, 0.0);
@@ -179,13 +188,17 @@ float sampleProjectorVisibility(
     effectiveBias
   );
   float v = center;
-  vec3 d1 = normalize(direction + tangent * offsetAngle);
+  vec3 d1 = direction;
+  vec3 d2 = direction;
+  vec3 d3 = direction;
+  vec3 d4 = direction;
+  d1 = normalize(direction + tangent * offsetAngle);
   v += singleOcclusionSample(d1, worldPosition, projectorOrigin, occlusionCube, nearMeters, farMeters, effectiveBias);
-  vec3 d2 = normalize(direction - tangent * offsetAngle);
+  d2 = normalize(direction - tangent * offsetAngle);
   v += singleOcclusionSample(d2, worldPosition, projectorOrigin, occlusionCube, nearMeters, farMeters, effectiveBias);
-  vec3 d3 = normalize(direction + bitangent * offsetAngle);
+  d3 = normalize(direction + bitangent * offsetAngle);
   v += singleOcclusionSample(d3, worldPosition, projectorOrigin, occlusionCube, nearMeters, farMeters, effectiveBias);
-  vec3 d4 = normalize(direction - bitangent * offsetAngle);
+  d4 = normalize(direction - bitangent * offsetAngle);
   v += singleOcclusionSample(d4, worldPosition, projectorOrigin, occlusionCube, nearMeters, farMeters, effectiveBias);
   float averaged = clamp(v / 5.0, 0.0, 1.0);
   // Neighbor taps often graze closer geometry and falsely darken a surface that

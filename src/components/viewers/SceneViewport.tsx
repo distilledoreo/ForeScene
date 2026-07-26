@@ -10,7 +10,11 @@ import {
   type ForwardSprintState,
 } from '../../engine/forwardSprint';
 import { BUILD_GRID_SIZE, createPlacedSceneObject, resolveStampPoint } from '../../engine/sandbox';
-import { getHumanMannequinRevision, subscribeHumanMannequinReady } from '../../engine/humanMannequinModel';
+import {
+  ensureHumanMannequinModel,
+  getHumanMannequinRevision,
+  subscribeHumanMannequinReady,
+} from '../../engine/humanMannequinModel';
 import {
   resolveProjectedProjectorAssets,
 } from '../../engine/multiOriginProjection';
@@ -1451,6 +1455,9 @@ export function SceneViewport({
   }, [renderDistance, shotFraming]);
 
   useEffect(() => {
+    void ensureHumanMannequinModel().catch(() => {
+      // The procedural fallback stays available if the optional GLB cannot load.
+    });
     return subscribeHumanMannequinReady(() => {
       setMannequinRevision(getHumanMannequinRevision());
     });

@@ -4,6 +4,7 @@ import {
   clampDuration,
   getCameraMoveDurationSeconds,
   getCameraMoveReferenceFrames,
+  getIntermediateCameraKeyframeTimeBounds,
   hasRenderableCameraMove,
   insertIntermediateCameraKeyframe,
   interpolateCameraKeyframes,
@@ -180,6 +181,59 @@ describe('camera keyframes', () => {
 
     const shortened = updateCameraMoveDuration(keyframes, 4);
     expect(shortened.map((keyframe) => keyframe.timeSeconds)).toEqual([0, 1, 2, 4]);
+  });
+
+  it('keeps retimed intermediate keyframes strictly between their neighbors', () => {
+    const shot = createDefaultProject().shots[0];
+    let keyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: { ...shot.camera, position: [0, shot.camera.position[1], shot.camera.position[2]] },
+        durationSeconds: 8,
+      }),
+      slot: 'end',
+      camera: { ...shot.camera, position: [8, shot.camera.position[1], shot.camera.position[2]] },
+      durationSeconds: 8,
+    });
+    keyframes = insertIntermediateCameraKeyframe({
+      keyframes,
+      camera: { ...shot.camera, position: [4, shot.camera.position[1], shot.camera.position[2]] },
+    });
+    keyframes = insertIntermediateCameraKeyframe({
+      keyframes,
+      camera: { ...shot.camera, position: [2, shot.camera.position[1], shot.camera.position[2]] },
+    });
+
+    const retimed = updateIntermediateCameraKeyframeTime(keyframes, keyframes[1].id, 4);
+
+    expect(retimed.map((keyframe) => keyframe.timeSeconds)).toEqual([0, 3.99, 4, 8]);
+    expect(interpolateCameraKeyframes(retimed, 4).position[0]).toBeCloseTo(4);
+    expect(interpolateCameraKeyframes(retimed, 4.0001).position[0]).toBeCloseTo(4.0001);
+  });
+
+  it('contracts the retime margin for tightly packed neighboring points', () => {
+    const shot = createDefaultProject().shots[0];
+    const keyframes = [
+      { id: 'start', label: 'Start', timeSeconds: 0, camera: shot.camera },
+      { id: 'middle', label: 'Keyframe 1', timeSeconds: 0.004, camera: shot.camera },
+      { id: 'next', label: 'Keyframe 2', timeSeconds: 0.008, camera: shot.camera },
+      { id: 'end', label: 'End', timeSeconds: 0.5, camera: shot.camera },
+    ];
+
+    const bounds = getIntermediateCameraKeyframeTimeBounds(keyframes, 'middle');
+    const retimed = updateIntermediateCameraKeyframeTime(keyframes, 'middle', 0.5);
+
+    expect(bounds).toEqual({
+      minimumTimeSeconds: expect.closeTo(0.0013333333333333333),
+      maximumTimeSeconds: expect.closeTo(0.006666666666666666),
+    });
+    expect(retimed.map((keyframe) => keyframe.timeSeconds)).toEqual([
+      0,
+      expect.closeTo(0.006666666666666666),
+      0.008,
+      0.5,
+    ]);
   });
 
   it('applies the selected easing curve between every camera keyframe', () => {

@@ -75,6 +75,7 @@ export default function SplashScreen({ onDismissed }: { onDismissed?: () => void
         playsInline
         muted
         autoPlay
+        preload="metadata"
         onEnded={dismiss}
         onClick={(e) => {
           // Prevent the parent onClick from firing twice; allow tap-to-dismiss.

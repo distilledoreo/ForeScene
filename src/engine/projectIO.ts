@@ -7,14 +7,15 @@ import {
 } from '../domain/defaults';
 import JSZip from 'jszip';
 import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
-import { deleteModelAsset, getModelAsset, putModelAsset } from './modelAssetStore';
+import { getReferencedProjectAssetIds, pruneUnreferencedProjectAssets } from './projectAssets';
+import { deleteModelAsset, getModelAsset, putModelAssets } from './modelAssetStore';
 
 const PROJECT_MANIFEST = 'project.json';
 const DEFAULT_SCENE_PANO_ORIGIN: Vec3 = [0, DEFAULT_CAMERA_HEIGHT_METERS, 0];
 const DEFAULT_SCENE_PANO_ROTATION: Euler = [0, 0, 0];
 
 export function serializeProject(project: LocationProject): string {
-  return JSON.stringify(withoutOrphanedModelAssets(project), null, 2);
+  return JSON.stringify(pruneUnreferencedProjectAssets(project), null, 2);
 }
 
 export function parseProject(json: string): LocationProject {
@@ -199,7 +200,7 @@ function normalizeShot(shot: Shot): Shot {
 }
 
 export async function createProjectPackage(project: LocationProject): Promise<Blob> {
-  const portable = structuredClone(withoutOrphanedModelAssets(project));
+  const portable = structuredClone(pruneUnreferencedProjectAssets(project));
   const migratedBytes = new Map<string, ArrayBuffer>();
   const legacyPrefix = 'data:application/vnd.panoref.graybox-mesh;base64,';
   for (const asset of Object.values(portable.assets.assets)) {
@@ -229,20 +230,23 @@ export async function readProjectFile(file: File): Promise<LocationProject> {
   const manifest = zip.file(PROJECT_MANIFEST);
   if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
   const project = parseProject(await manifest.async('text'));
-  for (const asset of Object.values(project.assets.assets)) {
-    if (asset.type !== 'model' || !asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) continue;
-    const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
-    const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
-    if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
-    const bytes = await entry.async('arraybuffer');
-    await putModelAsset(key, bytes);
-  }
+  const modelWrites = await Promise.all(
+    Object.values(project.assets.assets)
+      .filter((asset) => asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX))
+      .map(async (asset) => {
+        const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+        const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
+        if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
+        return { key, bytes: await entry.async('arraybuffer') };
+      }),
+  );
+  await putModelAssets(modelWrites);
   return project;
 }
 
 export async function downloadProject(project: LocationProject) {
   const blob = await createProjectPackage(project);
-  const referenced = new Set(project.scene.objects.map((object) => object.modelAssetId).filter(Boolean));
+  const referenced = getReferencedProjectAssetIds(project);
   await Promise.all(Object.values(project.assets.assets).filter((asset) => asset.type === 'model' && !referenced.has(asset.id) && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)).map((asset) => deleteModelAsset(asset.uri.slice(MODEL_ASSET_URI_PREFIX.length))));
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -325,22 +329,4 @@ export function readFileAsText(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsText(file);
   });
-}
-
-function withoutOrphanedModelAssets(project: LocationProject): LocationProject {
-  const referencedModelIds = new Set(
-    project.scene.objects
-      .map((object) => object.modelAssetId)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const assets = Object.fromEntries(
-    Object.entries(project.assets.assets).filter(([, asset]) => (
-      asset.type !== 'model' || referencedModelIds.has(asset.id)
-    )),
-  );
-  if (Object.keys(assets).length === Object.keys(project.assets.assets).length) return project;
-  return {
-    ...project,
-    assets: { assets },
-  };
 }

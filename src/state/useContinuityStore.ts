@@ -45,7 +45,7 @@ import {
   add,
   multiplyScalar,
 } from '../engine/sync';
-import { renderGrayboxEquirectangularPano } from '../engine/renderers';
+import { pruneUnreferencedProjectAssets } from '../engine/projectAssets';
 import {
   BUILD_HISTORY_COALESCE_MS,
   type BuildHistoryMode,
@@ -447,7 +447,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     });
   },
   setProject: (project) => {
-    const linkedProject = linkAllShotsToCanonicalPano(project);
+    const linkedProject = pruneUnreferencedProjectAssets(linkAllShotsToCanonicalPano(project));
     const canonical = linkedProject.panoRefs.find((pano) => pano.isCanonical) ?? linkedProject.panoRefs[0];
     const firstShot = linkedProject.shots[0];
     const cleared = clearBuildHistory();
@@ -866,6 +866,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       });
       const state = get();
       const theme = useThemeStore.getState().theme;
+      const { renderGrayboxEquirectangularPano } = await import('../engine/renderers');
       const render = await renderGrayboxEquirectangularPano(state.project, undefined, undefined, theme);
       const asset = createPanoAsset({
         name: 'global_graybox.png',
@@ -1252,14 +1253,14 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
 
     return {
       ...historyPatch,
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...state.project,
         shots: state.project.shots.map((current) => {
           if (current.id !== id) return current;
           const updated = { ...current, ...updates, updatedAt: new Date().toISOString() };
           return withShotPanoLink(state.project, updated);
         }),
-      }),
+      })),
     };
   }),
   removeShot: (id) => set((state) => {
@@ -1268,7 +1269,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const nextSelected = state.selectedShotId === id ? shots[0]?.id : state.selectedShotId;
     const nextShot = shots.find((shot) => shot.id === nextSelected);
     return {
-      project: touchProject({ ...state.project, shots }),
+      project: touchProject(pruneUnreferencedProjectAssets({ ...state.project, shots })),
       selectedShotId: nextSelected,
       panoView: nextShot ? panoViewFromCamera(nextShot.camera) : state.panoView,
     };
@@ -1296,7 +1297,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       },
     });
     set((current) => ({
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,
         assets: {
           assets: {
@@ -1314,7 +1315,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
               updatedAt: new Date().toISOString(),
             }
           : item),
-      }),
+      })),
     }));
     return asset;
   },
@@ -1337,8 +1338,6 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       },
     });
     set((current) => {
-      const currentShot = current.project.shots.find((item) => item.id === shot.id);
-      const previousAssetId = currentShot?.assets[assetKey];
       const shots = current.project.shots.map((item) => item.id === shot.id
         ? {
             ...item,
@@ -1353,20 +1352,12 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         ...current.project.assets.assets,
         [asset.id]: asset,
       };
-      const previousAssetStillReferenced = previousAssetId && (
-        current.project.panoRefs.some((pano) => pano.imageAssetId === previousAssetId)
-        || shots.some((item) => Object.values(item.assets).some((assetId) => assetId === previousAssetId))
-      );
-      if (previousAssetId && previousAssetId !== asset.id && !previousAssetStillReferenced) {
-        delete assets[previousAssetId];
-      }
-
       return {
-        project: touchProject({
+        project: touchProject(pruneUnreferencedProjectAssets({
           ...current.project,
           assets: { assets },
           shots,
-        }),
+        })),
       };
     });
     return asset;
@@ -1386,7 +1377,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       },
     });
     set((current) => ({
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,
         assets: {
           assets: {
@@ -1406,7 +1397,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
               updatedAt: new Date().toISOString(),
             }
           : item),
-      }),
+      })),
     }));
     return asset;
   },

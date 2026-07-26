@@ -137,14 +137,45 @@ export function updateIntermediateCameraKeyframeTime(
 ): CameraKeyframe[] {
   const sorted = getSortedCameraKeyframes(keyframes);
   if (sorted.length < 3 || !Number.isFinite(timeSeconds)) return sorted;
-  const first = sorted[0];
-  const last = sorted[sorted.length - 1];
-  if (keyframeId === first.id || keyframeId === last.id) return sorted;
-  const margin = Math.min(0.01, (last.timeSeconds - first.timeSeconds) / 4);
-  const clamped = Math.max(first.timeSeconds + margin, Math.min(last.timeSeconds - margin, timeSeconds));
+  const bounds = getIntermediateCameraKeyframeTimeBounds(sorted, keyframeId);
+  if (!bounds) return sorted;
+  const clamped = Math.max(
+    bounds.minimumTimeSeconds,
+    Math.min(bounds.maximumTimeSeconds, timeSeconds),
+  );
   return getSortedCameraKeyframes(sorted.map((keyframe) => (
     keyframe.id === keyframeId ? { ...keyframe, timeSeconds: clamped } : keyframe
   )));
+}
+
+export interface IntermediateCameraKeyframeTimeBounds {
+  minimumTimeSeconds: number;
+  maximumTimeSeconds: number;
+}
+
+/**
+ * Return a strict, neighbor-aware time window for an intermediate point.
+ * The margin contracts for tightly packed points so valid imports and short
+ * camera moves cannot be retimed past an adjacent keyframe.
+ */
+export function getIntermediateCameraKeyframeTimeBounds(
+  keyframes: readonly CameraKeyframe[],
+  keyframeId: string,
+): IntermediateCameraKeyframeTimeBounds | undefined {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  const keyframeIndex = sorted.findIndex((keyframe) => keyframe.id === keyframeId);
+  if (keyframeIndex <= 0 || keyframeIndex >= sorted.length - 1) return undefined;
+
+  const previous = sorted[keyframeIndex - 1];
+  const next = sorted[keyframeIndex + 1];
+  const gap = next.timeSeconds - previous.timeSeconds;
+  if (!Number.isFinite(gap) || gap <= 0) return undefined;
+
+  const margin = Math.min(0.01, gap / 3);
+  return {
+    minimumTimeSeconds: previous.timeSeconds + margin,
+    maximumTimeSeconds: next.timeSeconds - margin,
+  };
 }
 
 export function removeIntermediateCameraKeyframe(

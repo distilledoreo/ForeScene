@@ -31,6 +31,51 @@ describe('project workflow logic', () => {
     expect(parsed.scene.objects[0].name).toBe(project.scene.objects[0].name);
   });
 
+  it('does not serialize unreferenced image, video, or model registry entries', () => {
+    const project = createDefaultProject();
+    const referenced = createPanoAsset({
+      name: 'reference.png',
+      uri: 'data:image/png;base64,REFERENCE',
+      width: 2048,
+      height: 1024,
+    });
+    const pano = createPanoReference({
+      name: 'Reference',
+      assetId: referenced.id,
+      type: 'ai_global_reference',
+      origin: project.scene.panoOrigin,
+      width: 2048,
+      height: 1024,
+      isCanonical: true,
+    });
+    project.assets.assets[referenced.id] = referenced;
+    project.assets.assets.orphanImage = {
+      id: 'orphanImage',
+      type: 'image',
+      name: 'old.png',
+      uri: 'data:image/png;base64,OLD',
+      createdAt: new Date(0).toISOString(),
+    };
+    project.assets.assets.orphanVideo = {
+      id: 'orphanVideo',
+      type: 'video',
+      name: 'old.mp4',
+      uri: 'data:video/mp4;base64,OLD',
+      createdAt: new Date(0).toISOString(),
+    };
+    project.assets.assets.orphanModel = {
+      id: 'orphanModel',
+      type: 'model',
+      name: 'old.glb',
+      uri: 'data:model/gltf-binary;base64,OLD',
+      createdAt: new Date(0).toISOString(),
+    };
+    project.panoRefs = [pano];
+
+    const serialized = JSON.parse(serializeProject(project)) as typeof project;
+    expect(Object.keys(serialized.assets.assets)).toEqual([referenced.id]);
+  });
+
   it('rejects unsupported project JSON during import parsing', () => {
     const project = createDefaultProject();
     expect(() => parseProject(JSON.stringify({ ...project, schemaVersion: '9.9' })))
@@ -1084,5 +1129,45 @@ describe('project workflow logic', () => {
     expect(state.project.shots[0].assets.viewportRenderAssetId).toBe(second.id);
     expect(state.project.assets.assets[first.id]).toBeUndefined();
     expect(state.project.assets.assets[second.id]).toBeTruthy();
+  });
+
+  it('reclaims superseded and detached shot media assets', () => {
+    const project = createDefaultProject();
+    useContinuityStore.setState({
+      project,
+      selectedShotId: project.shots[0]?.id,
+    });
+    const shotId = project.shots[0].id;
+    const firstVideo = useContinuityStore.getState().attachCameraMoveVideoToShot(shotId, {
+      name: 'first.mp4', dataUrl: 'data:video/mp4;base64,FIRST', mimeType: 'video/mp4', width: 1920, height: 1080,
+      durationSeconds: 2, frameRate: 24,
+    });
+    const secondVideo = useContinuityStore.getState().attachCameraMoveVideoToShot(shotId, {
+      name: 'second.mp4', dataUrl: 'data:video/mp4;base64,SECOND', mimeType: 'video/mp4', width: 1920, height: 1080,
+      durationSeconds: 2, frameRate: 24,
+    });
+    const firstAiResult = useContinuityStore.getState().attachAiResultFrameToShot(shotId, {
+      name: 'first.png', dataUrl: 'data:image/png;base64,FIRST',
+    });
+    const secondAiResult = useContinuityStore.getState().attachAiResultFrameToShot(shotId, {
+      name: 'second.png', dataUrl: 'data:image/png;base64,SECOND',
+    });
+    let state = useContinuityStore.getState();
+    expect(state.project.assets.assets[firstVideo.id]).toBeUndefined();
+    expect(state.project.assets.assets[firstAiResult.id]).toBeUndefined();
+    expect(state.project.assets.assets[secondVideo.id]).toBeTruthy();
+    expect(state.project.assets.assets[secondAiResult.id]).toBeTruthy();
+
+    state.updateShot(shotId, {
+      assets: { ...state.project.shots[0].assets, cameraMoveVideoAssetId: undefined },
+    });
+    expect(useContinuityStore.getState().project.assets.assets[secondVideo.id]).toBeUndefined();
+
+    const detachedShot = useContinuityStore.getState().addCamera({ navigateToShots: false });
+    const detachedAsset = useContinuityStore.getState().attachAiResultFrameToShot(detachedShot.id, {
+      name: 'detached.png', dataUrl: 'data:image/png;base64,DETACHED',
+    });
+    useContinuityStore.getState().removeShot(detachedShot.id);
+    expect(useContinuityStore.getState().project.assets.assets[detachedAsset.id]).toBeUndefined();
   });
 });

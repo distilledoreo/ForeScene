@@ -46,6 +46,7 @@ import {
   CAMERA_KEYFRAME_EASING_OPTIONS,
   CameraMoveKeyframeSlot,
   getCameraMoveDurationSeconds,
+  getIntermediateCameraKeyframeTimeBounds,
   getSortedCameraKeyframes,
   hasRenderableCameraMove,
   insertIntermediateCameraKeyframe,
@@ -55,6 +56,7 @@ import {
   updateCameraMoveDuration,
   updateIntermediateCameraKeyframeTime,
 } from '../../engine/cameraKeyframes';
+import { runSettledSequentially } from '../../engine/asyncJobs';
 import {
   getCameraMoveDownloadName,
   getProjectedCameraMoveDownloadName,
@@ -844,8 +846,8 @@ export function ShotsWorkspace() {
         );
 
         // Capture companion stills for camera-roll view toggles (projection × people).
-        const companionJobs: Array<Promise<void>> = [
-          renderShotFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
+        const companionJobs: Array<() => Promise<void>> = [
+          () => renderShotFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
             .then((clean) => attachStillView(
               { appearance: 'clay', people: 'clean_plate' },
               clean.dataUrl,
@@ -858,7 +860,7 @@ export function ShotsWorkspace() {
         if (canUseProjectedAppearance(latestProject)) {
           const projectedBaseName = getProjectedStillDownloadName(shotForNaming);
           companionJobs.push(
-            renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'with_people' })
+            () => renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'with_people' })
               .then(async (projected) => {
                 await attachStillView(
                   { appearance: 'projected', people: 'with_people' },
@@ -867,10 +869,8 @@ export function ShotsWorkspace() {
                   projected.height,
                   projectedBaseName,
                 );
-                // Keep dual-download behavior for the primary projected companion.
-                downloadDataUrl(projected.dataUrl, projectedBaseName);
               }),
-            renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
+            () => renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
               .then((projectedClean) => attachStillView(
                 { appearance: 'projected', people: 'clean_plate' },
                 projectedClean.dataUrl,
@@ -881,7 +881,7 @@ export function ShotsWorkspace() {
           );
         }
 
-        await Promise.allSettled(companionJobs);
+        await runSettledSequentially(companionJobs);
       })
       .catch(() => {
         setSnapshotError('Could not save the shot preview. Try Capture again.');
@@ -1942,42 +1942,49 @@ export function ShotsWorkspace() {
                   )}
                   {intermediateCameraMoveKeyframes.length > 0 && (
                     <div className="mt-3 space-y-2">
-                      {intermediateCameraMoveKeyframes.map((keyframe, index) => (
-                        <div
-                          key={keyframe.id}
-                          className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised px-2 py-2"
-                          data-camera-intermediate-keyframe
-                        >
-                          <span className="min-w-0 flex-1 truncate text-xs font-medium text-primary">
-                            Point {index + 1}
-                          </span>
-                          <label className="flex items-center gap-1 text-xs text-muted">
-                            <span className="sr-only">Time for point {index + 1}</span>
-                            <TextInput
-                              type="number"
-                              min={0.01}
-                              max={Math.max(0.01, cameraMoveDurationSeconds - 0.01)}
-                              step="0.1"
-                              value={Number(keyframe.timeSeconds.toFixed(2))}
-                              onChange={(event) => changeIntermediateCameraMoveKeyframeTime(
-                                keyframe.id,
-                                Number(event.target.value),
-                              )}
-                              className="w-20 px-2 py-1.5 text-xs"
-                              aria-label={`Time for point ${index + 1}`}
-                            />
-                            s
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => deleteIntermediateCameraMoveKeyframe(keyframe.id)}
-                            className="rounded-md p-1.5 text-muted transition hover:bg-surface-hover hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-[var(--accent-glow)]"
-                            aria-label={`Delete point ${index + 1}`}
+                      {intermediateCameraMoveKeyframes.map((keyframe, index) => {
+                        const timeBounds = getIntermediateCameraKeyframeTimeBounds(
+                          cameraMoveKeyframes,
+                          keyframe.id,
+                        );
+                        return (
+                          <div
+                            key={keyframe.id}
+                            className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised px-2 py-2"
+                            data-camera-intermediate-keyframe
                           >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      ))}
+                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-primary">
+                              Point {index + 1}
+                            </span>
+                            <label className="flex items-center gap-1 text-xs text-muted">
+                              <span className="sr-only">Time for point {index + 1}</span>
+                              <TextInput
+                                type="number"
+                                min={timeBounds?.minimumTimeSeconds}
+                                max={timeBounds?.maximumTimeSeconds}
+                                step="any"
+                                value={keyframe.timeSeconds}
+                                disabled={!timeBounds}
+                                onChange={(event) => changeIntermediateCameraMoveKeyframeTime(
+                                  keyframe.id,
+                                  Number(event.target.value),
+                                )}
+                                className="w-20 px-2 py-1.5 text-xs"
+                                aria-label={`Time for point ${index + 1}`}
+                              />
+                              s
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => deleteIntermediateCameraMoveKeyframe(keyframe.id)}
+                              className="rounded-md p-1.5 text-muted transition hover:bg-surface-hover hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-[var(--accent-glow)]"
+                              aria-label={`Delete point ${index + 1}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

@@ -29,23 +29,70 @@ export function getRegisteredModelAssetBytes(key: string): ArrayBuffer | undefin
   return bytes ? cloneBuffer(bytes) : undefined;
 }
 
-export async function putModelAsset(key: string, bytes: ArrayBuffer, signal?: AbortSignal): Promise<void> {
+export interface ModelAssetWrite {
+  key: string;
+  bytes: ArrayBuffer;
+}
+
+/**
+ * Persist a package's model payloads in one IndexedDB transaction. The memory
+ * cache is only updated after that transaction commits, so a broken package
+ * cannot partially replace an existing model import.
+ */
+export async function putModelAssets(entries: readonly ModelAssetWrite[], signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
-  registerModelAssetBytes(key, bytes);
+  if (entries.length === 0) return;
+
   const db = await openDatabase();
-  if (!db) return;
+  if (!db) {
+    if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
+    for (const entry of entries) registerModelAssetBytes(entry.key, entry.bytes);
+    return;
+  }
+
   try {
+    if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(STORE_NAME, 'readwrite');
-      transaction.objectStore(STORE_NAME).put(bytes, key);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not store model geometry.'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Model geometry storage was cancelled.'));
-      signal?.addEventListener('abort', () => transaction.abort(), { once: true });
+      const abort = () => {
+        try {
+          transaction.abort();
+        } catch {
+          // The transaction already completed between the signal and callback.
+        }
+      };
+      const finish = () => signal?.removeEventListener('abort', abort);
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        const store = transaction.objectStore(STORE_NAME);
+        for (const entry of entries) store.put(entry.bytes, entry.key);
+      } catch (error) {
+        finish();
+        transaction.abort();
+        reject(error);
+        return;
+      }
+      transaction.oncomplete = () => {
+        finish();
+        resolve();
+      };
+      transaction.onerror = () => {
+        finish();
+        reject(transaction.error ?? new Error('Could not store model geometry.'));
+      };
+      transaction.onabort = () => {
+        finish();
+        reject(transaction.error ?? new Error('Model geometry storage was cancelled.'));
+      };
     });
+    for (const entry of entries) registerModelAssetBytes(entry.key, entry.bytes);
   } finally {
     db.close();
   }
+}
+
+export async function putModelAsset(key: string, bytes: ArrayBuffer, signal?: AbortSignal): Promise<void> {
+  await putModelAssets([{ key, bytes }], signal);
 }
 
 export async function getModelAsset(key: string): Promise<ArrayBuffer | undefined> {

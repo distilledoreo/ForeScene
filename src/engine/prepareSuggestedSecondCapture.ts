@@ -7,7 +7,6 @@ import {
   type CoverageOptimizationResult,
   type CoverageOptimizationTask,
 } from './projectionCoverage';
-import { renderProjectedEquirectangularPano } from './renderers';
 
 export type SuggestedSecondCapturePhase =
   | 'preparing'
@@ -165,6 +164,7 @@ export function prepareSuggestedSecondCapture(
           },
         };
 
+        const { renderProjectedEquirectangularPano } = await import('./renderers');
         const projected = await renderProjectedEquirectangularPano(
           projectAtB,
           undefined,
