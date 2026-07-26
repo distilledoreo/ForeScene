@@ -6,6 +6,7 @@ import {
   normalizeProjectWorkflow,
 } from '../domain/defaults';
 import JSZip from 'jszip';
+import { digestFromRecoveryResourceKey, sha256Digest, verifyBinaryDigest } from './binaryIntegrity';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import { dataUrlToBlob, readFileAsText } from './fileTransfers';
 import { pruneUnreferencedProjectAssets } from './projectAssets';
@@ -19,6 +20,7 @@ import {
 } from './projectAssetStore';
 
 const PROJECT_MANIFEST = 'project.json';
+const PROJECT_INTEGRITY = 'integrity.json';
 const DEFAULT_SCENE_PANO_ORIGIN: Vec3 = [0, DEFAULT_CAMERA_HEIGHT_METERS, 0];
 const DEFAULT_SCENE_PANO_ROTATION: Euler = [0, 0, 0];
 
@@ -291,20 +293,32 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
   }
   const zip = new JSZip();
   zip.file(PROJECT_MANIFEST, serializeProject(portable));
+  const integrity: ProjectPackageIntegrity = { version: 1, entries: {} };
   for (const asset of binaryAssets) {
     const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
     const bytes = migratedBytes.get(key) ?? await getModelAsset(key);
     if (!bytes) throw new Error(`Cannot save project: binary model asset ${asset.name} is missing.`);
-    zip.file(`model-assets/${encodeURIComponent(key)}.bin`, bytes);
+    const path = `model-assets/${encodeURIComponent(key)}.bin`;
+    integrity.entries[path] = { sha256: await sha256Digest(bytes), byteLength: bytes.byteLength };
+    zip.file(path, bytes);
   }
   for (const asset of storedProjectAssets) {
     const key = portableStorageKey(asset);
     if (!key) continue;
     const blob = migratedProjectAssetBlobs.get(key) ?? await getProjectAssetBlob(key);
     if (!blob) throw new Error(`Cannot save project: binary asset ${asset.name} is missing.`);
-    zip.file(`project-assets/${encodeURIComponent(key)}.bin`, await blob.arrayBuffer());
+    const bytes = await blob.arrayBuffer();
+    const path = `project-assets/${encodeURIComponent(key)}.bin`;
+    integrity.entries[path] = { sha256: await sha256Digest(bytes), byteLength: bytes.byteLength };
+    zip.file(path, bytes);
   }
+  zip.file(PROJECT_INTEGRITY, JSON.stringify(integrity));
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
+}
+
+interface ProjectPackageIntegrity {
+  version: 1;
+  entries: Record<string, { sha256: string; byteLength: number }>;
 }
 
 interface ValidatedProjectFileContents {
@@ -316,6 +330,43 @@ interface ValidatedProjectFileContents {
 
 function assertNonEmptyBinary(name: string, byteLength: number): void {
   if (byteLength <= 0) throw new Error(`Project package contains an empty binary asset ${name}.`);
+}
+
+async function readPackageIntegrity(zip: JSZip): Promise<ProjectPackageIntegrity | undefined> {
+  const entry = zip.file(PROJECT_INTEGRITY);
+  if (!entry) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await entry.async('text'));
+  } catch {
+    throw new Error('Project package has invalid binary integrity metadata.');
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('Project package has invalid binary integrity metadata.');
+  const candidate = parsed as Partial<ProjectPackageIntegrity>;
+  if (candidate.version !== 1 || !candidate.entries || typeof candidate.entries !== 'object') {
+    throw new Error('Project package has unsupported binary integrity metadata.');
+  }
+  return candidate as ProjectPackageIntegrity;
+}
+
+async function validatePackagedBinary(
+  name: string,
+  key: string,
+  path: string,
+  bytes: ArrayBuffer,
+  integrity?: ProjectPackageIntegrity,
+): Promise<void> {
+  assertNonEmptyBinary(name, bytes.byteLength);
+  const declared = integrity?.entries[path];
+  if (integrity && !declared) throw new Error(`Project package is missing integrity metadata for binary asset ${name}.`);
+  if (declared && declared.byteLength !== bytes.byteLength) {
+    throw new Error(`Project package binary asset ${name} has an unexpected byte length.`);
+  }
+  const expectedSha256 = declared?.sha256 ?? digestFromRecoveryResourceKey(key);
+  // Legacy packages without an integrity manifest remain importable when they
+  // have no content-addressed key. Newly generated backups always take the
+  // SHA-256 path above and reject same-length corruption.
+  if (expectedSha256) await verifyBinaryDigest(bytes, expectedSha256, `Project package binary asset ${name}`);
 }
 
 function createImportNamespace(): string {
@@ -349,15 +400,17 @@ async function inspectProjectFile(file: File): Promise<ValidatedProjectFileConte
   const manifest = zip.file(PROJECT_MANIFEST);
   if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
   const project = parseProject(await manifest.async('text'));
+  const integrity = await readPackageIntegrity(zip);
   const modelWrites = await Promise.all(
     Object.values(project.assets.assets)
       .filter((asset) => asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX))
       .map(async (asset) => {
         const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
-        const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
+        const path = `model-assets/${encodeURIComponent(key)}.bin`;
+        const entry = zip.file(path);
         if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
         const bytes = await entry.async('arraybuffer');
-        assertNonEmptyBinary(asset.name, bytes.byteLength);
+        await validatePackagedBinary(asset.name, key, path, bytes, integrity);
         return { key, bytes };
       }),
   );
@@ -367,10 +420,11 @@ async function inspectProjectFile(file: File): Promise<ValidatedProjectFileConte
       .map(async (asset) => {
         const key = portableStorageKey(asset);
         if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
-        const entry = zip.file(`project-assets/${encodeURIComponent(key)}.bin`);
+        const path = `project-assets/${encodeURIComponent(key)}.bin`;
+        const entry = zip.file(path);
         if (!entry) throw new Error(`Project package is missing binary asset ${asset.name}.`);
         const bytes = await entry.async('arraybuffer');
-        assertNonEmptyBinary(asset.name, bytes.byteLength);
+        await validatePackagedBinary(asset.name, key, path, bytes, integrity);
         asset.storageKey = key;
         return { key, blob: new Blob([bytes], { type: asset.mimeType }) };
       }),
@@ -394,20 +448,23 @@ export async function validateProjectPackage(blob: Blob): Promise<void> {
   const manifest = zip.file(PROJECT_MANIFEST);
   if (!manifest) throw new Error(`Invalid project package: missing ${PROJECT_MANIFEST}.`);
   const project = parseProject(await manifest.async('text'));
+  const integrity = await readPackageIntegrity(zip);
   for (const asset of Object.values(project.assets.assets)) {
     if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
       const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
-      const entry = zip.file(`model-assets/${encodeURIComponent(key)}.bin`);
+      const path = `model-assets/${encodeURIComponent(key)}.bin`;
+      const entry = zip.file(path);
       if (!entry) throw new Error(`Project package is missing binary model asset ${asset.name}.`);
-      assertNonEmptyBinary(asset.name, (await entry.async('arraybuffer')).byteLength);
+      await validatePackagedBinary(asset.name, key, path, await entry.async('arraybuffer'), integrity);
       continue;
     }
     if (isRasterOrVideoAsset(asset) && portableStorageKey(asset)) {
       const key = portableStorageKey(asset);
       if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
-      const entry = zip.file(`project-assets/${encodeURIComponent(key)}.bin`);
+      const path = `project-assets/${encodeURIComponent(key)}.bin`;
+      const entry = zip.file(path);
       if (!entry) throw new Error(`Project package is missing binary asset ${asset.name}.`);
-      assertNonEmptyBinary(asset.name, (await entry.async('arraybuffer')).byteLength);
+      await validatePackagedBinary(asset.name, key, path, await entry.async('arraybuffer'), integrity);
     }
   }
 }

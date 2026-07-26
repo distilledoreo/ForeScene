@@ -5,9 +5,14 @@ import { getModelAsset, putModelAsset, resetModelAssetStoreForTests } from '../s
 import { createProjectPackage, readProjectFile, validateProjectPackage } from '../src/engine/projectIO';
 import {
   createProjectSnapshot,
+  getPersistentProjectStorageStatus,
+  listLocalProjectHistories,
   listProjectRevisionSummaries,
+  loadProjectRevision,
+  removeLocalProjectHistory,
   recoverLatestProject,
   ProjectStorageQuotaError,
+  requestPersistentProjectStorage,
   restoreProjectRevision,
   saveProjectRevision,
 } from '../src/engine/projectSafety';
@@ -15,11 +20,16 @@ import {
   PROJECT_ASSET_URI_PREFIX,
   failNextProjectAssetBlobWriteForTests,
   getProjectAssetBlob,
+  deleteProjectAssetBlob,
   putProjectAssetBlobs,
   resetProjectAssetStoreForTests,
   storeProjectAssetDataUrl,
 } from '../src/engine/projectAssetStore';
-import { failNextProjectRevisionCommitForTests, resetProjectRevisionStoreForTests } from '../src/engine/projectRevisionStore';
+import {
+  failNextProjectRevisionCommitForTests,
+  failNextProjectRevisionDeleteForTests,
+  resetProjectRevisionStoreForTests,
+} from '../src/engine/projectRevisionStore';
 
 async function resetSafetyStorage() {
   resetProjectAssetStoreForTests();
@@ -253,5 +263,97 @@ describe('project safety revisions', () => {
     expect(restored.panoRefs[0]?.imageAssetId).toBe(image.id);
     expect(await (await getProjectAssetBlob(restoredImage.storageKey!))?.text()).toBe('reference-image');
     expect(Array.from(new Uint8Array((await getModelAsset(restoredModel.uri.slice(MODEL_ASSET_URI_PREFIX.length)))!))).toEqual([1, 2, 3, 4]);
+  });
+
+  it('recovers an older healthy snapshot after both active autosaves fail validation', async () => {
+    const project = createDefaultProject();
+    const asset = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'reference.png', uri: 'data:image/png;base64,Zmlyc3Q=', width: 16, height: 8,
+    }));
+    project.assets.assets[asset.id] = asset;
+    project.panoRefs = [createPanoReference({
+      name: 'Reference', assetId: asset.id, type: 'ai_global_reference', origin: [0, 1.6, 0], width: 16, height: 8, isCanonical: true,
+    })];
+    project.name = 'Snapshot fallback';
+    const snapshot = await createProjectSnapshot(project, 'Milestone before unstable saves');
+
+    project.assets.assets[asset.id] = storeProjectAssetDataUrl(project.id, {
+      ...asset, uri: 'data:image/png;base64,c2Vjb25k', storageKey: undefined,
+    });
+    const previous = await saveProjectRevision(project, { reason: 'Autosave before failure' });
+    project.assets.assets[asset.id] = storeProjectAssetDataUrl(project.id, {
+      ...asset, uri: 'data:image/png;base64,dGhpcmQ=', storageKey: undefined,
+    });
+    const active = await saveProjectRevision(project, { reason: 'Latest autosave before failure' });
+
+    await deleteProjectAssetBlob(active.revision.resources.projectAssets![0]!.key);
+    await deleteProjectAssetBlob(previous.revision.resources.projectAssets![0]!.key);
+
+    const recovered = await recoverLatestProject();
+
+    expect(recovered?.revision.id).toBe(snapshot.revision.id);
+    expect(recovered?.recoveredPreviousRevision).toBe(true);
+    expect((await listProjectRevisionSummaries(project.id)).find((revision) => revision.id === snapshot.revision.id)?.isActive).toBe(true);
+  });
+
+  it('rejects same-length binary corruption instead of trusting a content-addressed key', async () => {
+    const project = createDefaultProject();
+    const asset = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'reference.png', uri: 'data:image/png;base64,YWJjZA==', width: 16, height: 8,
+    }));
+    project.assets.assets[asset.id] = asset;
+    project.panoRefs = [createPanoReference({
+      name: 'Reference', assetId: asset.id, type: 'ai_global_reference', origin: [0, 1.6, 0], width: 16, height: 8, isCanonical: true,
+    })];
+    const saved = await saveProjectRevision(project);
+    const resource = saved.revision.resources.projectAssets![0]!;
+
+    await putProjectAssetBlobs([{ key: resource.key, blob: new Blob(['wxyz'], { type: 'image/png' }) }]);
+
+    await expect(loadProjectRevision(saved.revision.id)).rejects.toThrow('SHA-256 integrity verification');
+  });
+
+  it('keeps a durable active save successful when revision maintenance fails', async () => {
+    const project = createDefaultProject();
+    for (let index = 0; index < 8; index += 1) {
+      project.name = `Autosave ${index}`;
+      await saveProjectRevision(project);
+    }
+    project.name = 'Verified despite cleanup warning';
+    failNextProjectRevisionDeleteForTests();
+
+    const saved = await saveProjectRevision(project);
+
+    expect(saved.maintenanceWarning).toContain('new verified save is safe');
+    expect((await recoverLatestProject())?.project.name).toBe('Verified despite cleanup warning');
+  });
+
+  it('lists and intentionally removes older local project histories', async () => {
+    const current = createDefaultProject();
+    current.name = 'Current project';
+    const older = createDefaultProject();
+    older.name = 'Older project';
+    await saveProjectRevision(older);
+    await saveProjectRevision(current);
+
+    const histories = await listLocalProjectHistories();
+    expect(histories.map((history) => history.name)).toEqual(expect.arrayContaining(['Current project', 'Older project']));
+
+    const removed = await removeLocalProjectHistory(older.id);
+    expect(removed.revisionsRemoved).toBe(1);
+    expect((await listLocalProjectHistories()).some((history) => history.projectId === older.id)).toBe(false);
+  });
+
+  it('reports browser persistence status without treating unsupported storage as a save failure', async () => {
+    const persisted = vi.fn(async () => true);
+    const persist = vi.fn(async () => true);
+    vi.stubGlobal('navigator', { storage: { persisted, persist } });
+    try {
+      await expect(getPersistentProjectStorageStatus()).resolves.toEqual({ supported: true, persistent: true, requested: false });
+      await expect(requestPersistentProjectStorage()).resolves.toEqual({ supported: true, persistent: true, requested: false });
+      expect(persist).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

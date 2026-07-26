@@ -117,6 +117,7 @@ export default function App() {
   const setPersistenceState = useProjectSafetyStore((state) => state.setPersistenceState);
   const setRecovered = useProjectSafetyStore((state) => state.setRecovered);
   const setFlushProject = useProjectSafetyStore((state) => state.setFlushProject);
+  const setRunDestructiveProjectMutation = useProjectSafetyStore((state) => state.setRunDestructiveProjectMutation);
 
   const isPanoViewer = appMode === 'panoViewer';
   const isContinuityStage = appMode === 'continuity';
@@ -184,10 +185,10 @@ export default function App() {
       try {
         const controller = persistenceControllerRef.current;
         if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-        await controller.flush('Manual save before backup export');
+        const verified = await controller.flushAndLoadActiveRevision('Verified save before backup export');
+        if (!verified) throw new Error('No verified project revision is available for backup export.');
         const { downloadProject } = await loadProjectIo();
-        const project = useContinuityStore.getState().project;
-        await downloadProject(project);
+        await downloadProject(verified.project);
         setProjectImportStatus({
           tone: 'success',
           message: 'Verified project backup downloaded.',
@@ -226,6 +227,36 @@ export default function App() {
     });
   };
 
+  const openLocalProjectHistory = async (projectId: string, revisionId: string) => {
+    if (projectId === useContinuityStore.getState().project.id) return;
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    await controller.createSnapshot(useContinuityStore.getState().project, 'Before opening another local project');
+    const { restoreProjectRevision } = await loadProjectSafety();
+    const opened = await restoreProjectRevision(projectId, revisionId);
+    controller.adoptVerifiedProject(opened.project, {
+      revisionId: opened.revision.id,
+      savedAt: opened.revision.createdAt,
+      message: `Opened verified local project: ${opened.project.name}.`,
+      recovered: true,
+    });
+    setProject(opened.project);
+    setAppMode('continuity');
+    setProjectImportStatus({ tone: 'success', message: `Opened local project: ${opened.project.name}.` });
+  };
+
+  const removeLocalProjectHistory = async (projectId: string) => {
+    if (projectId === useContinuityStore.getState().project.id) {
+      throw new Error('Open projects cannot be removed. Open another project first.');
+    }
+    const { removeLocalProjectHistory: removeHistory } = await loadProjectSafety();
+    const result = await removeHistory(projectId, useContinuityStore.getState().project);
+    setProjectImportStatus({
+      tone: 'success',
+      message: `Removed ${result.revisionsRemoved} local recovery revision${result.revisionsRemoved === 1 ? '' : 's'}.`,
+    });
+  };
+
   const applyProjectHealthRepair = async (repairedProject: typeof project) => {
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
@@ -260,7 +291,16 @@ export default function App() {
           onStateChange: setPersistenceState,
         });
         persistenceControllerRef.current = controller;
-        setFlushProject((reason) => controller.flush(reason));
+        setFlushProject((reason) => controller.flushAndLoadActiveRevision(reason));
+        setRunDestructiveProjectMutation((reason, mutation) => controller.runDestructiveMutation(
+          useContinuityStore.getState().project,
+          reason,
+          mutation,
+          () => useContinuityStore.getState().project,
+        ));
+        // IndexedDB is otherwise best-effort browser storage. The Health view
+        // reports whether this request was granted; a denial never blocks use.
+        void safetyModule.requestPersistentProjectStorage();
 
         const currentProject = useContinuityStore.getState().project;
         if (recovered && currentProject === projectAtStartup) {
@@ -304,10 +344,11 @@ export default function App() {
       unsubscribe?.();
       unsubscribeAssetFailures?.();
       setFlushProject(undefined);
+      setRunDestructiveProjectMutation(undefined);
       persistenceControllerRef.current?.dispose();
       persistenceControllerRef.current = undefined;
     };
-  }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered]);
+  }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered, setRunDestructiveProjectMutation]);
 
   useEffect(() => {
     const preventUnsafeClose = (event: BeforeUnloadEvent) => {
@@ -636,6 +677,8 @@ export default function App() {
             onClose={() => setProjectSafetyOpen(false)}
             onCreateSnapshot={createProjectSnapshot}
             onRestoreRevision={restoreProjectSnapshot}
+            onOpenProjectHistory={openLocalProjectHistory}
+            onRemoveProjectHistory={removeLocalProjectHistory}
             onApplyRepair={applyProjectHealthRepair}
             onExportBackup={saveProject}
           />

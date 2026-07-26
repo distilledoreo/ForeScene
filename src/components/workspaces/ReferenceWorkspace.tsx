@@ -4,6 +4,7 @@ import { Check, FileDown, Hand, Settings, Sparkles, Star, Trash2 } from 'lucide-
 import type { PanoReference } from '../../domain/types';
 import { STYLED_PANO } from '../../domain/copy';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { preparePanoImport, downloadPanoImage } from '../../engine/panoImage';
 import { downloadDataUrl, readFileAsDataUrl } from '../../engine/fileTransfers';
 import { getLatestGrayboxPano, getPanoAsset, listGrayboxPanos, resolveCompareGraybox } from '../../domain/selectors';
@@ -39,6 +40,7 @@ export function ReferenceWorkspace() {
   const [precisionOpen, setPrecisionOpen] = useState(false);
   const [focusedLandmarkId, setFocusedLandmarkId] = useState<string | undefined>();
   const [fillGapsOpen, setFillGapsOpen] = useState(false);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const {
     project,
     activePanoId,
@@ -115,7 +117,7 @@ export function ReferenceWorkspace() {
       )) return;
     }
     const prepared = await preparePanoImport(params.dataUrl, params.width, params.height);
-    const mode = importStyledPano({
+    const applyImport = () => importStyledPano({
       name: params.name,
       dataUrl: prepared.dataUrl,
       width: prepared.width,
@@ -124,7 +126,23 @@ export function ReferenceWorkspace() {
         ? `Imported from ${params.width}×${params.height} letterboxed 16:9; extracted ${prepared.width}×${prepared.height} equirectangular region.`
         : undefined,
     });
+    let mode: ReturnType<typeof importStyledPano> | undefined;
+    if (importMode === 'replace' && currentCanonical) {
+      if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before replacing a panorama.');
+      await runDestructiveProjectMutation('Before replacing a panorama', () => {
+        mode = applyImport();
+      });
+    } else {
+      mode = applyImport();
+    }
     if (mode === 'add_secondary') setPendingSecondCapturePlan(undefined);
+  };
+
+  const removePanoWithRecovery = (pano: PanoReference) => {
+    if (!confirmRemovePano(pano) || !runDestructiveProjectMutation) return;
+    void runDestructiveProjectMutation('Before deleting a panorama reference', () => {
+      removePanoReference(pano.id);
+    }).catch(() => undefined);
   };
 
   const confirmRemovePano = (pano: PanoReference): boolean => {
@@ -608,8 +626,7 @@ export function ReferenceWorkspace() {
                     aria-label={`Remove ${pano.name}`}
                     data-remove-pano={pano.id}
                     onClick={() => {
-                      if (!confirmRemovePano(pano)) return;
-                      removePanoReference(pano.id);
+                      removePanoWithRecovery(pano);
                     }}
                     className="inline-flex shrink-0 items-center justify-center px-2.5 text-secondary transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
                   >
@@ -633,8 +650,7 @@ export function ReferenceWorkspace() {
               {(activePano.type === 'ai_global_reference' || activePano.type === 'external_reference') && (
                 <IconButton
                   onClick={() => {
-                    if (!confirmRemovePano(activePano)) return;
-                    removePanoReference(activePano.id);
+                    removePanoWithRecovery(activePano);
                   }}
                   className="w-full border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400"
                   data-remove-active-pano

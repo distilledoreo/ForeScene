@@ -8,6 +8,7 @@ const DATABASE_VERSION = 1;
 export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 
 const memoryBlobs = new Map<string, Blob>();
+const memoryBlobVersions = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
@@ -80,7 +81,7 @@ export function storeProjectAssetDataUrl<T extends ProjectAsset>(projectId: stri
   if (!asset.uri.startsWith('data:') || (asset.type !== 'image' && asset.type !== 'video')) return asset;
   const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
   const blob = dataUrlToBlob(asset.uri);
-  memoryBlobs.set(storageKey, blob);
+  cacheProjectAssetBlob(storageKey, blob, true);
   const uri = makeObjectUrl(storageKey, blob);
   persistProjectAssetBlob(storageKey, blob);
   return { ...asset, storageKey, uri };
@@ -93,10 +94,20 @@ export function storeProjectAssetBlob<T extends ProjectAsset>(projectId: string,
 }
 
 export function registerProjectAssetBlob(key: string, blob: Blob): string {
-  memoryBlobs.set(key, blob);
+  cacheProjectAssetBlob(key, blob, true);
   const uri = makeObjectUrl(key, blob);
   persistProjectAssetBlob(key, blob);
   return uri;
+}
+
+function cacheProjectAssetBlob(key: string, blob: Blob, replace: boolean): void {
+  memoryBlobs.set(key, blob);
+  if (replace) memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+}
+
+/** Changes whenever a local raster/video key is explicitly replaced or removed. */
+export function getProjectAssetBlobVersion(key: string): number | undefined {
+  return memoryBlobVersions.get(key);
 }
 
 export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
@@ -108,7 +119,7 @@ export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWri
   }
   const db = await openDatabase();
   if (!db) {
-    for (const entry of entries) memoryBlobs.set(entry.key, entry.blob);
+    for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
     return;
   }
   try {
@@ -120,7 +131,7 @@ export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWri
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not store local project assets.'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset storage was cancelled.'));
     });
-    for (const entry of entries) memoryBlobs.set(entry.key, entry.blob);
+    for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
   } finally {
     db.close();
   }
@@ -137,7 +148,7 @@ export async function getProjectAssetBlob(key: string): Promise<Blob | undefined
       request.onsuccess = () => resolve(request.result instanceof Blob ? request.result : undefined);
       request.onerror = () => reject(request.error ?? new Error('Could not read local project asset.'));
     });
-    if (blob) memoryBlobs.set(key, blob);
+    if (blob) cacheProjectAssetBlob(key, blob, false);
     return blob;
   } finally {
     db.close();
@@ -172,6 +183,7 @@ export async function resolveProjectAssetUri(asset: Pick<ProjectAsset, 'uri' | '
 
 export async function deleteProjectAssetBlob(key: string): Promise<void> {
   memoryBlobs.delete(key);
+  memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
   const url = objectUrls.get(key);
   if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
   objectUrls.delete(key);
@@ -194,6 +206,7 @@ export function resetProjectAssetStoreForTests() {
     for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }
   memoryBlobs.clear();
+  memoryBlobVersions.clear();
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;

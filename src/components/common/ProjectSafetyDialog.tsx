@@ -16,7 +16,28 @@ import {
   runProjectHealthCheck,
   type ProjectHealthReport,
 } from '../../engine/projectHealth';
-import { listProjectRevisionSummaries, type ProjectRevisionSummary } from '../../engine/projectSafety';
+import {
+  listLocalProjectHistories,
+  listProjectRevisionSummaries,
+  type LocalProjectHistory,
+  type ProjectRevisionSummary,
+} from '../../engine/projectSafety';
+
+type RevisionFilter = 'all' | 'milestones' | 'automatic' | 'autosaves';
+
+function revisionFilterLabel(filter: RevisionFilter): string {
+  if (filter === 'milestones') return 'Milestones';
+  if (filter === 'automatic') return 'Automatic recovery';
+  if (filter === 'autosaves') return 'Autosaves';
+  return 'All revisions';
+}
+
+function revisionMatchesFilter(revision: ProjectRevisionSummary, filter: RevisionFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'autosaves') return revision.kind === 'autosave';
+  const automatic = revision.kind !== 'snapshot' || revision.reason.startsWith('Before ');
+  return filter === 'automatic' ? automatic && revision.kind !== 'autosave' : !automatic && revision.kind === 'snapshot';
+}
 
 function formatBytes(bytes?: number): string {
   if (bytes === undefined) return 'Unavailable';
@@ -49,6 +70,8 @@ export function ProjectSafetyDialog({
   onClose,
   onCreateSnapshot,
   onRestoreRevision,
+  onOpenProjectHistory,
+  onRemoveProjectHistory,
   onApplyRepair,
   onExportBackup,
 }: {
@@ -58,24 +81,31 @@ export function ProjectSafetyDialog({
   onClose: () => void;
   onCreateSnapshot: (reason: string) => Promise<void>;
   onRestoreRevision: (revisionId: string) => Promise<void>;
+  onOpenProjectHistory: (projectId: string, revisionId: string) => Promise<void>;
+  onRemoveProjectHistory: (projectId: string) => Promise<void>;
   onApplyRepair: (project: LocationProject) => Promise<void>;
   onExportBackup: () => void;
 }) {
   const [report, setReport] = useState<ProjectHealthReport>();
   const [revisions, setRevisions] = useState<ProjectRevisionSummary[]>([]);
+  const [histories, setHistories] = useState<LocalProjectHistory[]>([]);
+  const [revisionFilter, setRevisionFilter] = useState<RevisionFilter>('all');
   const [snapshotReason, setSnapshotReason] = useState('Manual snapshot');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirmRestore, setConfirmRestore] = useState<ProjectRevisionSummary>();
   const [confirmCleanup, setConfirmCleanup] = useState(false);
+  const [confirmRemoveHistory, setConfirmRemoveHistory] = useState<LocalProjectHistory>();
 
   const refresh = async () => {
-    const [nextReport, nextRevisions] = await Promise.all([
+    const [nextReport, nextRevisions, nextHistories] = await Promise.all([
       runProjectHealthCheck(project),
       listProjectRevisionSummaries(project.id),
+      listLocalProjectHistories(),
     ]);
     setReport(nextReport);
     setRevisions(nextRevisions);
+    setHistories(nextHistories);
   };
 
   useEffect(() => {
@@ -111,7 +141,7 @@ export function ProjectSafetyDialog({
   };
 
   const safeRepair = report ? repairProjectHealth(project) : undefined;
-  const snapshots = revisions.filter((revision) => revision.kind === 'snapshot');
+  const visibleRevisions = revisions.filter((revision) => revisionMatchesFilter(revision, revisionFilter));
   const temporaryBytes = report?.storage.temporaryLocalBytes ?? 0;
 
   return (
@@ -176,19 +206,37 @@ export function ProjectSafetyDialog({
                   Snapshot
                 </button>
               </div>
-              <div className="mt-3 max-h-48 space-y-2 overflow-y-auto">
-                {snapshots.length === 0 ? (
-                  <p className="text-sm text-secondary">No manual or milestone snapshots yet.</p>
-                ) : snapshots.map((snapshot) => (
-                  <div key={snapshot.id} className="flex items-center justify-between gap-3 rounded-lg border border-subtle px-3 py-2">
+              <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Recovery point filters">
+                {(['all', 'milestones', 'automatic', 'autosaves'] as RevisionFilter[]).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => setRevisionFilter(filter)}
+                    className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                      revisionFilter === filter ? 'bg-accent-soft text-accent' : 'text-secondary hover:bg-surface-muted hover:text-primary'
+                    }`}
+                  >
+                    {revisionFilterLabel(filter)}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 max-h-56 space-y-2 overflow-y-auto" data-revision-timeline>
+                {visibleRevisions.length === 0 ? (
+                  <p className="text-sm text-secondary">No {revisionFilterLabel(revisionFilter).toLowerCase()} yet.</p>
+                ) : visibleRevisions.map((revision) => (
+                  <div key={revision.id} className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${revision.isActive ? 'border-accent/60 bg-accent-soft/40' : 'border-subtle'}`}>
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-primary">{snapshot.reason}</div>
-                      <div className="text-xs text-secondary">{formatDate(snapshot.createdAt)}{snapshot.isActive ? ' · Current' : ''}</div>
+                      <div className="truncate text-sm font-medium text-primary">{revision.reason}</div>
+                      <div className="text-xs text-secondary">
+                        {formatDate(revision.createdAt)}
+                        {revision.isActive ? ' · Current verified revision' : ''}
+                        {revision.isPreviousKnownGood ? ' · Previous known-good' : ''}
+                      </div>
                     </div>
                     <button
                       type="button"
-                      disabled={busy || snapshot.isActive}
-                      onClick={() => setConfirmRestore(snapshot)}
+                      disabled={busy || revision.isActive}
+                      onClick={() => setConfirmRestore(revision)}
                       className="shrink-0 rounded-md border border-subtle px-2 py-1 text-xs font-medium text-secondary transition hover:bg-surface-muted hover:text-primary disabled:opacity-40"
                     >
                       Restore
@@ -215,6 +263,12 @@ export function ProjectSafetyDialog({
                 <StorageRow label="Revisions" value={String(report?.storage.revisionCount ?? 0)} />
                 <StorageRow label="Snapshots" value={String(report?.storage.snapshotCount ?? 0)} />
                 <StorageRow label="Last verified save" value={lastSavedAt ? formatDate(lastSavedAt) : 'Not yet saved'} />
+                <StorageRow
+                  label="Persistent storage"
+                  value={report?.storage.persistentStorageSupported
+                    ? report.storage.persistentStorageGranted ? 'Granted' : 'Not granted'
+                    : 'Unavailable'}
+                />
               </dl>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
@@ -251,6 +305,49 @@ export function ProjectSafetyDialog({
               ) : null}
             </section>
           </div>
+
+          <section className="mt-4 rounded-xl border border-subtle bg-surface-raised p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-primary">Local project histories</h3>
+                <p className="mt-1 text-xs text-secondary">Open an older local project deliberately, or remove a history you no longer need to keep its retained media from using browser storage.</p>
+              </div>
+              <HardDrive className="h-5 w-5 shrink-0 text-accent" />
+            </div>
+            <div className="mt-3 max-h-44 space-y-2 overflow-y-auto" data-local-project-histories>
+              {histories.length === 0 ? (
+                <p className="text-sm text-secondary">No local project histories are available yet.</p>
+              ) : histories.map((history) => {
+                const isCurrentProject = history.projectId === project.id;
+                return (
+                  <div key={history.projectId} className="flex items-center justify-between gap-3 rounded-lg border border-subtle px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-primary">{history.name}{isCurrentProject ? ' · Open now' : ''}</div>
+                      <div className="text-xs text-secondary">{history.revisionCount} revision{history.revisionCount === 1 ? '' : 's'} · {formatDate(history.updatedAt)}</div>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <button
+                        type="button"
+                        disabled={busy || isCurrentProject}
+                        onClick={() => void run(() => onOpenProjectHistory(history.projectId, history.activeRevisionId))}
+                        className="rounded-md border border-subtle px-2 py-1 text-xs font-medium text-secondary transition hover:bg-surface-muted hover:text-primary disabled:opacity-40"
+                      >
+                        Open
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || isCurrentProject}
+                        onClick={() => setConfirmRemoveHistory(history)}
+                        className="rounded-md border border-red-300/70 px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-40 dark:border-red-900/70 dark:hover:bg-red-950/30"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
           <section className="mt-4 rounded-xl border border-subtle bg-surface-raised p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -311,7 +408,28 @@ export function ProjectSafetyDialog({
                 }}
                 className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
               >
-                Restore snapshot
+                Restore revision
+              </button>
+            </div>
+          </footer>
+        )}
+
+        {confirmRemoveHistory && (
+          <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-subtle bg-surface-raised px-5 py-3">
+            <p className="text-sm text-secondary">Remove the local history for “{confirmRemoveHistory.name}” and reclaim recovery media that no other project references?</p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setConfirmRemoveHistory(undefined)} disabled={busy} className="rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">Cancel</button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const history = confirmRemoveHistory;
+                  setConfirmRemoveHistory(undefined);
+                  void run(() => onRemoveProjectHistory(history.projectId));
+                }}
+                className="rounded-lg border border-red-500/70 bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Remove local history
               </button>
             </div>
           </footer>

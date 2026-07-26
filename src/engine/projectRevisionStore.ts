@@ -14,9 +14,21 @@ const HEADS_STORE = 'heads';
 
 export type ProjectRevisionKind = 'autosave' | 'snapshot' | 'import' | 'migration' | 'restore';
 
+/** Immutable binary metadata written alongside every new recovery revision. */
+export interface ProjectRevisionBinaryResource {
+  key: string;
+  sha256: string;
+  byteLength: number;
+  mimeType?: string;
+}
+
 export interface ProjectRevisionResources {
   projectAssetKeys: string[];
   modelAssetKeys: string[];
+  /** Optional only for revisions written before binary metadata was introduced. */
+  projectAssets?: ProjectRevisionBinaryResource[];
+  /** Optional only for revisions written before binary metadata was introduced. */
+  models?: ProjectRevisionBinaryResource[];
 }
 
 export interface ProjectRevisionRecord {
@@ -40,6 +52,7 @@ export interface ProjectRevisionHead {
 const memoryRevisions = new Map<string, ProjectRevisionRecord>();
 const memoryHeads = new Map<string, ProjectRevisionHead>();
 let nextCommitFailureForTests: Error | undefined;
+let nextDeleteFailureForTests: Error | undefined;
 
 function copy<T>(value: T): T {
   return typeof structuredClone === 'function'
@@ -273,6 +286,11 @@ export async function activateProjectRevision(
 }
 
 export async function deleteProjectRevision(id: string): Promise<void> {
+  if (nextDeleteFailureForTests) {
+    const error = nextDeleteFailureForTests;
+    nextDeleteFailureForTests = undefined;
+    throw error;
+  }
   const db = await openDatabase();
   if (!db) {
     memoryRevisions.delete(id);
@@ -291,10 +309,52 @@ export async function deleteProjectRevision(id: string): Promise<void> {
   }
 }
 
+/**
+ * Remove an intentionally discarded local project's revision history in one
+ * metadata transaction. Binary cleanup is deliberately separate so a cleanup
+ * failure cannot leave a half-deleted history or invalidate another project.
+ */
+export async function deleteProjectHistory(projectId: string): Promise<ProjectRevisionRecord[]> {
+  const db = await openDatabase();
+  if (!db) {
+    const removed = [...memoryRevisions.values()]
+      .filter((record) => record.projectId === projectId)
+      .map(copy);
+    for (const record of removed) memoryRevisions.delete(record.id);
+    memoryHeads.delete(projectId);
+    return removed;
+  }
+  try {
+    return await new Promise<ProjectRevisionRecord[]>((resolve, reject) => {
+      const transaction = db.transaction([REVISIONS_STORE, HEADS_STORE], 'readwrite');
+      const revisions = transaction.objectStore(REVISIONS_STORE);
+      const heads = transaction.objectStore(HEADS_STORE);
+      let removed: ProjectRevisionRecord[] = [];
+      const allRequest = revisions.getAll();
+      allRequest.onsuccess = () => {
+        removed = (allRequest.result as ProjectRevisionRecord[])
+          .filter((record) => record.projectId === projectId)
+          .map(copy);
+        for (const record of removed) revisions.delete(record.id);
+        heads.delete(projectId);
+      };
+      allRequest.onerror = () => {
+        try { transaction.abort(); } catch { /* transaction already finished */ }
+      };
+      transaction.oncomplete = () => resolve(removed);
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not remove the local project history.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Local project history removal was cancelled.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
 export async function resetProjectRevisionStoreForTests(): Promise<void> {
   memoryRevisions.clear();
   memoryHeads.clear();
   nextCommitFailureForTests = undefined;
+  nextDeleteFailureForTests = undefined;
   if (typeof indexedDB === 'undefined') return;
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DATABASE_NAME);
@@ -306,4 +366,9 @@ export async function resetProjectRevisionStoreForTests(): Promise<void> {
 
 export function failNextProjectRevisionCommitForTests(message = 'Injected project revision commit failure.'): void {
   nextCommitFailureForTests = new Error(message);
+}
+
+/** Exercise best-effort revision maintenance without affecting the active commit. */
+export function failNextProjectRevisionDeleteForTests(message = 'Injected project revision cleanup failure.'): void {
+  nextDeleteFailureForTests = new Error(message);
 }

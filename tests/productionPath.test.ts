@@ -22,7 +22,7 @@ describe('workflow guidance UI', () => {
     expect(app).toContain('data-project-name-input');
     expect(app).toContain('const saveProject');
     expect(app).toContain('loadProjectIo');
-    expect(app).toContain('downloadProject(project)');
+    expect(app).toContain('downloadProject(verified.project)');
     expect(app).toContain('accept=".json,.zip,.panoref-project,application/json,application/zip"');
     expect(app).toContain('Project opened:');
     expect(app).toContain('Could not open project:');
@@ -68,6 +68,8 @@ describe('workflow guidance UI', () => {
     expect(exportWorkspace).toContain('getShotPrimaryLabel(shot)');
     expect(exportWorkspace).toContain('Handoff packages');
     expect(exportWorkspace).toContain("flushProject('Verified save before package export')");
+    expect(exportWorkspace).toContain('const exportProject = verified.project');
+    expect(shots).toContain('const renderProject = verified.project');
     expect(app).not.toContain('ReviewWorkspace');
     expect(app).not.toContain("id: 'review'");
     expect(shotThumbnail).toContain('resolveShotThumbnail');

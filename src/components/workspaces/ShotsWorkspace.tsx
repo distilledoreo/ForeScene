@@ -207,6 +207,7 @@ export function ShotsWorkspace() {
     redoShotCamera: state.redoShotCamera,
   })));
   const flushProject = useProjectSafetyStore((state) => state.flushProject);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const shotCameraHistoryRestoreGeneration = useContinuityStore(
     (state) => state.shotCameraHistoryRestoreGeneration,
   );
@@ -382,9 +383,18 @@ export function ShotsWorkspace() {
 
   const handleConfirmDeleteShot = useCallback(() => {
     if (!shotPendingDelete) return;
-    removeShot(shotPendingDelete.id);
+    if (!runDestructiveProjectMutation) {
+      setSnapshotError('Local recovery is still starting. Please wait before deleting this shot.');
+      return;
+    }
+    const shotId = shotPendingDelete.id;
     setShotPendingDelete(null);
-  }, [removeShot, shotPendingDelete]);
+    void runDestructiveProjectMutation('Before deleting a shot', () => {
+      removeShot(shotId);
+    }).catch((error) => {
+      setSnapshotError(error instanceof Error ? error.message : 'Could not create a recovery point before deleting this shot.');
+    });
+  }, [removeShot, runDestructiveProjectMutation, shotPendingDelete]);
 
   const handleOpenShotFromMedia = useCallback((shotId: string) => {
     selectShot(shotId);
@@ -402,8 +412,9 @@ export function ShotsWorkspace() {
       // A downloaded still must be traceable to a durable project state, not
       // merely the transient editor state that happened to be on screen.
       updateShot(previewShot.id, { camera: previewShot.camera });
-      await flushProject('Verified save before still render');
-      const renderProject = useContinuityStore.getState().project;
+      const verified = await flushProject('Verified save before still render');
+      if (!verified) throw new Error('No verified project revision is available for still rendering.');
+      const renderProject = verified.project;
       const renderShot = renderProject.shots.find((shot) => shot.id === previewShot.id) ?? previewShot;
       const peopleMode = renderShot.exportSettings.peopleExportMode;
       const variants = getPeopleRenderVariants(peopleMode);
@@ -569,8 +580,9 @@ export function ShotsWorkspace() {
       // Lock the render inputs to a verified local revision before expensive
       // encoding begins. The generated video can then be reproduced after a
       // reload from the same saved controls and source media.
-      await flushProject('Verified save before video render');
-      const renderProject = useContinuityStore.getState().project;
+      const verified = await flushProject('Verified save before video render');
+      if (!verified) throw new Error('No verified project revision is available for MP4 rendering.');
+      const renderProject = verified.project;
       const renderShot = renderProject.shots.find((shot) => shot.id === shotId);
       if (!renderShot) throw new Error('The selected shot changed before MP4 rendering could begin.');
       const variants = getPeopleRenderVariants(renderShot.exportSettings.peopleExportMode);

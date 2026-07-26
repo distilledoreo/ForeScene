@@ -117,4 +117,19 @@ describe('local-first raster and video assets', () => {
 
     await expect(validateProjectPackage(await zip.generateAsync({ type: 'blob' }))).rejects.toThrow('missing binary asset');
   });
+
+  it('rejects same-length tampering in a generated portable backup', async () => {
+    const project = createDefaultProject();
+    const asset = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'reference.png', uri: 'data:image/png;base64,YWJjZA==', width: 16, height: 8,
+    }));
+    project.assets.assets[asset.id] = asset;
+    project.panoRefs = [createPanoReference({
+      name: 'Reference', assetId: asset.id, type: 'ai_global_reference', origin: [0, 1.6, 0], width: 16, height: 8, isCanonical: true,
+    })];
+    const zip = await JSZip.loadAsync(await (await createProjectPackage(project)).arrayBuffer());
+    zip.file(`project-assets/${encodeURIComponent(asset.storageKey!)}.bin`, new TextEncoder().encode('wxyz'));
+
+    await expect(validateProjectPackage(await zip.generateAsync({ type: 'blob' }))).rejects.toThrow('SHA-256 integrity verification');
+  });
 });

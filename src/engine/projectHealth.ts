@@ -8,7 +8,14 @@ import {
   getProjectAssetBlob,
   listProjectAssetBlobKeys,
 } from './projectAssetStore';
-import { getAllRetainedResourceKeys, listProjectRevisionSummaries } from './projectSafety';
+import {
+  getAllRetainedBinaryResources,
+  getAllRetainedResourceKeys,
+  getPersistentProjectStorageStatus,
+  listProjectRevisionSummaries,
+  verifyRetainedModelResource,
+  verifyRetainedProjectAssetResource,
+} from './projectSafety';
 
 const PROJECT_ASSET_RESOURCE_PREFIX = 'recovery-resource/project-asset/';
 const MODEL_RESOURCE_PREFIX = 'recovery-resource/model/';
@@ -30,6 +37,8 @@ export interface ProjectStorageSummary {
   browserUsageBytes?: number;
   browserQuotaBytes?: number;
   browserAvailableBytes?: number;
+  persistentStorageSupported?: boolean;
+  persistentStorageGranted?: boolean;
   largestAssets: Array<{ id: string; name: string; type: ProjectAsset['type']; bytes: number }>;
   revisionCount: number;
   snapshotCount: number;
@@ -208,12 +217,14 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
     }
   }
 
-  const [projectAssetKeys, modelAssetKeys, retained, revisions, browser] = await Promise.all([
+  const [projectAssetKeys, modelAssetKeys, retained, retainedBinary, revisions, browser, persistence] = await Promise.all([
     listProjectAssetBlobKeys(),
     listModelAssetKeys(),
     getAllRetainedResourceKeys(),
+    getAllRetainedBinaryResources(),
     listProjectRevisionSummaries(project.id),
     browserStorageEstimate(),
+    getPersistentProjectStorageStatus(),
   ]);
   const currentProjectAssetKeys = new Set(Object.values(assets)
     .filter(isRasterOrVideo)
@@ -241,6 +252,35 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
     else temporaryLocalBytes += bytes.byteLength;
   }
 
+  for (const resource of retainedBinary.projectAssets) {
+    try {
+      await verifyRetainedProjectAssetResource(resource);
+    } catch (error) {
+      issue(
+        issues,
+        'corrupt-recovery-resource',
+        'danger',
+        error instanceof Error
+          ? `Recovery binary ${resource.key} failed integrity verification: ${error.message}`
+          : `Recovery binary ${resource.key} failed integrity verification.`,
+      );
+    }
+  }
+  for (const resource of retainedBinary.models) {
+    try {
+      await verifyRetainedModelResource(resource);
+    } catch (error) {
+      issue(
+        issues,
+        'corrupt-recovery-resource',
+        'danger',
+        error instanceof Error
+          ? `Recovery model ${resource.key} failed integrity verification: ${error.message}`
+          : `Recovery model ${resource.key} failed integrity verification.`,
+      );
+    }
+  }
+
   const temporaryProjectAssetKeys = projectAssetKeys.filter((key) => (
     (key.startsWith(PROJECT_ASSET_RESOURCE_PREFIX) && !retained.projectAssetKeys.has(key))
     || ((key.startsWith(`project/${project.id}/`) || key.startsWith(`import/${project.id}/`)) && !currentProjectAssetKeys.has(key))
@@ -257,6 +297,9 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
   )) {
     issue(issues, 'storage-near-limit', 'warning', 'Browser storage is nearly full. Export a backup or free temporary data before importing more media.');
   }
+  if (persistence.supported && !persistence.persistent) {
+    issue(issues, 'persistent-storage-not-granted', 'warning', 'Browser persistent storage was not granted. Local recovery remains available, but the browser may evict data under storage pressure. Export a backup regularly.');
+  }
 
   const largestAssets = Object.values(assets)
     .map((asset) => ({ id: asset.id, name: asset.name, type: asset.type, bytes: projectAssetSizes.get(asset.id) ?? 0 }))
@@ -272,6 +315,8 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
       essentialLocalBytes,
       temporaryLocalBytes,
       ...browser,
+      persistentStorageSupported: persistence.supported,
+      ...(persistence.persistent !== undefined ? { persistentStorageGranted: persistence.persistent } : {}),
       largestAssets,
       revisionCount: revisions.length,
       snapshotCount: revisions.filter((revision) => revision.kind === 'snapshot').length,

@@ -1,10 +1,11 @@
 import type { LocationProject } from '../domain/types';
 import {
   createProjectSnapshot,
+  loadProjectRevision,
   saveProjectRevision,
   type ProjectSaveStatus,
 } from './projectSafety';
-import type { ProjectRevisionKind } from './projectRevisionStore';
+import type { ProjectRevisionKind, ProjectRevisionRecord } from './projectRevisionStore';
 
 export interface ProjectPersistenceState {
   status: ProjectSaveStatus;
@@ -12,6 +13,12 @@ export interface ProjectPersistenceState {
   lastSavedAt?: string;
   activeRevisionId?: string;
   criticalWrite: boolean;
+}
+
+/** Immutable, fully reloaded inputs that an export is allowed to consume. */
+export interface VerifiedProjectRevision {
+  project: LocationProject;
+  revision: ProjectRevisionRecord;
 }
 
 export interface ProjectPersistenceControllerOptions {
@@ -70,10 +77,9 @@ export function getAutomaticSnapshotReason(previous: LocationProject, next: Loca
 }
 
 /**
- * Serializes all local revisions. It deliberately snapshots the prior state
- * before a destructive transition, then saves the latest state. A later
- * change while a write is active stays marked Unsaved and is queued after the
- * active transaction finishes.
+ * Serializes all local revisions. Critical destructive actions use
+ * runDestructiveMutation(): its snapshot commits before the live mutation,
+ * then the changed project becomes a separately verified active revision.
  */
 export class ProjectPersistenceController {
   private readonly onStateChange: (state: ProjectPersistenceState) => void;
@@ -86,6 +92,9 @@ export class ProjectPersistenceController {
   private pendingSnapshots: PendingSnapshot[] = [];
   private lastAutomaticSnapshotAtByReason = new Map<string, number>();
   private ignoredProject?: LocationProject;
+  private protectedMutationDepth = 0;
+  private lastSavedAt?: string;
+  private activeRevisionId?: string;
   private disposed = false;
 
   constructor(options: ProjectPersistenceControllerOptions) {
@@ -139,6 +148,10 @@ export class ProjectPersistenceController {
       this.ignoredProject = undefined;
       return;
     }
+    // The explicit destructive transaction has already committed its pre-change
+    // snapshot. It takes responsibility for immediately saving this exact next
+    // state, so the comparison detector stays a fallback rather than a delay.
+    if (this.protectedMutationDepth > 0) return;
     const reason = getAutomaticSnapshotReason(previous, next);
     if (reason && this.shouldCreateAutomaticSnapshot(reason)) {
       this.pendingSnapshots.push({ project: cloneProject(previous), reason });
@@ -149,38 +162,82 @@ export class ProjectPersistenceController {
   async commitProject(
     project: LocationProject,
     options: { kind?: ProjectRevisionKind; reason?: string } = {},
-  ): Promise<void> {
-    if (this.disposed) return;
+  ): Promise<VerifiedProjectRevision | undefined> {
+    if (this.disposed) return undefined;
     this.latestProject = project;
     this.pendingSave = false;
     this.clearTimer();
-    await this.enqueue(async () => {
-      await this.writeProject(project, options.kind ?? 'autosave', options.reason ?? 'Manual save');
-    });
+    return this.enqueue(async () => this.writeProject(project, options.kind ?? 'autosave', options.reason ?? 'Manual save'));
   }
 
-  async createSnapshot(project: LocationProject, reason = 'Manual snapshot'): Promise<void> {
-    if (this.disposed) return;
+  async createSnapshot(project: LocationProject, reason = 'Manual snapshot'): Promise<VerifiedProjectRevision | undefined> {
+    if (this.disposed) return undefined;
     this.clearTimer();
-    await this.enqueue(async () => {
+    return this.enqueue(async () => {
       this.emit({ status: 'saving', message: 'Creating a recovery snapshot…', criticalWrite: true });
       const result = await createProjectSnapshot(project, reason);
+      const verified = await loadProjectRevision(result.revision.id);
       this.emit({
         status: 'saved',
-        message: 'Recovery snapshot created.',
+        message: result.maintenanceWarning ?? 'Recovery snapshot created.',
         lastSavedAt: result.revision.createdAt,
         activeRevisionId: result.revision.id,
         criticalWrite: false,
       });
+      return verified;
     });
   }
 
-  async flush(reason = 'Manual save'): Promise<void> {
-    if (this.disposed) return;
+  /**
+   * Commit the pre-change snapshot before mutating Zustand state, then write
+   * and reload the changed revision. If the process stops at any point, the
+   * snapshot remains the active, fully validated recovery point.
+   */
+  async runDestructiveMutation(
+    projectBeforeMutation: LocationProject,
+    reason: string,
+    mutate: () => void | Promise<void>,
+    getCurrentProject: () => LocationProject,
+  ): Promise<VerifiedProjectRevision | undefined> {
+    if (this.disposed) return undefined;
     this.clearTimer();
-    if (!this.latestProject) return;
+    return this.enqueue(async () => {
+      this.emit({ status: 'saving', message: 'Creating a recovery point before this change…', criticalWrite: true });
+      const snapshot = await createProjectSnapshot(cloneProject(projectBeforeMutation), reason);
+      this.emit({
+        status: 'saving',
+        message: 'Applying protected project change…',
+        lastSavedAt: snapshot.revision.createdAt,
+        activeRevisionId: snapshot.revision.id,
+        criticalWrite: true,
+      });
+      this.protectedMutationDepth += 1;
+      try {
+        await mutate();
+      } finally {
+        this.protectedMutationDepth -= 1;
+      }
+      const changedProject = getCurrentProject();
+      this.latestProject = changedProject;
+      this.pendingSnapshots = [];
+      this.pendingSave = false;
+      this.hasUnsavedChanges = false;
+      return this.writeProject(changedProject, 'autosave', `Protected change: ${reason}`);
+    });
+  }
+
+  /** @deprecated Prefer flushAndLoadActiveRevision for an export input. */
+  async flush(reason = 'Manual save'): Promise<VerifiedProjectRevision | undefined> {
+    return this.flushAndLoadActiveRevision(reason);
+  }
+
+  /** Save, reload, and return the exact immutable revision an export must use. */
+  async flushAndLoadActiveRevision(reason = 'Manual save'): Promise<VerifiedProjectRevision | undefined> {
+    if (this.disposed) return undefined;
+    this.clearTimer();
+    if (!this.latestProject) return undefined;
     this.pendingSave = true;
-    await this.enqueue(() => this.persistPending(reason));
+    return this.enqueue(() => this.persistPending(reason));
   }
 
   get hasPendingChanges(): boolean {
@@ -239,9 +296,9 @@ export class ProjectPersistenceController {
     return true;
   }
 
-  private enqueue(work: () => Promise<void>): Promise<void> {
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
     const next = this.queued.then(work, work);
-    this.queued = next.catch(() => undefined);
+    this.queued = next.then(() => undefined, () => undefined);
     return next.catch((error) => {
       this.hasUnsavedChanges = true;
       this.pendingSave = false;
@@ -257,39 +314,67 @@ export class ProjectPersistenceController {
     });
   }
 
-  private async persistPending(reason: string): Promise<void> {
-    if (!this.pendingSave || !this.latestProject) return;
+  private async persistPending(reason: string): Promise<VerifiedProjectRevision | undefined> {
+    if (!this.pendingSave || !this.latestProject) return this.loadActiveRevision();
     const snapshots = this.pendingSnapshots.splice(0);
     const project = this.latestProject;
     this.pendingSave = false;
 
     for (const snapshot of snapshots) {
       this.emit({ status: 'saving', message: 'Creating an automatic recovery point…', criticalWrite: true });
-      await createProjectSnapshot(snapshot.project, snapshot.reason);
+      const result = await createProjectSnapshot(snapshot.project, snapshot.reason);
+      this.emit({
+        status: 'saving',
+        message: 'Saving the changed project…',
+        lastSavedAt: result.revision.createdAt,
+        activeRevisionId: result.revision.id,
+        criticalWrite: true,
+      });
     }
 
-    await this.writeProject(project, 'autosave', reason);
+    const verified = await this.writeProject(project, 'autosave', reason);
     if (this.latestProject !== project || this.pendingSave) {
       this.hasUnsavedChanges = true;
       this.emit({ status: 'unsaved', message: 'Newer changes are waiting to be saved locally.', criticalWrite: false });
       this.schedule();
     }
+    return verified;
   }
 
-  private async writeProject(project: LocationProject, kind: ProjectRevisionKind, reason: string): Promise<void> {
+  private async writeProject(
+    project: LocationProject,
+    kind: ProjectRevisionKind,
+    reason: string,
+  ): Promise<VerifiedProjectRevision> {
     this.emit({ status: 'saving', message: 'Saving a verified local revision…', criticalWrite: true });
     const result = await saveProjectRevision(project, { kind, reason });
+    // Reload the committed manifest and hash-verify every referenced binary.
+    // This object is deliberately independent from mutable Zustand state.
+    const verified = await loadProjectRevision(result.revision.id);
     this.hasUnsavedChanges = this.latestProject !== project || this.pendingSave;
     this.emit({
       status: 'saved',
-      message: 'Saved locally and ready for recovery.',
+      message: result.maintenanceWarning ?? 'Saved locally and ready for recovery.',
       lastSavedAt: result.revision.createdAt,
       activeRevisionId: result.revision.id,
       criticalWrite: false,
     });
+    return verified;
+  }
+
+  private async loadActiveRevision(): Promise<VerifiedProjectRevision | undefined> {
+    if (!this.activeRevisionId) return undefined;
+    return loadProjectRevision(this.activeRevisionId);
   }
 
   private emit(state: ProjectPersistenceState): void {
-    if (!this.disposed) this.onStateChange(state);
+    if (this.disposed) return;
+    if (state.lastSavedAt !== undefined) this.lastSavedAt = state.lastSavedAt;
+    if (state.activeRevisionId !== undefined) this.activeRevisionId = state.activeRevisionId;
+    this.onStateChange({
+      ...state,
+      lastSavedAt: state.lastSavedAt ?? this.lastSavedAt,
+      activeRevisionId: state.activeRevisionId ?? this.activeRevisionId,
+    });
   }
 }

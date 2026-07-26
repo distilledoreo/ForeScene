@@ -141,6 +141,7 @@ export async function listModelAssetKeys(): Promise<string[]> {
 
 export async function deleteModelAsset(key: string): Promise<void> {
   memoryAssets.delete(key);
+  memoryAssetVersions.set(key, (memoryAssetVersions.get(key) ?? 0) + 1);
   const db = await openDatabase();
   if (!db) return;
   try {

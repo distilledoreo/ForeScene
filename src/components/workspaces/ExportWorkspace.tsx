@@ -172,8 +172,9 @@ export function ExportWorkspace() {
     let controller: AbortController | undefined;
     try {
       if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before exporting a package.');
-      await flushProject('Verified save before package export');
-      const exportProject = useContinuityStore.getState().project;
+      const verified = await flushProject('Verified save before package export');
+      if (!verified) throw new Error('No verified project revision is available for package export.');
+      const exportProject = verified.project;
       const shotsToExport = exportProject.shots.filter((shot) => selectedShotIds.has(shot.id));
       if (shotsToExport.length === 0) return;
       controller = beginExport();
@@ -227,8 +228,9 @@ export function ExportWorkspace() {
     let controller: AbortController | undefined;
     try {
       if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before exporting a package.');
-      await flushProject('Verified save before package export');
-      const exportProject = useContinuityStore.getState().project;
+      const verified = await flushProject('Verified save before package export');
+      if (!verified) throw new Error('No verified project revision is available for package export.');
+      const exportProject = verified.project;
       const shotToExport = exportProject.shots.find((shot) => shot.id === selectedShot?.id);
       if (!shotToExport) return;
       controller = beginExport();

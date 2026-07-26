@@ -75,6 +75,7 @@ import {
 import { getSceneObjectStagingRole } from '../../engine/shotSceneState';
 import { resolveWorkspacePrimaryAction } from '../../engine/workflow';
 import { BuildMode, useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useThemeStore } from '../../state/useThemeStore';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { ContextualPanel } from '../common/ContextualPanel';
@@ -118,6 +119,7 @@ export function BuildWorkspace() {
   const [projectedRenderError, setProjectedRenderError] = useState<string | undefined>();
   const [clipboardStatus, setClipboardStatus] = useState<string | undefined>();
   const theme = useThemeStore((state) => state.theme);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [systemClipboardSyncedAt, setSystemClipboardSyncedAt] = useState<string | undefined>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [modelImportOpen, setModelImportOpen] = useState(false);
@@ -336,10 +338,22 @@ export function BuildWorkspace() {
       return;
     }
     await copySelection();
-    if (removeSelectedObjects()) setClipboardStatus(`Cut ${selectedObjects.length} object${selectedObjects.length === 1 ? '' : 's'}.`);
-  }, [copySelection, removeSelectedObjects, selectedObjects.length, selectionHasLocked]);
+    if (!runDestructiveProjectMutation) {
+      setClipboardStatus('Local recovery is still starting. Please wait before cutting objects.');
+      return;
+    }
+    let removed = false;
+    try {
+      await runDestructiveProjectMutation('Before deleting scene objects', () => {
+        removed = removeSelectedObjects();
+      });
+      if (removed) setClipboardStatus(`Cut ${selectedObjects.length} object${selectedObjects.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setClipboardStatus(error instanceof Error ? error.message : 'Could not create a recovery point before cutting objects.');
+    }
+  }, [copySelection, removeSelectedObjects, runDestructiveProjectMutation, selectedObjects.length, selectionHasLocked]);
 
-  const requestDeleteSelection = useCallback(() => {
+  const requestDeleteSelection = useCallback(async () => {
     if (selectedObjects.length === 0) return false;
     if (selectionHasLocked) {
       setClipboardStatus('Unlock the selection before deleting it.');
@@ -348,10 +362,23 @@ export function BuildWorkspace() {
     const count = selectedObjects.length;
     const label = `${count} selected object${count === 1 ? '' : 's'}`;
     if (!window.confirm(`Delete ${label}? A local recovery point will be kept so this can be restored later.`)) return false;
-    if (!removeSelectedObjects()) return false;
-    setClipboardStatus(`Deleted ${label}.`);
-    return true;
-  }, [removeSelectedObjects, selectedObjects.length, selectionHasLocked]);
+    if (!runDestructiveProjectMutation) {
+      setClipboardStatus('Local recovery is still starting. Please wait before deleting objects.');
+      return false;
+    }
+    let removed = false;
+    try {
+      await runDestructiveProjectMutation('Before deleting scene objects', () => {
+        removed = removeSelectedObjects();
+      });
+      if (!removed) return false;
+      setClipboardStatus(`Deleted ${label}.`);
+      return true;
+    } catch (error) {
+      setClipboardStatus(error instanceof Error ? error.message : 'Could not create a recovery point before deleting objects.');
+      return false;
+    }
+  }, [removeSelectedObjects, runDestructiveProjectMutation, selectedObjects.length, selectionHasLocked]);
 
   const pasteSelection = useCallback(async (inPlace = false) => {
     let payload = buildClipboard;

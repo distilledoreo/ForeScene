@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultProject, createPanoAsset, createPanoReference, createSceneObject } from '../src/domain/defaults';
 import { repairProjectHealth, runProjectHealthCheck } from '../src/engine/projectHealth';
 import { resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
-import { resetProjectAssetStoreForTests, storeProjectAssetDataUrl } from '../src/engine/projectAssetStore';
+import { putProjectAssetBlobs, resetProjectAssetStoreForTests, storeProjectAssetDataUrl } from '../src/engine/projectAssetStore';
 import { resetProjectRevisionStoreForTests } from '../src/engine/projectRevisionStore';
+import { saveProjectRevision } from '../src/engine/projectSafety';
 
 async function resetSafetyStorage() {
   resetProjectAssetStoreForTests();
@@ -97,5 +98,23 @@ describe('project health', () => {
     expect(report.storage.logicalProjectBytes).toBeGreaterThan(0);
     expect(report.storage.largestAssets[0]?.id).toBe(asset.id);
     expect(report.storage.temporaryLocalBytes).toBe(0);
+  });
+
+  it('reports a retained recovery payload whose SHA-256 no longer matches', async () => {
+    const project = createDefaultProject();
+    const asset = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'reference.png', uri: 'data:image/png;base64,YWJjZA==', width: 16, height: 8,
+    }));
+    project.assets.assets[asset.id] = asset;
+    project.panoRefs = [createPanoReference({
+      name: 'Reference', assetId: asset.id, type: 'ai_global_reference', origin: [0, 1.6, 0], width: 16, height: 8, isCanonical: true,
+    })];
+    const saved = await saveProjectRevision(project);
+    const resource = saved.revision.resources.projectAssets![0]!;
+    await putProjectAssetBlobs([{ key: resource.key, blob: new Blob(['wxyz'], { type: 'image/png' }) }]);
+
+    const report = await runProjectHealthCheck(project);
+
+    expect(report.issues.some((entry) => entry.code === 'corrupt-recovery-resource')).toBe(true);
   });
 });

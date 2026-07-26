@@ -81,4 +81,58 @@ describe('project persistence controller', () => {
     expect(states.at(-1)?.status).toBe('failed');
     expect((await recoverLatestProject())?.project.name).toBe('Known good controller save');
   });
+
+  it('commits a destructive snapshot before applying the live mutation', async () => {
+    const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: () => undefined });
+    const before = createDefaultProject();
+    before.scene.objects.push(createSceneObject('box', 1));
+    controller.start(before);
+    await controller.flushAndLoadActiveRevision('Initial local save');
+    let current = before;
+    let snapshotWasDurable = false;
+
+    const verified = await controller.runDestructiveMutation(
+      before,
+      'Before deleting scene objects',
+      async () => {
+        snapshotWasDurable = (await listProjectRevisionSummaries(before.id))
+          .some((revision) => revision.kind === 'snapshot' && revision.reason === 'Before deleting scene objects');
+        current = structuredClone(before);
+        current.scene.objects = [];
+        controller.noteProjectChange(current, before);
+      },
+      () => current,
+    );
+
+    expect(snapshotWasDurable).toBe(true);
+    expect(verified?.project.scene.objects).toEqual([]);
+    expect((await listProjectRevisionSummaries(before.id)).some((revision) => revision.reason === 'Before deleting scene objects')).toBe(true);
+  });
+
+  it('returns an immutable loaded revision for export instead of mutable editor state', async () => {
+    const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: () => undefined });
+    const project = createDefaultProject();
+    project.name = 'Verified export input';
+    controller.start(project);
+    const verified = await controller.flushAndLoadActiveRevision('Verified save before export');
+    const changed = structuredClone(project);
+    changed.name = 'Mutable editor change after export started';
+    controller.noteProjectChange(changed, project);
+
+    expect(verified?.project.name).toBe('Verified export input');
+    expect(verified?.revision.id).toBeTruthy();
+  });
+
+  it('keeps prior save metadata visible when a later write fails', async () => {
+    const states: ProjectPersistenceState[] = [];
+    const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: (state) => states.push(state) });
+    const project = createDefaultProject();
+    controller.start(project);
+    await controller.flushAndLoadActiveRevision();
+    const prior = states.at(-1)!;
+    controller.reportAssetPersistenceFailure(new Error('Injected later asset write failure.'));
+    const failed = states.at(-1)!;
+    expect(failed.lastSavedAt).toBe(prior.lastSavedAt);
+    expect(failed.activeRevisionId).toBe(prior.activeRevisionId);
+  });
 });
