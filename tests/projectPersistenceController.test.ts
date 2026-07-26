@@ -4,7 +4,7 @@ import {
   ProjectPersistenceController,
   type ProjectPersistenceState,
 } from '../src/engine/projectPersistenceController';
-import { listProjectRevisionSummaries, recoverLatestProject } from '../src/engine/projectSafety';
+import { listProjectRevisionSummaries, loadProjectRevision, recoverLatestProject } from '../src/engine/projectSafety';
 import { resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import { resetProjectAssetStoreForTests } from '../src/engine/projectAssetStore';
 import { resetProjectRevisionStoreForTests } from '../src/engine/projectRevisionStore';
@@ -107,6 +107,39 @@ describe('project persistence controller', () => {
     expect(snapshotWasDurable).toBe(true);
     expect(verified?.project.scene.objects).toEqual([]);
     expect((await listProjectRevisionSummaries(before.id)).some((revision) => revision.reason === 'Before deleting scene objects')).toBe(true);
+  });
+
+  it('captures the current project when a queued destructive mutation begins', async () => {
+    const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: () => undefined });
+    const stale = createDefaultProject();
+    stale.name = 'Stale call-time project';
+    stale.scene.objects.push(createSceneObject('box', 1));
+    controller.start(stale);
+    await controller.flushAndLoadActiveRevision('Initial local save');
+    let current = stale;
+
+    const pending = controller.runDestructiveMutation(
+      stale,
+      'Before deleting scene objects',
+      () => {
+        const changed = structuredClone(current);
+        changed.scene.objects = [];
+        controller.noteProjectChange(changed, current);
+        current = changed;
+      },
+      () => current,
+    );
+
+    current = structuredClone(stale);
+    current.name = 'Latest state at queue drain';
+    const verified = await pending;
+    const snapshot = (await listProjectRevisionSummaries(stale.id))
+      .find((revision) => revision.kind === 'snapshot' && revision.reason === 'Before deleting scene objects');
+
+    expect(snapshot).toBeDefined();
+    expect((await loadProjectRevision(snapshot!.id)).project.name).toBe('Latest state at queue drain');
+    expect(verified?.project.name).toBe('Latest state at queue drain');
+    expect(verified?.project.scene.objects).toEqual([]);
   });
 
   it('returns an immutable loaded revision for export instead of mutable editor state', async () => {
