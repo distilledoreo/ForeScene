@@ -232,6 +232,7 @@ export async function activateProjectRevision(
     const record = memoryRevisions.get(revisionId);
     if (!record || record.projectId !== projectId) throw new Error('The requested recovery revision is unavailable.');
     const previous = memoryHeads.get(projectId);
+    if (previous?.activeRevisionId === revisionId) return copy(previous);
     const head: ProjectRevisionHead = {
       projectId,
       activeRevisionId: revisionId,
@@ -258,6 +259,10 @@ export async function activateProjectRevision(
         const headRequest = heads.get(projectId);
         headRequest.onsuccess = () => {
           const previous = headRequest.result as ProjectRevisionHead | undefined;
+          if (previous?.activeRevisionId === revisionId) {
+            nextHead = previous;
+            return;
+          }
           nextHead = {
             projectId,
             activeRevisionId: revisionId,
