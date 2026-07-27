@@ -217,6 +217,12 @@ test.describe('@smoke build interactions', () => {
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
 
+    // Shortcuts ignore editable targets; focus the 3D viewport so Ctrl/Cmd+A is not lost.
+    const viewport = page.getByTestId('scene-viewport');
+    await expect(viewport).toBeVisible();
+    await viewport.focus();
+    await expect(viewport).toBeFocused();
+
     await page.keyboard.press('ControlOrMeta+A');
     await expect(page.locator('[data-build-selection-count]')).toContainText(/objects selected/);
     await page.keyboard.press('ControlOrMeta+C');

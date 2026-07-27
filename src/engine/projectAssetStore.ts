@@ -12,6 +12,8 @@ const memoryBlobVersions = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
+/** Serialize fire-and-forget IDB writes — WebKit is sensitive to overlapping open/put/close. */
+let assetWriteQueue: Promise<void> = Promise.resolve();
 
 export interface ProjectAssetBlobWrite {
   key: string;
@@ -49,12 +51,16 @@ function makeObjectUrl(key: string, blob: Blob): string {
 }
 
 function persistProjectAssetBlob(key: string, blob: Blob) {
-  void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
-    // The in-memory blob remains usable for the current session, but this is
-    // now observable by the project safety controller instead of being a
-    // silent durability failure.
-    for (const listener of persistenceFailureListeners) listener({ key, error });
-  });
+  // Chain writes so concurrent storeProjectAssetDataUrl calls do not open
+  // overlapping IndexedDB transactions (Safari/WebKit is especially sensitive).
+  assetWriteQueue = assetWriteQueue
+    .then(() => putProjectAssetBlobs([{ key, blob }]))
+    .catch((error) => {
+      // The in-memory blob remains usable for the current session, but this is
+      // now observable by the project safety controller instead of being a
+      // silent durability failure.
+      for (const listener of persistenceFailureListeners) listener({ key, error });
+    });
 }
 
 /** Observe asynchronous cache-write failures from synchronous asset actions. */
@@ -210,6 +216,7 @@ export function resetProjectAssetStoreForTests() {
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;
+  assetWriteQueue = Promise.resolve();
 }
 
 /** Deterministically exercise a durable binary-write failure in regression tests. */

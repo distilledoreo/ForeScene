@@ -81,7 +81,11 @@ export default defineConfig({
       name: 'desktop-webkit',
       use: {
         ...devices['Desktop Safari'],
-        viewport: { width: 1440, height: 900 },
+        // Lower resolution + 1x DPR reduces WebGL/canvas pressure on Linux SW WebKit.
+        viewport: { width: 1280, height: 720 },
+        deviceScaleFactor: 1,
+        // Continuous video encoding of WebGL canvases is a common WebKit crash source in CI.
+        video: 'off',
       },
     },
   ],

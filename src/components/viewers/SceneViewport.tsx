@@ -2092,6 +2092,8 @@ export function SceneViewport({
       className={`relative h-full ${minHeightClassName} overflow-hidden bg-surface-base ${cursorClass}`}
       data-testid="scene-viewport"
       data-occlusion-status={occlusionStatus}
+      // Focusable so keyboard shortcuts / E2E can target the canvas shell.
+      tabIndex={0}
       ref={containerRef}
     >
       {shotFraming && (
