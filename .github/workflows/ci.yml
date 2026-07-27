@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  unit:
+    name: Vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test
+
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  e2e-chromium:
+    name: Playwright Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e -- --project=desktop-chromium --project=tablet-chromium --project=phone-390
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-chromium-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit:
+    name: Playwright WebKit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps webkit
+      - run: npm run test:e2e -- --project=desktop-webkit
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-webkit-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  visual-baselines:
+    name: Screenshot baselines
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e -- --project=desktop-chromium --project=tablet-chromium --project=phone-390 e2e/visual-baselines.spec.ts e2e/layout-assertions.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-baseline-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

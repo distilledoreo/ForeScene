@@ -1,7 +1,8 @@
 {
   "name": "continuity-stage",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "PanoRef — Continuity Stage: local-first continuity packages for AI video production",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -13,7 +14,8 @@
     "goal:smoke": "node scripts/goal-workflow-smoke.mjs",
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "playwright install chromium webkit",
+    "test:e2e:visual": "playwright test e2e/visual-baselines.spec.ts e2e/layout-assertions.spec.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

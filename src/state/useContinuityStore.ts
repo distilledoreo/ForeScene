@@ -72,6 +72,25 @@ import {
 } from '../engine/shotCameraHistory';
 
 import { useThemeStore } from './useThemeStore';
+import type {
+  BuildMode,
+  ContinuityStoreSlices,
+  ShotCameraHistoryMode,
+} from './slices/types';
+export type {
+  BuildMode,
+  ContinuityStoreSlices,
+  ShotCameraHistoryMode,
+} from './slices/types';
+export {
+  PROJECT_SLICE_KEYS,
+  SELECTION_SLICE_KEYS,
+  HISTORY_SLICE_KEYS,
+  WORKFLOW_SLICE_KEYS,
+  SESSION_SLICE_KEYS,
+} from './slices';
+import { reorderShots as reorderShotsInSequence, copyStagingToNextShot as copyStagingInSequence } from '../engine/sequenceStoryboard';
+import { commitKeyframePreviewAsset } from '../engine/keyframePreviewAssets';
 import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../engine/sandboxCore';
 import { normalizeWorkspace } from '../engine/workflow';
 import {
@@ -89,9 +108,8 @@ import {
   translateSelectedObjects,
 } from '../engine/buildSelectionMath';
 
-export type BuildMode = 'select' | 'place' | 'pano_origin';
 export type { BuildHistoryMode };
-export type ShotCameraHistoryMode = 'step' | 'batch' | 'silent';
+// BuildMode + ShotCameraHistoryMode re-exported from slices/types above.
 
 /** Only the coalesce timer stays outside the store (cannot serialize Timeout handles cleanly). */
 let buildHistoryCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -105,153 +123,8 @@ function clearBuildHistoryCoalesceTimer() {
   }
 }
 
-interface ContinuityStore {
-  project: LocationProject;
-  workspace: Workspace;
-  selectedObjectIds: string[];
-  buildClipboard?: BuildClipboardPayload;
-  buildClipboardPasteCount: number;
-  selectedShotId?: string;
-  selectedLandmarkId?: string;
-  activePanoId?: string;
-  panoView: PanoViewState;
-  buildMode: BuildMode;
-  activePrimitive: SceneObjectType;
-  gridSnap: boolean;
-  isRenderingGraybox: boolean;
-  isExportingPackage: boolean;
-  shotCameraFlying: boolean;
-  buildHistoryPast: BuildHistorySnapshot[];
-  buildHistoryFuture: BuildHistorySnapshot[];
-  buildHistoryBatchDepth: number;
-  buildHistoryBatchCaptured: boolean;
-  buildHistoryCoalesceActive: boolean;
-  buildTransformPivot?: Vec3;
-  shotCameraHistoryByShotId: ShotCameraHistoryByShotId;
-  shotCameraHistoryBatchDepth: number;
-  shotCameraHistoryBatchCaptured: boolean;
-  /** Bumps on undo/redo so live framing can reseed from the restored stored pose. */
-  shotCameraHistoryRestoreGeneration: number;
-  setWorkspace: (workspace: Workspace) => void;
-  setProject: (project: LocationProject) => void;
-  updateProjectInfo: (updates: Pick<LocationProject, 'name'> | Partial<Pick<LocationProject, 'name' | 'description'>>) => void;
-  updateProjectSettings: (updates: Partial<LocationProject['settings']>) => void;
-  setBuildMode: (mode: BuildMode) => void;
-  setActivePrimitive: (type: SceneObjectType) => void;
-  setGridSnap: (value: boolean) => void;
-  beginBuildHistoryBatch: () => void;
-  endBuildHistoryBatch: () => void;
-  undoBuild: () => boolean;
-  redoBuild: () => boolean;
-  canUndoBuild: () => boolean;
-  canRedoBuild: () => boolean;
-  beginShotCameraHistoryBatch: () => void;
-  endShotCameraHistoryBatch: () => void;
-  canUndoShotCamera: () => boolean;
-  canRedoShotCamera: () => boolean;
-  undoShotCamera: () => boolean;
-  redoShotCamera: () => boolean;
-  addObject: (type: SceneObjectType) => void;
-  addImportedModel: (result: { asset: ProjectAsset; object: SceneObject }) => SceneObject;
-  addImportedModels: (results: Array<{ asset: ProjectAsset; object: SceneObject }>) => SceneObject[];
-  placeObject: (type: SceneObjectType, point: Vec3) => SceneObject;
-  selectObject: (id?: string, mode?: SelectionMode) => void;
-  selectObjectRange: (id: string) => void;
-  selectAllObjects: () => void;
-  clearObjectSelection: () => void;
-  setBuildClipboard: (payload?: BuildClipboardPayload) => void;
-  updateObject: (id: string, updates: Partial<SceneObject>, options?: { history?: BuildHistoryMode }) => void;
-  moveObjectToGroundPoint: (id: string, point: Vec3) => void;
-  moveObjectPosition: (id: string, point: Vec3) => void;
-  duplicateObject: (id: string) => SceneObject | undefined;
-  duplicateSelectedObjects: () => SceneObject[];
-  pasteBuildObjects: (payload: BuildClipboardPayload, options?: { inPlace?: boolean }) => SceneObject[];
-  removeSelectedObjects: () => boolean;
-  nudgeSelectedObjects: (delta: Vec3) => boolean;
-  translateSelectedObjectsBy: (delta: Vec3, options?: { history?: BuildHistoryMode }) => boolean;
-  rotateSelectedObjectsBy: (axis: 'x' | 'y' | 'z', degrees: number, options?: { history?: BuildHistoryMode }) => boolean;
-  scaleSelectedObjectsBy: (factors: Vec3, options?: { history?: BuildHistoryMode }) => boolean;
-  toggleSelectedVisibility: () => boolean;
-  toggleSelectedLocked: () => boolean;
-  showAllObjects: () => boolean;
-  toggleObjectVisibility: (id: string) => void;
-  toggleObjectLocked: (id: string) => void;
-  removeObject: (id: string) => void;
-  setPanoOrigin: (origin: Vec3) => void;
-  /** Capture-origin yaw/orientation for new graybox captures (does not rewrite existing panos). */
-  setPanoRotation: (rotation: Euler) => void;
-  renderGrayboxPano: () => Promise<PanoReference>;
-  importCanonicalPano: (params: { name: string; dataUrl: string; width?: number; height?: number; importNote?: string }) => void;
-  /** Origin-aware import: replace at same capture, or add a secondary blend partner when origin moved. */
-  importStyledPano: (params: { name: string; dataUrl: string; width?: number; height?: number; importNote?: string }) => 'first' | 'replace' | 'add_secondary';
-  /**
-   * Frozen plan for the next secondary styled import (suggest or manual place).
-   * Forces add_secondary and stamps the secondary with plan.origin / plan.rotation.
-   */
-  pendingSecondCapturePlan: PendingSecondCapturePlan | undefined;
-  setPendingSecondCapturePlan: (plan: PendingSecondCapturePlan | undefined) => void;
-  removePanoReference: (id: string) => void;
-  setActivePano: (id?: string) => void;
-  updatePanoReference: (id: string, updates: Partial<PanoReference>) => void;
-  setPanoView: (updates: Partial<PanoViewState>) => void;
-  addCamera: (options?: { navigateToShots?: boolean }) => Shot;
-  selectShot: (id?: string) => void;
-  setShotCameraFlying: (value: boolean, options?: { clearFramingAcceptance?: boolean }) => void;
-  lockShotCamera: () => void;
-  /** Commit framing: exit fly mode and mark shot framing accepted. */
-  /** Commit camera + framing acceptance. By default exits fly; pass keepFlying for continuous capture. */
-  landShotFraming: (shotId: string, camera?: CameraData, options?: { keepFlying?: boolean }) => void;
-  updateShot: (id: string, updates: Partial<Shot>, options?: { cameraHistory?: ShotCameraHistoryMode }) => void;
-  removeShot: (id: string) => void;
-  attachCameraMoveVideoToShot: (shotId: string, params: {
-    name: string;
-    dataUrl: string;
-    mimeType: string;
-    width: number;
-    height: number;
-    durationSeconds: number;
-    frameRate: number;
-    encodeMode?: 'render' | 'quickPreview';
-    codecString?: string;
-    frameCount?: number;
-    resolutionPreset?: string;
-    validated?: boolean;
-  }) => ProjectAsset;
-  attachViewportRenderToShot: (shotId: string, params: {
-    name: string;
-    dataUrl: string;
-    width: number;
-    height: number;
-    /** Which still view slot to fill; defaults to clay with people. */
-    stillView?: ShotStillViewSelection;
-  }) => ProjectAsset;
-  attachAiResultFrameToShot: (shotId: string, params: { name: string; dataUrl: string; width?: number; height?: number }) => ProjectAsset;
-  addLandmark: () => Landmark;
-  updateLandmark: (id: string, updates: Partial<Landmark>) => void;
-  toggleShotLandmark: (shotId: string, landmarkId: string) => void;
-  setExportingPackage: (value: boolean) => void;
-  approveGrayboxForReference: () => void;
-  acceptReferenceAlignment: () => void;
-  acceptShotFraming: (shotId: string) => void;
-  markAiBriefSent: (shotId: string) => void;
-  markFinalPackageExported: (shotId: string) => void;
-  dismissedWorkflowAdvanceKeys: string[];
-  seenObjectiveWorkspaces: Workspace[];
-  objectiveModalRequest: number;
-  alignmentIntroRequest: number;
-  alignmentRetryModalRequest: number;
-  seenAlignmentIntroForPanoId?: string;
-  /** Live projected-style occlusion status reported by the viewport. */
-  projectedOcclusionStatus: 'disabled' | 'generating' | 'ready' | 'failed';
-  setProjectedOcclusionStatus: (status: 'disabled' | 'generating' | 'ready' | 'failed') => void;
-  dismissWorkflowAdvance: (promptKey: string) => void;
-  markObjectiveSeen: (workspace: Workspace) => void;
-  requestObjectiveModal: () => void;
-  requestAlignmentIntro: () => void;
-  requestAlignmentRetryModal: () => void;
-  markAlignmentIntroSeen: (panoId: string) => void;
-  resetWorkflowSession: () => void;
-}
+/** Composed Continuity store: domain slices defined under `./slices`. */
+type ContinuityStore = ContinuityStoreSlices;
 
 const initialProject = createDefaultProject();
 
@@ -1294,6 +1167,30 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       panoView: nextShot ? panoViewFromCamera(nextShot.camera) : state.panoView,
     };
   }),
+  reorderShots: (shotId, targetIndex) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      shots: reorderShotsInSequence(state.project.shots, shotId, targetIndex),
+    }),
+  })),
+  copyStagingToNextShot: (sourceShotId) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      shots: copyStagingInSequence(state.project.shots, sourceShotId),
+    }),
+  })),
+  attachKeyframePreviewToShot: (shotId, keyframeId, dataUrl) => {
+    const state = get();
+    const committed = commitKeyframePreviewAsset({
+      project: state.project,
+      shotId,
+      keyframeId,
+      dataUrl,
+    });
+    if (!committed) return undefined;
+    set({ project: touchProject(committed.project) });
+    return committed.project.assets.assets[committed.previewAssetId];
+  },
   attachCameraMoveVideoToShot: (shotId, params) => {
     const state = get();
     const shot = state.project.shots.find((item) => item.id === shotId);

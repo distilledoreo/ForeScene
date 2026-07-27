@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "0.1",
+  "id": "project_fixture_01",
+  "name": "Fixture Location 0.1",
+  "description": "Minimal schema 0.1 fixture for migration tests",
+  "units": "meters",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "scene": {
+    "worldUp": "Y",
+    "objects": [
+      {
+        "id": "obj_ground",
+        "name": "Ground",
+        "type": "floor",
+        "transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "dimensions": [20, 0.1, 20],
+        "category": "architecture",
+        "locked": true,
+        "visible": true
+      }
+    ],
+    "panoOrigin": [0, 1.6, 0],
+    "panoRotation": [0, 0, 0]
+  },
+  "panoRefs": [],
+  "landmarks": [],
+  "shots": [
+    {
+      "id": "shot_fixture_1",
+      "shotNumber": 1,
+      "name": "Origin",
+      "status": "planned",
+      "camera": {
+        "position": [0, 1.6, 4],
+        "target": [0, 1.5, 0],
+        "fovDegrees": 40,
+        "aspectRatio": 1.777,
+        "near": 0.05,
+        "far": 200
+      },
+      "cameraKeyframes": [],
+      "linkedLandmarkIds": [],
+      "exportSettings": {
+        "width": 1920,
+        "height": 1080,
+        "includeViewport": true,
+        "includeAiResultFrame": false,
+        "includePanoCrop": true,
+        "includeFullPano": true,
+        "includeGrayboxPano": true
+      },
+      "assets": {},
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "assets": {
+    "assets": {}
+  },
+  "settings": {
+    "defaultShotWidth": 1920,
+    "defaultShotHeight": 1080,
+    "defaultShotFovDegrees": 40,
+    "panoGoodMatchMeters": 0.35,
+    "panoModerateMatchMeters": 1.25,
+    "panoLetterboxExports169": true
+  },
+  "workflow": {
+    "shotFramingAcceptedAtByShotId": {},
+    "aiBriefSentAtByShotId": {},
+    "finalPackageExportedAtByShotId": {}
+  }
+}

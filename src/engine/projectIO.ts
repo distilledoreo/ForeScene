@@ -18,6 +18,11 @@ import {
   registerProjectAssetBlob,
   resolveProjectAssetUri,
 } from './projectAssetStore';
+import {
+  CURRENT_SCHEMA_VERSION,
+  migrateProjectToCurrent,
+  stripEphemeralKeyframePreviewUris,
+} from './schemaMigrations';
 
 const PROJECT_MANIFEST = 'project.json';
 const PROJECT_INTEGRITY = 'integrity.json';
@@ -29,7 +34,10 @@ export function serializeProject(project: LocationProject): string {
 }
 
 function createPortableProject(project: LocationProject): LocationProject {
-  const portable = structuredClone(pruneUnreferencedProjectAssets(project));
+  const withoutEphemeral = stripEphemeralKeyframePreviewUris(project);
+  const portable = structuredClone(pruneUnreferencedProjectAssets(withoutEphemeral));
+  portable.schemaVersion = CURRENT_SCHEMA_VERSION;
+  portable.productVersion = portable.productVersion ?? '0.1.0';
   for (const asset of Object.values(portable.assets.assets)) {
     if (asset.storageKey) asset.uri = `${PROJECT_ASSET_URI_PREFIX}${asset.storageKey}`;
   }
@@ -101,8 +109,8 @@ export function parseProject(json: string): LocationProject {
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Invalid project file.');
   }
-  if (parsed.schemaVersion !== '0.1') {
-    throw new Error('Unsupported project schema version.');
+  if (typeof parsed.schemaVersion !== 'string') {
+    throw new Error('Invalid project file: missing schemaVersion.');
   }
   if (!parsed.scene || typeof parsed.scene !== 'object') {
     throw new Error('Invalid project file: missing scene.');
@@ -120,7 +128,7 @@ export function parseProject(json: string): LocationProject {
     throw new Error('Invalid project file: panoRefs must be an array.');
   }
   try {
-    return {
+    const normalized: LocationProject = {
       ...parsed,
       scene: {
         ...parsed.scene,
@@ -135,6 +143,7 @@ export function parseProject(json: string): LocationProject {
       settings: normalizeProjectSettings(parsed.settings),
       workflow: normalizeProjectWorkflow(parsed.workflow),
     };
+    return migrateProjectToCurrent(normalized);
   } catch (error) {
     throw new Error(
       error instanceof Error

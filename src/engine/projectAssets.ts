@@ -19,6 +19,9 @@ export function getReferencedProjectAssetIds(project: LocationProject): Set<stri
     for (const assetId of Object.values(shot.assets)) {
       if (assetId) referenced.add(assetId);
     }
+    for (const keyframe of shot.cameraKeyframes ?? []) {
+      if (keyframe.previewAssetId) referenced.add(keyframe.previewAssetId);
+    }
   }
 
   return referenced;

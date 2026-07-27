@@ -97,22 +97,36 @@ export function shotHasCameraKeyframeMove(shot: Pick<Shot, 'cameraKeyframes'>): 
 }
 
 /**
+ * Resolve a keyframe filmstrip still: runtime previewUri, then project asset URI.
+ */
+export function resolveKeyframePreviewUri(
+  project: Pick<LocationProject, 'assets'> | undefined,
+  keyframe: Pick<CameraKeyframe, 'previewUri' | 'previewAssetId'>,
+): string | undefined {
+  if (keyframe.previewUri) return keyframe.previewUri;
+  if (!keyframe.previewAssetId || !project) return undefined;
+  return project.assets.assets[keyframe.previewAssetId]?.uri;
+}
+
+/**
  * Preview stills for a GIF-like camera-roll animation of keyframes.
- * Sorted by time; only includes frames that have a stored previewUri.
+ * Sorted by time; only includes frames that have a stored preview (asset or URI).
  * Consumers must select/animate by keyframeId — never by parallel index into all keyframes.
  */
 export function resolveCameraKeyframePreviewFrames(
   shot: Pick<Shot, 'cameraKeyframes'>,
+  project?: Pick<LocationProject, 'assets'>,
 ): KeyframePreviewFrame[] {
   const sorted = [...(shot.cameraKeyframes ?? [])].sort(
     (a, b) => a.timeSeconds - b.timeSeconds,
   );
   const frames: KeyframePreviewFrame[] = [];
   for (const keyframe of sorted) {
-    if (!keyframe.previewUri) continue;
+    const uri = resolveKeyframePreviewUri(project, keyframe);
+    if (!uri) continue;
     frames.push({
       keyframeId: keyframe.id,
-      uri: keyframe.previewUri,
+      uri,
       timeSeconds: keyframe.timeSeconds,
     });
   }

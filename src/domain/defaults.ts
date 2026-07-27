@@ -423,7 +423,8 @@ export function createDefaultProject(): LocationProject {
   };
 
   return {
-    schemaVersion: '0.1',
+    schemaVersion: '1.0',
+    productVersion: '0.1.0',
     id: createId('project'),
     name: 'Untitled Location',
     description: '',

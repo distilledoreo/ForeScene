@@ -122,6 +122,7 @@ import {
   buildKeyframeThumbCacheFromKeyframes,
   shouldCommitKeyframeThumb,
 } from '../../engine/keyframePreviewThumbs';
+import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
 import {
   type ShotStillViewSelection,
 } from '../../domain/shotStillViews';
@@ -134,6 +135,28 @@ import {
   normalizeProductionShotId,
   normalizeShotTitle,
 } from '../../domain/shotIdentity';
+import { useShotCameraController } from '../../hooks/useShotCameraController';
+import { useShotRenderController } from '../../hooks/useShotRenderController';
+import { useShotStagingController } from '../../hooks/useShotStagingController';
+import { useVideoAuthoringController } from '../../hooks/useVideoAuthoringController';
+import { ContinuityComparePanel } from '../shots/ContinuityComparePanel';
+import { SequenceStoryboardView } from '../shots/SequenceStoryboardView';
+import { ShotsCaptureChrome } from '../shots/ShotsCaptureChrome';
+import { ShotsLibrary } from '../shots/ShotsLibrary';
+import { ShotSettings } from '../shots/ShotSettings';
+
+// Plan-named extractions re-exported for structural tests / composition visibility.
+export {
+  useShotCameraController,
+  useShotRenderController,
+  useShotStagingController,
+  useVideoAuthoringController,
+  ContinuityComparePanel,
+  SequenceStoryboardView,
+  ShotsCaptureChrome,
+  ShotsLibrary,
+  ShotSettings,
+};
 
 const statuses: ShotStatus[] = ['planned', 'exported', 'needs_fix', 'approved', 'rejected'];
 const STATUS_LABELS: Record<ShotStatus, string> = {
@@ -181,12 +204,15 @@ export function ShotsWorkspace() {
     landShotFraming,
     attachCameraMoveVideoToShot,
     attachViewportRenderToShot,
+    attachKeyframePreviewToShot,
     setWorkspace,
     setActivePano,
     beginShotCameraHistoryBatch,
     endShotCameraHistoryBatch,
     undoShotCamera,
     redoShotCamera,
+    reorderShots,
+    copyStagingToNextShot,
   } = useContinuityStore(useShallow((state) => ({
     project: state.project,
     selectedShotId: state.selectedShotId,
@@ -200,30 +226,38 @@ export function ShotsWorkspace() {
     landShotFraming: state.landShotFraming,
     attachCameraMoveVideoToShot: state.attachCameraMoveVideoToShot,
     attachViewportRenderToShot: state.attachViewportRenderToShot,
+    attachKeyframePreviewToShot: state.attachKeyframePreviewToShot,
     setWorkspace: state.setWorkspace,
     setActivePano: state.setActivePano,
     beginShotCameraHistoryBatch: state.beginShotCameraHistoryBatch,
     endShotCameraHistoryBatch: state.endShotCameraHistoryBatch,
     undoShotCamera: state.undoShotCamera,
     redoShotCamera: state.redoShotCamera,
+    reorderShots: state.reorderShots,
+    copyStagingToNextShot: state.copyStagingToNextShot,
   })));
   const flushProject = useProjectSafetyStore((state) => state.flushProject);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const shotCameraHistoryRestoreGeneration = useContinuityStore(
     (state) => state.shotCameraHistoryRestoreGeneration,
   );
-  const [stagingMode, setStagingMode] = useState(false);
-  const [stagingGizmoMode, setStagingGizmoMode] = useState<GizmoMode>('translate');
-  const [stagedObjectId, setStagedObjectId] = useState<string>();
-  const [showPeopleInViewport, setShowPeopleInViewport] = useState(true);
+  const {
+    stagingMode,
+    setStagingMode,
+    stagingGizmoMode,
+    setStagingGizmoMode,
+    stagedObjectId,
+    setStagedObjectId,
+    showPeopleInViewport,
+    setShowPeopleInViewport,
+    viewportObjectOverrides,
+    setViewportObjectOverrides,
+    clearViewportObjectInspection: clearStagingInspection,
+  } = useShotStagingController();
+  const shotCamera = useShotCameraController();
+  const shotRender = useShotRenderController();
+  const videoAuthoring = useVideoAuthoringController();
   const selectedShot = project.shots.find((shot) => shot.id === selectedShotId) ?? project.shots[0];
-  /**
-   * Transient object overrides for keyframe inspection / move preview.
-   * Not written to the shot until Update pose (or staging edits) commits them.
-   */
-  const [viewportObjectOverrides, setViewportObjectOverrides] = useState<
-    ShotObjectOverrides | undefined
-  >(undefined);
   const shotForViewport = useMemo(() => {
     if (!selectedShot) return undefined;
     if (viewportObjectOverrides !== undefined) {
@@ -246,29 +280,50 @@ export function ShotsWorkspace() {
   );
   const linkedPano = selectedShot ? resolveShotLinkedPano(project, selectedShot) : undefined;
   const linkedAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
-  const draftCameraRef = useRef<CameraData | undefined>();
+  const draftCameraRef = shotCamera.draftCameraRef;
   const shotCameraFlyingRef = useRef(shotCameraFlying);
   shotCameraFlyingRef.current = shotCameraFlying;
   const handledRestoreGenerationRef = useRef(shotCameraHistoryRestoreGeneration);
   const finalizeShotFovWheelBatchRef = useRef<() => void>(() => {});
-  /** Transient live previews keyed by shot id — never reuse across shots. */
-  const [framePreviewByShotId, setFramePreviewByShotId] = useState<Record<string, string>>({});
+  const {
+    framePreviewByShotId,
+    setFramePreviewByShotId,
+    setShotFramePreview,
+    isRenderingFrame,
+    setIsRenderingFrame,
+    isExportingFrame,
+    setIsExportingFrame,
+    cameraMovePreviewUrl,
+    setCameraMovePreviewUrl,
+    isExportingCameraMove,
+    setIsExportingCameraMove,
+    cameraMoveProgress,
+    setCameraMoveProgress,
+    cameraMoveProgressMessage,
+    setCameraMoveProgressMessage,
+    cameraMoveError,
+    setCameraMoveError,
+    cameraMoveNotice,
+    setCameraMoveNotice,
+    snapshotError,
+    setSnapshotError,
+    videoExportMode,
+    setVideoExportMode,
+    videoResolutionPreset,
+    setVideoResolutionPreset,
+    canRenderMp4,
+    setCanRenderMp4,
+    cameraMoveAbortRef,
+    cancelCameraMoveExport: _cancelCameraMoveExportUnused,
+    applyExportProgress: _applyExportProgressUnused,
+  } = shotRender;
+  void _cancelCameraMoveExportUnused;
+  void _applyExportProgressUnused;
   const framePreviewUrl = selectedShot ? framePreviewByShotId[selectedShot.id] : undefined;
-  const [isRenderingFrame, setIsRenderingFrame] = useState(false);
-  const [isExportingFrame, setIsExportingFrame] = useState(false);
-  const [cameraMovePreviewUrl, setCameraMovePreviewUrl] = useState<string | undefined>();
-  const [isExportingCameraMove, setIsExportingCameraMove] = useState(false);
-  const [cameraMoveProgress, setCameraMoveProgress] = useState(0);
-  const [cameraMoveProgressMessage, setCameraMoveProgressMessage] = useState('Preparing scene');
-  const [cameraMoveError, setCameraMoveError] = useState<string | undefined>();
-  const [cameraMoveNotice, setCameraMoveNotice] = useState<string | undefined>();
-  const [snapshotError, setSnapshotError] = useState<string | undefined>();
-  const cameraMoveAbortRef = useRef<{ cancelled: boolean; abort?: () => void }>({ cancelled: false });
-  const [videoExportMode, setVideoExportMode] = useState<'render' | 'quickPreview'>('render');
-  const [videoResolutionPreset, setVideoResolutionPreset] = useState<VideoResolutionPresetId>('1080p');
-  const [canRenderMp4, setCanRenderMp4] = useState<boolean | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [showContinuityCompare, setShowContinuityCompare] = useState(false);
+  const [showSequenceBoard, setShowSequenceBoard] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [shotPendingDelete, setShotPendingDelete] = useState<Shot | null>(null);
   const [mediaModalShotId, setMediaModalShotId] = useState<string | null>(null);
@@ -279,17 +334,42 @@ export function ShotsWorkspace() {
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(DEFAULT_CAMERA_MOVE_DURATION_SECONDS);
   /**
    * Sequential capture authoring state (empty → capturing → finished).
+   * Kept in React state for UI; major transitions also dispatch into videoAuthoring machine.
    * Export progress stays on isExportingCameraMove — never overloaded into capture state.
    */
-  const [videoCaptureState, setVideoCaptureState] = useState<VideoCaptureState>('empty');
+  const [videoCaptureState, setVideoCaptureStateRaw] = useState<VideoCaptureState>('empty');
+  const setVideoCaptureState = useCallback((
+    next: VideoCaptureState | ((prev: VideoCaptureState) => VideoCaptureState),
+  ) => {
+    setVideoCaptureStateRaw((prev) => {
+      const resolved = typeof next === 'function' ? next(prev) : next;
+      // Mirror into the explicit state machine (best-effort; never block UI).
+      if (resolved === 'empty') videoAuthoring.tryDispatch({ type: 'RETAKE' });
+      else if (resolved === 'finished') videoAuthoring.tryDispatch({ type: 'FINISH_MOVE' });
+      else if (resolved === 'capturing' && prev === 'finished') {
+        videoAuthoring.tryDispatch({ type: 'CONTINUE_MOVE' });
+      } else if (resolved === 'capturing') {
+        videoAuthoring.tryDispatch({ type: 'ENTER_VIDEO' });
+      }
+      return resolved;
+    });
+  }, [videoAuthoring]);
   /**
    * Progressive disclosure: timeline stays hidden until a third pose or "Edit timeline".
-   * Default flow is Start → End (Capture next + Finish) without a mode switch.
    */
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
-  const [isPreviewingCameraMove, setIsPreviewingCameraMove] = useState(false);
+  const [isPreviewingCameraMove, setIsPreviewingCameraMoveRaw] = useState(false);
+  const setIsPreviewingCameraMove = useCallback((
+    value: boolean | ((prev: boolean) => boolean),
+  ) => {
+    setIsPreviewingCameraMoveRaw((prev) => {
+      const resolved = typeof value === 'function' ? value(prev) : value;
+      videoAuthoring.tryDispatch({ type: resolved ? 'START_PREVIEW' : 'STOP_PREVIEW' });
+      return resolved;
+    });
+  }, [videoAuthoring]);
   const previewAbortRef = useRef<{ cancelled: boolean; frame?: number }>({ cancelled: false });
   /** After "Next shot" from a finished video move, keep Video mode empty on the new shot. */
   const resumeVideoAfterNextShotRef = useRef(false);
@@ -298,12 +378,11 @@ export function ShotsWorkspace() {
   /** Lightweight per-keyframe stills for the move filmstrip (not the full gallery matrix). */
   const [keyframeThumbById, setKeyframeThumbById] = useState<Record<string, string>>({});
   const keyframeThumbGenerationRef = useRef(0);
-  const [framingCamera, setFramingCamera] = useState<CameraData | undefined>();
-  const [focalLengthHudPulse, setFocalLengthHudPulse] = useState(0);
-  const [cameraReseedGeneration, setCameraReseedGeneration] = useState(0);
-  const bumpCameraReseed = useCallback(() => {
-    setCameraReseedGeneration((value) => value + 1);
-  }, []);
+  const framingCamera = shotCamera.framingCamera;
+  const setFramingCamera = shotCamera.setFramingCamera;
+  const focalLengthHudPulse = shotCamera.focalLengthHudPulse;
+  const cameraReseedGeneration = shotCamera.cameraReseedGeneration;
+  const bumpCameraReseed = shotCamera.bumpCameraReseed;
 
   const clearKeyframeSelection = useCallback(() => {
     setSelectedKeyframeId(null);
@@ -312,8 +391,8 @@ export function ShotsWorkspace() {
 
   const getEffectiveCamera = useCallback((): CameraData | undefined => {
     if (!selectedShot) return undefined;
-    return draftCameraRef.current ?? selectedShot.camera;
-  }, [selectedShot]);
+    return shotCamera.getEffectiveCamera(selectedShot.camera);
+  }, [selectedShot, shotCamera]);
 
   const getPreviewShot = useCallback(() => {
     if (!selectedShot) return undefined;
@@ -369,7 +448,7 @@ export function ShotsWorkspace() {
   const selectedExportModeAvailable = videoExportMode === 'render'
     ? canRenderMp4 === true
     : Boolean(supportedMp4MimeType);
-  const applyExportProgress = useCallback((
+  const applyExportProgressMapped = useCallback((
     progress: number | CameraMoveExportProgress,
     mapProgress: (value: number) => number = (value) => value,
   ) => {
@@ -380,7 +459,7 @@ export function ShotsWorkspace() {
     }
     setCameraMoveProgress(mapProgress(progress.progress));
     setCameraMoveProgressMessage(progress.message);
-  }, []);
+  }, [setCameraMoveProgress, setCameraMoveProgressMessage, cameraMoveAbortRef]);
 
   const cancelCameraMoveExport = useCallback(() => {
     cameraMoveAbortRef.current.cancelled = true;
@@ -390,11 +469,14 @@ export function ShotsWorkspace() {
     setCameraMoveProgressMessage('Preparing scene');
     setCameraMoveError('MP4 export was cancelled.');
     setCameraMoveNotice(undefined);
-  }, []);
-
-  const setShotFramePreview = useCallback((shotId: string, dataUrl: string) => {
-    setFramePreviewByShotId((current) => ({ ...current, [shotId]: dataUrl }));
-  }, []);
+  }, [
+    cameraMoveAbortRef,
+    setIsExportingCameraMove,
+    setCameraMoveProgress,
+    setCameraMoveProgressMessage,
+    setCameraMoveError,
+    setCameraMoveNotice,
+  ]);
 
   const handleLibraryRename = useCallback((shotId: string, updates: { productionShotId?: string; name: string }) => {
     const shot = project.shots.find((item) => item.id === shotId);
@@ -554,8 +636,9 @@ export function ShotsWorkspace() {
   }, []);
 
   const clearViewportObjectInspection = useCallback(() => {
+    clearStagingInspection();
     setViewportObjectOverrides(undefined);
-  }, []);
+  }, [clearStagingInspection, setViewportObjectOverrides]);
 
   useEffect(() => () => {
     previewAbortRef.current.cancelled = true;
@@ -816,9 +899,7 @@ export function ShotsWorkspace() {
     stopCameraMovePreview,
   ]);
 
-  const pulseFocalLengthHud = useCallback(() => {
-    setFocalLengthHudPulse((value) => value + 1);
-  }, []);
+  const pulseFocalLengthHud = shotCamera.pulseFocalLengthHud;
 
   const undoShotCameraWithActiveBatchFinalize = useCallback(() => {
     finalizeShotFovWheelBatchRef.current();
@@ -1007,9 +1088,6 @@ export function ShotsWorkspace() {
             ? current
             : { ...current, [keyframeId]: frame.dataUrl }
         ));
-        // Persist for camera-roll GIF animation (no undo step).
-        const live = useContinuityStore.getState().project.shots.find((item) => item.id === shot.id);
-        if (!live) return;
         // Re-check generation after reading live state — restore may have raced the await.
         if (!shouldCommitKeyframeThumb({
           renderGeneration: generation,
@@ -1017,22 +1095,13 @@ export function ShotsWorkspace() {
         })) {
           return;
         }
-        const nextKeyframes = live.cameraKeyframes.map((item) => (
-          item.id === keyframeId
-            ? { ...item, previewUri: frame.dataUrl }
-            : item
-        ));
-        if (nextKeyframes.every((item, index) => (
-          item.previewUri === live.cameraKeyframes[index]?.previewUri
-        ))) {
-          return;
-        }
-        updateShot(shot.id, { cameraKeyframes: nextKeyframes }, { cameraHistory: 'silent' });
+        // Persist as content-addressed binary asset (not base64 in project JSON).
+        attachKeyframePreviewToShot(shot.id, keyframeId, frame.dataUrl);
       })
       .catch(() => {
         // Filmstrip falls back to labeled placeholders.
       });
-  }, [selectedShot, selectedShotId, updateShot]);
+  }, [attachKeyframePreviewToShot, selectedShot, selectedShotId]);
 
   const snapshotPreview = useCallback((
     shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData },
@@ -1859,14 +1928,15 @@ export function ShotsWorkspace() {
 
   /** Timeline shows after third pose or explicit Edit timeline. */
   const showTimeline = timelineOpen || cameraMoveKeyframes.length > 2;
-  /** Merge persisted keyframe stills with in-flight local thumbs for the filmstrip. */
+  /** Merge persisted keyframe stills (asset or URI) with in-flight local thumbs for the filmstrip. */
   const movePreviewThumbsById = useMemo(() => {
     const fromKeyframes: Record<string, string> = {};
     for (const keyframe of cameraMoveKeyframes) {
-      if (keyframe.previewUri) fromKeyframes[keyframe.id] = keyframe.previewUri;
+      const uri = resolveKeyframePreviewUri(project, keyframe);
+      if (uri) fromKeyframes[keyframe.id] = uri;
     }
     return { ...fromKeyframes, ...keyframeThumbById };
-  }, [cameraMoveKeyframes, keyframeThumbById]);
+  }, [cameraMoveKeyframes, keyframeThumbById, project]);
 
   const captureLabel = !selectedShot
     ? 'Add shot'
@@ -2058,6 +2128,48 @@ export function ShotsWorkspace() {
               matchQuality={panoMatch?.quality}
               matchDistanceMeters={panoMatch?.distanceMeters}
               disabledReason={undefined}
+            />
+          </div>
+        )}
+
+        {showContinuityCompare && selectedShot && (
+          <div className="pointer-events-auto absolute inset-y-[calc(var(--stage-header-safe)+3rem)] left-3 z-20 w-80 overflow-y-auto rounded-[var(--radius-card)] border border-white/10 bg-zinc-950/95 p-2 shadow-soft backdrop-blur-md">
+            <ContinuityComparePanel
+              project={project}
+              currentShot={selectedShot}
+              previousPreviewUri={
+                (() => {
+                  const prev = project.shots[project.shots.findIndex((s) => s.id === selectedShot.id) - 1];
+                  if (!prev) return undefined;
+                  return framePreviewByShotId[prev.id]
+                    ?? project.assets.assets[prev.assets.viewportRenderAssetId ?? '']?.uri;
+                })()
+              }
+              currentPreviewUri={
+                framePreviewUrl
+                ?? project.assets.assets[selectedShot.assets.viewportRenderAssetId ?? '']?.uri
+              }
+            />
+          </div>
+        )}
+
+        {showSequenceBoard && (
+          <div
+            data-sequence-storyboard-host
+            className="pointer-events-auto absolute inset-x-0 bottom-0 z-30 max-h-[45%] overflow-hidden rounded-t-2xl border border-white/10 bg-zinc-950/95 shadow-soft backdrop-blur-md"
+          >
+            <SequenceStoryboardView
+              project={project}
+              selectedShotId={selectedShot?.id}
+              onSelectShot={(shotId) => selectShot(shotId)}
+              onReorder={(shotId, targetIndex) => reorderShots(shotId, targetIndex)}
+              onCopyStagingToNext={(shotId) => copyStagingToNextShot(shotId)}
+              resolveThumbnailUri={(item) => {
+                if (item.thumbnailAssetId) {
+                  return project.assets.assets[item.thumbnailAssetId]?.uri;
+                }
+                return framePreviewByShotId[item.shotId];
+              }}
             />
           </div>
         )}
@@ -2655,6 +2767,26 @@ export function ShotsWorkspace() {
               </div>
             </Field>
 
+            <Panel title="Continuity & sequence">
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  data-continuity-compare-toggle
+                  className="rounded-md border border-white/10 px-3 py-2 text-left text-xs hover:bg-white/5"
+                  onClick={() => setShowContinuityCompare((value) => !value)}
+                >
+                  {showContinuityCompare ? 'Hide shot-to-shot continuity' : 'Shot-to-shot continuity'}
+                </button>
+                <button
+                  type="button"
+                  data-sequence-storyboard-toggle
+                  className="rounded-md border border-white/10 px-3 py-2 text-left text-xs hover:bg-white/5"
+                  onClick={() => setShowSequenceBoard((value) => !value)}
+                >
+                  {showSequenceBoard ? 'Hide sequence storyboard' : 'Sequence storyboard'}
+                </button>
+              </div>
+            </Panel>
             <Panel title="Tools">
               <div className="space-y-2">
                 <IconButton
