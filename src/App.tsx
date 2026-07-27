@@ -33,6 +33,7 @@ import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
 import SplashScreen from './components/common/SplashScreen';
 import { TextInput } from './components/common/Field';
+import { WorkspaceErrorBoundary } from './components/common/WorkspaceErrorBoundary';
 
 const BuildWorkspace = lazy(() => import('./components/workspaces/BuildWorkspace').then((m) => ({ default: m.BuildWorkspace })));
 const ReferenceWorkspace = lazy(() => import('./components/workspaces/ReferenceWorkspace').then((m) => ({ default: m.ReferenceWorkspace })));
@@ -459,15 +460,44 @@ export default function App() {
           )}
         >
           {helpOpen ? (
-            <HelpWorkspace onClose={() => setHelpOpen(false)} />
+            <WorkspaceErrorBoundary workspaceName="Help">
+              <HelpWorkspace onClose={() => setHelpOpen(false)} />
+            </WorkspaceErrorBoundary>
           ) : isPanoViewer ? (
-            <PanoViewerWorkspace />
+            <WorkspaceErrorBoundary workspaceName="360 Viewer">
+              <PanoViewerWorkspace />
+            </WorkspaceErrorBoundary>
           ) : isContinuityStage ? (
             <>
-              {workspace === 'build' && <BuildWorkspace />}
-              {workspace === 'reference' && <ReferenceWorkspace />}
-              {workspace === 'shots' && <ShotsWorkspace />}
-              {workspace === 'export' && <ExportWorkspace />}
+              {workspace === 'build' && (
+                <WorkspaceErrorBoundary workspaceName="Build">
+                  <BuildWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'reference' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Reference"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ReferenceWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'shots' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Shots"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ShotsWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'export' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Export"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ExportWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
             </>
           ) : null}
         </Suspense>
@@ -491,7 +521,7 @@ export default function App() {
                   <Boxes className="h-7 w-7 md:h-9 md:w-9" strokeWidth={2.2} />
                 </span>
                 <span className="min-w-0 truncate text-base font-semibold tracking-normal text-primary md:text-xl">
-                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : 'Continuity Stage'}
+                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : 'PanoRef — Continuity Stage'}
                 </span>
                 <ChevronDown
                   className={`h-4 w-4 shrink-0 text-secondary transition ${projectMenuOpen ? 'rotate-180 text-accent' : ''}`}
@@ -702,6 +732,7 @@ export default function App() {
                       className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium transition ${
                         active ? 'bg-[var(--accent)] text-white' : 'bg-surface-overlay/80 text-secondary backdrop-blur-sm'
                       }`}
+                      aria-current={active ? 'page' : undefined}
                     >
                       <Icon className="h-3.5 w-3.5" />
                       {item.label}

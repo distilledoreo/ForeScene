@@ -13,7 +13,7 @@ import { resolveStyledImportMode } from '../src/engine/multiOriginProjection';
 describe('project workflow logic', () => {
   it('creates a valid default local-first project', () => {
     const project = createDefaultProject();
-    expect(project.schemaVersion).toBe('0.1');
+    expect(project.schemaVersion).toBe('1.0');
     expect(project.scene.objects.length).toBeGreaterThan(0);
     expect(project.scene.panoOrigin).toEqual([0, 1.65, 0]);
     expect(project.scene.objects.find((object) => object.name === 'Main Temple Gate')?.transform.position[2]).toBeGreaterThan(0);
@@ -79,7 +79,7 @@ describe('project workflow logic', () => {
   it('rejects unsupported project JSON during import parsing', () => {
     const project = createDefaultProject();
     expect(() => parseProject(JSON.stringify({ ...project, schemaVersion: '9.9' })))
-      .toThrow('Unsupported project schema version.');
+      .toThrow(/Unsupported project schema version/);
   });
 
   it('migrates legacy in-app skinned frame fields to imported AI result fields', () => {

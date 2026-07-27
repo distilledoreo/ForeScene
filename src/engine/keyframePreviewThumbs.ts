@@ -5,11 +5,13 @@
 
 export function buildKeyframeThumbCacheFromKeyframes(
   keyframes: readonly { id: string; previewUri?: string }[],
+  resolveUri?: (keyframeId: string) => string | undefined,
 ): Record<string, string> {
   const entries: Array<[string, string]> = [];
   for (const keyframe of keyframes) {
-    if (!keyframe.previewUri) continue;
-    entries.push([keyframe.id, keyframe.previewUri]);
+    const uri = keyframe.previewUri ?? resolveUri?.(keyframe.id);
+    if (!uri) continue;
+    entries.push([keyframe.id, uri]);
   }
   return Object.fromEntries(entries);
 }

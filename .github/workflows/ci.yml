@@ -1,0 +1,233 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  unit:
+    name: Vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test
+
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  e2e-desktop-smoke:
+    name: Chromium desktop smoke
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:smoke
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-desktop-smoke-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-tablet-responsive:
+    name: Chromium tablet responsive
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=tablet-chromium --grep @responsive
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-tablet-responsive-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-phone-responsive:
+    name: Chromium phone responsive
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=phone-390 --grep @responsive
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-phone-responsive-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit-smoke:
+    name: WebKit desktop smoke
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps webkit
+      # Required: excludes @webkit-gpu capture/transition paths that crash Linux SW WebKit.
+      - run: npm run test:e2e:webkit
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-webkit-smoke-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit-gpu-canary:
+    name: WebKit GPU canary
+    needs: build
+    runs-on: ubuntu-latest
+    # Linux Playwright WebKit frequently kills the page process under multi-context WebGL.
+    # Keep the signal visible with traces, but do not block PR merge.
+    # Step-level continue-on-error finishes the job green-with-warning; job-level
+    # continue-on-error still surfaced a failure conclusion in the Actions UI.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps webkit
+      - name: Run WebKit GPU canary
+        id: webkit_gpu
+        continue-on-error: true
+        run: npm run test:e2e:webkit-gpu
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - name: Report WebKit GPU instability
+        if: steps.webkit_gpu.outcome == 'failure'
+        run: |
+          echo "::warning::Linux WebKit GPU canary failed. See uploaded traces."
+      - uses: actions/upload-artifact@v4
+        if: steps.webkit_gpu.outcome == 'failure'
+        with:
+          name: playwright-webkit-gpu-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-visual:
+    name: Screenshot baselines
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:visual
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-baseline-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

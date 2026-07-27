@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { goToWorkspace, workspaceTab } from './workspace-navigation';
+
 async function enterContinuityStage(page: Page) {
   // Skip splash video so it never blocks pointer events mid-test.
   await page.addInitScript(() => {
@@ -36,15 +38,6 @@ async function enterContinuityStage(page: Page) {
 
   await expect(workspaceTab(page, 'Build')).toBeVisible({ timeout: 15000 });
   await expect(modeChooser).toBeHidden({ timeout: 5000 }).catch(() => undefined);
-}
-
-function workspaceTab(page: Page, label: 'Build' | 'Reference' | 'Shots' | 'Export') {
-  // Mobile + desktop both render stage navs; only the visible one is interactive.
-  return page
-    .locator('header nav button')
-    .filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) })
-    .locator('visible=true')
-    .first();
 }
 
 async function dismissOverlays(page: Page) {
@@ -105,7 +98,15 @@ function multiNodeGltfBuffer() {
   }));
 }
 
-test.describe('layout and core chrome', () => {
+/**
+ * Tag taxonomy (see CI workflows):
+ * @smoke       — essential workflow / workspace mount (desktop Chromium PR; WebKit subset)
+ * @responsive  — layout, overflow, menus, drawers (tablet + phone PR)
+ * @visual      — screenshot baselines
+ * @heavy       — optimizer, projected, MP4, multi-import, video authoring (main/nightly)
+ * @webkit-gpu  — WebGL/Shots capture paths that crash Linux Playwright WebKit (canary only)
+ */
+test.describe('@responsive layout and core chrome', () => {
   test('header actions stay in viewport', async ({ page }, testInfo) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -191,23 +192,36 @@ test.describe('layout and core chrome', () => {
         expect(box.x).toBeGreaterThanOrEqual(-2);
         expect(box.y).toBeGreaterThanOrEqual(0);
       }
-    } else {
+    } else if (testInfo.project.name === 'desktop-chromium') {
       // Desktop should keep the tray content-sized instead of spanning the full viewport.
       expect(trayBox.width).toBeLessThan(viewport.width * 0.8);
+    } else {
+      // Tablet/touch: reachable and fully on-screen, not a desktop width ratio.
+      expect(trayBox.x).toBeGreaterThanOrEqual(-2);
+      expect(trayBox.x + trayBox.width).toBeLessThanOrEqual(viewport.width + 2);
     }
   });
 
+});
+
+test.describe('@smoke build interactions', () => {
   test('Build editor shortcuts expose multi-selection and clipboard feedback', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
 
-    await page.keyboard.press('Control+A');
+    // Shortcuts ignore editable targets; focus the 3D viewport so Ctrl/Cmd+A is not lost.
+    const viewport = page.getByTestId('scene-viewport');
+    await expect(viewport).toBeVisible();
+    await viewport.focus();
+    await expect(viewport).toBeFocused();
+
+    await page.keyboard.press('ControlOrMeta+A');
     await expect(page.locator('[data-build-selection-count]')).toContainText(/objects selected/);
-    await page.keyboard.press('Control+C');
+    await page.keyboard.press('ControlOrMeta+C');
     await expect(page.locator('[data-build-command-status]')).toContainText(/Copied/);
-    await page.keyboard.press('Control+V');
+    await page.keyboard.press('ControlOrMeta+V');
     await expect(page.locator('[data-build-command-status]')).toContainText(/Pasted/);
     await page.keyboard.type('?');
     await expect(page.locator('[data-build-shortcut-reference]')).toBeVisible();
@@ -242,6 +256,30 @@ test.describe('layout and core chrome', () => {
     await expect(page.getByRole('textbox', { name: 'Selected object name' })).toHaveValue('triangle');
   });
 
+  test('Help documentation is searchable and returns to the active workspace', async ({ page }) => {
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Build').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: 'Open app menu' }).click();
+    await page.getByRole('menuitem', { name: 'Help & Documentation' }).click();
+    await expect(page.locator('[data-help-workspace]')).toBeVisible();
+    await expect(page.locator('img[src="/docs/build-workspace.png"]')).toHaveCount(1);
+    await expect(page.locator('img[src="/docs/workflow-overview.png"]')).toHaveCount(1);
+
+    const search = page.getByRole('searchbox', { name: 'Search documentation' });
+    await search.fill('clipboard');
+    await expect(page.locator('[data-help-section="shortcuts"]')).toBeVisible();
+    await expect(page.locator('[data-help-section="welcome"]')).toHaveCount(0);
+    await search.fill('');
+
+    await page.getByRole('button', { name: 'Back to the app' }).click();
+    await expect(page.locator('[data-build-object-tray]')).toBeVisible();
+  });
+});
+
+test.describe('@heavy model import variants', () => {
   test('imports separate multi-node scenes with one report card per source file', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -280,32 +318,23 @@ test.describe('layout and core chrome', () => {
     await expect(dialog.getByText(/Imported 1 combined object from 2 mesh nodes/)).toBeVisible();
     await expect(dialog.locator('[data-model-import-report-item="success"]')).toHaveCount(1);
   });
-
-  test('Help documentation is searchable and returns to the active workspace', async ({ page }) => {
-    await enterContinuityStage(page);
-    await dismissOverlays(page);
-    await workspaceTab(page, 'Build').click();
-    await dismissOverlays(page);
-
-    await page.getByRole('button', { name: 'Open app menu' }).click();
-    await page.getByRole('menuitem', { name: 'Help & Documentation' }).click();
-    await expect(page.locator('[data-help-workspace]')).toBeVisible();
-    await expect(page.locator('img[src="/docs/build-workspace.png"]')).toHaveCount(1);
-    await expect(page.locator('img[src="/docs/workflow-overview.png"]')).toHaveCount(1);
-
-    const search = page.getByRole('searchbox', { name: 'Search documentation' });
-    await search.fill('clipboard');
-    await expect(page.locator('[data-help-section="shortcuts"]')).toBeVisible();
-    await expect(page.locator('[data-help-section="welcome"]')).toHaveCount(0);
-    await search.fill('');
-
-    await page.getByRole('button', { name: 'Back to the app' }).click();
-    await expect(page.locator('[data-build-object-tray]')).toBeVisible();
-  });
 });
 
-test.describe('workflow path smoke', () => {
-  test('build graybox, approve reference, open shots and export', async ({ page }) => {
+test.describe('@smoke workflow path', () => {
+  // Lightweight Shots mount — WebKit canary only (flakes even on mount under Linux SW WebKit).
+  // Still required on Chromium desktop smoke. Avoid capture / multi-workspace GPU churn.
+  test(
+    '@webkit-gpu Shots workspace mounts camera shell without capture',
+    async ({ page }) => {
+      await enterContinuityStage(page);
+      await dismissOverlays(page);
+      await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
+      await expect(page.locator('[data-shots-camera-shell]')).toBeVisible();
+    },
+  );
+
+  // GPU-heavy on Linux WebKit (canary only). Still required on Chromium desktop smoke.
+  test('@webkit-gpu build graybox, approve reference, open shots and export', async ({ page }) => {
     test.setTimeout(180_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -354,12 +383,11 @@ test.describe('workflow path smoke', () => {
     const continueShots = page.getByRole('button', { name: /Continue to Shots/i });
     if (await continueShots.isVisible().catch(() => false)) {
       await continueShots.click();
-    } else {
-      await workspaceTab(page, 'Shots').click();
     }
     await dismissOverlays(page);
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
+    await dismissOverlays(page);
 
-    await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-shots-shutter]')).toBeVisible();
 
     await workspaceTab(page, 'Export').click();
@@ -367,11 +395,11 @@ test.describe('workflow path smoke', () => {
     await expect(page.getByRole('button', { name: /Export Selected Shots|Export \d+ Shots/i })).toBeVisible();
   });
 
-  test('repeated still captures create distinct persisted shot thumbnails', async ({ page }) => {
+  test('@webkit-gpu repeated still captures create distinct persisted shot thumbnails', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     const shutter = page.locator('[data-shots-shutter]');
@@ -392,16 +420,20 @@ test.describe('workflow path smoke', () => {
     const thumbnailSources = await cards.locator('img').evaluateAll((images) => images.map((image) => image.getAttribute('src')));
 
     expect(thumbnailSources).toHaveLength(2);
-    expect(thumbnailSources[0]).toMatch(/^data:image\//);
-    expect(thumbnailSources[1]).toMatch(/^data:image\//);
+    // Durable project assets resolve as blob: URLs; legacy fixtures may still use data:image.
+    for (const source of thumbnailSources) {
+      expect(source).toMatch(/^(blob:|data:image\/)/);
+    }
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
+});
 
+test.describe('@heavy video authoring', () => {
   test('video progressive capture finishes two poses then next shot', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -454,7 +486,7 @@ test.describe('workflow path smoke', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -484,7 +516,7 @@ test.describe('workflow path smoke', () => {
 
     // Undo must restore Start-only keyframes AND resync React authoring state.
     await page.locator('body').click({ position: { x: 8, y: 8 } });
-    await page.keyboard.press('Control+z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await dismissOverlays(page);
 
     await expect(page.locator('[data-shots-video-finished]')).toHaveCount(0, { timeout: 10_000 });
@@ -501,7 +533,7 @@ test.describe('workflow path smoke', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -548,7 +580,9 @@ test.describe('workflow path smoke', () => {
     await capturePose();
     await expect(page.locator('[data-camera-keyframe-node]')).toHaveCount(4, { timeout: 10_000 });
   });
+});
 
+test.describe('@heavy projected optimizer and second capture', () => {
   test('projected occlusion unmounts cleanly into Export without a crash', async ({ page }) => {
     test.setTimeout(180_000);
 
@@ -606,7 +640,7 @@ test.describe('workflow path smoke', () => {
     await dismissOverlays(page);
 
     // Shots → enable Projected appearance so the occlusion engine builds GPU maps.
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
 
@@ -675,7 +709,7 @@ test.describe('workflow path smoke', () => {
       if (await startChecking.isVisible().catch(() => false)) await startChecking.click();
       await dismissOverlays(page);
     }
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     await page.locator('[data-coverage-optimizer] summary').click();
@@ -800,7 +834,7 @@ test.describe('workflow path smoke', () => {
       if (await fillGapsInModal.isVisible().catch(() => false)) {
         await fillGapsInModal.click();
       } else {
-        await page.getByRole('button', { name: 'Settings', exact: true }).click().catch(() => undefined);
+        await page.getByRole('button', { name: /Reference settings|Settings/i }).click().catch(() => undefined);
         await openFillGaps.click();
         await page.locator('[data-second-capture-fill-gaps]').click();
       }
@@ -894,7 +928,7 @@ test.describe('workflow path smoke', () => {
     await expect(page.locator('[data-reference-pano-origins]')).toHaveAttribute('data-graybox-count', '2');
 
     // Enable dual projection blend.
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     const blendToggle = drawer.locator('[data-projected-blend-toggle] button, [data-projected-blend-toggle] [role="switch"]').first();
@@ -905,7 +939,7 @@ test.describe('workflow path smoke', () => {
     await dismissOverlays(page);
 
     // Capture projected shot and export.
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
     const projectedToggle = page

@@ -188,10 +188,10 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               <StepCard number="1" title="Block the set" text="Stamp simple objects in Build, place the pano origin, and render a graybox 360." icon={<Boxes className="h-5 w-5" />} onClick={() => openWorkspace('build')} />
               <StepCard number="2" title="Set the reference" text="Import or approve a canonical 2:1 panorama, then align it to the graybox." icon={<Globe2 className="h-5 w-5" />} onClick={() => openWorkspace('reference')} />
-              <StepCard number="3" title="Land cameras" text="Capture stills, or record → stop a two-point camera move in Shots." icon={<Clapperboard className="h-5 w-5" />} onClick={() => openWorkspace('shots')} />
+              <StepCard number="3" title="Land cameras" text="Capture stills, or build a sequential camera move (Capture start → Capture next → Finish) in Shots." icon={<Clapperboard className="h-5 w-5" />} onClick={() => openWorkspace('shots')} />
               <StepCard number="4" title="Export the handoff" text="Choose shots and download a ZIP with visual references, camera data, and prompts." icon={<Upload className="h-5 w-5" />} onClick={() => openWorkspace('export')} />
             </div>
-            <Tip>Save the project JSON regularly. Export ZIPs are deliverables; the project JSON is the editable source.</Tip>
+            <Tip>Projects autosave locally with verified revisions and recovery snapshots. Export ZIPs are deliverables; use Project Safety & Recovery or Export Project Backup when you need a portable copy.</Tip>
           </DocSection>
 
           <DocSection id="workflow" visible={visibleIds.has('workflow')} title="The workflow" eyebrow="Build → Reference → Shots → Export">

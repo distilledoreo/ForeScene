@@ -65,7 +65,7 @@ describe('sandbox build interactions', () => {
     const object = useContinuityStore.getState().placeObject('box', [1.24, 0, 1.26]);
     const state = useContinuityStore.getState();
 
-    expect(state.project.schemaVersion).toBe('0.1');
+    expect(state.project.schemaVersion).toBe('1.0');
     expect(state.selectedObjectIds).toEqual([]);
     expect(state.buildMode).toBe('place');
     expect(object.transform.position).toEqual([1, 0.7, 1.5]);

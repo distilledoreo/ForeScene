@@ -1,0 +1,92 @@
+# Heavy / full browser regression — not required for every PR push.
+# Runs after merge to main, nightly, or on manual dispatch.
+name: Full regression
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 06:00 UTC daily
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: full-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-full
+          path: dist/
+          retention-days: 1
+
+  e2e-heavy-chromium:
+    name: Chromium heavy regression
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-full
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:heavy
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+          FULL_REGRESSION: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-heavy-chromium-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit-full:
+    name: WebKit full regression
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-full
+          path: dist/
+      - run: npx playwright install --with-deps webkit
+      # No Chromium-only visual baselines on WebKit.
+      - run: npx playwright test --project=desktop-webkit --grep-invert @visual
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+          FULL_REGRESSION: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-webkit-full-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

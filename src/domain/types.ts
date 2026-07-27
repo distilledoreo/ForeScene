@@ -1,6 +1,7 @@
 export type Vec3 = [number, number, number];
 export type Euler = [number, number, number];
-export type ProjectVersion = '0.1';
+/** Supported project schema versions (load migrates older → current). */
+export type ProjectVersion = '0.1' | '0.2' | '1.0';
 
 export type SceneObjectType =
   | 'floor'
@@ -162,8 +163,15 @@ export interface CameraKeyframe {
    */
   objectOverrides?: ShotObjectOverrides;
   /**
-   * Lightweight still (data URL or asset URI) for filmstrip / camera-roll animation.
-   * Not used for export; regenerated cheaply when missing.
+   * Content-addressed project asset id for filmstrip / camera-roll stills.
+   * Preferred over legacy `previewUri` data URLs (stripped from JSON on save).
+   */
+  previewAssetId?: string;
+  /** Local binary storage key when the preview lives in the project asset store. */
+  previewStorageKey?: string;
+  /**
+   * Runtime-only or legacy still URI (blob URL / ephemeral data URL).
+   * Not written into recovery revisions when `previewAssetId` is set.
    */
   previewUri?: string;
 }
@@ -329,6 +337,11 @@ export interface ProjectSettings {
 
 export interface LocationProject {
   schemaVersion: ProjectVersion;
+  /**
+   * Semver product release that last wrote this project (distinct from schemaVersion).
+   * Present on schema ≥1.0; optional on older files after migration.
+   */
+  productVersion?: string;
   id: string;
   name: string;
   description: string;
