@@ -16,7 +16,7 @@ interface Mp4EncodeHarnessResult {
   validationIssues?: Array<{ code: string; message: string }>;
 }
 
-test.describe('camera move MP4 encode integration', () => {
+test.describe('@heavy camera move MP4 encode integration', () => {
   test.beforeEach(({}, testInfo) => {
     test.skip(
       testInfo.project.name !== 'desktop-chromium',

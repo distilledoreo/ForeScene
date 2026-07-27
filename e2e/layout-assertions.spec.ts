@@ -67,7 +67,7 @@ async function assertInViewport(box: { x: number; y: number; width: number; heig
   expect(box.y + box.height, `${label} bottom`).toBeLessThanOrEqual(viewport.height + 4);
 }
 
-test.describe('layout visibility and overflow', () => {
+test.describe('@responsive layout visibility and overflow', () => {
   test('Build workspace: primary controls visible, no horizontal overflow', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);

@@ -46,9 +46,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
 
-  e2e-chromium:
-    name: Playwright Chromium
+  e2e-desktop-smoke:
+    name: Chromium desktop smoke
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,19 +63,26 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e -- --project=desktop-chromium --project=tablet-chromium --project=phone-390
+      - run: npm run test:e2e:smoke
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-chromium-artifacts
+          name: playwright-desktop-smoke-artifacts
           path: |
             test-results/
             playwright-report/
           retention-days: 7
 
-  e2e-webkit:
-    name: Playwright WebKit
+  e2e-tablet-responsive:
+    name: Chromium tablet responsive
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,20 +91,82 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=tablet-chromium --grep @responsive
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-tablet-responsive-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-phone-responsive:
+    name: Chromium phone responsive
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=phone-390 --grep @responsive
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-phone-responsive-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit-smoke:
+    name: WebKit desktop smoke
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - run: npx playwright install --with-deps webkit
-      # Chromium owns screenshot baselines; WebKit has no committed snapshots yet.
-      - run: npm run test:e2e -- --project=desktop-webkit --grep-invert "@visual"
+      - run: npm run test:e2e:webkit
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-webkit-artifacts
+          name: playwright-webkit-smoke-artifacts
           path: |
             test-results/
             playwright-report/
           retention-days: 7
 
-  visual-baselines:
+  e2e-visual:
     name: Screenshot baselines
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,8 +175,14 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e -- --project=desktop-chromium --project=tablet-chromium --project=phone-390 e2e/visual-baselines.spec.ts e2e/layout-assertions.spec.ts
+      - run: npm run test:e2e:visual
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

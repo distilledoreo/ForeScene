@@ -105,7 +105,14 @@ function multiNodeGltfBuffer() {
   }));
 }
 
-test.describe('layout and core chrome', () => {
+/**
+ * Tag taxonomy (see CI workflows):
+ * @smoke      — essential workflow / workspace mount (desktop + WebKit PR)
+ * @responsive — layout, overflow, menus, drawers (tablet + phone PR)
+ * @visual     — screenshot baselines
+ * @heavy      — optimizer, projected, MP4, multi-import, video authoring (main/nightly)
+ */
+test.describe('@responsive layout and core chrome', () => {
   test('header actions stay in viewport', async ({ page }, testInfo) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -197,6 +204,9 @@ test.describe('layout and core chrome', () => {
     }
   });
 
+});
+
+test.describe('@smoke build interactions', () => {
   test('Build editor shortcuts expose multi-selection and clipboard feedback', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -242,6 +252,30 @@ test.describe('layout and core chrome', () => {
     await expect(page.getByRole('textbox', { name: 'Selected object name' })).toHaveValue('triangle');
   });
 
+  test('Help documentation is searchable and returns to the active workspace', async ({ page }) => {
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Build').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: 'Open app menu' }).click();
+    await page.getByRole('menuitem', { name: 'Help & Documentation' }).click();
+    await expect(page.locator('[data-help-workspace]')).toBeVisible();
+    await expect(page.locator('img[src="/docs/build-workspace.png"]')).toHaveCount(1);
+    await expect(page.locator('img[src="/docs/workflow-overview.png"]')).toHaveCount(1);
+
+    const search = page.getByRole('searchbox', { name: 'Search documentation' });
+    await search.fill('clipboard');
+    await expect(page.locator('[data-help-section="shortcuts"]')).toBeVisible();
+    await expect(page.locator('[data-help-section="welcome"]')).toHaveCount(0);
+    await search.fill('');
+
+    await page.getByRole('button', { name: 'Back to the app' }).click();
+    await expect(page.locator('[data-build-object-tray]')).toBeVisible();
+  });
+});
+
+test.describe('@heavy model import variants', () => {
   test('imports separate multi-node scenes with one report card per source file', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -280,31 +314,9 @@ test.describe('layout and core chrome', () => {
     await expect(dialog.getByText(/Imported 1 combined object from 2 mesh nodes/)).toBeVisible();
     await expect(dialog.locator('[data-model-import-report-item="success"]')).toHaveCount(1);
   });
-
-  test('Help documentation is searchable and returns to the active workspace', async ({ page }) => {
-    await enterContinuityStage(page);
-    await dismissOverlays(page);
-    await workspaceTab(page, 'Build').click();
-    await dismissOverlays(page);
-
-    await page.getByRole('button', { name: 'Open app menu' }).click();
-    await page.getByRole('menuitem', { name: 'Help & Documentation' }).click();
-    await expect(page.locator('[data-help-workspace]')).toBeVisible();
-    await expect(page.locator('img[src="/docs/build-workspace.png"]')).toHaveCount(1);
-    await expect(page.locator('img[src="/docs/workflow-overview.png"]')).toHaveCount(1);
-
-    const search = page.getByRole('searchbox', { name: 'Search documentation' });
-    await search.fill('clipboard');
-    await expect(page.locator('[data-help-section="shortcuts"]')).toBeVisible();
-    await expect(page.locator('[data-help-section="welcome"]')).toHaveCount(0);
-    await search.fill('');
-
-    await page.getByRole('button', { name: 'Back to the app' }).click();
-    await expect(page.locator('[data-build-object-tray]')).toBeVisible();
-  });
 });
 
-test.describe('workflow path smoke', () => {
+test.describe('@smoke workflow path', () => {
   test('build graybox, approve reference, open shots and export', async ({ page }) => {
     test.setTimeout(180_000);
     await enterContinuityStage(page);
@@ -396,7 +408,9 @@ test.describe('workflow path smoke', () => {
     expect(thumbnailSources[1]).toMatch(/^data:image\//);
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
+});
 
+test.describe('@heavy video authoring', () => {
   test('video progressive capture finishes two poses then next shot', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
@@ -548,7 +562,9 @@ test.describe('workflow path smoke', () => {
     await capturePose();
     await expect(page.locator('[data-camera-keyframe-node]')).toHaveCount(4, { timeout: 10_000 });
   });
+});
 
+test.describe('@heavy projected optimizer and second capture', () => {
   test('projected occlusion unmounts cleanly into Export without a crash', async ({ page }) => {
     test.setTimeout(180_000);
 
