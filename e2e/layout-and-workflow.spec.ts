@@ -438,7 +438,7 @@ test.describe('workflow path smoke', () => {
 
     await expect(page.locator('[data-shots-video-finished]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('[data-shots-video-next-shot]')).toBeVisible();
-    await expect(page.locator('[data-shots-video-preview]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-play]')).toBeVisible();
     await expect(page.locator('[data-shots-video-export]')).toBeVisible();
     await expect(shutter).toBeEnabled();
     await expect(shutter).toHaveAttribute('data-shots-video-shutter-next', 'true');
