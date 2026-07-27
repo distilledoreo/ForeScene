@@ -397,6 +397,59 @@ test.describe('workflow path smoke', () => {
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
 
+  test('video sequential capture appends poses, finishes, and continues', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+    const strip = page.locator('[data-camera-keyframe-strip]');
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'empty');
+    await expect(page.locator('[data-camera-keyframe-capture-next]')).toBeVisible();
+
+    const shutter = page.locator('[data-shots-shutter]');
+    const captureNext = async (expectedNodes: number) => {
+      await dismissOverlays(page);
+      await shutter.click({ force: true });
+      await dismissOverlays(page);
+      await expect(page.locator('[data-camera-keyframe-node]')).toHaveCount(expectedNodes, { timeout: 10_000 });
+    };
+
+    await captureNext(1);
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'capturing');
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await captureNext(2);
+    await expect(page.locator('[data-camera-keyframe-finish]')).toBeVisible();
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await captureNext(3);
+
+    await dismissOverlays(page);
+    await page.locator('[data-camera-keyframe-finish]').click({ force: true });
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'finished');
+    await expect(page.locator('[data-camera-keyframe-preview]')).toBeVisible();
+    await expect(page.locator('[data-camera-keyframe-continue]')).toBeVisible();
+    await expect(shutter).toBeDisabled();
+
+    await dismissOverlays(page);
+    await page.locator('[data-camera-keyframe-continue]').click({ force: true });
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'capturing');
+    await expect(shutter).toBeEnabled();
+    await page.keyboard.down('a');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('a');
+    await captureNext(4);
+  });
+
   test('projected occlusion unmounts cleanly into Export without a crash', async ({ page }) => {
     test.setTimeout(180_000);
 

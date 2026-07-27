@@ -9,8 +9,11 @@ import { createCameraKeyframe } from '../domain/defaults';
 export const DEFAULT_CAMERA_MOVE_DURATION_SECONDS = 3;
 export const MIN_CAMERA_MOVE_DURATION_SECONDS = 0.5;
 export const MAX_CAMERA_MOVE_DURATION_SECONDS = 30;
+/** Tolerance when comparing authored times to even automatic distribution. */
+export const CAMERA_KEYFRAME_TIME_EPSILON = 0.001;
 
 export type CameraMoveKeyframeSlot = 'start' | 'end';
+export type VideoCaptureState = 'empty' | 'capturing' | 'finished';
 
 export const CAMERA_KEYFRAME_EASING_OPTIONS: readonly {
   value: CameraKeyframeEasing;
@@ -109,25 +112,218 @@ export function insertIntermediateCameraKeyframe(params: {
     }
   }
 
-  const usedNumbers = new Set(
-    sorted
-      .map((keyframe) => /^Keyframe (\d+)$/i.exec(keyframe.label)?.[1])
-      .filter((value): value is string => Boolean(value))
-      .map(Number),
-  );
-  let labelNumber = 1;
-  while (usedNumbers.has(labelNumber)) labelNumber += 1;
-
   const before = sorted[gapStartIndex];
   const after = sorted[gapStartIndex + 1];
   const inserted = createCameraKeyframe({
-    label: `Keyframe ${labelNumber}`,
+    label: nextIntermediateCameraKeyframeLabel(sorted),
     timeSeconds: before.timeSeconds + ((after.timeSeconds - before.timeSeconds) / 2),
     camera: params.camera,
     easing: before.easing ?? 'linear',
     objectOverrides: params.objectOverrides,
   });
   return getSortedCameraKeyframes([...sorted, inserted]);
+}
+
+/**
+ * Append the current camera pose as the next sequential keyframe.
+ * First pose → Start@0; second → End@duration; further poses demote End to intermediate
+ * and create a new End, redistributing times evenly unless preserveManualTiming is set.
+ */
+export function appendSequentialCameraKeyframe(params: {
+  keyframes: readonly CameraKeyframe[];
+  camera: CameraData;
+  durationSeconds: number;
+  objectOverrides?: ShotObjectOverrides;
+  easing: CameraKeyframeEasing;
+  preserveManualTiming: boolean;
+}): CameraKeyframe[] {
+  const duration = clampDuration(params.durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return getSortedCameraKeyframes(params.keyframes);
+  }
+
+  const sorted = getSortedCameraKeyframes(params.keyframes);
+
+  if (sorted.length === 0) {
+    return [
+      createCameraKeyframe({
+        label: 'Start',
+        timeSeconds: 0,
+        camera: params.camera,
+        objectOverrides: params.objectOverrides,
+      }),
+    ];
+  }
+
+  if (sorted.length === 1) {
+    const start: CameraKeyframe = {
+      ...sorted[0],
+      timeSeconds: 0,
+      easing: params.easing,
+    };
+    const end = createCameraKeyframe({
+      label: 'End',
+      timeSeconds: duration,
+      camera: params.camera,
+      objectOverrides: params.objectOverrides,
+    });
+    return [start, end];
+  }
+
+  // Two or more: demote current End (preserve id/camera/overrides), create new End.
+  // Re-label demoted End so label-based tools (e.g. setTwoPointCameraKeyframe) do not
+  // treat multiple "End" labels as one slot and drop intermediates.
+  const formerEnd = sorted[sorted.length - 1];
+  const preservedPrefix = sorted.slice(0, -1).map((keyframe) => ({ ...keyframe }));
+  const demotedEnd: CameraKeyframe = {
+    ...formerEnd,
+    label: nextIntermediateCameraKeyframeLabel(sorted),
+    easing: params.easing,
+  };
+  const newEnd = createCameraKeyframe({
+    label: 'End',
+    timeSeconds: duration,
+    camera: params.camera,
+    objectOverrides: params.objectOverrides,
+  });
+
+  if (params.preserveManualTiming) {
+    const previous = preservedPrefix[preservedPrefix.length - 1];
+    const previousTime = previous?.timeSeconds ?? 0;
+    demotedEnd.timeSeconds = previousTime + ((duration - previousTime) / 2);
+    // Keep all existing intermediate times; only demoted former End and new End change.
+    return getSortedCameraKeyframes([
+      ...preservedPrefix,
+      demotedEnd,
+      newEnd,
+    ]);
+  }
+
+  // Automatic: even distribution across all poses (including the new End).
+  const all = [...preservedPrefix, demotedEnd, newEnd];
+  const lastIndex = all.length - 1;
+  return all.map((keyframe, index) => {
+    const timeSeconds = (index / lastIndex) * duration;
+    if (index === lastIndex) {
+      const { easing: _omit, ...withoutEasing } = keyframe;
+      return { ...withoutEasing, timeSeconds };
+    }
+    if (index === lastIndex - 1) {
+      return { ...keyframe, timeSeconds, easing: params.easing };
+    }
+    return { ...keyframe, timeSeconds };
+  });
+}
+
+/**
+ * Insert a keyframe at the midpoint of the segment that starts at afterKeyframeId.
+ * Returns unchanged data when the id is unknown or is the final keyframe.
+ */
+export function insertCameraKeyframeInSegment(params: {
+  keyframes: readonly CameraKeyframe[];
+  afterKeyframeId: string;
+  camera: CameraData;
+  objectOverrides?: ShotObjectOverrides;
+  easing: CameraKeyframeEasing;
+}): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(params.keyframes);
+  if (!canInsertCameraKeyframeAfter(sorted, params.afterKeyframeId)) {
+    return sorted;
+  }
+  const index = sorted.findIndex((keyframe) => keyframe.id === params.afterKeyframeId);
+  const before = sorted[index];
+  const after = sorted[index + 1];
+  const inserted = createCameraKeyframe({
+    label: nextIntermediateCameraKeyframeLabel(sorted),
+    timeSeconds: before.timeSeconds + ((after.timeSeconds - before.timeSeconds) / 2),
+    camera: params.camera,
+    easing: params.easing,
+    objectOverrides: params.objectOverrides,
+  });
+  return getSortedCameraKeyframes([...sorted, inserted]);
+}
+
+export function canInsertCameraKeyframeAfter(
+  keyframes: readonly CameraKeyframe[],
+  afterKeyframeId: string,
+): boolean {
+  if (!afterKeyframeId) return false;
+  const sorted = getSortedCameraKeyframes(keyframes);
+  const index = sorted.findIndex((keyframe) => keyframe.id === afterKeyframeId);
+  return index >= 0 && index < sorted.length - 1;
+}
+
+/**
+ * Overwrite camera + objectOverrides for an existing keyframe.
+ * Preserves id, label, time, easing, and sequence position.
+ */
+export function recaptureCameraKeyframe(params: {
+  keyframes: readonly CameraKeyframe[];
+  keyframeId: string;
+  camera: CameraData;
+  objectOverrides?: ShotObjectOverrides;
+}): CameraKeyframe[] {
+  const sorted = getSortedCameraKeyframes(params.keyframes);
+  if (!sorted.some((keyframe) => keyframe.id === params.keyframeId)) {
+    return sorted;
+  }
+  return sorted.map((keyframe) => {
+    if (keyframe.id !== params.keyframeId) return keyframe;
+    const next: CameraKeyframe = {
+      ...keyframe,
+      camera: cloneCamera(params.camera),
+    };
+    if (params.objectOverrides !== undefined) {
+      next.objectOverrides = structuredClone(params.objectOverrides);
+    } else {
+      delete next.objectOverrides;
+    }
+    return next;
+  });
+}
+
+/**
+ * True when sorted keyframe times deviate from even distribution by more than epsilon.
+ * Always false for fewer than three keyframes.
+ */
+export function hasManualCameraKeyframeTiming(
+  keyframes: readonly CameraKeyframe[],
+  durationSeconds: number,
+): boolean {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  const n = sorted.length;
+  if (n < 3) return false;
+  const duration = clampDuration(durationSeconds);
+  for (let index = 0; index < n; index += 1) {
+    const expectedTime = (index / (n - 1)) * duration;
+    if (Math.abs(sorted[index].timeSeconds - expectedTime) > CAMERA_KEYFRAME_TIME_EPSILON) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Display label from chronological index (not persisted labels). */
+export function getCameraKeyframeDisplayLabel(
+  index: number,
+  total: number,
+): string {
+  if (total <= 0) return '';
+  if (index === 0) return 'Start';
+  if (index === total - 1) return 'End';
+  return `K${index}`;
+}
+
+function nextIntermediateCameraKeyframeLabel(keyframes: readonly CameraKeyframe[]): string {
+  const usedNumbers = new Set(
+    keyframes
+      .map((keyframe) => /^Keyframe (\d+)$/i.exec(keyframe.label)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map(Number),
+  );
+  let labelNumber = 1;
+  while (usedNumbers.has(labelNumber)) labelNumber += 1;
+  return `Keyframe ${labelNumber}`;
 }
 
 export function updateIntermediateCameraKeyframeTime(

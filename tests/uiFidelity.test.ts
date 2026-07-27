@@ -474,46 +474,72 @@ describe('ui revamp fidelity surfaces', () => {
     expect(panoViewer).toContain('useState');
   });
 
-  it('advances video shutter record → stop → export without requiring fly to stop', () => {
+  it('uses sequential capture state empty|capturing|finished without export-on-shutter', () => {
     const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
-    expect(shots).toContain("type VideoShutterPhase = 'record' | 'stop' | 'export'");
-    expect(shots).toContain('data-shots-video-phase');
-    expect(shots).toContain("setVideoPhase('stop')");
-    expect(shots).toContain("setVideoPhase('export')");
-    expect(shots).toContain('setCameraMoveStart');
-    expect(shots).toContain('setCameraMoveEnd');
+    const strip = readFileSync(new URL('../src/components/workspaces/KeyframeStrip.tsx', import.meta.url), 'utf8');
+    expect(shots).toContain("VideoCaptureState");
+    expect(shots).toContain('data-shots-video-capture-state');
+    expect(shots).toContain('appendSequentialCapture');
+    expect(shots).toContain('finishSequentialCapture');
+    expect(shots).toContain('continueSequentialCapture');
     expect(shots).toContain('retakeVideoMove');
     expect(shots).toContain('data-shots-video-retake');
     expect(shots).toContain('data-shots-video-rec-badge');
-    // Entering video mode must not auto-capture the start keyframe.
-    expect(shots).toMatch(/enterVideoMode[\s\S]*setVideoPhase\('record'\)[\s\S]*updateCameraMoveKeyframes\(\[\]\)/);
-    expect(shots).not.toMatch(/enterVideoMode[\s\S]*slot: 'start'/);
-    // Record must keep the live fly pose (persist pose + never seed draft over an active fly).
-    expect(shots).toMatch(/setCameraMoveStart[\s\S]*updateShot\(selectedShot\.id, \{[\s\S]*camera: pose/);
+    expect(shots).toContain('KeyframeStrip');
+    expect(strip).toContain('data-camera-keyframe-strip');
+    expect(strip).toContain('data-camera-keyframe-node');
+    expect(strip).toContain('data-camera-keyframe-segment');
+    expect(strip).toContain('data-camera-keyframe-capture-next');
+    expect(strip).toContain('data-camera-keyframe-finish');
+    expect(strip).toContain('data-camera-keyframe-continue');
+    expect(strip).toContain('data-camera-keyframe-insert');
+    expect(strip).toContain('data-camera-keyframe-update-pose');
+    // Re-entering Video preserves existing keyframes and restores capture state from them.
+    // Only Retake / explicit clear wipes the sequence — never auto-capture Start on enter.
+    const enterVideoModeBody = shots.match(
+      /const enterVideoMode = useCallback\(\(\) => \{[\s\S]*?\n  \}, \[/,
+    )?.[0] ?? '';
+    expect(enterVideoModeBody).toContain('captureStateFromKeyframes(existing)');
+    expect(enterVideoModeBody).not.toContain('updateCameraMoveKeyframes([])');
+    expect(enterVideoModeBody).not.toContain("slot: 'start'");
+    const retakeVideoMoveBody = shots.match(
+      /const retakeVideoMove = useCallback\(\(\) => \{[\s\S]*?\n  \}, \[/,
+    )?.[0] ?? '';
+    expect(retakeVideoMoveBody).toContain('updateCameraMoveKeyframes([])');
+    expect(retakeVideoMoveBody).toContain("setVideoCaptureState('empty')");
+    // Sequential append must keep the live fly pose.
+    expect(shots).toMatch(/appendSequentialCapture[\s\S]*updateShot\(selectedShot\.id, \{[\s\S]*camera: pose/);
     expect(shots).toMatch(/startFlyCamera[\s\S]*if \(selectedShot && !shotCameraFlying\)/);
     // Fly re-seed is driven by an explicit camera reseed token, not live camera churn.
     expect(viewport).toContain('cameraReseedGeneration');
     expect(viewport).toContain('shouldReseedShotFramingViewport');
     expect(viewport).toContain('shotFraming?.cameraReseedGeneration');
     expect(viewport).not.toMatch(/useEffect\([\s\S]*shotFraming\?\.camera\.fovDegrees[\s\S]*\],\s*\)/);
-    // Export must not be gated on !shotCameraFlying.
+    // Export must not be gated on !shotCameraFlying; shutter must not export after second pose.
     expect(shots).not.toMatch(/if \(shotCameraFlying \|\| !cameraMoveReady\)/);
-    expect(shots).toMatch(/if \(videoPhase === 'record'\)/);
-    expect(shots).toMatch(/if \(videoPhase === 'stop'\)/);
+    expect(shots).not.toContain("type VideoShutterPhase = 'record' | 'stop' | 'export'");
+    expect(shots).not.toMatch(/if \(videoPhase === 'record'\)/);
     // Preview after capture should read latest store project (not stale closure only).
     expect(shots).toContain('useContinuityStore.getState().project');
+    // Instructional copy is state-aware (no old fly-to-end / end-set guidance).
+    expect(shots).not.toContain('Fly to end · press stop');
+    expect(shots).not.toContain('End set · export when ready');
+    expect(shots).toContain('Pose the first camera position · capture start');
   });
 
-  it('keeps intermediate video keyframes discoverable in the advanced drawer', () => {
+  it('keeps keyframe strip as primary editor and easing in the advanced drawer', () => {
     const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
-    expect(shots).toContain('data-camera-keyframe-editor');
-    expect(shots).toContain('data-camera-keyframe-add');
-    expect(shots).toContain('data-camera-intermediate-keyframe');
     expect(shots).toContain('data-camera-keyframe-easing');
-    expect(shots).toContain('Add in-between keyframe');
     expect(shots).toContain('updateIntermediateCameraKeyframeTime');
     expect(shots).toContain('removeIntermediateCameraKeyframe');
+    // Old drawer intermediate list/add path must not remain the primary editor.
+    expect(shots).not.toContain('data-camera-keyframe-editor');
+    expect(shots).not.toContain('data-camera-keyframe-add');
+    expect(shots).not.toContain('data-camera-intermediate-keyframe');
+    expect(shots).not.toContain('Add in-between keyframe');
+    expect(shots).toContain('Set Start');
+    expect(shots).toContain('Set End');
   });
 
   it('keeps hidden staged objects recoverable from the staging list', () => {
