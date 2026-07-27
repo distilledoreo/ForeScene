@@ -10,6 +10,7 @@ import {
   CloudOff,
   Compass,
   FileJson,
+  FilePlus,
   FolderOpen,
   Globe,
   Moon,
@@ -21,12 +22,14 @@ import {
   Upload,
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
+import { createDefaultProject } from './domain/defaults';
 import type { ProjectPersistenceController } from './engine/projectPersistenceController';
 import type { ProjectSaveStatus } from './engine/projectSafety';
 import { useAppModeStore } from './state/useAppModeStore';
 import { useContinuityStore } from './state/useContinuityStore';
 import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
+import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
 import SplashScreen from './components/common/SplashScreen';
 import { TextInput } from './components/common/Field';
@@ -95,6 +98,8 @@ export default function App() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
+  const [newProjectConfirmOpen, setNewProjectConfirmOpen] = useState(false);
+  const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const [projectImportStatus, setProjectImportStatus] = useState<{
     tone: 'success' | 'error';
@@ -134,6 +139,53 @@ export default function App() {
     setProjectImportStatus(undefined);
     void loadProjectIo();
     fileRef.current?.click();
+  };
+
+  /**
+   * Start a blank Continuity Stage project. Snapshots the current autosaved project
+   * so Project Safety can restore it, then swaps in createDefaultProject().
+   */
+  const startNewProject = async () => {
+    if (criticalProjectWrite || isCreatingNewProject) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before starting a new project.',
+      });
+      return;
+    }
+    setIsCreatingNewProject(true);
+    setProjectImportStatus(undefined);
+    try {
+      const controller = persistenceControllerRef.current;
+      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+      const current = useContinuityStore.getState().project;
+      await controller.createSnapshot(current, `Before starting a new project (from “${current.name}”)`);
+      const fresh = createDefaultProject();
+      await controller.commitProject(fresh, {
+        kind: 'import',
+        reason: `Started new project: ${fresh.name}`,
+      });
+      controller.ignoreNextProjectChange(fresh);
+      setProject(fresh);
+      setWorkspace('build');
+      setAppMode('continuity');
+      setHelpOpen(false);
+      setProjectSafetyOpen(false);
+      setNewProjectConfirmOpen(false);
+      setProjectImportStatus({
+        tone: 'success',
+        message: `Started a new project: ${fresh.name}. Your previous project was saved as a local recovery point.`,
+      });
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not start a new project: ${error.message}`
+          : 'Could not start a new project.',
+      });
+    } finally {
+      setIsCreatingNewProject(false);
+    }
   };
 
   const navigateWorkspace = (nextWorkspace: Workspace) => {
@@ -504,6 +556,15 @@ export default function App() {
                         }}
                       />
                       <ProjectMenuButton
+                        icon={<FilePlus className="h-4 w-4" />}
+                        label="New Project"
+                        onClick={() => {
+                          setNewProjectConfirmOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-project-new-button
+                      />
+                      <ProjectMenuButton
                         icon={<FolderOpen className="h-4 w-4" />}
                         label="Import Project Backup"
                         onClick={() => {
@@ -685,6 +746,26 @@ export default function App() {
         </Suspense>
       )}
 
+      <ConfirmDialog
+        open={newProjectConfirmOpen}
+        title="Start a new project?"
+        confirmLabel={isCreatingNewProject ? 'Starting…' : 'Start new project'}
+        destructive
+        onCancel={() => {
+          if (!isCreatingNewProject) setNewProjectConfirmOpen(false);
+        }}
+        onConfirm={() => {
+          if (!isCreatingNewProject) void startNewProject();
+        }}
+      >
+        <span data-project-new-confirm>
+          This replaces the project currently open in Continuity Stage with a blank scene.
+          Your current work stays available under Project Safety &amp; Recovery
+          {project.name ? ` as “${project.name}”` : ''}.
+          Export a backup first if you want an offline copy.
+        </span>
+      </ConfirmDialog>
+
       {isContinuityStage && !helpOpen && (
         <Suspense fallback={null}>
           <WorkflowGuidance />
@@ -744,15 +825,17 @@ function ProjectMenuButton({
   icon,
   label,
   onClick,
+  ...rest
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
-}) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
       role="menuitem"
+      {...rest}
       onClick={onClick}
       className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-secondary transition hover:bg-surface-muted hover:text-primary"
     >

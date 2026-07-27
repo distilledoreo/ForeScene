@@ -35,6 +35,17 @@ describe('workflow guidance UI', () => {
     expect(app).toMatch(/label="Export Project Backup"[\s\S]*saveProject\(\)/);
   });
 
+  it('exposes New Project with confirmation and recovery snapshot', () => {
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(app).toContain('startNewProject');
+    expect(app).toContain('data-project-new-button');
+    expect(app).toContain('data-project-new-confirm');
+    expect(app).toContain('createDefaultProject');
+    expect(app).toContain('Before starting a new project');
+    expect(app).toMatch(/label="New Project"/);
+    expect(app).toContain('Start a new project?');
+  });
+
   it('uses progressive disclosure layouts with shot filmstrip and precision drawer', () => {
     const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
     const shell = readFileSync(new URL('../src/components/workspaces/WorkspaceShell.tsx', import.meta.url), 'utf8');
