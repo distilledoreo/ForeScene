@@ -19,6 +19,7 @@ import {
   importModelJob,
 } from '../../engine/modelImport';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
 
 interface ImportReportItem {
@@ -39,6 +40,7 @@ export function ModelImportDialog({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const addImportedModels = useContinuityStore((state) => state.addImportedModels);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
   const [report, setReport] = useState<ImportReportItem[]>([]);
@@ -77,7 +79,10 @@ export function ModelImportDialog({
           signal: abortRef.current.signal,
           onProgress: (value) => setProgress(value.message),
         });
-        addImportedModels(batch.items);
+        if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before importing a model.');
+        await runDestructiveProjectMutation('Before importing a model', () => {
+          addImportedModels(batch.items);
+        });
         imported.push(...batch.items.map((i) => i.object));
 
         // Per-file success card
@@ -133,7 +138,10 @@ export function ModelImportDialog({
     setBusy(true);
     try {
       const batch = await importModelJob(pending.job, { mode, allowHeavy: true, extremeConfirmation: extremeText, signal: controller.signal, onProgress: (value) => setProgress(value.message) });
-      addImportedModels(batch.items);
+      if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before importing a model.');
+      await runDestructiveProjectMutation('Before importing a model', () => {
+        addImportedModels(batch.items);
+      });
       onImported?.(batch.items.map((item) => item.object));
       setReport((items) => [...items, { id: `success-${pending.job.file.name}`, tone: 'success', title: pending.job.file.name, message: `Imported ${batch.summary.totalObjects} object${batch.summary.totalObjects === 1 ? '' : 's'} using binary-backed geometry.` }]);
       setPending(undefined);

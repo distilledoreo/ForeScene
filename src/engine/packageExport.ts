@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { LocationProject, Shot } from '../domain/types';
+import { LocationProject, ProjectAsset, Shot } from '../domain/types';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import {
   CAMERA_MOVE_CUBEMAP_FACES,
@@ -9,13 +9,13 @@ import { buildShotMetadata, createShotPackageManifest } from './exportManifest';
 import { assignShotPackageRootFolders, getShotExportProgressLabel, getShotPackageBaseName } from './exportNaming';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { preparePanoExportDataUrl } from './panoImage';
-import { stitchCubemapFacesCrossAsync } from './cubemapStitch';
-import { ensureHumanMannequinModel } from './humanMannequinModel';
-import { downloadBlob } from './projectIO';
+import { stitchCubemapFaceBlobsCrossAsync } from './cubemapStitch';
+import { downloadBlob } from './fileTransfers';
+import { getProjectAssetBlob } from './projectAssetStore';
 import { canUseProjectedAppearance } from './projectedStyle';
 import {
   CameraMoveExportProgress,
-  renderPanoCubemapFaces,
+  renderPanoCubemapFacesAsBlobs,
   renderPanoPerspectiveCrop,
   renderShotCameraMoveMp4,
   renderShotFrame,
@@ -494,7 +494,7 @@ async function appendShotPackageToZip(
     const aiResultAsset = project.assets.assets[aiResultAssetId];
     if (aiResultAsset) {
       emit('packaging', 'Adding AI result frame…');
-      addDataUrl(zip, `${resolvedRootFolder}/outputs/ai_result_frame.png`, aiResultAsset.uri);
+      await addProjectAssetToZip(zip, `${resolvedRootFolder}/outputs/ai_result_frame.png`, aiResultAsset);
       finishUnit('packaging', 'AI result frame added');
     }
   }
@@ -543,10 +543,10 @@ async function appendShotPackageToZip(
     ) {
       throwIfAborted(signal);
       emit('packaging', 'Adding clay camera-move video…');
-      addBinaryToZip(
+      await addProjectAssetToZip(
         zip,
         getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_clay_motion.mp4`, 'with_people', peopleMode),
-        cameraMoveVideoAsset.uri,
+        cameraMoveVideoAsset,
       );
       finishUnit('packaging', 'Clay camera-move video added');
     }
@@ -597,9 +597,6 @@ async function appendShotPackageToZip(
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
   if (cameraMoveReferenceFrames.length > 0) {
-    throwIfAborted(signal);
-    emit('preparing', 'Loading figure model…', { indeterminate: true });
-    await ensureHumanMannequinModel();
     for (let index = 0; index < cameraMoveReferenceFrames.length; index += 1) {
       const frame = cameraMoveReferenceFrames[index];
       for (const variant of peopleVariants) {
@@ -680,22 +677,22 @@ async function appendShotPackageToZip(
   if (cubemapSourcePano) {
     throwIfAborted(signal);
     emit('rendering', 'Rendering cubemap faces…', { indeterminate: true });
-    const cubemap = await renderPanoCubemapFaces(cubemapSourcePano.asset.uri, {
+    const cubemap = await renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri, {
       faceSize: DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE,
       panoRotation: cubemapSourcePano.pano.rotation,
+      onFaceRendered: async (face, rendered) => {
+        throwIfAborted(signal);
+        await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, rendered.blob);
+        const faceIndex = CAMERA_MOVE_CUBEMAP_FACES.indexOf(face);
+        finishUnit(
+          'rendering',
+          `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`,
+        );
+      },
     });
-    for (let faceIndex = 0; faceIndex < CAMERA_MOVE_CUBEMAP_FACES.length; faceIndex += 1) {
-      throwIfAborted(signal);
-      const face = CAMERA_MOVE_CUBEMAP_FACES[faceIndex];
-      addDataUrl(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, cubemap.faces[face].dataUrl);
-      finishUnit(
-        'rendering',
-        `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`,
-      );
-    }
     emit('packaging', 'Stitching cubemap…', { indeterminate: true });
-    const stitchedCubemap = await stitchCubemapFacesCrossAsync(cubemap.faces, cubemap.faceSize);
-    addDataUrl(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, stitchedCubemap.dataUrl);
+    const stitchedCubemap = await stitchCubemapFaceBlobsCrossAsync(cubemap.faces, cubemap.faceSize);
+    await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, stitchedCubemap.blob);
     finishUnit('packaging', 'Cubemap stitch ready');
   }
 
@@ -722,7 +719,11 @@ async function appendShotPackageToZip(
         targetHeight: project.settings.defaultShotHeight,
       },
     );
-    addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+    if (exportUrl === canonicalAsset.uri) {
+      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
+    } else {
+      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+    }
     finishUnit('packaging', 'Styled reference panorama added');
   }
 
@@ -739,7 +740,11 @@ async function appendShotPackageToZip(
         targetHeight: project.settings.defaultShotHeight,
       },
     );
-    addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+    if (exportUrl === grayboxAsset.uri) {
+      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
+    } else {
+      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+    }
     finishUnit('packaging', 'Graybox panorama added');
   }
 
@@ -798,12 +803,33 @@ function addDataUrl(zip: JSZip, path: string, dataUrl: string) {
   zip.file(path, payload, { base64: /;base64/i.test(dataUrl.slice(0, Math.max(0, comma))) });
 }
 
-/** Add a data URL or opaque URI payload to the zip (data URLs are written as binary). */
-function addBinaryToZip(zip: JSZip, path: string, uri: string) {
+/** Add binary image/video data without materializing an inflated base64 string. */
+async function addBlobToZip(zip: JSZip, path: string, blob: Blob) {
+  zip.file(path, await blob.arrayBuffer());
+}
+
+async function addProjectAssetToZip(zip: JSZip, path: string, asset: ProjectAsset) {
+  if (asset.storageKey) {
+    const blob = await getProjectAssetBlob(asset.storageKey);
+    if (!blob) throw new Error(`Local asset ${asset.name} is missing.`);
+    zip.file(path, await blob.arrayBuffer());
+    return;
+  }
+  await addBinaryToZip(zip, path, asset.uri);
+}
+
+/** Add a data URL or blob URL to the zip as binary. */
+async function addBinaryToZip(zip: JSZip, path: string, uri: string) {
   if (uri.startsWith('data:')) {
     addDataUrl(zip, path, uri);
     return;
   }
-  // Non-data URIs are unexpected for in-app video assets; store as text so the path exists.
+  if (uri.startsWith('blob:')) {
+    const response = await fetch(uri);
+    if (!response.ok) throw new Error(`Could not read local binary asset for ${path}.`);
+    zip.file(path, await response.arrayBuffer());
+    return;
+  }
+  // Opaque non-local URIs are not expected for in-app assets; retain the path for diagnostics.
   zip.file(path, uri);
 }

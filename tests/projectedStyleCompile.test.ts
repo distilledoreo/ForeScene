@@ -67,9 +67,11 @@ describe('projected style WebGL compile gate', () => {
       });
       const page = await browser.newPage();
       const pageErrors: string[] = [];
+      const pageWarnings: string[] = [];
       page.on('pageerror', (err) => pageErrors.push(String(err)));
       page.on('console', (msg) => {
         if (msg.type() === 'error') pageErrors.push(msg.text());
+        if (msg.type() === 'warning') pageWarnings.push(msg.text());
       });
 
       // setContent avoids file:// path issues between WSL and Windows Chromium.
@@ -84,7 +86,7 @@ describe('projected style WebGL compile gate', () => {
 
       writeEvidence(
         'projected-style-compile.json',
-        JSON.stringify({ result, pageErrors, evidenceDir: EVIDENCE_DIR }, null, 2),
+        JSON.stringify({ result, pageErrors, pageWarnings, evidenceDir: EVIDENCE_DIR }, null, 2),
       );
 
       expect(result, 'compile harness did not set __PROJECTED_COMPILE__').toBeTruthy();
@@ -96,6 +98,7 @@ describe('projected style WebGL compile gate', () => {
       expect(result.cases.length).toBeGreaterThanOrEqual(8);
       expect(result.cases.every((c) => c.ok)).toBe(true);
       expect(pageErrors.filter((e) => /shader|fragment|compile|link/i.test(e))).toEqual([]);
+      expect(pageWarnings.filter((e) => /potentially uninitialized variable/i.test(e))).toEqual([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeEvidence('projected-style-compile-skip-or-fail.log', message);

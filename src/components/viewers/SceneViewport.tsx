@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { objectDisplayName } from '../../domain/defaults';
 import { CameraData, Euler, LocationProject, SceneObject, SceneObjectType, Vec3 } from '../../domain/types';
@@ -10,7 +10,12 @@ import {
   type ForwardSprintState,
 } from '../../engine/forwardSprint';
 import { BUILD_GRID_SIZE, createPlacedSceneObject, resolveStampPoint } from '../../engine/sandbox';
-import { getHumanMannequinRevision, subscribeHumanMannequinReady } from '../../engine/humanMannequinModel';
+import {
+  ensureHumanMannequinForProject,
+  getHumanMannequinRevision,
+  projectHasVisibleHumanMannequin,
+  subscribeHumanMannequinReady,
+} from '../../engine/humanMannequinModel';
 import {
   resolveProjectedProjectorAssets,
 } from '../../engine/multiOriginProjection';
@@ -34,7 +39,15 @@ import {
   type ProjectorOcclusionMap,
   type ProjectorOcclusionSet,
 } from '../../engine/projectorOcclusion';
-import { buildScene, computeBuildFogRange, createPreviewMesh, disposePreviewMesh, disposeScene } from '../../engine/sceneObjects';
+import {
+  applySceneObjectPose,
+  buildScene,
+  computeBuildFogRange,
+  createPreviewMesh,
+  disposePreviewMesh,
+  disposeScene,
+  sceneObjectUsesProceduralScale,
+} from '../../engine/sceneObjects';
 import {
   angleInAxisPlane,
   applyAxisRotationDelta,
@@ -68,7 +81,7 @@ import { clampFlyCameraPosition, computeSceneFlyBounds } from '../../engine/flyC
 import { shotFlySpeedMultiplier } from '../../engine/shotFlyMovement';
 import { sceneEnvelope, selectionBounds } from '../../engine/buildSelection';
 import { DEFAULT_SHOT_NEAR_CLIP_METERS } from '../../engine/cameraClipping';
-import { applyFlyCameraToPerspectiveCamera } from '../../engine/renderers';
+import { applyFlyCameraToPerspectiveCamera } from '../../engine/flyCamera';
 import {
   cameraFromOrbit,
   cameraOrbitFromCamera,
@@ -108,6 +121,59 @@ const MAX_INTERACTIVE_PIXEL_RATIO = 1.5;
 function sceneBoundingRadius(project: LocationProject): number {
   const box = sceneEnvelope(project.scene);
   return Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 2);
+}
+
+function sceneObjectStructureSignature(project: LocationProject): string {
+  return JSON.stringify(project.scene.objects.map((object) => {
+    const asset = object.modelAssetId ? project.assets.assets[object.modelAssetId] : undefined;
+    return {
+      id: object.id,
+      type: object.type,
+      dimensions: object.dimensions,
+      category: object.category,
+      visible: object.visible,
+      surfaceStyle: object.surfaceStyle,
+      color: object.color,
+      secondaryColor: object.secondaryColor,
+      modelAssetId: object.modelAssetId,
+      importedModel: object.importedModel && {
+        sourceImportId: object.importedModel.sourceImportId,
+        meshCount: object.importedModel.meshCount,
+        vertexCount: object.importedModel.vertexCount,
+        triangleCount: object.importedModel.triangleCount,
+      },
+      modelAsset: asset
+        ? { id: asset.id, mimeType: asset.mimeType, uriPrefix: asset.uri.slice(0, 80), uriLength: asset.uri.length }
+        : undefined,
+    };
+  }));
+}
+
+function sceneObjectPoseSignature(project: LocationProject): string {
+  return JSON.stringify(project.scene.objects.map((object) => ({
+    id: object.id,
+    name: object.name,
+    transform: object.transform,
+  })));
+}
+
+function landmarkStructureSignature(project: LocationProject): string {
+  return JSON.stringify(project.landmarks.map((landmark) => ({
+    id: landmark.id,
+    visible: landmark.visible,
+  })));
+}
+
+function landmarkPoseSignature(project: LocationProject): string {
+  return JSON.stringify(project.landmarks.map((landmark) => ({
+    id: landmark.id,
+    name: landmark.displayName,
+    position: landmark.position,
+  })));
+}
+
+function shotCameraSignature(project: LocationProject): string {
+  return JSON.stringify(project.shots.map((shot) => ({ id: shot.id, camera: shot.camera })));
 }
 
 interface DragState {
@@ -231,6 +297,7 @@ export function SceneViewport({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const frameRef = useRef<number>(0);
+  const renderFrameRef = useRef<() => void>(() => {});
   const orbitRef = useRef({ yaw: -34, pitch: 28, distance: 15.5, target: new THREE.Vector3(0, 1.15, 1.25) });
   const freeCameraActiveRef = useRef(freeCameraActive);
   const freeCameraModeRef = useRef(freeCameraActive);
@@ -288,6 +355,14 @@ export function SceneViewport({
   const finalizeShotFovWheelBatchRef = useRef<() => void>(() => {});
   const handledCameraReseedRef = useRef(shotFraming?.cameraReseedGeneration ?? 0);
   const altHeldRef = useRef(false);
+
+  const requestRender = useCallback(() => {
+    if (frameRef.current) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = 0;
+      renderFrameRef.current();
+    });
+  }, []);
 
   // Live geometry-occlusion cubemaps (shared across all projected objects).
   const primaryOcclusionRef = useRef<ProjectorOcclusionMap | undefined>();
@@ -537,6 +612,7 @@ export function SceneViewport({
       cameraRef.current.aspect = width / height;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(width, height, false);
+      requestRender();
     };
 
     syncViewportSize();
@@ -544,7 +620,7 @@ export function SceneViewport({
     resizeObserver.observe(container);
     window.addEventListener('resize', syncViewportSize);
 
-    const processFlyMovement = (deltaSeconds: number) => {
+    const processFlyMovement = (deltaSeconds: number): boolean => {
       const keys = flyKeysRef.current;
       const axes = flyAxesRef.current;
       let axisForward = 0;
@@ -560,7 +636,7 @@ export function SceneViewport({
       if (axisForward === 0) axisForward = axes.forward;
       if (axisStrafe === 0) axisStrafe = axes.strafe;
       if (axisVertical === 0) axisVertical = axes.vertical;
-      if (axisForward === 0 && axisStrafe === 0 && axisVertical === 0) return;
+      if (axisForward === 0 && axisStrafe === 0 && axisVertical === 0) return false;
 
       const fly = flyRef.current;
       const { forward, right } = horizontalFlyDirections(fly.yawDegrees);
@@ -568,7 +644,7 @@ export function SceneViewport({
       const moveY = axisVertical;
       const moveZ = forward[2] * axisForward + right[2] * axisStrafe;
       const length = Math.hypot(moveX, moveY, moveZ);
-      if (length === 0) return;
+      if (length === 0) return false;
       const sprinting = isForwardSprinting(forwardSprintRef.current);
       const speed = FLY_SPEED * shotFlySpeedMultiplier({ altHeld: altHeldRef.current, sprinting });
       const step = (speed * deltaSeconds) / length;
@@ -581,10 +657,18 @@ export function SceneViewport({
         flyBoundsRef.current,
       );
       flyDirtyRef.current = true;
+      return true;
     };
 
-    const animate = () => {
-      frameRef.current = requestAnimationFrame(animate);
+    const hasActiveFlyInput = () => {
+      const axes = flyAxesRef.current;
+      return flyKeysRef.current.size > 0
+        || axes.forward !== 0
+        || axes.strafe !== 0
+        || axes.vertical !== 0;
+    };
+
+    renderFrameRef.current = () => {
       const activeCamera = cameraRef.current;
       const activeRenderer = rendererRef.current;
       const activeScene = sceneRef.current;
@@ -599,8 +683,9 @@ export function SceneViewport({
       const cssWidth = Math.max(1, container?.clientWidth ?? 1);
       const cssHeight = Math.max(1, container?.clientHeight ?? 1);
 
+      const shouldAnimateFly = (framing?.flyActive || freeCameraActiveRef.current) && hasActiveFlyInput();
       if (framing || freeCameraActiveRef.current) {
-        if (framing?.flyActive || freeCameraActiveRef.current) processFlyMovement(deltaSeconds);
+        if (shouldAnimateFly) processFlyMovement(deltaSeconds);
         if (framing && flyDirtyRef.current) emitFramingCamera();
         applyFlyCameraToPerspectiveCamera(
           activeCamera,
@@ -624,8 +709,9 @@ export function SceneViewport({
         updateCamera(activeCamera, orbitRef.current);
         activeRenderer.render(activeScene, activeCamera);
       }
+      if (shouldAnimateFly) requestRender();
     };
-    animate();
+    requestRender();
 
     const canvas = renderer.domElement;
 
@@ -936,6 +1022,7 @@ export function SceneViewport({
       const drag = dragRef.current;
       const placementPreviewActive = Boolean(placementTypeRef.current);
       if (drag.kind === 'idle' && !placementPreviewActive) return;
+      requestRender();
 
       const needsFloorPoint = placementPreviewActive;
       const needsRaycaster = needsFloorPoint
@@ -1153,6 +1240,7 @@ export function SceneViewport({
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      requestRender();
       const drag = dragRef.current;
       if (drag.kind === 'shot_framing') {
         dragRef.current = { kind: 'idle', x: 0, y: 0, moved: false };
@@ -1211,7 +1299,10 @@ export function SceneViewport({
     };
 
     const onPointerLeave = () => {
-      if (dragRef.current.kind === 'idle') clearPreviewMesh();
+      if (dragRef.current.kind === 'idle') {
+        clearPreviewMesh();
+        requestRender();
+      }
     };
 
     const endShotFovWheelBatch = () => {
@@ -1275,6 +1366,7 @@ export function SceneViewport({
         framing.onFocalLengthHudPulse?.();
         emitFramingCamera();
         scheduleShotFovWheelBatchEnd();
+        requestRender();
         return;
       }
       if (freeCameraActiveRef.current) return;
@@ -1286,6 +1378,7 @@ export function SceneViewport({
           orbitRef.current.distance + event.deltaY * 0.01 * dollyScale,
         ),
       );
+      requestRender();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1317,6 +1410,7 @@ export function SceneViewport({
       flyKeysRef.current.add(event.code);
       event.preventDefault();
       event.stopImmediatePropagation();
+      requestRender();
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
@@ -1330,12 +1424,14 @@ export function SceneViewport({
         });
       }
       flyKeysRef.current.delete(event.code);
+      requestRender();
     };
     const clearFlyInput = () => {
       flyKeysRef.current.clear();
       flyAxesRef.current = { forward: 0, strafe: 0, vertical: 0 };
       forwardSprintRef.current = reduceForwardSprint(forwardSprintRef.current, { type: 'reset' });
       altHeldRef.current = false;
+      requestRender();
     };
     const onVisibilityChange = () => { if (document.hidden) clearFlyInput(); };
 
@@ -1344,6 +1440,7 @@ export function SceneViewport({
     const onPointerCancel = () => {
       dragRef.current = { kind: 'idle', x: 0, y: 0, moved: false };
       endEditBatch();
+      requestRender();
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -1360,7 +1457,9 @@ export function SceneViewport({
 
     return () => {
       endEditBatch();
-      cancelAnimationFrame(frameRef.current);
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+      renderFrameRef.current = () => {};
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
@@ -1388,7 +1487,7 @@ export function SceneViewport({
         parentFinalizeShotFovWheelBatchRef.current = () => {};
       }
     };
-  }, [clearTransformGizmo, disposeOcclusionMaps, emitFramingCamera, parentFinalizeShotFovWheelBatchRef, syncTransformGizmo, theme]);
+  }, [clearTransformGizmo, disposeOcclusionMaps, emitFramingCamera, parentFinalizeShotFovWheelBatchRef, requestRender, syncTransformGizmo, theme]);
 
   useEffect(() => {
     const modeChanged = freeCameraModeRef.current !== freeCameraActive;
@@ -1416,6 +1515,7 @@ export function SceneViewport({
         camera.near,
         camera.far,
       ));
+      requestRender();
       return;
     }
 
@@ -1434,7 +1534,8 @@ export function SceneViewport({
       distance: Math.max(3, Math.min(sceneBoundingRadius(projectRef.current) * 4, nextOrbit.distance)),
       target: new THREE.Vector3().fromArray(nextOrbit.target),
     };
-  }, [freeCameraActive, shotFraming]);
+    requestRender();
+  }, [freeCameraActive, requestRender, shotFraming]);
 
   useEffect(() => {
     if (shotFraming) return;
@@ -1448,13 +1549,36 @@ export function SceneViewport({
       sceneRef.current.fog.far = fogRange.far;
     }
     camera.updateProjectionMatrix();
-  }, [renderDistance, shotFraming]);
+    requestRender();
+  }, [renderDistance, requestRender, shotFraming]);
+
+  const hasVisibleHumanMannequin = projectHasVisibleHumanMannequin(project);
 
   useEffect(() => {
+    if (!hasVisibleHumanMannequin) return;
+
+    const loadWhenIdle = () => {
+      void ensureHumanMannequinForProject(project).catch(() => {
+        // The procedural fallback stays available if the optional GLB cannot load.
+      });
+    };
+    const idleCallback = window.requestIdleCallback?.(loadWhenIdle, { timeout: 2_000 });
+    const timeoutId = idleCallback === undefined
+      ? window.setTimeout(loadWhenIdle, 0)
+      : undefined;
+
+    return () => {
+      if (idleCallback !== undefined) window.cancelIdleCallback?.(idleCallback);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [hasVisibleHumanMannequin]);
+
+  useEffect(() => {
+    if (!hasVisibleHumanMannequin) return;
     return subscribeHumanMannequinReady(() => {
       setMannequinRevision(getHumanMannequinRevision());
     });
-  }, []);
+  }, [hasVisibleHumanMannequin]);
 
   useEffect(() => {
     if (!shotFraming?.flyActive && !freeCameraActive) {
@@ -1476,7 +1600,8 @@ export function SceneViewport({
       strafe: clampUnit(axes.strafe),
       vertical: clampUnit(axes.vertical ?? 0),
     };
-  }, []);
+    requestRender();
+  }, [requestRender]);
 
   const projectedProjectors = appearance === 'projected'
     ? resolveProjectedProjectorAssets(project)
@@ -1599,7 +1724,8 @@ export function SceneViewport({
         shotFraming.frameAspectRatio,
       );
     }
-  }, [shotFraming?.cameraReseedGeneration, Boolean(shotFraming)]);
+    requestRender();
+  }, [requestRender, shotFraming?.cameraReseedGeneration, Boolean(shotFraming)]);
 
   const projectedSettings = projectedProjectors?.settings
     ?? normalizeProjectedStyleSettings(project.settings.projectedStyle);
@@ -1618,6 +1744,75 @@ export function SceneViewport({
     secondaryAssetKey: projectedSecondaryAssetKey,
   });
   const { projectedActive, dualActive } = projectedState;
+
+  const objectStructureKey = useMemo(
+    () => sceneObjectStructureSignature(project),
+    [project.assets.assets, project.scene.objects],
+  );
+  const objectPoseKey = useMemo(
+    () => sceneObjectPoseSignature(project),
+    [project.scene.objects],
+  );
+  const landmarkStructureKey = useMemo(
+    () => landmarkStructureSignature(project),
+    [project.landmarks],
+  );
+  const landmarkPoseKey = useMemo(
+    () => landmarkPoseSignature(project),
+    [project.landmarks],
+  );
+  const shotCameraKey = useMemo(
+    () => shotCameraSignature(project),
+    [project.shots],
+  );
+  const panoOriginKey = useMemo(
+    () => project.scene.panoOrigin.join(','),
+    [project.scene.panoOrigin],
+  );
+  const occlusionGeometryKey = useMemo(
+    () => `${objectStructureKey}:${objectPoseKey}:${panoOriginKey}`,
+    [objectPoseKey, objectStructureKey, panoOriginKey],
+  );
+  const shotFrustumStructureKey = useMemo(
+    () => JSON.stringify(project.shots.map((shot) => ({ id: shot.id, shotNumber: shot.shotNumber }))),
+    [project.shots],
+  );
+  const sceneStructureKey = useMemo(() => JSON.stringify({
+    objects: objectStructureKey,
+    landmarks: landmarkStructureKey,
+    shotFrustums: shotFrustumStructureKey,
+    selectedShotId,
+    showSceneGuides,
+    originPlacementActive,
+    isShotFraming: Boolean(shotFraming),
+  }), [
+    landmarkStructureKey,
+    objectStructureKey,
+    originPlacementActive,
+    selectedShotId,
+    shotFrustumStructureKey,
+    showSceneGuides,
+    shotFraming,
+  ]);
+  const projectedAppearanceKey = JSON.stringify({
+    projectedActive,
+    dualActive,
+    settings: projectedSettings,
+    primary: projectedPano && {
+      id: projectedPano.id,
+      origin: projectedPano.origin,
+      rotation: projectedPano.rotation,
+      width: projectedPano.width,
+      height: projectedPano.height,
+    },
+    secondary: projectedSecondary && {
+      id: projectedSecondary.id,
+      origin: projectedSecondary.origin,
+      rotation: projectedSecondary.rotation,
+      width: projectedSecondary.width,
+      height: projectedSecondary.height,
+    },
+  });
 
   const occlusionWanted = projectedActive
     && projectedSettings.occlusionEnabled
@@ -1699,7 +1894,7 @@ export function SceneViewport({
     };
   }, [
     occlusionWanted,
-    project,
+    occlusionGeometryKey,
     rendererRevisionRef.current,
     projectedPano?.id,
     projectedPano?.origin[0],
@@ -1767,41 +1962,94 @@ export function SceneViewport({
       updatePreviewMesh(previewPointRef.current);
     }
     syncTransformGizmo();
+    requestRender();
   }, [
     clearTransformGizmo,
-    originPlacementActive,
-    project,
-    projectedActive,
-    projectedBlendMode,
-    projectedPano?.id,
-    projectedPanoId,
-    projectedSecondary?.id,
-    projectedSecondaryPanoId,
-    projectedSecondaryTexture,
-    projectedSettings.exposure,
-    projectedSettings.fallbackMode,
-    projectedSettings.lightingContribution,
-    projectedSettings.opacity,
-    projectedSettings.occlusionEnabled,
-    projectedSettings.occlusionDebugMode,
-    projectedSettings.blendMode,
-    projectedTexture,
-    dualActive,
+    mannequinRevision,
     primaryOcclusionRef.current?.key,
+    projectedAppearanceKey,
+    projectedSecondaryTexture,
+    projectedTexture,
+    requestRender,
+    sceneStructureKey,
     secondaryOcclusionRef.current?.key,
-    selectedShotId,
-    shotFraming,
-    showSceneGuides,
     syncTransformGizmo,
     theme,
     updatePreviewMesh,
-    mannequinRevision,
-    renderDistance,
+  ]);
+
+  // Cameras, object transforms, landmarks, and the capture origin all change frequently
+  // while editing. Keep the existing Three.js resources and update their poses in place;
+  // geometry/material/guide topology changes above are the only reasons to rebuild.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    const objectNodes = new Map<string, THREE.Object3D>();
+    const landmarkNodes = new Map<string, THREE.Object3D>();
+    const frustumHelpers = new Map<string, THREE.CameraHelper>();
+    let panoOriginMarker: THREE.Object3D | undefined;
+    scene.traverse((node) => {
+      const objectId = node.userData.sceneObjectId as string | undefined;
+      if (objectId) objectNodes.set(objectId, node);
+      const landmarkId = node.userData.landmarkId as string | undefined;
+      if (landmarkId) landmarkNodes.set(landmarkId, node);
+      const shotId = node.userData.shotId as string | undefined;
+      if (shotId && node instanceof THREE.CameraHelper) frustumHelpers.set(shotId, node);
+      if (node.userData.panoOriginMarker === true) panoOriginMarker = node;
+    });
+
+    for (const object of project.scene.objects) {
+      const node = objectNodes.get(object.id);
+      if (!node) continue;
+      node.name = object.name;
+      applySceneObjectPose(node, object.transform, {
+        applyScale: !sceneObjectUsesProceduralScale(object.type),
+        visible: object.visible,
+      });
+    }
+
+    panoOriginMarker?.position.fromArray(project.scene.panoOrigin);
+
+    for (const landmark of project.landmarks) {
+      const node = landmarkNodes.get(landmark.id);
+      if (!node) continue;
+      node.name = landmark.displayName;
+      node.position.fromArray(landmark.position);
+      node.visible = landmark.visible;
+    }
+
+    const shotsById = new Map(project.shots.map((shot) => [shot.id, shot]));
+    for (const [shotId, helper] of frustumHelpers) {
+      const shot = shotsById.get(shotId);
+      if (!shot) continue;
+      const camera = helper.camera as THREE.PerspectiveCamera;
+      camera.fov = shot.camera.fovDegrees;
+      camera.aspect = shot.camera.aspectRatio;
+      camera.near = shot.camera.near;
+      camera.far = shot.camera.far;
+      camera.position.fromArray(shot.camera.position);
+      camera.lookAt(new THREE.Vector3().fromArray(shot.camera.target));
+      camera.updateProjectionMatrix();
+      helper.update();
+    }
+
+    syncTransformGizmo();
+    requestRender();
+  }, [
+    landmarkPoseKey,
+    objectPoseKey,
+    panoOriginKey,
+    requestRender,
+    sceneStructureKey,
+    shotCameraKey,
+    syncTransformGizmo,
   ]);
 
   useEffect(() => {
     syncTransformGizmo();
-  }, [gizmoMode, selectedObjectIds, showTransformGizmo, syncTransformGizmo]);
+    requestRender();
+  }, [gizmoMode, requestRender, selectedObjectIds, showTransformGizmo, syncTransformGizmo]);
 
   useEffect(() => {
     if (!frameRequest || shotFraming || !cameraRef.current) return;
@@ -1815,12 +2063,14 @@ export function SceneViewport({
     orbitRef.current.target.copy(center);
     const framingDistance = Math.max(size.length() * 0.5, 2) / Math.tan(THREE.MathUtils.degToRad(framingFovRef.current * 0.5));
     orbitRef.current.distance = THREE.MathUtils.clamp(framingDistance * 1.15, 3, sceneBoundingRadius(projectRef.current) * 4);
-  }, [frameObjectIds, frameRequest, project.scene.objects, shotFraming]);
+    requestRender();
+  }, [frameObjectIds, frameRequest, project.scene.objects, requestRender, shotFraming]);
 
   useEffect(() => {
     if (previewPointRef.current) updatePreviewMesh(previewPointRef.current);
     else clearPreviewMesh();
-  }, [placementType, snapToGrid, clearPreviewMesh, updatePreviewMesh]);
+    requestRender();
+  }, [placementType, snapToGrid, clearPreviewMesh, requestRender, updatePreviewMesh]);
 
   const cursorClass = shotFraming
     ? 'cursor-crosshair'

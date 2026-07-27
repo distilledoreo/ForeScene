@@ -15,12 +15,14 @@ describe('workflow guidance UI', () => {
   it('keeps project import discoverable and retryable after the full-bleed revamp', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     expect(app).toContain('openProjectPicker');
-    expect(app).toContain('title="Open project"');
-    expect(app).toContain('title="Save project"');
+    expect(app).toContain('title="Import project backup"');
+    expect(app).toContain('title="Export verified project backup"');
     expect(app).toContain('data-project-import-input');
     expect(app).toContain('data-project-export-button');
     expect(app).toContain('data-project-name-input');
-    expect(app).toContain('downloadProject(project)');
+    expect(app).toContain('const saveProject');
+    expect(app).toContain('loadProjectIo');
+    expect(app).toContain('downloadProject(verified.project)');
     expect(app).toContain('accept=".json,.zip,.panoref-project,application/json,application/zip"');
     expect(app).toContain('Project opened:');
     expect(app).toContain('Could not open project:');
@@ -29,8 +31,19 @@ describe('workflow guidance UI', () => {
     expect(app).toContain("fileRef.current.value = ''");
     expect(app).toContain('setProjectMenuOpen(false)');
     expect(app).toContain("event.key === 'Escape'");
-    expect(app).toMatch(/label="Open Project"[\s\S]*openProjectPicker\(\)/);
-    expect(app).toMatch(/label="Save Project"[\s\S]*downloadProject\(project\)/);
+    expect(app).toMatch(/label="Import Project Backup"[\s\S]*openProjectPicker\(\)/);
+    expect(app).toMatch(/label="Export Project Backup"[\s\S]*saveProject\(\)/);
+  });
+
+  it('exposes New Project with confirmation and recovery snapshot', () => {
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    expect(app).toContain('startNewProject');
+    expect(app).toContain('data-project-new-button');
+    expect(app).toContain('data-project-new-confirm');
+    expect(app).toContain('createDefaultProject');
+    expect(app).toContain('Before starting a new project');
+    expect(app).toMatch(/label="New Project"/);
+    expect(app).toContain('Start a new project?');
   });
 
   it('uses progressive disclosure layouts with shot filmstrip and precision drawer', () => {
@@ -51,6 +64,8 @@ describe('workflow guidance UI', () => {
     expect(shots).toContain('landShotFraming');
     expect(shots).toContain('Still');
     expect(shots).toContain('Video');
+    expect(shots).toContain("flushProject('Verified save before still render')");
+    expect(shots).toContain("flushProject('Verified save before video render')");
     expect(shots).not.toContain('ShotFilmstrip');
     expect(shots).not.toContain('ShotInfoCard');
     expect(shots).not.toContain('Go to Review');
@@ -63,6 +78,9 @@ describe('workflow guidance UI', () => {
     expect(exportWorkspace).toContain('Export Settings');
     expect(exportWorkspace).toContain('getShotPrimaryLabel(shot)');
     expect(exportWorkspace).toContain('Handoff packages');
+    expect(exportWorkspace).toContain("flushProject('Verified save before package export')");
+    expect(exportWorkspace).toContain('const exportProject = verified.project');
+    expect(shots).toContain('const renderProject = verified.project');
     expect(app).not.toContain('ReviewWorkspace');
     expect(app).not.toContain("id: 'review'");
     expect(shotThumbnail).toContain('resolveShotThumbnail');

@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import { ArrowRight, Compass } from 'lucide-react';
 import { getCanonicalPano, getLatestGrayboxPano, getPanoAsset } from '../../domain/selectors';
 import { downloadPanoImage } from '../../engine/panoImage';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 import {
   hasGrayboxPano,
   hasStyledCanonicalPano,
@@ -15,8 +16,13 @@ import { Workspace } from '../../domain/types';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { AlignmentRetryContent, GrayboxReferencePromptBuilder } from './GrayboxReferenceGuide';
 import { Modal } from './Modal';
-import { SecondCaptureForkContent } from './SecondCaptureForkPanel';
-import { countStyledPanoramas } from '../../engine/multiOriginProjection';
+import { countStyledPanoramas } from '../../engine/panoProjectionCore';
+
+// Coverage analysis initializes geometry and renderer code; only load it after
+// the user chooses the optional second-capture workflow.
+const SecondCaptureForkContent = lazy(() => import('./SecondCaptureForkPanel').then((module) => ({
+  default: module.SecondCaptureForkContent,
+})));
 
 const WORKSPACE_LABELS: Record<Workspace, string> = {
   build: 'Build',
@@ -96,7 +102,23 @@ export function WorkflowGuidance() {
     markObjectiveSeen,
     markAlignmentIntroSeen,
     updateProjectInfo,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    workspace: state.workspace,
+    selectedShotId: state.selectedShotId,
+    shotCameraFlying: state.shotCameraFlying,
+    dismissedWorkflowAdvanceKeys: state.dismissedWorkflowAdvanceKeys,
+    seenObjectiveWorkspaces: state.seenObjectiveWorkspaces,
+    objectiveModalRequest: state.objectiveModalRequest,
+    alignmentIntroRequest: state.alignmentIntroRequest,
+    alignmentRetryModalRequest: state.alignmentRetryModalRequest,
+    seenAlignmentIntroForPanoId: state.seenAlignmentIntroForPanoId,
+    setWorkspace: state.setWorkspace,
+    dismissWorkflowAdvance: state.dismissWorkflowAdvance,
+    markObjectiveSeen: state.markObjectiveSeen,
+    markAlignmentIntroSeen: state.markAlignmentIntroSeen,
+    updateProjectInfo: state.updateProjectInfo,
+  })));
 
   const [isDownloadingGraybox, setIsDownloadingGraybox] = useState(false);
   const [activeDialog, setActiveDialog] = useState<GuidanceDialog>('none');
@@ -366,16 +388,18 @@ export function WorkflowGuidance() {
         )}
       >
         {showSecondCaptureFork ? (
-          <SecondCaptureForkContent
-            open={activeDialog === 'advance' && showSecondCaptureFork}
-            compactIntro
-            onContinue={handleAdvanceNext}
-            onClose={handleAdvanceDismiss}
-            onAwaitingImport={() => {
-              // Frozen plan is latched inside SecondCaptureForkContent.
-            }}
-            onPlaceInBuild={handleAdvanceDismiss}
-          />
+          <Suspense fallback={<p className="text-sm text-secondary">Loading second-capture planner…</p>}>
+            <SecondCaptureForkContent
+              open={activeDialog === 'advance' && showSecondCaptureFork}
+              compactIntro
+              onContinue={handleAdvanceNext}
+              onClose={handleAdvanceDismiss}
+              onAwaitingImport={() => {
+                // Frozen plan is latched inside SecondCaptureForkContent.
+              }}
+              onPlaceInBuild={handleAdvanceDismiss}
+            />
+          </Suspense>
         ) : (
           <p className="text-sm text-secondary">{advancePrompt?.body}</p>
         )}

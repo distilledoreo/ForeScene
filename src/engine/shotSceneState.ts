@@ -44,6 +44,17 @@ export function canStageObjectPerShot(object: Pick<SceneObject, 'type' | 'stagin
   return true;
 }
 
+/**
+ * Keep all stageable objects discoverable, including ones hidden for this shot.
+ * A hidden object cannot be picked in the viewport, so the staging list is its
+ * recovery path.
+ */
+export function getStageableObjectsForShot<T extends Pick<SceneObject, 'type' | 'stagingRole' | 'locked'>>(
+  objects: readonly T[],
+): T[] {
+  return objects.filter((object) => canStageObjectPerShot(object));
+}
+
 export function resolveSceneObjectsForShot(
   project: Pick<LocationProject, 'scene'>,
   shot: Pick<Shot, 'objectOverrides'>,

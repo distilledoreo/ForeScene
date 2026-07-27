@@ -1,10 +1,16 @@
-import { CameraData } from '../domain/types';
+import type { CameraData, CameraKeyframe } from '../domain/types';
 
 export const MAX_SHOT_CAMERA_HISTORY = 50;
 
+/** Authored camera pose + keyframe sequence restored together by undo/redo. */
+export interface ShotCameraHistoryEntry {
+  camera: CameraData;
+  cameraKeyframes: CameraKeyframe[];
+}
+
 export interface ShotCameraHistoryStacks {
-  past: CameraData[];
-  future: CameraData[];
+  past: ShotCameraHistoryEntry[];
+  future: ShotCameraHistoryEntry[];
 }
 
 export type ShotCameraHistoryByShotId = Record<string, ShotCameraHistoryStacks>;
@@ -17,8 +23,38 @@ export function cloneCameraData(camera: CameraData): CameraData {
   };
 }
 
+export function cloneCameraKeyframes(
+  keyframes: readonly CameraKeyframe[] = [],
+): CameraKeyframe[] {
+  return structuredClone(keyframes) as CameraKeyframe[];
+}
+
+export function cloneShotCameraHistoryEntry(
+  entry: ShotCameraHistoryEntry,
+): ShotCameraHistoryEntry {
+  return {
+    camera: cloneCameraData(entry.camera),
+    cameraKeyframes: cloneCameraKeyframes(entry.cameraKeyframes),
+  };
+}
+
 export function cameraDataEqual(a: CameraData, b: CameraData): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export function cameraKeyframesEqual(
+  a: readonly CameraKeyframe[] = [],
+  b: readonly CameraKeyframe[] = [],
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export function shotCameraHistoryEntryEqual(
+  a: ShotCameraHistoryEntry,
+  b: ShotCameraHistoryEntry,
+): boolean {
+  return cameraDataEqual(a.camera, b.camera)
+    && cameraKeyframesEqual(a.cameraKeyframes, b.cameraKeyframes);
 }
 
 export function clearShotCameraHistory(): ShotCameraHistoryStacks {
@@ -46,10 +82,10 @@ export function withShotCameraHistoryStacks(
 
 export function pushShotCameraHistoryPast(
   stacks: ShotCameraHistoryStacks,
-  camera: CameraData,
+  entry: ShotCameraHistoryEntry,
   maxDepth = MAX_SHOT_CAMERA_HISTORY,
 ): ShotCameraHistoryStacks {
-  const past = [...stacks.past, cloneCameraData(camera)];
+  const past = [...stacks.past, cloneShotCameraHistoryEntry(entry)];
   while (past.length > maxDepth) past.shift();
   return {
     past,
@@ -59,33 +95,33 @@ export function pushShotCameraHistoryPast(
 
 export function undoShotCameraHistory(
   stacks: ShotCameraHistoryStacks,
-  current: CameraData,
-): { stacks: ShotCameraHistoryStacks; restored: CameraData } | undefined {
+  current: ShotCameraHistoryEntry,
+): { stacks: ShotCameraHistoryStacks; restored: ShotCameraHistoryEntry } | undefined {
   if (stacks.past.length === 0) return undefined;
   const past = [...stacks.past];
   const restored = past.pop()!;
   return {
     stacks: {
       past,
-      future: [cloneCameraData(current), ...stacks.future],
+      future: [cloneShotCameraHistoryEntry(current), ...stacks.future],
     },
-    restored: cloneCameraData(restored),
+    restored: cloneShotCameraHistoryEntry(restored),
   };
 }
 
 export function redoShotCameraHistory(
   stacks: ShotCameraHistoryStacks,
-  current: CameraData,
-): { stacks: ShotCameraHistoryStacks; restored: CameraData } | undefined {
+  current: ShotCameraHistoryEntry,
+): { stacks: ShotCameraHistoryStacks; restored: ShotCameraHistoryEntry } | undefined {
   if (stacks.future.length === 0) return undefined;
   const future = [...stacks.future];
   const restored = future.shift()!;
   return {
     stacks: {
-      past: [...stacks.past, cloneCameraData(current)],
+      past: [...stacks.past, cloneShotCameraHistoryEntry(current)],
       future,
     },
-    restored: cloneCameraData(restored),
+    restored: cloneShotCameraHistoryEntry(restored),
   };
 }
 

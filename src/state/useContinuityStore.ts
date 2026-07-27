@@ -33,7 +33,7 @@ import {
   primaryStyledPano,
   resolveStyledImportMode,
   type PendingSecondCapturePlan,
-} from '../engine/multiOriginProjection';
+} from '../engine/panoProjectionCore';
 import { findGrayboxNearOrigin } from '../domain/selectors';
 import {
   getCanonicalPano,
@@ -45,7 +45,8 @@ import {
   add,
   multiplyScalar,
 } from '../engine/sync';
-import { renderGrayboxEquirectangularPano } from '../engine/renderers';
+import { pruneUnreferencedProjectAssets } from '../engine/projectAssets';
+import { storeProjectAssetBlob, storeProjectAssetDataUrl } from '../engine/projectAssetStore';
 import {
   BUILD_HISTORY_COALESCE_MS,
   type BuildHistoryMode,
@@ -60,6 +61,7 @@ import {
 } from '../engine/buildHistory';
 import {
   cameraDataEqual,
+  cameraKeyframesEqual,
   clearAllShotCameraHistory,
   getShotCameraHistoryStacks,
   pushShotCameraHistoryPast,
@@ -70,7 +72,7 @@ import {
 } from '../engine/shotCameraHistory';
 
 import { useThemeStore } from './useThemeStore';
-import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../engine/sandbox';
+import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../engine/sandboxCore';
 import { normalizeWorkspace } from '../engine/workflow';
 import {
   BuildClipboardPayload,
@@ -85,7 +87,7 @@ import {
   SelectionMode,
   toggleSelectedId,
   translateSelectedObjects,
-} from '../engine/buildSelection';
+} from '../engine/buildSelectionMath';
 
 export type BuildMode = 'select' | 'place' | 'pano_origin';
 export type { BuildHistoryMode };
@@ -372,10 +374,16 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const shot = state.project.shots.find((item) => item.id === state.selectedShotId);
     if (!shot) return false;
     const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, shot.id);
-    const result = undoShotCameraHistory(currentStacks, shot.camera);
+    const result = undoShotCameraHistory(currentStacks, {
+      camera: shot.camera,
+      cameraKeyframes: shot.cameraKeyframes,
+    });
     if (!result) return false;
     shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, { camera: result.restored }, { cameraHistory: 'silent' });
+    get().updateShot(shot.id, {
+      camera: result.restored.camera,
+      cameraKeyframes: result.restored.cameraKeyframes,
+    }, { cameraHistory: 'silent' });
     shotCameraHistoryRestoring = false;
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
@@ -392,10 +400,16 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const shot = state.project.shots.find((item) => item.id === state.selectedShotId);
     if (!shot) return false;
     const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, shot.id);
-    const result = redoShotCameraHistory(currentStacks, shot.camera);
+    const result = redoShotCameraHistory(currentStacks, {
+      camera: shot.camera,
+      cameraKeyframes: shot.cameraKeyframes,
+    });
     if (!result) return false;
     shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, { camera: result.restored }, { cameraHistory: 'silent' });
+    get().updateShot(shot.id, {
+      camera: result.restored.camera,
+      cameraKeyframes: result.restored.cameraKeyframes,
+    }, { cameraHistory: 'silent' });
     shotCameraHistoryRestoring = false;
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
@@ -447,7 +461,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     });
   },
   setProject: (project) => {
-    const linkedProject = linkAllShotsToCanonicalPano(project);
+    const linkedProject = pruneUnreferencedProjectAssets(linkAllShotsToCanonicalPano(project));
     const canonical = linkedProject.panoRefs.find((pano) => pano.isCanonical) ?? linkedProject.panoRefs[0];
     const firstShot = linkedProject.shots[0];
     const cleared = clearBuildHistory();
@@ -866,14 +880,15 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
       });
       const state = get();
       const theme = useThemeStore.getState().theme;
+      const { renderGrayboxEquirectangularPano } = await import('../engine/renderers');
       const render = await renderGrayboxEquirectangularPano(state.project, undefined, undefined, theme);
-      const asset = createPanoAsset({
+      const asset = storeProjectAssetBlob(state.project.id, createPanoAsset({
         name: 'global_graybox.png',
-        uri: render.dataUrl,
+        uri: '',
         width: render.width,
         height: render.height,
         metadata: { source: 'graybox_scene', theme },
-      });
+      }), render.blob);
       const captureOrigin = [...state.project.scene.panoOrigin] as Vec3;
       const hadOnlyGrayboxCanonical = state.project.panoRefs.every(
         (existing) => !existing.isCanonical || existing.type === 'graybox_render',
@@ -929,13 +944,13 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     }
   },
   importCanonicalPano: (params) => set((state) => {
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name,
       uri: params.dataUrl,
       width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
       height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
       metadata: { source: 'user_import' },
-    });
+    }));
     const graybox = findGrayboxNearOrigin(state.project, state.project.scene.panoOrigin);
     const pano = createPanoReference({
       name: params.name.replace(/\.[^.]+$/, '') || 'Styled Reference',
@@ -977,13 +992,13 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
             (pano) => pano.isCanonical && pano.type !== 'graybox_render',
           )
           ?? current.project.panoRefs.find((pano) => pano.type !== 'graybox_render');
-        const asset = createPanoAsset({
+        const asset = storeProjectAssetDataUrl(current.project.id, createPanoAsset({
           name: params.name,
           uri: params.dataUrl,
           width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
           height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
           metadata: { source: 'user_import' },
-        });
+        }));
         const plan = current.pendingSecondCapturePlan;
         const frozenOrigin = plan
           ? [...plan.origin] as Vec3
@@ -1223,19 +1238,25 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     }
 
     const nextCamera = updates.camera ?? shot.camera;
+    const nextKeyframes = updates.cameraKeyframes ?? shot.cameraKeyframes;
     const cameraChanged = updates.camera !== undefined && !cameraDataEqual(shot.camera, nextCamera);
+    const keyframesChanged = updates.cameraKeyframes !== undefined
+      && !cameraKeyframesEqual(shot.cameraKeyframes, nextKeyframes);
     let historyPatch: Partial<Pick<
       ContinuityStore,
       'shotCameraHistoryByShotId' | 'shotCameraHistoryBatchCaptured'
     >> = {};
 
-    if (cameraChanged && !shotCameraHistoryRestoring) {
+    if ((cameraChanged || keyframesChanged) && !shotCameraHistoryRestoring) {
       const mode = options?.cameraHistory ?? 'step';
       if (mode !== 'silent') {
         const effectiveMode: ShotCameraHistoryMode = state.shotCameraHistoryBatchDepth > 0 ? 'batch' : mode;
         if (effectiveMode !== 'batch' || !state.shotCameraHistoryBatchCaptured) {
           const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, id);
-          const stacks = pushShotCameraHistoryPast(currentStacks, shot.camera);
+          const stacks = pushShotCameraHistoryPast(currentStacks, {
+            camera: shot.camera,
+            cameraKeyframes: shot.cameraKeyframes,
+          });
           historyPatch = {
             shotCameraHistoryByShotId: withShotCameraHistoryStacks(
               state.shotCameraHistoryByShotId,
@@ -1252,14 +1273,14 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
 
     return {
       ...historyPatch,
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...state.project,
         shots: state.project.shots.map((current) => {
           if (current.id !== id) return current;
           const updated = { ...current, ...updates, updatedAt: new Date().toISOString() };
           return withShotPanoLink(state.project, updated);
         }),
-      }),
+      })),
     };
   }),
   removeShot: (id) => set((state) => {
@@ -1268,7 +1289,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const nextSelected = state.selectedShotId === id ? shots[0]?.id : state.selectedShotId;
     const nextShot = shots.find((shot) => shot.id === nextSelected);
     return {
-      project: touchProject({ ...state.project, shots }),
+      project: touchProject(pruneUnreferencedProjectAssets({ ...state.project, shots })),
       selectedShotId: nextSelected,
       panoView: nextShot ? panoViewFromCamera(nextShot.camera) : state.panoView,
     };
@@ -1277,7 +1298,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const state = get();
     const shot = state.project.shots.find((item) => item.id === shotId);
     if (!shot) throw new Error('Select a shot before exporting a camera move MP4.');
-    const asset = createVideoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createVideoAsset({
       name: params.name || `shot_${shot.shotNumber}_camera_move.mp4`,
       uri: params.dataUrl,
       mimeType: params.mimeType,
@@ -1294,9 +1315,9 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         ...(params.resolutionPreset ? { resolutionPreset: params.resolutionPreset } : {}),
         ...(params.validated !== undefined ? { validated: params.validated } : {}),
       },
-    });
+    }));
     set((current) => ({
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,
         assets: {
           assets: {
@@ -1314,7 +1335,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
               updatedAt: new Date().toISOString(),
             }
           : item),
-      }),
+      })),
     }));
     return asset;
   },
@@ -1324,7 +1345,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     if (!shot) throw new Error('Select a shot before attaching a viewport render.');
     const stillView = params.stillView ?? { appearance: 'clay' as const, people: 'with_people' as const };
     const assetKey = shotStillViewAssetKey(stillView);
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name || `shot_${shot.shotNumber}_viewport.png`,
       uri: params.dataUrl,
       width: params.width,
@@ -1335,10 +1356,8 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         stillAppearance: stillView.appearance,
         stillPeople: stillView.people,
       },
-    });
+    }));
     set((current) => {
-      const currentShot = current.project.shots.find((item) => item.id === shot.id);
-      const previousAssetId = currentShot?.assets[assetKey];
       const shots = current.project.shots.map((item) => item.id === shot.id
         ? {
             ...item,
@@ -1353,20 +1372,12 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         ...current.project.assets.assets,
         [asset.id]: asset,
       };
-      const previousAssetStillReferenced = previousAssetId && (
-        current.project.panoRefs.some((pano) => pano.imageAssetId === previousAssetId)
-        || shots.some((item) => Object.values(item.assets).some((assetId) => assetId === previousAssetId))
-      );
-      if (previousAssetId && previousAssetId !== asset.id && !previousAssetStillReferenced) {
-        delete assets[previousAssetId];
-      }
-
       return {
-        project: touchProject({
+        project: touchProject(pruneUnreferencedProjectAssets({
           ...current.project,
           assets: { assets },
           shots,
-        }),
+        })),
       };
     });
     return asset;
@@ -1375,7 +1386,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const state = get();
     const shot = state.project.shots.find((item) => item.id === shotId);
     if (!shot) throw new Error('Select a shot before importing an AI result frame.');
-    const asset = createPanoAsset({
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
       name: params.name || `shot_${shot.shotNumber}_ai_result_frame.png`,
       uri: params.dataUrl,
       width: params.width ?? shot.exportSettings.width,
@@ -1384,9 +1395,9 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
         source: 'external_ai_image_generator',
         shotId: shot.id,
       },
-    });
+    }));
     set((current) => ({
-      project: touchProject({
+      project: touchProject(pruneUnreferencedProjectAssets({
         ...current.project,
         assets: {
           assets: {
@@ -1406,7 +1417,7 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
               updatedAt: new Date().toISOString(),
             }
           : item),
-      }),
+      })),
     }));
     return asset;
   },

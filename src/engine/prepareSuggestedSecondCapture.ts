@@ -1,13 +1,12 @@
 import type { LocationProject, Vec3 } from '../domain/types';
 import type { SceneVisualTheme } from './sceneObjects';
-import { primaryStyledPano } from './multiOriginProjection';
+import { primaryStyledPano } from './panoProjectionCore';
 import {
   extractCoverageScene,
   runCoverageOptimization,
   type CoverageOptimizationResult,
   type CoverageOptimizationTask,
 } from './projectionCoverage';
-import { renderProjectedEquirectangularPano } from './renderers';
 
 export type SuggestedSecondCapturePhase =
   | 'preparing'
@@ -165,6 +164,7 @@ export function prepareSuggestedSecondCapture(
           },
         };
 
+        const { renderProjectedEquirectangularPano } = await import('./renderers');
         const projected = await renderProjectedEquirectangularPano(
           projectAtB,
           undefined,

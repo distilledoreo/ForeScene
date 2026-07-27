@@ -2,13 +2,14 @@ import React, { useRef, useState } from 'react';
 import { ImagePlus, LoaderCircle } from 'lucide-react';
 import { STYLED_PANO } from '../../domain/copy';
 import { analyzeEquirectImage, EQUIRECT_ASPECT, isAspectRatio, preparePanoImport } from '../../engine/panoImage';
-import { readFileAsDataUrl } from '../../engine/projectIO';
+import { readFileAsDataUrl } from '../../engine/fileTransfers';
 import {
   resolveStyledImportMode,
   styledImportActionHint,
   styledImportActionLabel,
-} from '../../engine/multiOriginProjection';
+} from '../../engine/panoProjectionCore';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { IconButton } from './Field';
 
 export function StyledPanoImportButton({
@@ -33,6 +34,7 @@ export function StyledPanoImportButton({
     (state) => state.pendingSecondCapturePlan,
   );
   const importStyledPano = useContinuityStore((state) => state.importStyledPano);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [error, setError] = useState<string | undefined>();
   const [warning, setWarning] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -61,7 +63,7 @@ export function StyledPanoImportButton({
         );
       }
       const prepared = await preparePanoImport(dataUrl, dimensions.width, dimensions.height);
-      const importedMode = importStyledPano({
+      const applyImport = () => importStyledPano({
         name: file.name,
         dataUrl: prepared.dataUrl,
         width: prepared.width,
@@ -70,6 +72,20 @@ export function StyledPanoImportButton({
           ? `Imported from ${dimensions.width}×${dimensions.height} letterboxed 16:9; extracted ${prepared.width}×${prepared.height} equirectangular region.`
           : undefined,
       });
+      let importedMode: 'first' | 'replace' | 'add_secondary' | undefined;
+      if (mode === 'replace') {
+        const canonical = project.panoRefs.find((pano) => pano.isCanonical);
+        const affectedShots = canonical
+          ? project.shots.filter((shot) => shot.linkedPanoId === canonical.id || shot.panoCrop?.panoId === canonical.id).length
+          : 0;
+        if (!window.confirm(`Replace the current canonical panorama? ${affectedShots} shot${affectedShots === 1 ? '' : 's'} will use the replacement. A verified recovery point will be committed first.`)) return;
+        if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before replacing a panorama.');
+        await runDestructiveProjectMutation('Before replacing a panorama', () => {
+          importedMode = applyImport();
+        });
+      } else {
+        importedMode = applyImport();
+      }
       onImported?.(importedMode);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not import panorama image.');

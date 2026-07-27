@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import { Check, FileDown, Hand, Settings, Sparkles, Star, Trash2 } from 'lucide-react';
+import type { PanoReference } from '../../domain/types';
 import { STYLED_PANO } from '../../domain/copy';
 import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { preparePanoImport, downloadPanoImage } from '../../engine/panoImage';
-import { downloadDataUrl, readFileAsDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl, readFileAsDataUrl } from '../../engine/fileTransfers';
 import { getLatestGrayboxPano, getPanoAsset, listGrayboxPanos, resolveCompareGraybox } from '../../domain/selectors';
 import { ReferenceAlignmentPanel } from '../common/ReferenceAlignmentPanel';
 import { ProjectedStylePanel } from '../common/ProjectedStylePanel';
@@ -20,8 +23,8 @@ import {
   countStyledPanoramas,
   resolveStyledImportMode,
   styledImportActionHint,
-} from '../../engine/multiOriginProjection';
-import { isEligibleProjectedStylePano } from '../../engine/projectedStyle';
+} from '../../engine/panoProjectionCore';
+import { isEligibleProjectedStylePano } from '../../engine/panoProjectionCore';
 import {
   hasReferenceCandidate,
   hasStyledCanonicalPano,
@@ -37,6 +40,7 @@ export function ReferenceWorkspace() {
   const [precisionOpen, setPrecisionOpen] = useState(false);
   const [focusedLandmarkId, setFocusedLandmarkId] = useState<string | undefined>();
   const [fillGapsOpen, setFillGapsOpen] = useState(false);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const {
     project,
     activePanoId,
@@ -55,7 +59,25 @@ export function ReferenceWorkspace() {
     requestAlignmentRetryModal,
     setWorkspace,
     setPendingSecondCapturePlan,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    activePanoId: state.activePanoId,
+    panoView: state.panoView,
+    pendingSecondCapturePlan: state.pendingSecondCapturePlan,
+    setActivePano: state.setActivePano,
+    setPanoView: state.setPanoView,
+    updatePanoReference: state.updatePanoReference,
+    updateProjectSettings: state.updateProjectSettings,
+    setPanoOrigin: state.setPanoOrigin,
+    importStyledPano: state.importStyledPano,
+    removePanoReference: state.removePanoReference,
+    approveGrayboxForReference: state.approveGrayboxForReference,
+    acceptReferenceAlignment: state.acceptReferenceAlignment,
+    requestAlignmentIntro: state.requestAlignmentIntro,
+    requestAlignmentRetryModal: state.requestAlignmentRetryModal,
+    setWorkspace: state.setWorkspace,
+    setPendingSecondCapturePlan: state.setPendingSecondCapturePlan,
+  })));
   const activePano = project.panoRefs.find((pano) => pano.id === activePanoId) ?? project.panoRefs.find((pano) => pano.isCanonical);
   const activeAsset = activePano ? project.assets.assets[activePano.imageAssetId] : undefined;
   const compareGraybox = resolveCompareGraybox(project, activePano);
@@ -85,8 +107,17 @@ export function ReferenceWorkspace() {
   };
 
   const importPanoImage = async (params: { name: string; dataUrl: string; width: number; height: number }) => {
+    const currentCanonical = project.panoRefs.find((pano) => pano.isCanonical);
+    if (importMode === 'replace' && currentCanonical) {
+      const affectedShots = project.shots.filter((shot) => (
+        shot.linkedPanoId === currentCanonical.id || shot.panoCrop?.panoId === currentCanonical.id
+      )).length;
+      if (!window.confirm(
+        `Replace the current canonical panorama? ${affectedShots} shot${affectedShots === 1 ? '' : 's'} will use the replacement. A local recovery point will be kept before the change.`,
+      )) return;
+    }
     const prepared = await preparePanoImport(params.dataUrl, params.width, params.height);
-    const mode = importStyledPano({
+    const applyImport = () => importStyledPano({
       name: params.name,
       dataUrl: prepared.dataUrl,
       width: prepared.width,
@@ -95,7 +126,35 @@ export function ReferenceWorkspace() {
         ? `Imported from ${params.width}×${params.height} letterboxed 16:9; extracted ${prepared.width}×${prepared.height} equirectangular region.`
         : undefined,
     });
+    let mode: ReturnType<typeof importStyledPano> | undefined;
+    if (importMode === 'replace' && currentCanonical) {
+      if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before replacing a panorama.');
+      await runDestructiveProjectMutation('Before replacing a panorama', () => {
+        mode = applyImport();
+      });
+    } else {
+      mode = applyImport();
+    }
     if (mode === 'add_secondary') setPendingSecondCapturePlan(undefined);
+  };
+
+  const removePanoWithRecovery = (pano: PanoReference) => {
+    if (!confirmRemovePano(pano) || !runDestructiveProjectMutation) return;
+    void runDestructiveProjectMutation('Before deleting a panorama reference', () => {
+      removePanoReference(pano.id);
+    }).catch(() => undefined);
+  };
+
+  const confirmRemovePano = (pano: PanoReference): boolean => {
+    const affectedShots = project.shots.filter((shot) => (
+      shot.linkedPanoId === pano.id || shot.panoCrop?.panoId === pano.id
+    )).length;
+    const label = pano.type === 'ai_global_reference' || pano.type === 'external_reference'
+      ? 'uploaded panorama'
+      : 'panorama reference';
+    return window.confirm(
+      `Remove this ${label}? ${affectedShots} shot${affectedShots === 1 ? '' : 's'} will be re-linked or cleared. A local recovery point will be kept before removal.`,
+    );
   };
 
   const loadAttachedReference = async () => {
@@ -567,11 +626,7 @@ export function ReferenceWorkspace() {
                     aria-label={`Remove ${pano.name}`}
                     data-remove-pano={pano.id}
                     onClick={() => {
-                      const label = isUploaded ? 'uploaded pano' : 'pano reference';
-                      if (!window.confirm(`Remove this ${label}? Shots will re-link to the remaining canonical pano if one exists.`)) {
-                        return;
-                      }
-                      removePanoReference(pano.id);
+                      removePanoWithRecovery(pano);
                     }}
                     className="inline-flex shrink-0 items-center justify-center px-2.5 text-secondary transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
                   >
@@ -595,8 +650,7 @@ export function ReferenceWorkspace() {
               {(activePano.type === 'ai_global_reference' || activePano.type === 'external_reference') && (
                 <IconButton
                   onClick={() => {
-                    if (!window.confirm('Remove this uploaded pano reference?')) return;
-                    removePanoReference(activePano.id);
+                    removePanoWithRecovery(activePano);
                   }}
                   className="w-full border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400"
                   data-remove-active-pano

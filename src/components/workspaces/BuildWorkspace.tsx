@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useShallow } from 'zustand/shallow';
 import {
   Box,
   Circle,
@@ -43,7 +44,7 @@ import {
   originMoveWarningMessage,
   resolveStyledImportMode,
   shouldWarnOnOriginMove,
-} from '../../engine/multiOriginProjection';
+} from '../../engine/panoProjectionCore';
 import {
   CLICK_ONLY_BUILD_PRIMITIVES,
   HOTKEYED_BUILD_PRIMITIVES,
@@ -63,9 +64,8 @@ import {
   MIN_BUILD_RENDER_DISTANCE,
 } from '../../engine/viewport';
 import { downloadPanoImage } from '../../engine/panoImage';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 import { canUseProjectedAppearance } from '../../engine/projectedStyle';
-import { renderProjectedEquirectangularPano } from '../../engine/renderers';
 import {
   CHECKERBOARD_TILE_METERS,
   defaultSecondaryColor,
@@ -75,6 +75,7 @@ import {
 import { getSceneObjectStagingRole } from '../../engine/shotSceneState';
 import { resolveWorkspacePrimaryAction } from '../../engine/workflow';
 import { BuildMode, useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useThemeStore } from '../../state/useThemeStore';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { ContextualPanel } from '../common/ContextualPanel';
@@ -118,6 +119,7 @@ export function BuildWorkspace() {
   const [projectedRenderError, setProjectedRenderError] = useState<string | undefined>();
   const [clipboardStatus, setClipboardStatus] = useState<string | undefined>();
   const theme = useThemeStore((state) => state.theme);
+  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [systemClipboardSyncedAt, setSystemClipboardSyncedAt] = useState<string | undefined>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [modelImportOpen, setModelImportOpen] = useState(false);
@@ -166,7 +168,46 @@ export function BuildWorkspace() {
     buildHistoryPast,
     buildHistoryFuture,
     pendingSecondCapturePlan,
-  } = useContinuityStore();
+  } = useContinuityStore(useShallow((state) => ({
+    project: state.project,
+    selectedObjectIds: state.selectedObjectIds,
+    buildClipboard: state.buildClipboard,
+    buildMode: state.buildMode,
+    activePrimitive: state.activePrimitive,
+    gridSnap: state.gridSnap,
+    setBuildMode: state.setBuildMode,
+    setActivePrimitive: state.setActivePrimitive,
+    setGridSnap: state.setGridSnap,
+    placeObject: state.placeObject,
+    selectObject: state.selectObject,
+    selectObjectRange: state.selectObjectRange,
+    selectAllObjects: state.selectAllObjects,
+    clearObjectSelection: state.clearObjectSelection,
+    setBuildClipboard: state.setBuildClipboard,
+    updateObject: state.updateObject,
+    moveObjectToGroundPoint: state.moveObjectToGroundPoint,
+    duplicateSelectedObjects: state.duplicateSelectedObjects,
+    pasteBuildObjects: state.pasteBuildObjects,
+    removeSelectedObjects: state.removeSelectedObjects,
+    nudgeSelectedObjects: state.nudgeSelectedObjects,
+    translateSelectedObjectsBy: state.translateSelectedObjectsBy,
+    rotateSelectedObjectsBy: state.rotateSelectedObjectsBy,
+    scaleSelectedObjectsBy: state.scaleSelectedObjectsBy,
+    toggleSelectedVisibility: state.toggleSelectedVisibility,
+    toggleSelectedLocked: state.toggleSelectedLocked,
+    showAllObjects: state.showAllObjects,
+    setPanoOrigin: state.setPanoOrigin,
+    setPanoRotation: state.setPanoRotation,
+    renderGrayboxPano: state.renderGrayboxPano,
+    isRenderingGraybox: state.isRenderingGraybox,
+    beginBuildHistoryBatch: state.beginBuildHistoryBatch,
+    endBuildHistoryBatch: state.endBuildHistoryBatch,
+    undoBuild: state.undoBuild,
+    redoBuild: state.redoBuild,
+    buildHistoryPast: state.buildHistoryPast,
+    buildHistoryFuture: state.buildHistoryFuture,
+    pendingSecondCapturePlan: state.pendingSecondCapturePlan,
+  })));
   const canUndo = buildHistoryPast.length > 0;
   const canRedo = buildHistoryFuture.length > 0;
 
@@ -205,6 +246,7 @@ export function BuildWorkspace() {
         await new Promise<void>((resolve) => {
           window.requestAnimationFrame(() => resolve());
         });
+        const { renderProjectedEquirectangularPano } = await import('../../engine/renderers');
         const render = await renderProjectedEquirectangularPano(project, undefined, undefined, theme);
         await downloadPanoImage(
           render.dataUrl,
@@ -296,8 +338,47 @@ export function BuildWorkspace() {
       return;
     }
     await copySelection();
-    if (removeSelectedObjects()) setClipboardStatus(`Cut ${selectedObjects.length} object${selectedObjects.length === 1 ? '' : 's'}.`);
-  }, [copySelection, removeSelectedObjects, selectedObjects.length, selectionHasLocked]);
+    if (!runDestructiveProjectMutation) {
+      setClipboardStatus('Local recovery is still starting. Please wait before cutting objects.');
+      return;
+    }
+    let removed = false;
+    try {
+      await runDestructiveProjectMutation('Before deleting scene objects', () => {
+        removed = removeSelectedObjects();
+      });
+      if (removed) setClipboardStatus(`Cut ${selectedObjects.length} object${selectedObjects.length === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setClipboardStatus(error instanceof Error ? error.message : 'Could not create a recovery point before cutting objects.');
+    }
+  }, [copySelection, removeSelectedObjects, runDestructiveProjectMutation, selectedObjects.length, selectionHasLocked]);
+
+  const requestDeleteSelection = useCallback(async () => {
+    if (selectedObjects.length === 0) return false;
+    if (selectionHasLocked) {
+      setClipboardStatus('Unlock the selection before deleting it.');
+      return false;
+    }
+    const count = selectedObjects.length;
+    const label = `${count} selected object${count === 1 ? '' : 's'}`;
+    if (!window.confirm(`Delete ${label}? A local recovery point will be kept so this can be restored later.`)) return false;
+    if (!runDestructiveProjectMutation) {
+      setClipboardStatus('Local recovery is still starting. Please wait before deleting objects.');
+      return false;
+    }
+    let removed = false;
+    try {
+      await runDestructiveProjectMutation('Before deleting scene objects', () => {
+        removed = removeSelectedObjects();
+      });
+      if (!removed) return false;
+      setClipboardStatus(`Deleted ${label}.`);
+      return true;
+    } catch (error) {
+      setClipboardStatus(error instanceof Error ? error.message : 'Could not create a recovery point before deleting objects.');
+      return false;
+    }
+  }, [removeSelectedObjects, runDestructiveProjectMutation, selectedObjects.length, selectionHasLocked]);
 
   const pasteSelection = useCallback(async (inPlace = false) => {
     let payload = buildClipboard;
@@ -447,9 +528,7 @@ useEffect(() => {
       if (command.kind === 'toggle-lock') toggleSelectedLocked();
       if (command.kind === 'toggle-visibility') toggleSelectedVisibility();
       if (command.kind === 'toggle-precision') setPrecisionOpen((open) => !open);
-      if (command.kind === 'delete' && !removeSelectedObjects() && selectionHasLocked) {
-        setClipboardStatus('Unlock the selection before deleting it.');
-      }
+      if (command.kind === 'delete') requestDeleteSelection();
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -465,7 +544,7 @@ useEffect(() => {
     pasteSelection,
     project.scene.objects,
     redoBuild,
-    removeSelectedObjects,
+    requestDeleteSelection,
     requestFrame,
     rotateSelected,
     scaleSelected,
@@ -789,9 +868,7 @@ useEffect(() => {
                 <QuickAction title={selectionAllHidden ? 'Show (H)' : 'Hide (H)'} onClick={() => toggleSelectedVisibility()}>
                   {selectionAllHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </QuickAction>
-                <QuickAction title="Delete" danger onClick={() => {
-                  if (!removeSelectedObjects()) setClipboardStatus('Unlock the selection before deleting it.');
-                }}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
+                <QuickAction title="Delete" danger onClick={requestDeleteSelection}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
               </div>
               {layersOpen && (
                 <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-subtle pt-3">

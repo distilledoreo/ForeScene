@@ -4,6 +4,8 @@ import JSZip from 'jszip';
 import { createDefaultProject, createPanoAsset, createPanoReference } from '../src/domain/defaults';
 import { getShotPackageBaseName } from '../src/engine/exportNaming';
 import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
+import { CAMERA_MOVE_CUBEMAP_FACES, type CameraMoveCubemapFaceId } from '../src/engine/cameraMoveCubemap';
+import { stitchCubemapFaceBlobsCrossAsync } from '../src/engine/cubemapStitch';
 import {
   buildMultiShotPackage,
   buildShotPackage,
@@ -11,13 +13,22 @@ import {
   PackageExportProgress,
   resolveClayCameraMovePackageSource,
 } from '../src/engine/packageExport';
-import { renderShotCameraMoveMp4 } from '../src/engine/renderers';
+import { type BlobImageRenderResult, renderPanoCubemapFacesAsBlobs, renderShotCameraMoveMp4 } from '../src/engine/renderers';
 
 vi.mock('../src/engine/renderers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/renderers')>();
   return {
     ...actual,
     renderShotCameraMoveMp4: vi.fn(actual.renderShotCameraMoveMp4),
+    renderPanoCubemapFacesAsBlobs: vi.fn(actual.renderPanoCubemapFacesAsBlobs),
+  };
+});
+
+vi.mock('../src/engine/cubemapStitch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/cubemapStitch')>();
+  return {
+    ...actual,
+    stitchCubemapFaceBlobsCrossAsync: vi.fn(actual.stitchCubemapFaceBlobsCrossAsync),
   };
 });
 
@@ -76,6 +87,8 @@ describe('package export', () => {
     vi.mocked(renderShotCameraMoveMp4).mockImplementation(async () => {
       throw new Error('renderShotCameraMoveMp4 should be mocked in camera-move package tests');
     });
+    vi.mocked(renderPanoCubemapFacesAsBlobs).mockReset();
+    vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockReset();
   });
 
   it('generates camera move MP4 during packaging when keyframes exist without a pre-exported asset', () => {
@@ -279,6 +292,50 @@ describe('package export', () => {
     const paths = await zipPaths(result.blob);
     expect(paths.some((path) => path.endsWith('manifest.json'))).toBe(true);
     expect(paths.some((path) => path.includes('metadata/shot.json'))).toBe(true);
+  });
+
+  it('streams sequential binary cubemap faces into the package before stitching them', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeFullPano: true,
+    };
+    project.settings.panoLetterboxExports169 = false;
+    const faces = Object.fromEntries(
+      CAMERA_MOVE_CUBEMAP_FACES.map((face) => [
+        face,
+        { blob: new Blob([`face-${face}`], { type: 'image/png' }), width: 2, height: 2 },
+      ]),
+    ) as Record<CameraMoveCubemapFaceId, BlobImageRenderResult>;
+    const stitched = {
+      blob: new Blob(['stitched-cubemap'], { type: 'image/png' }),
+      width: 8,
+      height: 6,
+    };
+
+    vi.mocked(renderPanoCubemapFacesAsBlobs).mockImplementation(async (_uri, options) => {
+      for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+        await options.onFaceRendered?.(face, faces[face]);
+      }
+      return { faceSize: 2, faces };
+    });
+    vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockResolvedValue(stitched);
+
+    const result = await buildShotPackage(project, shot);
+    const canonicalPano = project.panoRefs.find((pano) => pano.isCanonical)!;
+    expect(renderPanoCubemapFacesAsBlobs).toHaveBeenCalledWith(
+      project.assets.assets[canonicalPano.imageAssetId].uri,
+      expect.objectContaining({ panoRotation: canonicalPano.rotation }),
+    );
+    expect(stitchCubemapFaceBlobsCrossAsync).toHaveBeenCalledWith(faces, 2);
+
+    const zip = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+      const content = await zip.file(`shot_001/inputs/cubemap/${face}.png`)?.async('text');
+      expect(content).toBe(`face-${face}`);
+    }
+    expect(await zip.file('shot_001/inputs/cubemap/cubemap_stitched.png')?.async('text')).toBe('stitched-cubemap');
   });
 
   it('packs multiple shots into one outer zip download', async () => {

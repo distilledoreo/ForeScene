@@ -397,6 +397,158 @@ test.describe('workflow path smoke', () => {
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
 
+  test('video progressive capture finishes two poses then next shot', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-chrome]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-camera-keyframe-strip]')).toHaveCount(0);
+
+    const shutter = page.locator('[data-shots-shutter]');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-start-set]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+
+    // Second pose stays capturing with Finish + Capture next (no auto-finish).
+    await expect(page.locator('[data-shots-video-compact-actions]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-finish]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-capture-next]')).toBeVisible();
+    await expect(page.locator('[data-camera-keyframe-strip]')).toHaveCount(0);
+    // Move preview filmstrip appears once a path exists.
+    await expect(page.locator('[data-camera-move-preview-strip]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-play]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-frame]')).toHaveCount(2);
+
+    await page.locator('[data-shots-video-finish]').click({ force: true });
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-finished]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-next-shot]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-play]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-export]')).toBeVisible();
+    await expect(shutter).toBeEnabled();
+    await expect(shutter).toHaveAttribute('data-shots-video-shutter-next', 'true');
+
+    await dismissOverlays(page);
+    await page.locator('[data-shots-video-next-shot]').click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-finished]')).toHaveCount(0);
+    await expect(page.locator('[data-shots-video-empty-hint]')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('video finish then undo resyncs capture state to start-only', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+
+    const shutter = page.locator('[data-shots-shutter]');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-start-set]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-compact-actions]')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-shots-video-finish]').click({ force: true });
+    await dismissOverlays(page);
+
+    // Finished: Next shot shutter semantics.
+    await expect(page.locator('[data-shots-video-finished]')).toBeVisible({ timeout: 10_000 });
+    await expect(shutter).toHaveAttribute('data-shots-video-shutter-next', 'true');
+    await expect(shutter).toHaveAttribute('data-shots-video-capture-state', 'finished');
+
+    // Undo must restore Start-only keyframes AND resync React authoring state.
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
+    await page.keyboard.press('Control+z');
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-finished]')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-compact-actions]')).toHaveCount(0);
+    await expect(page.locator('[data-shots-video-start-set]')).toBeVisible({ timeout: 10_000 });
+    await expect(shutter).toHaveAttribute('data-shots-video-capture-state', 'capturing');
+    await expect(shutter).not.toHaveAttribute('data-shots-video-shutter-next', 'true');
+    await expect(shutter).toBeEnabled();
+    // Shutter is Capture next again — not Next shot.
+    await expect(shutter).toHaveAttribute('aria-label', /Capture next/i);
+  });
+
+  test('video timeline opens on third pose, finish, continue, and next shot', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+
+    const shutter = page.locator('[data-shots-shutter]');
+    const capturePose = async () => {
+      await dismissOverlays(page);
+      await shutter.click({ force: true });
+      await dismissOverlays(page);
+    };
+
+    await capturePose();
+    await page.keyboard.down('d');
+    await page.waitForTimeout(350);
+    await page.keyboard.up('d');
+    await capturePose();
+    await expect(page.locator('[data-shots-video-compact-actions]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(350);
+    await page.keyboard.up('d');
+    await capturePose();
+
+    const strip = page.locator('[data-camera-keyframe-strip]');
+    await expect(strip).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-camera-keyframe-node]')).toHaveCount(3, { timeout: 10_000 });
+    await expect(page.locator('[data-camera-keyframe-finish]')).toBeVisible();
+
+    await dismissOverlays(page);
+    await page.locator('[data-camera-keyframe-finish]').click({ force: true });
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'finished');
+    await expect(page.locator('[data-shots-video-next-shot]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-export]')).toBeVisible();
+    await expect(page.locator('[data-camera-keyframe-continue]')).toBeVisible();
+    await expect(shutter).toBeEnabled();
+
+    await dismissOverlays(page);
+    await page.locator('[data-camera-keyframe-continue]').click({ force: true });
+    await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'capturing');
+    await page.keyboard.down('a');
+    await page.waitForTimeout(350);
+    await page.keyboard.up('a');
+    await capturePose();
+    await expect(page.locator('[data-camera-keyframe-node]')).toHaveCount(4, { timeout: 10_000 });
+  });
+
   test('projected occlusion unmounts cleanly into Export without a crash', async ({ page }) => {
     test.setTimeout(180_000);
 

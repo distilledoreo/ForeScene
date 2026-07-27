@@ -1,4 +1,4 @@
-import { LocationProject, ProjectAsset, Shot } from './types';
+import { CameraKeyframe, LocationProject, ProjectAsset, Shot } from './types';
 
 export type ShotMediaSource =
   | 'camera_move'
@@ -13,6 +13,13 @@ export interface ShotMediaItem {
   kind: 'image' | 'video';
   label: string;
   source: ShotMediaSource;
+}
+
+/** One keyed preview still for filmstrip / roll animation (never index-aligned to all keyframes). */
+export interface KeyframePreviewFrame {
+  keyframeId: string;
+  uri: string;
+  timeSeconds: number;
 }
 
 const shotMediaPriority: Array<{
@@ -84,10 +91,67 @@ export function shotHasCameraMoveVideo(project: LocationProject, shot: Shot): bo
   return resolveShotMedia(project, shot).some((item) => item.source === 'camera_move');
 }
 
+/** True when the shot has a multi-pose camera path (exported video not required). */
+export function shotHasCameraKeyframeMove(shot: Pick<Shot, 'cameraKeyframes'>): boolean {
+  return (shot.cameraKeyframes?.length ?? 0) >= 2;
+}
+
+/**
+ * Preview stills for a GIF-like camera-roll animation of keyframes.
+ * Sorted by time; only includes frames that have a stored previewUri.
+ * Consumers must select/animate by keyframeId — never by parallel index into all keyframes.
+ */
+export function resolveCameraKeyframePreviewFrames(
+  shot: Pick<Shot, 'cameraKeyframes'>,
+): KeyframePreviewFrame[] {
+  const sorted = [...(shot.cameraKeyframes ?? [])].sort(
+    (a, b) => a.timeSeconds - b.timeSeconds,
+  );
+  const frames: KeyframePreviewFrame[] = [];
+  for (const keyframe of sorted) {
+    if (!keyframe.previewUri) continue;
+    frames.push({
+      keyframeId: keyframe.id,
+      uri: keyframe.previewUri,
+      timeSeconds: keyframe.timeSeconds,
+    });
+  }
+  return frames;
+}
+
+/** Stable signature for memo deps without joining full base64 data URLs. */
+export function keyframePreviewFramesSignature(
+  frames: readonly KeyframePreviewFrame[],
+): string {
+  if (frames.length === 0) return '';
+  let signature = String(frames.length);
+  for (const frame of frames) {
+    signature += `|${frame.keyframeId}:${frame.timeSeconds}:${frame.uri.length}`;
+  }
+  return signature;
+}
+
+/**
+ * @deprecated Prefer resolveCameraKeyframePreviewFrames — URI-only lists drop keyframe identity.
+ */
+export function resolveCameraKeyframePreviewUris(
+  shot: Pick<Shot, 'cameraKeyframes'>,
+): string[] {
+  return resolveCameraKeyframePreviewFrames(shot).map((frame) => frame.uri);
+}
+
+/** Lookup helper for display labels next to a preview frame. */
+export function findCameraKeyframeById(
+  keyframes: readonly CameraKeyframe[] | undefined,
+  keyframeId: string,
+): CameraKeyframe | undefined {
+  return keyframes?.find((keyframe) => keyframe.id === keyframeId);
+}
+
 export function getShotMediaCount(project: LocationProject, shot: Shot): number {
   return resolveShotMedia(project, shot).length;
 }
 
 export function hasShotCapture(project: LocationProject, shot: Shot): boolean {
-  return getShotMediaCount(project, shot) > 0;
+  return getShotMediaCount(project, shot) > 0 || shotHasCameraKeyframeMove(shot);
 }

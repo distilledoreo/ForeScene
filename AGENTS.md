@@ -11,7 +11,7 @@
 
 ### Non-obvious caveats
 - **Node 22+ is required** (uses React 19 / Vite 6 / ESM).
-- **`npm run lint` is `tsc --noEmit`** and currently reports a pre-existing type error in `src/components/workspaces/ShotsWorkspace.tsx` (a spurious `key` prop type). It is unrelated to environment setup and does not block `npm run build` (Vite build skips `tsc`). Don't assume you introduced it.
+- **`npm run lint` is `tsc --noEmit`** and must remain clean. It is the separate TypeScript validation because `npm run build` (Vite) skips `tsc`; run it before delivery.
 - **`npm run test` (Vitest) needs the Playwright Chromium browser.** A few tests (`tests/projected*.test.ts`) launch a real headless Chromium for WebGL shader compilation and fail with "Executable doesn't exist" until `npx playwright install chromium` has been run. The startup update script installs it; if tests suddenly can't find the browser, re-run `npm run test:e2e:install`.
 - Playwright E2E (`npm run test:e2e`) auto-runs `npm run build` + `vite preview` on port 4173 unless `PLAYWRIGHT_BASE_URL` is set.
 - Set `DISABLE_HMR=true` to disable Vite HMR/file watching (lowers CPU during heavy agent edits).

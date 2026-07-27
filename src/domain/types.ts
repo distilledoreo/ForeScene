@@ -147,16 +147,25 @@ export interface CameraData {
   far: number;
 }
 
+export type CameraKeyframeEasing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+
 export interface CameraKeyframe {
   id: string;
   label: string;
   timeSeconds: number;
   camera: CameraData;
+  /** Easing applied from this keyframe to the next one. */
+  easing?: CameraKeyframeEasing;
   /**
    * Optional staged-object snapshot captured with this keyframe.
    * Used to animate props/people between start and end during camera-move video export.
    */
   objectOverrides?: ShotObjectOverrides;
+  /**
+   * Lightweight still (data URL or asset URI) for filmstrip / camera-roll animation.
+   * Not used for export; regenerated cheaply when missing.
+   */
+  previewUri?: string;
 }
 
 export interface PanoCropSettings {
@@ -282,7 +291,10 @@ export interface ProjectAsset {
   id: string;
   type: 'image' | 'video' | 'model' | 'json' | 'text' | 'other';
   name: string;
+  /** Runtime URL (data:, blob:, or a portable panoref-asset: reference). */
   uri: string;
+  /** IndexedDB key for local-first image/video payloads; portable packages include this binary separately. */
+  storageKey?: string;
   mimeType?: string;
   width?: number;
   height?: number;

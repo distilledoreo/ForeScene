@@ -1,13 +1,12 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { clone as cloneSkinnedObject } from 'three/addons/utils/SkeletonUtils.js';
-import { SceneObject } from '../domain/types';
+import type { LocationProject, SceneObject } from '../domain/types';
 import { degreesToRadians } from './sync';
 const DEFAULT_MODEL_URL = '/models/human-mannequin.glb';
 export const HUMAN_MANNEQUIN_REFERENCE_DIMENSIONS: [number, number, number] = [0.55, 1.75, 0.55];
 
 let template: THREE.Object3D | null = null;
 let loadPromise: Promise<void> | null = null;
+let cloneSkinnedObject: ((source: THREE.Object3D) => THREE.Object3D) | null = null;
 let revision = 0;
 const listeners = new Set<() => void>();
 
@@ -38,9 +37,23 @@ export async function ensureHumanMannequinModel(source: HumanMannequinModelSourc
   await loadPromise;
 }
 
+/** Avoid fetching and parsing the optional GLB for scenes that only use the procedural fallback. */
+export function projectHasVisibleHumanMannequin(project: Pick<LocationProject, 'scene'>): boolean {
+  return project.scene.objects.some((object) => object.type === 'human_dummy' && object.visible);
+}
+
+export async function ensureHumanMannequinForProject(
+  project: Pick<LocationProject, 'scene'>,
+  source: HumanMannequinModelSource = DEFAULT_MODEL_URL,
+): Promise<void> {
+  if (!projectHasVisibleHumanMannequin(project)) return;
+  await ensureHumanMannequinModel(source);
+}
+
 export function resetHumanMannequinModelForTests() {
   template = null;
   loadPromise = null;
+  cloneSkinnedObject = null;
   revision = 0;
   listeners.clear();
 }
@@ -49,7 +62,7 @@ export function createHumanMannequinObject(
   object: SceneObject,
   material: THREE.MeshStandardMaterial,
 ): THREE.Object3D {
-  if (!template) {
+  if (!template || !cloneSkinnedObject) {
     return createHumanMannequinFallback(object, material);
   }
 
@@ -74,6 +87,10 @@ export function createHumanMannequinObject(
 }
 
 async function loadTemplate(source: HumanMannequinModelSource): Promise<void> {
+  const [{ GLTFLoader }, skeletonUtils] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('three/addons/utils/SkeletonUtils.js'),
+  ]);
   const loader = new GLTFLoader();
   const gltf = typeof source === 'string'
     ? await loader.loadAsync(source)
@@ -92,6 +109,7 @@ async function loadTemplate(source: HumanMannequinModelSource): Promise<void> {
   wrapper.add(root);
   normalizeHumanTemplateRoot(root, HUMAN_MANNEQUIN_REFERENCE_DIMENSIONS[1]);
   template = wrapper;
+  cloneSkinnedObject = skeletonUtils.clone;
   revision += 1;
   listeners.forEach((listener) => listener());
 }

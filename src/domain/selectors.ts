@@ -2,7 +2,7 @@ import { LocationProject, PanoReference, ProjectAsset, Vec3 } from './types';
 import {
   CAPTURE_ORIGIN_NEAR_METERS,
   isCaptureOriginNearPano,
-} from '../engine/multiOriginProjection';
+} from '../engine/panoProjectionCore';
 
 export function getLatestGrayboxPano(project: LocationProject): PanoReference | undefined {
   return [...project.panoRefs]

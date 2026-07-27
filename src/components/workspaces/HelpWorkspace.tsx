@@ -238,7 +238,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
             <p className="doc-lead">Treat Shots like a live phone camera inside the graybox. The viewfinder stays live after capture so you can move directly to the next composition.</p>
             <FeatureGrid items={[
               ['Still mode', 'Fly the camera, set the FOV, and press Capture at 4K (3840×2160) by default. A persisted thumbnail is added to the library.'],
-              ['Video mode', 'Press record for the start keyframe, fly to the end, press stop, then Render MP4 for a smooth fog-free 1080p30 H.264 file (Resolve-safe). Quick Preview keeps the older real-time recorder as a fallback.'],
+              ['Video mode', 'Capture start, then capture the next pose. After two poses, choose Finish capture or Capture next for more. The timeline appears after a third pose or Edit timeline. When finished: Next shot (primary), Preview, or optional Export MP4. Undo restores keyframes and capture state together. Preview plays camera + staged objects; Render MP4 encodes Resolve-safe 1080p30 H.264.'],
               ['Shot library', 'Open the bottom-left thumbnail to review, rename, duplicate, or delete captured shots.'],
               ['Camera settings', 'Fine-tune FOV, duration, keyframes, preview downloads, and pano matching.'],
             ]} />
@@ -265,7 +265,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
 
           <DocSection id="projects" visible={visibleIds.has('projects')} title="Project files" eyebrow="Save editable state">
             <div className="grid gap-4 sm:grid-cols-2">
-              <InfoCard icon={<FileJson />} title="Project JSON" text="Use Open Project and Save Project in the header. JSON stores scene objects, references, shots, settings, workflow checkpoints, and embedded asset data." />
+              <InfoCard icon={<FileJson />} title="Projects & backups" text="Open the Continuity Stage menu to start a New Project (current work is kept as a local recovery point), Import Project Backup, or Export Project Backup. Backups are validated before import and include scene objects, references, shots, settings, workflow checkpoints, and local binary media. Use Project Safety & Recovery to restore a previous autosave." />
               <InfoCard icon={<Upload />} title="Export ZIP" text="The export package is a handoff artifact, not an editable project. Keep the JSON if you expect to revise the location later." />
             </div>
             <Tip>Project data stays local to the browser until you explicitly open, save, or download a file.</Tip>

@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSceneObject } from '../src/domain/defaults';
+import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
 import {
   HUMAN_MANNEQUIN_REFERENCE_DIMENSIONS,
+  ensureHumanMannequinForProject,
   ensureHumanMannequinModel,
   isHumanMannequinModelReady,
+  projectHasVisibleHumanMannequin,
   resetHumanMannequinModelForTests,
 } from '../src/engine/humanMannequinModel';
 import { createObject3D } from '../src/engine/sceneObjects';
@@ -20,6 +22,17 @@ describe('human mannequin model', () => {
   it('loads the bundled CC0 mannequin asset', async () => {
     await ensureHumanMannequinModel(modelBuffer);
     expect(isHumanMannequinModelReady()).toBe(true);
+  });
+
+  it('does not load the optional GLB when the resolved project hides every mannequin', async () => {
+    const project = createDefaultProject();
+    for (const object of project.scene.objects) {
+      if (object.type === 'human_dummy') object.visible = false;
+    }
+
+    expect(projectHasVisibleHumanMannequin(project)).toBe(false);
+    await ensureHumanMannequinForProject(project, modelBuffer);
+    expect(isHumanMannequinModelReady()).toBe(false);
   });
 
   it('grounds and centers the loaded mannequin for scene placement', async () => {

@@ -7,7 +7,11 @@ import {
   normalizeProductionShotId,
   normalizeShotTitle,
 } from '../../domain/shotIdentity';
-import { resolveShotMedia, ShotMediaItem } from '../../domain/shotMedia';
+import {
+  resolveCameraKeyframePreviewFrames,
+  resolveShotMedia,
+  ShotMediaItem,
+} from '../../domain/shotMedia';
 import {
   hasShotStillViewVariants,
   listAvailableShotStillViews,
@@ -19,7 +23,12 @@ import {
   type ShotStillViewSelection,
 } from '../../domain/shotStillViews';
 import { LocationProject, Shot } from '../../domain/types';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { getCameraKeyframeDisplayLabel, getSortedCameraKeyframes } from '../../engine/cameraKeyframes';
+import { downloadDataUrl } from '../../engine/fileTransfers';
+import { KeyframePreviewRoll } from './KeyframePreviewRoll';
+
+/** Synthetic media id for the GIF-like keyframe path preview in the full-screen viewer. */
+export const SHOT_MEDIA_KEYFRAME_PATH_ID = 'keyframe_path';
 
 export interface ShotMediaModalProps {
   open: boolean;
@@ -53,6 +62,8 @@ export function ShotMediaModal({
   const [draftTitle, setDraftTitle] = useState('');
   const [stillAppearance, setStillAppearance] = useState<ShotStillAppearance>('clay');
   const [stillPeople, setStillPeople] = useState<ShotStillPeople>('with_people');
+  const [activeKeyframeId, setActiveKeyframeId] = useState<string | null>(null);
+  const [keyframeRollPaused, setKeyframeRollPaused] = useState(false);
 
   const shotIndex = shots.findIndex((item) => item.id === shotId);
   const shot = shotIndex >= 0 ? shots[shotIndex] : undefined;
@@ -60,7 +71,24 @@ export function ShotMediaModal({
     () => (shot ? resolveShotMedia(project, shot) : []),
     [project, shot],
   );
-  const activeMedia = mediaItems.find((item) => item.id === activeMediaId) ?? mediaItems[0];
+  const keyframePreviewFrames = useMemo(
+    () => (shot ? resolveCameraKeyframePreviewFrames(shot) : []),
+    [shot],
+  );
+  const sortedKeyframes = useMemo(
+    () => (shot ? getSortedCameraKeyframes(shot.cameraKeyframes ?? []) : []),
+    [shot],
+  );
+  const hasKeyframePath = keyframePreviewFrames.length >= 2;
+  // Treat unset selection as keyframe path when available (covers first paint / SSR before effects).
+  const showingKeyframePath = hasKeyframePath && (
+    activeMediaId === SHOT_MEDIA_KEYFRAME_PATH_ID
+    || activeMediaId === undefined
+  );
+  // Prefer explicit media when selected; fall back to first real media if keyframe path not active.
+  const activeMedia = showingKeyframePath
+    ? undefined
+    : (mediaItems.find((item) => item.id === activeMediaId) ?? mediaItems[0]);
   const stillSelection = useMemo<ShotStillViewSelection>(
     () => ({ appearance: stillAppearance, people: stillPeople }),
     [stillAppearance, stillPeople],
@@ -81,6 +109,7 @@ export function ShotMediaModal({
     ?? (activeMedia?.kind === 'image' ? activeMedia.asset.uri : undefined);
   const displayDownloadAsset = activeStillView?.asset
     ?? (activeMedia?.kind === 'image' || activeMedia?.kind === 'video' ? activeMedia.asset : undefined);
+  const mediaTabCount = mediaItems.length + (hasKeyframePath ? 1 : 0);
 
   const pauseVideo = useCallback(() => {
     const video = videoRef.current;
@@ -102,17 +131,35 @@ export function ShotMediaModal({
     setStillPeople('with_people');
   }, [project, stillAppearance, stillPeople]);
 
+  const preferredMediaIdForShot = useCallback((nextShot: Shot, preferredId?: string) => {
+    const items = resolveShotMedia(project, nextShot);
+    if (preferredId === SHOT_MEDIA_KEYFRAME_PATH_ID
+      && resolveCameraKeyframePreviewFrames(nextShot).length >= 2) {
+      return SHOT_MEDIA_KEYFRAME_PATH_ID;
+    }
+    if (preferredId && items.some((item) => item.id === preferredId)) {
+      return preferredId;
+    }
+    // Prefer keyframe path so multi-pose moves open with the animated preview.
+    if (resolveCameraKeyframePreviewFrames(nextShot).length >= 2) {
+      return SHOT_MEDIA_KEYFRAME_PATH_ID;
+    }
+    return items[0]?.id;
+  }, [project]);
+
   const goToShot = useCallback((delta: number) => {
     if (shotIndex < 0) return;
     const nextIndex = shotIndex + delta;
     if (nextIndex < 0 || nextIndex >= shots.length) return;
     pauseVideo();
     const nextShot = shots[nextIndex];
-    const nextMedia = resolveShotMedia(project, nextShot);
-    setActiveMediaId(nextMedia[0]?.id);
+    setActiveMediaId(preferredMediaIdForShot(nextShot));
+    const frames = resolveCameraKeyframePreviewFrames(nextShot);
+    setActiveKeyframeId(frames[0]?.keyframeId ?? null);
+    setKeyframeRollPaused(false);
     syncStillViewForShot(nextShot);
     onNavigateShot?.(nextShot.id);
-  }, [onNavigateShot, pauseVideo, project, shotIndex, shots, syncStillViewForShot]);
+  }, [onNavigateShot, pauseVideo, preferredMediaIdForShot, shotIndex, shots, syncStillViewForShot]);
 
   useEffect(() => {
     if (!open || !shot) return;
@@ -120,16 +167,17 @@ export function ShotMediaModal({
     setDraftTitle(shot.name);
     setEditingProductionId(false);
     setEditingTitle(false);
-    const items = resolveShotMedia(project, shot);
-    const preferred = items.find((item) => item.id === initialMediaId) ?? items[0];
-    setActiveMediaId(preferred?.id);
+    setActiveMediaId(preferredMediaIdForShot(shot, initialMediaId));
+    const frames = resolveCameraKeyframePreviewFrames(shot);
+    setActiveKeyframeId(frames[0]?.keyframeId ?? null);
+    setKeyframeRollPaused(false);
     const still = resolvePreferredShotStillView(project, shot, {
       appearance: 'clay',
       people: 'with_people',
     });
     setStillAppearance(still?.selection.appearance ?? 'clay');
     setStillPeople(still?.selection.people ?? 'with_people');
-  }, [open, shot?.id, initialMediaId, project]);
+  }, [open, shot?.id, initialMediaId, preferredMediaIdForShot, project]);
 
   useEffect(() => {
     if (!open || !shot || !showStillViewToggles) return;
@@ -201,9 +249,13 @@ export function ShotMediaModal({
     setEditingTitle(false);
   };
 
-  const handleMediaSelect = (item: ShotMediaItem) => {
+  const handleMediaSelect = (item: ShotMediaItem | { id: typeof SHOT_MEDIA_KEYFRAME_PATH_ID }) => {
     pauseVideo();
     setActiveMediaId(item.id);
+    if (item.id === SHOT_MEDIA_KEYFRAME_PATH_ID) {
+      setActiveKeyframeId(keyframePreviewFrames[0]?.keyframeId ?? null);
+      setKeyframeRollPaused(false);
+    }
   };
 
   const canSelectStillView = (selection: ShotStillViewSelection) => (
@@ -303,8 +355,23 @@ export function ShotMediaModal({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
-        <div className="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 items-center justify-center rounded-xl border border-white/10 bg-black/50">
-          {activeMedia?.kind === 'video' ? (
+        <div
+          className="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/50"
+          data-shot-media-stage
+          data-shot-media-stage-mode={showingKeyframePath ? 'keyframe_path' : (activeMedia?.kind ?? 'empty')}
+        >
+          {showingKeyframePath ? (
+            <div className="flex h-full max-h-full w-full max-w-full items-center justify-center p-2">
+              <KeyframePreviewRoll
+                frames={keyframePreviewFrames}
+                size="full"
+                animate
+                paused={keyframeRollPaused}
+                activeKeyframeId={keyframeRollPaused ? activeKeyframeId : null}
+                onActiveKeyframeIdChange={setActiveKeyframeId}
+              />
+            </div>
+          ) : activeMedia?.kind === 'video' ? (
             <video
               ref={videoRef}
               key={activeMedia.id}
@@ -344,6 +411,72 @@ export function ShotMediaModal({
             <ChevronRight className="h-5 w-5" />
           </button>
         </div>
+
+        {hasKeyframePath && (
+          <div
+            className="mx-auto mt-3 flex max-w-5xl flex-col gap-2"
+            data-shot-media-keyframe-strip
+          >
+            <div className="flex items-center justify-between gap-2 px-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-white/50">
+                Keyframes
+              </p>
+              {showingKeyframePath && (
+                <button
+                  type="button"
+                  data-shot-media-keyframe-play-toggle
+                  onClick={() => setKeyframeRollPaused((value) => !value)}
+                  className="text-[11px] font-semibold text-white/70 underline-offset-2 hover:text-white hover:underline"
+                >
+                  {keyframeRollPaused ? 'Play animation' : 'Pause animation'}
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {sortedKeyframes.map((keyframe, index) => {
+                // Highlight by keyframe id against the preview-frame set (may omit missing stills).
+                const hasPreview = keyframePreviewFrames.some((frame) => frame.keyframeId === keyframe.id);
+                const uri = keyframe.previewUri;
+                const label = getCameraKeyframeDisplayLabel(index, sortedKeyframes.length);
+                const selected = showingKeyframePath && activeKeyframeId === keyframe.id;
+                return (
+                  <button
+                    key={keyframe.id}
+                    type="button"
+                    data-shot-media-keyframe-frame
+                    data-keyframe-id={keyframe.id}
+                    data-has-preview={hasPreview ? 'true' : 'false'}
+                    onClick={() => {
+                      handleMediaSelect({ id: SHOT_MEDIA_KEYFRAME_PATH_ID });
+                      if (hasPreview) {
+                        setKeyframeRollPaused(true);
+                        setActiveKeyframeId(keyframe.id);
+                      }
+                    }}
+                    className={`relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border transition ${
+                      selected
+                        ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]'
+                        : 'border-white/15 hover:border-white/40'
+                    }`}
+                    title={`${label} · ${keyframe.timeSeconds.toFixed(1)}s`}
+                    aria-label={`Show ${label} at ${keyframe.timeSeconds.toFixed(1)} seconds`}
+                  >
+                    {uri ? (
+                      <img src={uri} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-[10px] font-semibold text-white/60">
+                        {label}
+                      </div>
+                    )}
+                    <span className="absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-[9px] font-semibold text-white">
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {showStillViewToggles && (
           <div
@@ -411,15 +544,29 @@ export function ShotMediaModal({
           </div>
         )}
 
-        {mediaItems.length > 1 && (
-          <div className="mx-auto mt-3 flex max-w-5xl flex-wrap justify-center gap-2">
+        {mediaTabCount > 1 && (
+          <div className="mx-auto mt-3 flex max-w-5xl flex-wrap justify-center gap-2" data-shot-media-tabs>
+            {hasKeyframePath && (
+              <button
+                type="button"
+                data-shot-media-tab-keyframe-path
+                onClick={() => handleMediaSelect({ id: SHOT_MEDIA_KEYFRAME_PATH_ID })}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  showingKeyframePath
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-white/10 text-white/75 hover:bg-white/15'
+                }`}
+              >
+                Keyframe path
+              </button>
+            )}
             {mediaItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => handleMediaSelect(item)}
                 className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                  item.id === activeMedia?.id
+                  !showingKeyframePath && item.id === activeMedia?.id
                     ? 'bg-[var(--accent)] text-white'
                     : 'bg-white/10 text-white/75 hover:bg-white/15'
                 }`}

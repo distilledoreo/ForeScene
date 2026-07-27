@@ -3,7 +3,7 @@ import {
   CameraMoveCubemapFaceId,
   CameraMoveCubemapPixelCrop,
 } from './cameraMoveCubemap';
-import { ImageRenderResult } from './renderers';
+import type { BlobImageRenderResult, ImageRenderResult } from './renderers';
 
 /**
  * Standard cubemap cross layout aligned with renderPanoCubemapFace UV conventions.
@@ -111,6 +111,35 @@ export async function stitchCubemapFacesCrossAsync(
 }
 
 /**
+ * Blob equivalent of the master stitch. It keeps the source faces binary and
+ * releases each temporary object URL immediately after it has been drawn.
+ */
+export async function stitchCubemapFaceBlobsCrossAsync(
+  faces: Record<CameraMoveCubemapFaceId, BlobImageRenderResult>,
+  faceSize: number,
+): Promise<BlobImageRenderResult> {
+  const { width, height } = getCubemapCrossCanvasSize(faceSize);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create canvas context.');
+  context.clearRect(0, 0, width, height);
+
+  for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+    const rect = getCubemapCrossFaceRect(face, faceSize);
+    const image = await loadBlobImage(faces[face].blob);
+    try {
+      context.drawImage(image.element, rect.x, rect.y, rect.width, rect.height);
+    } finally {
+      URL.revokeObjectURL(image.url);
+    }
+  }
+
+  return { blob: await canvasToBlob(canvas, 'image/png'), width, height };
+}
+
+/**
  * Places visible face crops into the same cross layout and trims to their combined bounds.
  * Shared seams stay aligned even when only a subset of faces is visible.
  */
@@ -166,5 +195,27 @@ function loadDataUrlImage(dataUrl: string): Promise<HTMLImageElement> {
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error('Failed to load image.'));
     image.src = dataUrl;
+  });
+}
+
+function loadBlobImage(blob: Blob): Promise<{ element: HTMLImageElement; url: string }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => resolve({ element: image, url });
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load cubemap face.'));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not encode stitched cubemap.'));
+    }, type);
   });
 }

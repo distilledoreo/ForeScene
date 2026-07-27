@@ -1,12 +1,18 @@
 import * as THREE from 'three';
 import { AssetRegistry, ProjectAsset, SceneObject } from '../domain/types';
 import { getRegisteredModelAssetBytes } from './modelAssetStore';
-import { IMPORT_BUDGET_POLICY } from './modelImportBudget';
-
-export const PANOREF_MESH_MIME = 'application/vnd.panoref.graybox-mesh';
-export const PANOREF_MESH_VERSION = 2;
-export const MAX_PACKED_MESH_BYTES = IMPORT_BUDGET_POLICY.maxPackedAssetBytes;
-export const MODEL_ASSET_URI_PREFIX = 'panoref-idb:';
+import {
+  MAX_PACKED_MESH_BYTES,
+  MODEL_ASSET_URI_PREFIX,
+  PANOREF_MESH_MIME,
+  PANOREF_MESH_VERSION,
+} from './importedMeshConstants';
+export {
+  MAX_PACKED_MESH_BYTES,
+  MODEL_ASSET_URI_PREFIX,
+  PANOREF_MESH_MIME,
+  PANOREF_MESH_VERSION,
+} from './importedMeshConstants';
 
 const HEADER_BYTES = 40;
 const MAGIC = [0x50, 0x52, 0x47, 0x4d] as const; // PRGM

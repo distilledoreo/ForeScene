@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
-import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
+import {
+  setTwoPointCameraKeyframe,
+  updateCameraKeyframeEasing,
+} from '../src/engine/cameraKeyframes';
 import {
   cameraKeyframesHaveObjectAnimation,
   interpolateObjectOverrides,
@@ -197,5 +200,38 @@ describe('object keyframes', () => {
 
     const early = interpolateObjectOverrides(keyframes, 0.4, {}, project.scene.objects);
     expect(early[prop.id]?.visible).toBe(true);
+
+    const eased = updateCameraKeyframeEasing(keyframes, 'easeIn');
+    const easedMid = interpolateObjectOverrides(eased, 1, {}, project.scene.objects);
+    expect(easedMid[prop.id]?.transform?.position[0]).toBeCloseTo(1);
+    expect(easedMid[prop.id]?.transform?.rotation[1]).toBeCloseTo(22.5);
+  });
+
+  it('uses the shortest rotation path across the 360-degree seam', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    const prop = createSceneObject('box', 1);
+    project.scene.objects.push(prop);
+
+    const keyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: shot.camera,
+        durationSeconds: 2,
+        objectOverrides: {
+          [prop.id]: { transform: { ...prop.transform, rotation: [0, 350, 0] } },
+        },
+      }),
+      slot: 'end',
+      camera: shot.camera,
+      durationSeconds: 2,
+      objectOverrides: {
+        [prop.id]: { transform: { ...prop.transform, rotation: [0, 10, 0] } },
+      },
+    });
+
+    const mid = interpolateObjectOverrides(keyframes, 1, {}, project.scene.objects);
+    expect(mid[prop.id]?.transform?.rotation[1]).toBeCloseTo(360);
   });
 });

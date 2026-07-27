@@ -88,6 +88,20 @@ describe('scene object disposal', () => {
     expect(preview.name).toBe('Placement Preview');
     expect(preview.userData.previewObject).toBe(true);
   });
+
+  it('reuses matching primitive geometry and surface materials across objects', () => {
+    const first = createSceneObject('box', 1);
+    first.dimensions = [2, 3, 4];
+    first.surfaceStyle = 'solid';
+    first.color = '#7aa2c4';
+    const second = { ...first, id: 'same-geometry-second' };
+
+    const firstMesh = createObject3D(first) as THREE.Mesh;
+    const secondMesh = createObject3D(second) as THREE.Mesh;
+
+    expect(firstMesh.geometry).toBe(secondMesh.geometry);
+    expect(firstMesh.material).toBe(secondMesh.material);
+  });
 });
 
 describe('object surface styles', () => {
@@ -112,6 +126,13 @@ describe('object surface styles', () => {
     const checkerMaterial = resolveObjectMaterial(checker);
     expect(CHECKERBOARD_TILE_METERS).toBe(1);
     expect(checkerMaterial.customProgramCacheKey?.()).toContain('checkerboard-1m-face');
+
+    const alternateCheckerMaterial = resolveObjectMaterial({
+      ...checker,
+      color: '#999999',
+      secondaryColor: '#222222',
+    });
+    expect(alternateCheckerMaterial.customProgramCacheKey?.()).toBe(checkerMaterial.customProgramCacheKey?.());
     expect(defaultSolidColorForObject(box)).toMatch(/^#[0-9a-f]{6}$/);
     expect(defaultSecondaryColor('#ffffff')).toMatch(/^#[0-9a-f]{6}$/);
 

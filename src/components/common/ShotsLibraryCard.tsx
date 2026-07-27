@@ -3,7 +3,7 @@ import { Download, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { getShotPrimaryLabel, hasCustomShotTitle } from '../../domain/shotIdentity';
 import { resolveShotMedia, resolveShotMediaPoster } from '../../domain/shotMedia';
 import { LocationProject, ProjectAsset, Shot } from '../../domain/types';
-import { downloadDataUrl } from '../../engine/projectIO';
+import { downloadDataUrl } from '../../engine/fileTransfers';
 import { AnchoredMenuPopover } from './AnchoredMenuPopover';
 import { ShotCameraRollThumbnail } from './ShotCameraRollThumbnail';
 
@@ -100,6 +100,7 @@ export function ShotsLibraryCard({
           showMediaCount
           showCapturedBadge
           landed={landed}
+          animateKeyframeRoll={selected}
         />
       </button>
 
