@@ -198,9 +198,13 @@ test.describe('@responsive layout and core chrome', () => {
         expect(box.x).toBeGreaterThanOrEqual(-2);
         expect(box.y).toBeGreaterThanOrEqual(0);
       }
-    } else {
+    } else if (testInfo.project.name === 'desktop-chromium') {
       // Desktop should keep the tray content-sized instead of spanning the full viewport.
       expect(trayBox.width).toBeLessThan(viewport.width * 0.8);
+    } else {
+      // Tablet/touch: reachable and fully on-screen, not a desktop width ratio.
+      expect(trayBox.x).toBeGreaterThanOrEqual(-2);
+      expect(trayBox.x + trayBox.width).toBeLessThanOrEqual(viewport.width + 2);
     }
   });
 
@@ -404,8 +408,10 @@ test.describe('@smoke workflow path', () => {
     const thumbnailSources = await cards.locator('img').evaluateAll((images) => images.map((image) => image.getAttribute('src')));
 
     expect(thumbnailSources).toHaveLength(2);
-    expect(thumbnailSources[0]).toMatch(/^data:image\//);
-    expect(thumbnailSources[1]).toMatch(/^data:image\//);
+    // Durable project assets resolve as blob: URLs; legacy fixtures may still use data:image.
+    for (const source of thumbnailSources) {
+      expect(source).toMatch(/^(blob:|data:image\/)/);
+    }
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
 });

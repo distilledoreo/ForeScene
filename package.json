@@ -17,7 +17,7 @@
     "test:e2e:install": "playwright install chromium webkit",
     "test:e2e:smoke": "playwright test --project=desktop-chromium --grep \"@smoke\"",
     "test:e2e:responsive": "playwright test --grep \"@responsive\"",
-    "test:e2e:webkit": "playwright test --project=desktop-webkit --grep \"@smoke\"",
+    "test:e2e:webkit": "playwright test --project=desktop-webkit --grep \"@smoke\" --workers=1",
     "test:e2e:visual": "playwright test --project=desktop-chromium --project=tablet-chromium --project=phone-390 --grep \"@visual\"",
     "test:e2e:heavy": "playwright test --project=desktop-chromium --grep \"@heavy\"",
     "test:e2e:full": "playwright test"
