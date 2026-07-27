@@ -47,7 +47,10 @@ describe('workflow guidance UI', () => {
   });
 
   it('uses progressive disclosure layouts with shot filmstrip and precision drawer', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const shell = readFileSync(new URL('../src/components/workspaces/WorkspaceShell.tsx', import.meta.url), 'utf8');
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');

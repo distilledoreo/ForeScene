@@ -47,10 +47,7 @@ import {
   MIN_CAMERA_MOVE_DURATION_SECONDS,
   CAMERA_KEYFRAME_EASING_OPTIONS,
   CameraMoveKeyframeSlot,
-  VideoCaptureState,
   appendSequentialCameraKeyframe,
-  captureStateAfterKeyframeRestore,
-  captureStateFromKeyframes,
   getCameraMoveDurationSeconds,
   getSortedCameraKeyframes,
   hasManualCameraKeyframeTiming,
@@ -327,49 +324,34 @@ export function ShotsWorkspace() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [shotPendingDelete, setShotPendingDelete] = useState<Shot | null>(null);
   const [mediaModalShotId, setMediaModalShotId] = useState<string | null>(null);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>('still');
   const [appearance, setAppearance] = useState<'clay' | 'projected'>('clay');
   const [landFlash, setLandFlash] = useState(false);
   /** Pending move length — applied when end is captured (and updates existing end if present). */
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(DEFAULT_CAMERA_MOVE_DURATION_SECONDS);
   /**
-   * Sequential capture authoring state (empty → capturing → finished).
-   * Kept in React state for UI; major transitions also dispatch into videoAuthoring machine.
-   * Export progress stays on isExportingCameraMove — never overloaded into capture state.
+   * Sequential capture authoring — videoAuthoring machine is the sole source of truth.
+   * UI reads mode/captureState/isPreviewing/timelineOpen from the controller only.
    */
-  const [videoCaptureState, setVideoCaptureStateRaw] = useState<VideoCaptureState>('empty');
-  const setVideoCaptureState = useCallback((
-    next: VideoCaptureState | ((prev: VideoCaptureState) => VideoCaptureState),
-  ) => {
-    setVideoCaptureStateRaw((prev) => {
-      const resolved = typeof next === 'function' ? next(prev) : next;
-      // Mirror into the explicit state machine (best-effort; never block UI).
-      if (resolved === 'empty') videoAuthoring.tryDispatch({ type: 'RETAKE' });
-      else if (resolved === 'finished') videoAuthoring.tryDispatch({ type: 'FINISH_MOVE' });
-      else if (resolved === 'capturing' && prev === 'finished') {
-        videoAuthoring.tryDispatch({ type: 'CONTINUE_MOVE' });
-      } else if (resolved === 'capturing') {
-        videoAuthoring.tryDispatch({ type: 'ENTER_VIDEO' });
-      }
-      return resolved;
-    });
+  const captureMode: CaptureMode = videoAuthoring.mode;
+  const videoCaptureState = videoAuthoring.captureState;
+  const timelineOpen = videoAuthoring.timelineOpen;
+  const isPreviewingCameraMove = videoAuthoring.isPreviewing;
+  const setTimelineOpen = useCallback((open: boolean | ((prev: boolean) => boolean)) => {
+    const resolved = typeof open === 'function' ? open(videoAuthoring.timelineOpen) : open;
+    videoAuthoring.dispatch({ type: resolved ? 'OPEN_TIMELINE' : 'CLOSE_TIMELINE' });
   }, [videoAuthoring]);
-  /**
-   * Progressive disclosure: timeline stays hidden until a third pose or "Edit timeline".
-   */
-  const [timelineOpen, setTimelineOpen] = useState(false);
-  const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
-  const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
-  const [isPreviewingCameraMove, setIsPreviewingCameraMoveRaw] = useState(false);
   const setIsPreviewingCameraMove = useCallback((
     value: boolean | ((prev: boolean) => boolean),
   ) => {
-    setIsPreviewingCameraMoveRaw((prev) => {
-      const resolved = typeof value === 'function' ? value(prev) : value;
-      videoAuthoring.tryDispatch({ type: resolved ? 'START_PREVIEW' : 'STOP_PREVIEW' });
-      return resolved;
-    });
+    const resolved = typeof value === 'function' ? value(videoAuthoring.isPreviewing) : value;
+    const result = videoAuthoring.tryDispatch({ type: resolved ? 'START_PREVIEW' : 'STOP_PREVIEW' });
+    if (!result.ok && resolved) {
+      // Illegal START_PREVIEW — leave machine state unchanged.
+      return;
+    }
   }, [videoAuthoring]);
+  const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
+  const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
   const previewAbortRef = useRef<{ cancelled: boolean; frame?: number }>({ cancelled: false });
   /** After "Next shot" from a finished video move, keep Video mode empty on the new shot. */
   const resumeVideoAfterNextShotRef = useRef(false);
@@ -610,8 +592,11 @@ export function ShotsWorkspace() {
       objectOverrides: snapshotStageableObjectOverrides(latest, latestShot),
     });
     updateCameraMoveKeyframes(nextKeyframes);
-    // Advanced drawer fallback: mirror sequential authoring state from keyframe count.
-    setVideoCaptureState(captureStateFromKeyframes(nextKeyframes));
+    // Advanced drawer fallback: resync machine from keyframe count.
+    videoAuthoring.dispatch({
+      type: 'ENTER_VIDEO',
+      keyframeCount: nextKeyframes.length,
+    });
     clearKeyframeSelection();
   }, [
     cameraMoveDurationSeconds,
@@ -619,6 +604,7 @@ export function ShotsWorkspace() {
     getEffectiveCamera,
     selectedShot,
     updateCameraMoveKeyframes,
+    videoAuthoring,
   ]);
 
   const changeCameraMoveEasing = useCallback((easing: CameraKeyframeEasing) => {
@@ -878,16 +864,14 @@ export function ShotsWorkspace() {
 
     // Keep authoring chrome consistent with restored keyframe data (undo/redo blocker).
     if (captureMode === 'video') {
-      setVideoCaptureState((previous) => captureStateAfterKeyframeRestore(
-        restoredKeyframes,
-        previous,
-      ));
+      videoAuthoring.dispatch({
+        type: 'UNDO_RESTORED',
+        keyframeCount: restoredKeyframes.length,
+        previousCaptureState: videoAuthoring.captureState,
+      });
       clearKeyframeSelection();
       clearViewportObjectInspection();
       stopCameraMovePreview();
-      if (restoredKeyframes.length <= 2) {
-        setTimelineOpen(false);
-      }
     }
   }, [
     bumpCameraReseed,
@@ -897,6 +881,7 @@ export function ShotsWorkspace() {
     selectedShotId,
     shotCameraHistoryRestoreGeneration,
     stopCameraMovePreview,
+    videoAuthoring,
   ]);
 
   const pulseFocalLengthHud = shotCamera.pulseFocalLengthHud;
@@ -1279,12 +1264,8 @@ export function ShotsWorkspace() {
     clearViewportObjectInspection();
     landShotFraming(selectedShot.id, pose, { keepFlying: true });
     // Stay capturing until Finish — second pose offers Capture next + Finish (no auto-finish).
-    setVideoCaptureState('capturing');
+    videoAuthoring.dispatch({ type: 'CAPTURE_POSE', keyframeCountAfter: nextKeyframes.length });
     thumbnailFreshAfterFinishRef.current = false;
-    // Progressive disclosure: open timeline once a third pose exists.
-    if (nextKeyframes.length > 2) {
-      setTimelineOpen(true);
-    }
     // Thumbnail only on first Start — intermediate appends stay light.
     if (wasEmpty) {
       snapshotPreview(selectedShot, pose);
@@ -1316,13 +1297,15 @@ export function ShotsWorkspace() {
     snapshotPreview,
     stopCameraMovePreview,
     updateShot,
+    videoAuthoring,
     videoCaptureState,
   ]);
 
   const finishSequentialCapture = useCallback(() => {
     if (!hasRenderableCameraMove(cameraMoveKeyframes)) return;
     stopCameraMovePreview();
-    setVideoCaptureState('finished');
+    const finished = videoAuthoring.tryDispatch({ type: 'FINISH_MOVE' });
+    if (!finished.ok) return;
     clearKeyframeSelection();
     clearViewportObjectInspection();
     // Refresh gallery thumbnail once when finishing; Next shot reuses only if render succeeds.
@@ -1351,12 +1334,14 @@ export function ShotsWorkspace() {
     selectedShot,
     snapshotPreview,
     stopCameraMovePreview,
+    videoAuthoring,
   ]);
 
   const continueSequentialCapture = useCallback(() => {
     if (!hasRenderableCameraMove(cameraMoveKeyframes)) return;
     stopCameraMovePreview();
-    setVideoCaptureState('capturing');
+    const continued = videoAuthoring.tryDispatch({ type: 'CONTINUE_MOVE' });
+    if (!continued.ok) return;
     clearKeyframeSelection();
     clearViewportObjectInspection();
     thumbnailFreshAfterFinishRef.current = false;
@@ -1365,6 +1350,7 @@ export function ShotsWorkspace() {
     clearKeyframeSelection,
     clearViewportObjectInspection,
     stopCameraMovePreview,
+    videoAuthoring,
   ]);
 
   const insertInSelectedSegment = useCallback(() => {
@@ -1555,11 +1541,10 @@ export function ShotsWorkspace() {
       getCameraMoveDurationSeconds(existing, videoDurationSeconds),
     );
     setVideoDurationSeconds(duration);
-    setCaptureMode('video');
     // Preserve authored keyframes when re-entering Video (e.g. after shot switch forces Still).
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start here.
-    setVideoCaptureState(captureStateFromKeyframes(existing));
-    setTimelineOpen(existing.length > 2);
+    videoAuthoring.dispatch({ type: 'ENTER_VIDEO', keyframeCount: existing.length });
+    if (existing.length > 2) videoAuthoring.dispatch({ type: 'OPEN_TIMELINE' });
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
@@ -1573,20 +1558,25 @@ export function ShotsWorkspace() {
     selectedShot,
     startFlyCamera,
     stopCameraMovePreview,
+    videoAuthoring,
     videoDurationSeconds,
   ]);
 
   const enterStillMode = useCallback(() => {
-    setCaptureMode('still');
-    setVideoCaptureState('empty');
-    setTimelineOpen(false);
+    videoAuthoring.dispatch({ type: 'EXIT_VIDEO' });
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
     thumbnailFreshAfterFinishRef.current = false;
     // Still camera is always live — like a phone camera app.
     startFlyCamera({ clearFramingAcceptance: false });
-  }, [clearKeyframeSelection, clearViewportObjectInspection, startFlyCamera, stopCameraMovePreview]);
+  }, [
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    startFlyCamera,
+    stopCameraMovePreview,
+    videoAuthoring,
+  ]);
 
   const setMode = useCallback((mode: CaptureMode) => {
     if (mode === captureMode) return;
@@ -1597,8 +1587,7 @@ export function ShotsWorkspace() {
   const retakeVideoMove = useCallback(() => {
     if (!selectedShot) return;
     updateCameraMoveKeyframes([]);
-    setVideoCaptureState('empty');
-    setTimelineOpen(false);
+    videoAuthoring.dispatch({ type: 'RETAKE' });
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
@@ -1615,6 +1604,7 @@ export function ShotsWorkspace() {
     startFlyCamera,
     stopCameraMovePreview,
     updateCameraMoveKeyframes,
+    videoAuthoring,
   ]);
 
   /**
@@ -1866,18 +1856,20 @@ export function ShotsWorkspace() {
     // "Next shot" from a finished video move: stay in Video with an empty sequence.
     if (resumeVideoAfterNextShotRef.current) {
       resumeVideoAfterNextShotRef.current = false;
-      setCaptureMode('video');
-      setVideoCaptureState('empty');
-      setTimelineOpen(false);
+      videoAuthoring.dispatch({ type: 'NEXT_SHOT' });
       thumbnailFreshAfterFinishRef.current = false;
       setCameraMoveError(undefined);
       setCameraMoveNotice(undefined);
       setShotCameraFlying(true, { clearFramingAcceptance: false });
       return;
     }
-    setCaptureMode('still');
-    setVideoCaptureState(captureStateFromKeyframes(shot?.cameraKeyframes ?? []));
-    setTimelineOpen((shot?.cameraKeyframes.length ?? 0) > 2);
+    const count = shot?.cameraKeyframes.length ?? 0;
+    if (count > 0) {
+      videoAuthoring.dispatch({ type: 'ENTER_VIDEO', keyframeCount: count });
+      if (count > 2) videoAuthoring.dispatch({ type: 'OPEN_TIMELINE' });
+    } else {
+      videoAuthoring.dispatch({ type: 'EXIT_VIDEO' });
+    }
     thumbnailFreshAfterFinishRef.current = false;
     keyframeThumbGenerationRef.current += 1;
     setKeyframeThumbById({});
@@ -2174,65 +2166,20 @@ export function ShotsWorkspace() {
           </div>
         )}
 
-        {/* Library sheet (opened from thumbnail) */}
-        {libraryOpen && (
-          <div
-            className="absolute inset-0 z-40 flex flex-col justify-end bg-black/50 backdrop-blur-[2px]"
-            data-shots-library
-            onClick={() => setLibraryOpen(false)}
-          >
-            <div
-              className="rounded-t-3xl border border-white/10 bg-zinc-950/95 px-4 pb-8 pt-3 shadow-soft"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-white">Shots</h2>
-                <button
-                  type="button"
-                  onClick={() => setLibraryOpen(false)}
-                  className="rounded-full p-1.5 text-white/70 hover:bg-white/10 hover:text-white"
-                  aria-label="Close shot library"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {project.shots.map((shot) => {
-                  const selected = shot.id === selectedShot?.id;
-                  const landed = isShotFramingAccepted(project, shot.id);
-                  const canDelete = project.shots.length > 1;
-                  return (
-                    <React.Fragment key={shot.id}>
-                      <ShotsLibraryCard
-                        project={project}
-                        shot={shot}
-                        selected={selected}
-                        landed={landed}
-                        canDelete={canDelete}
-                        sheetOpen={libraryOpen}
-                        onOpenMedia={setMediaModalShotId}
-                        onOpenShot={handleOpenShotFromLibrary}
-                        onRename={handleLibraryRename}
-                        onRequestDelete={handleRequestDeleteShot}
-                      />
-                    </React.Fragment>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => {
-                    addCamera();
-                    setLibraryOpen(false);
-                  }}
-                  className="inline-flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/25 text-white/80 transition hover:border-[var(--accent)] hover:text-accent"
-                >
-                  <Plus className="h-5 w-5" />
-                  <span className="text-[10px] font-semibold">New</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <ShotsLibrary
+          open={libraryOpen}
+          onClose={() => setLibraryOpen(false)}
+          project={project}
+          selectedShotId={selectedShot?.id}
+          onOpenShot={handleOpenShotFromLibrary}
+          onRenameShot={handleLibraryRename}
+          onRequestDelete={handleRequestDeleteShot}
+          onOpenMedia={setMediaModalShotId}
+          onAddShot={() => {
+            addCamera();
+            setLibraryOpen(false);
+          }}
+        />
 
         <ConfirmDialog
           open={shotPendingDelete != null}
@@ -2260,31 +2207,69 @@ export function ShotsWorkspace() {
           onNavigateShot={setMediaModalShotId}
         />
 
-        {/* Bottom camera chrome */}
-        <div
-          data-shots-camera-chrome
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-3 px-4 pb-6 pt-10"
-          style={{
-            background: 'linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.35) 55%, transparent 100%)',
-          }}
+        <ShotsCaptureChrome
+          mode={captureMode}
+          captureState={videoCaptureState}
+          isPreviewing={isPreviewingCameraMove}
+          isExporting={isExportingCameraMove}
+          landFlash={landFlash}
+          onStillMode={() => setMode('still')}
+          onVideoMode={() => setMode('video')}
+          onShutter={onCapture}
+          shutterLabel={captureLabel}
+          shutterTitle={captureHint}
+          error={captureMode === 'still' ? snapshotError : undefined}
+          hint={`${captureHint}${shotCameraFlying ? ' · WASD / mouse' : ''}`}
+          librarySlot={(
+            <button
+              type="button"
+              onClick={() => setLibraryOpen(true)}
+              className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border-2 border-white/80 bg-zinc-900 shadow-card"
+              aria-label="Open shot library"
+              data-shots-library-thumb
+              title="Previous shots"
+            >
+              {libraryThumbShot ? (
+                <ShotCameraRollThumbnail
+                  project={project}
+                  shot={libraryThumbShot}
+                  overrideSrc={framePreviewByShotId[libraryThumbShot.id]}
+                  allowLivePreview
+                  className="h-full w-full object-cover"
+                  compact
+                />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center text-white/40">
+                  <ImageIcon className="h-5 w-5" />
+                </span>
+              )}
+            </button>
+          )}
+          navSlot={(
+            <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5">
+              <div className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => goAdjacentShot(-1)}
+                  disabled={selectedIndex <= 0}
+                  className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10 disabled:opacity-30"
+                  aria-label="Previous shot"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goAdjacentShot(1)}
+                  disabled={selectedIndex < 0 || selectedIndex >= project.shots.length - 1}
+                  className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10 disabled:opacity-30"
+                  aria-label="Next shot"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+          )}
         >
-          {/* Mode switcher */}
-          <div
-            data-shots-mode-switcher
-            className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/40 p-1 backdrop-blur-md"
-          >
-            <ModePill
-              label="Still"
-              active={captureMode === 'still'}
-              onClick={() => setMode('still')}
-            />
-            <ModePill
-              label="Video"
-              active={captureMode === 'video'}
-              onClick={() => setMode('video')}
-            />
-          </div>
-
           {captureMode === 'video' && (
             <div
               className="pointer-events-auto flex w-full max-w-md flex-col items-center gap-2"
@@ -2543,103 +2528,24 @@ export function ShotsWorkspace() {
             </p>
           )}
 
-          {/* Shutter row */}
-          <div className="pointer-events-auto flex w-full max-w-md items-center justify-between gap-4 px-2">
-            {/* Last / library thumbnail */}
-            <button
-              type="button"
-              onClick={() => setLibraryOpen(true)}
-              className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border-2 border-white/80 bg-zinc-900 shadow-card"
-              aria-label="Open shot library"
-              data-shots-library-thumb
-              title="Previous shots"
-            >
-              {libraryThumbShot ? (
-                <ShotCameraRollThumbnail
-                  project={project}
-                  shot={libraryThumbShot}
-                  overrideSrc={framePreviewByShotId[libraryThumbShot.id]}
-                  allowLivePreview
-                  className="h-full w-full object-cover"
-                  compact
-                />
-              ) : (
-                <span className="flex h-full w-full items-center justify-center text-white/40">
-                  <ImageIcon className="h-5 w-5" />
-                </span>
-              )}
-            </button>
-
-            {/* Capture shutter — finished video: advances to Next shot (not export) */}
-            <button
-              type="button"
-              onClick={onCapture}
-              disabled={
-                captureMode === 'video'
-                && (isExportingCameraMove || isPreviewingCameraMove)
-              }
-              className="group relative flex h-[4.75rem] w-[4.75rem] shrink-0 items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50"
-              aria-label={captureLabel}
-              data-shots-shutter
-              data-shots-video-capture-state={captureMode === 'video' ? videoCaptureState : undefined}
-              data-shots-video-shutter-next={captureMode === 'video' && videoCaptureState === 'finished' ? 'true' : undefined}
-              title={captureHint}
-            >
-              <span className="absolute inset-0 rounded-full border-[3px] border-white/90" />
-              {captureMode === 'video' && videoCaptureState === 'finished' ? (
-                <span className="flex h-[3.65rem] w-[3.65rem] items-center justify-center rounded-full bg-white text-zinc-900 transition group-active:scale-95">
-                  <Check className="h-7 w-7" strokeWidth={2.5} />
-                </span>
-              ) : (
-                <span
-                  className={`h-[3.65rem] w-[3.65rem] rounded-full transition ${
-                    captureMode === 'video'
-                      ? 'bg-red-500 group-active:scale-95'
-                      : 'bg-white group-active:scale-90'
-                  }`}
-                />
-              )}
-            </button>
-
-            {/* Adjacent shot nav (keeps layout balanced; light affordance) */}
-            <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5">
-              <div className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => goAdjacentShot(-1)}
-                  disabled={selectedIndex <= 0}
-                  className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10 disabled:opacity-30"
-                  aria-label="Previous shot"
-                >
-                  <ChevronLeft className="h-5 w-5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => goAdjacentShot(1)}
-                  disabled={selectedIndex < 0 || selectedIndex >= project.shots.length - 1}
-                  className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10 disabled:opacity-30"
-                  aria-label="Next shot"
-                >
-                  <ChevronRight className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <p className="pointer-events-none text-center text-[11px] font-medium text-white/70">
-            {captureHint}
-            {shotCameraFlying ? ' · WASD / mouse' : ''}
-          </p>
-        </div>
+        </ShotsCaptureChrome>
       </div>
 
-      <PrecisionDrawer
-        open={settingsOpen && Boolean(selectedShot)}
-        title="Camera Settings"
+      <ShotSettings
+        open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        shot={selectedShot}
+        onUpdate={(updates) => selectedShot && updateShot(selectedShot.id, updates)}
+        peopleExportMode={selectedShot?.exportSettings.peopleExportMode ?? 'with_people'}
+        onPeopleExportMode={(mode) => selectedShot && updateShot(selectedShot.id, {
+          exportSettings: {
+            ...selectedShot.exportSettings,
+            peopleExportMode: mode,
+          },
+        })}
       >
         {selectedShot && (
-          <div className="space-y-4" data-shots-advanced-settings>
+          <>
             <div className="grid grid-cols-2 gap-2">
               <IconButton onClick={() => addCamera()} className="w-full">
                 <Plus className="h-4 w-4" />
@@ -2650,20 +2556,6 @@ export function ShotsWorkspace() {
                 Duplicate
               </IconButton>
             </div>
-
-            <Field label="Name">
-              <TextInput value={selectedShot.name} onChange={(event) => updateShot(selectedShot.id, { name: event.target.value })} />
-            </Field>
-            <Field label="Status">
-              <Select value={selectedShot.status} onChange={(event) => updateShot(selectedShot.id, { status: event.target.value as ShotStatus })}>
-                {statuses.map((status) => (
-                  <option key={status} value={status}>{STATUS_LABELS[status]}</option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Description">
-              <TextArea value={selectedShot.description} onChange={(event) => updateShot(selectedShot.id, { description: event.target.value })} />
-            </Field>
             <div className="grid grid-cols-3 gap-2 text-center text-xs">
               <div className="rounded-lg border border-subtle px-2 py-2">
                 <div className="text-muted">Lens</div>
@@ -2731,22 +2623,6 @@ export function ShotsWorkspace() {
                   });
                 }}
               />
-            </Field>
-            <Field label="People export" hint="Clean plate keeps the same camera and staging but hides every object classified as a person.">
-              <Select
-                value={selectedShot.exportSettings.peopleExportMode ?? 'with_people'}
-                onChange={(event) => updateShot(selectedShot.id, {
-                  exportSettings: {
-                    ...selectedShot.exportSettings,
-                    peopleExportMode: event.target.value as PeopleExportMode,
-                  },
-                })}
-                data-shots-people-export-mode
-              >
-                <option value="with_people">With people</option>
-                <option value="clean_plate">Clean plate</option>
-                <option value="both">Both</option>
-              </Select>
             </Field>
             <Field label="Resolution">
               <div className="grid grid-cols-2 gap-2">
@@ -2950,9 +2826,9 @@ export function ShotsWorkspace() {
               <Trash2 className="h-4 w-4" />
               Delete Shot
             </button>
-          </div>
+          </>
         )}
-      </PrecisionDrawer>
+      </ShotSettings>
     </FullBleedLayout>
   );
 }

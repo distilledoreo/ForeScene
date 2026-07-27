@@ -7,7 +7,10 @@ describe('ui revamp fidelity surfaces', () => {
     const styles = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
     const shell = readFileSync(new URL('../src/components/workspaces/WorkspaceShell.tsx', import.meta.url), 'utf8');
     const reference = readFileSync(new URL('../src/components/workspaces/ReferenceWorkspace.tsx', import.meta.url), 'utf8');
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     expect(app).toContain('<main className="absolute inset-0">');
@@ -60,7 +63,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('uses an iPhone-style camera chrome for shots capture', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).toContain('data-shots-camera-shell');
     expect(shots).toContain('data-shots-shutter');
     expect(shots).toContain('data-shots-mode-switcher');
@@ -142,7 +148,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('pauses automatic shot frame preview renders while fly camera is active', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).not.toContain('flyCameraRevision');
     expect(shots).toMatch(/useEffect\(\(\) => \{[\s\S]*if \(shotCameraFlying\) return;[\s\S]*renderShotFrame\(project, previewShot\)/);
     expect(shots).toMatch(/handleFramingCameraChange[\s\S]*if \(shotCameraFlying\) return;/);
@@ -163,7 +172,7 @@ describe('ui revamp fidelity surfaces', () => {
     const guidance = readFileSync(new URL('../src/components/common/WorkflowGuidance.tsx', import.meta.url), 'utf8');
     const referenceGuide = readFileSync(new URL('../src/components/common/GrayboxReferenceGuide.tsx', import.meta.url), 'utf8');
     const defaults = readFileSync(new URL('../src/domain/defaults.ts', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     const renderers = readFileSync(new URL('../src/engine/renderers.ts', import.meta.url), 'utf8');
     expect(build).toContain('Download Graybox 360');
     expect(build).toContain('Download Projected 360');
@@ -242,7 +251,7 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('exposes remove controls for pano references in reference settings', () => {
     const reference = readFileSync(new URL('../src/components/workspaces/ReferenceWorkspace.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     expect(reference).toContain('data-pano-reference-list');
     expect(reference).toContain('data-remove-pano');
     expect(reference).toContain('Remove Uploaded Pano');
@@ -291,7 +300,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('keeps advanced shot tools in settings rather than the camera chrome', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).toContain('data-shots-advanced-settings');
     expect(shots).toContain('Download PNG');
     expect(shots).toContain('Pano match');
@@ -306,7 +318,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('uses camera-style bottom chrome without a floating shot dossier', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const styles = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
     expect(styles).toContain('--shots-overlay-bottom-safe');
     expect(shots).toContain('data-shots-camera-chrome');
@@ -329,7 +344,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('renders shots viewport in camera-framing mode without build selection chrome', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     expect(shots).toContain('shotFraming={shotFraming}');
     expect(shots).toContain('cameraReseedGeneration');
@@ -356,7 +374,10 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('isolates build placement to explicit SceneViewport props instead of global build mode', () => {
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     expect(viewport).not.toContain('getBuildInteractionState');
     expect(viewport).not.toContain('useContinuityStore');
@@ -383,7 +404,10 @@ describe('ui revamp fidelity surfaces', () => {
   it('keeps accent-tone primary actions for main workflow CTAs', () => {
     const primaryCta = readFileSync(new URL('../src/components/common/PrimaryCTA.tsx', import.meta.url), 'utf8');
     const reference = readFileSync(new URL('../src/components/workspaces/ReferenceWorkspace.tsx', import.meta.url), 'utf8');
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
     expect(primaryCta).toContain("tone?: 'accent' | 'success'");
     expect(primaryCta).toContain('bg-[var(--accent)]');
@@ -420,7 +444,7 @@ describe('ui revamp fidelity surfaces', () => {
   it('exposes build undo/redo controls and history batching on the viewport', () => {
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     expect(build).toContain('data-build-undo');
     expect(build).toContain('data-build-redo');
     expect(build).toContain('Undo Build edit');
@@ -437,7 +461,10 @@ describe('ui revamp fidelity surfaces', () => {
   it('ends the production path at export handoff without a review stage', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const workflow = readFileSync(new URL('../src/engine/workflow.ts', import.meta.url), 'utf8');
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(app).toContain("id: 'export'");
     expect(app).not.toContain("id: 'review'");
     expect(workflow).toContain("['build', 'reference', 'shots', 'export']");
@@ -475,7 +502,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('uses sequential capture state empty|capturing|finished without export-on-shutter', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     const strip = readFileSync(new URL('../src/components/workspaces/KeyframeStrip.tsx', import.meta.url), 'utf8');
     expect(shots).toContain("VideoCaptureState");
@@ -510,7 +540,8 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('data-shots-video-next-shot');
     expect(shots).toContain('completeVideoAndNextShot');
     expect(shots).toContain('resumeVideoAfterNextShotRef');
-    expect(shots).toContain('captureStateAfterKeyframeRestore');
+    expect(shots).toContain('UNDO_RESTORED');
+    expect(shots).toContain('videoAuthoring.dispatch');
     expect(shots).toContain('thumbnailFreshAfterFinishRef');
     expect(shots).toMatch(/showTimeline = timelineOpen \|\| cameraMoveKeyframes\.length > 2/);
     // Intermediate sequential captures must not thrash snapshotPreview.
@@ -536,14 +567,14 @@ describe('ui revamp fidelity surfaces', () => {
     const enterVideoModeBody = shots.match(
       /const enterVideoMode = useCallback\(\(\) => \{[\s\S]*?\n  \}, \[/,
     )?.[0] ?? '';
-    expect(enterVideoModeBody).toContain('captureStateFromKeyframes(existing)');
+    expect(enterVideoModeBody).toContain("type: 'ENTER_VIDEO'");
     expect(enterVideoModeBody).not.toContain('updateCameraMoveKeyframes([])');
     expect(enterVideoModeBody).not.toContain("slot: 'start'");
     const retakeVideoMoveBody = shots.match(
       /const retakeVideoMove = useCallback\(\(\) => \{[\s\S]*?\n  \}, \[/,
     )?.[0] ?? '';
     expect(retakeVideoMoveBody).toContain('updateCameraMoveKeyframes([])');
-    expect(retakeVideoMoveBody).toContain("setVideoCaptureState('empty')");
+    expect(retakeVideoMoveBody).toContain("type: 'RETAKE'");
     // Sequential append must keep the live fly pose.
     expect(shots).toMatch(/appendSequentialCapture[\s\S]*updateShot\(selectedShot\.id, \{[\s\S]*camera: pose/);
     expect(shots).toMatch(/startFlyCamera[\s\S]*if \(selectedShot && !shotCameraFlying\)/);
@@ -565,7 +596,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('keeps keyframe strip as primary editor and easing in the advanced drawer', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).toContain('data-camera-keyframe-easing');
     expect(shots).toContain('updateIntermediateCameraKeyframeTime');
     expect(shots).toContain('removeIntermediateCameraKeyframe');
@@ -579,7 +613,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('keeps hidden staged objects recoverable from the staging list', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).toContain('getStageableObjectsForShot');
     expect(shots).toContain("title={object.visible ? undefined : 'Hidden in this shot'}");
     expect(shots).toContain('aria-label="Hidden in this shot"');
@@ -588,7 +625,7 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('keeps export multi-select reconciled and add-camera local to export', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     expect(exportWorkspace).toContain('reconcileExportSelectedShotIds');
     expect(exportWorkspace).toContain('navigateToShots: false');
     expect(exportWorkspace).toContain('WarningDetailsButton');
@@ -645,7 +682,10 @@ describe('ui revamp fidelity surfaces', () => {
   });
 
   it('reserves space for the camera shutter chrome on shots', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
+    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const styles = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
     expect(styles).toContain('--shots-overlay-bottom-safe');
     expect(shots).toContain('data-shots-camera-chrome');

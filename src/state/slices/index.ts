@@ -1,7 +1,6 @@
 /**
  * Domain-focused Continuity store slices.
- * Implementations live in `useContinuityStore`; these modules define the contracts
- * and re-export helpers used when composing/testing slices.
+ * Real StateCreator modules compose into `useContinuityStore`.
  */
 
 export type {
@@ -22,3 +21,9 @@ export {
   WORKFLOW_SLICE_KEYS,
   SESSION_SLICE_KEYS,
 } from './keys';
+
+export { createProjectSlice } from './projectSlice';
+export { createSelectionSlice } from './selectionSlice';
+export { createHistorySlice } from './historySlice';
+export { createWorkflowSlice } from './workflowSlice';
+export { createSessionSlice } from './sessionSlice';

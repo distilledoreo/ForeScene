@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject } from '../src/domain/defaults';
+import { createDefaultProject, createCameraKeyframe } from '../src/domain/defaults';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
 import {
   CURRENT_SCHEMA_VERSION,
@@ -12,7 +12,8 @@ import {
   stripEphemeralKeyframePreviewUris,
 } from '../src/engine/schemaMigrations';
 import { commitKeyframePreviewAsset } from '../src/engine/keyframePreviewAssets';
-import { createCameraKeyframe } from '../src/domain/defaults';
+import { createShotPackageManifest } from '../src/engine/exportManifest';
+import { getShotPackageBaseName } from '../src/engine/exportNaming';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'schema');
 
@@ -23,7 +24,7 @@ describe('schema migrations', () => {
     expect(CURRENT_SCHEMA_VERSION).toBe('1.0');
   });
 
-  it('migrates fixture 0.1 → current, save → reopen preserves data', () => {
+  it('migrates fixture 0.1 → current, save → reopen → export', async () => {
     const raw = readFileSync(join(fixturesDir, 'project-schema-0.1.json'), 'utf8');
     const loaded = parseProject(raw);
     expect(loaded.schemaVersion).toBe('1.0');
@@ -35,6 +36,16 @@ describe('schema migrations', () => {
     expect(reopened.schemaVersion).toBe('1.0');
     expect(reopened.name).toBe(loaded.name);
     expect(reopened.shots.length).toBe(loaded.shots.length);
+
+    // Export path after migrate → save → reopen: real package manifest builder (no WebGL in unit env).
+    const shot = reopened.shots[0];
+    expect(shot).toBeDefined();
+    const manifest = createShotPackageManifest(reopened, shot);
+    expect(manifest).toBeTruthy();
+    expect(Object.keys(manifest as object).length).toBeGreaterThan(0);
+    expect(getShotPackageBaseName(shot).length).toBeGreaterThan(0);
+    // Portable JSON after migration must remain parseable for package handoff.
+    expect(JSON.parse(serializeProject(reopened)).schemaVersion).toBe('1.0');
   });
 
   it('migrates keyframe data URL previews into assets (no embedded data URLs in manifest)', () => {

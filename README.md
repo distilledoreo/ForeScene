@@ -103,7 +103,7 @@ Existing Build actions remain: `V` or `Esc` for Select, `O` for Origin, `G` for 
 
 Saved projects use ordered schema migrations (current schema `1.0`, product version `0.1.0`). Older `0.1` / `0.2` files migrate on load.
 
-Use the top-right **Open project** / **Save project** header buttons, or the brand menu (Open / Save / Package Export). Rename the project from the brand menu name field.
+Projects **autosave** to verified local revisions with recovery snapshots before destructive changes. Use the brand menu (**PanoRef — Continuity Stage**) for New Project, Import/Export Project Backup, Package Export, and Project Safety & Recovery. Rename the project from the brand menu name field.
 
 Top-level fields include:
 

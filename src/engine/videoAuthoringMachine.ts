@@ -1,6 +1,7 @@
 /**
  * Explicit video authoring state machine for sequential capture.
  * Prevents impossible capture/preview combinations by named events.
+ * UI must read mode/captureState/isPreviewing from reduced state only.
  */
 
 import type { VideoCaptureState } from './cameraKeyframes';
@@ -8,7 +9,7 @@ import type { VideoCaptureState } from './cameraKeyframes';
 export type VideoAuthoringMode = 'still' | 'video';
 
 export type VideoAuthoringEvent =
-  | { type: 'ENTER_VIDEO' }
+  | { type: 'ENTER_VIDEO'; keyframeCount?: number }
   | { type: 'EXIT_VIDEO' }
   | { type: 'CAPTURE_POSE'; keyframeCountAfter: number }
   | { type: 'FINISH_MOVE' }
@@ -19,6 +20,7 @@ export type VideoAuthoringEvent =
   | { type: 'START_PREVIEW' }
   | { type: 'STOP_PREVIEW' }
   | { type: 'OPEN_TIMELINE' }
+  | { type: 'CLOSE_TIMELINE' }
   | { type: 'SET_KEYFRAME_COUNT'; count: number };
 
 export interface VideoAuthoringState {
@@ -69,13 +71,15 @@ export function reduceVideoAuthoring(
 ): VideoAuthoringState {
   switch (event.type) {
     case 'ENTER_VIDEO': {
-      const captureState = captureStateFromCount(state.keyframeCount);
+      const keyframeCount = event.keyframeCount ?? state.keyframeCount;
+      const captureState = captureStateFromCount(keyframeCount);
       return {
         ...state,
         mode: 'video',
+        keyframeCount,
         captureState,
         isPreviewing: false,
-        timelineOpen: state.keyframeCount > 2 ? state.timelineOpen : false,
+        timelineOpen: keyframeCount > 2 ? state.timelineOpen : false,
       };
     }
     case 'EXIT_VIDEO':
@@ -83,6 +87,8 @@ export function reduceVideoAuthoring(
         ...state,
         mode: 'still',
         isPreviewing: false,
+        captureState: 'empty',
+        timelineOpen: false,
       };
     case 'CAPTURE_POSE': {
       if (state.mode !== 'video') {
@@ -95,15 +101,11 @@ export function reduceVideoAuthoring(
         throw new VideoAuthoringError('Capture is finished; use CONTINUE_MOVE or RETAKE.');
       }
       const keyframeCount = Math.max(0, event.keyframeCountAfter);
-      const captureState: VideoCaptureState = keyframeCount <= 0
-        ? 'empty'
-        : keyframeCount === 1
-          ? 'capturing'
-          : 'capturing';
       return {
         ...state,
         keyframeCount,
-        captureState,
+        // Stay capturing until FINISH_MOVE (even with ≥2 poses).
+        captureState: keyframeCount <= 0 ? 'empty' : 'capturing',
         timelineOpen: keyframeCount > 2 ? true : state.timelineOpen,
       };
     }
@@ -166,27 +168,21 @@ export function reduceVideoAuthoring(
       };
     case 'START_PREVIEW': {
       if (state.mode !== 'video') {
-        // Allow preview attempt to no-op into video mode when already finished-ready.
-        if (state.keyframeCount < 2) {
-          throw new VideoAuthoringError('START_PREVIEW requires video mode with at least two poses.');
-        }
+        throw new VideoAuthoringError('START_PREVIEW requires video mode.');
       }
-      if (state.keyframeCount < 2 && state.mode === 'video') {
+      if (state.keyframeCount < 2) {
         throw new VideoAuthoringError('START_PREVIEW requires at least two poses.');
       }
-      return {
-        ...state,
-        mode: 'video',
-        isPreviewing: state.keyframeCount >= 2,
-      };
+      return { ...state, isPreviewing: true };
     }
     case 'STOP_PREVIEW':
       return { ...state, isPreviewing: false };
     case 'OPEN_TIMELINE':
       return { ...state, timelineOpen: true };
+    case 'CLOSE_TIMELINE':
+      return { ...state, timelineOpen: false };
     case 'SET_KEYFRAME_COUNT': {
       const keyframeCount = Math.max(0, event.count);
-      // When not actively capturing multi-pose, derive from count.
       let captureState = state.captureState;
       if (state.mode === 'video') {
         if (keyframeCount === 0) captureState = 'empty';
@@ -198,7 +194,11 @@ export function reduceVideoAuthoring(
         ...state,
         keyframeCount,
         captureState,
-        timelineOpen: keyframeCount > 2 ? true : keyframeCount <= 2 ? false : state.timelineOpen,
+        timelineOpen: keyframeCount > 2
+          ? true
+          : keyframeCount <= 2
+            ? (state.timelineOpen && keyframeCount >= 2 ? state.timelineOpen : false)
+            : state.timelineOpen,
       };
     }
     default: {

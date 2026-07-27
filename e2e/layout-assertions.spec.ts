@@ -58,76 +58,106 @@ async function assertNoHorizontalOverflow(page: Page) {
   );
 }
 
-async function assertPrimaryNavVisible(page: Page) {
-  const build = page.locator('header nav button').filter({ hasText: /^\s*Build\s*$/ }).locator('visible=true').first();
-  const shots = page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first();
-  await expect(build).toBeVisible();
-  await expect(shots).toBeVisible();
-  const box = await build.boundingBox();
-  expect(box, 'primary Build tab should have a box').toBeTruthy();
-  if (box) {
-    expect(box.y + box.height).toBeGreaterThan(0);
-    expect(box.x).toBeGreaterThanOrEqual(0);
-  }
+async function assertInViewport(box: { x: number; y: number; width: number; height: number }, viewport: { width: number; height: number }, label: string) {
+  expect(box.width, `${label} width`).toBeGreaterThan(0);
+  expect(box.height, `${label} height`).toBeGreaterThan(0);
+  expect(box.x, `${label} left`).toBeGreaterThanOrEqual(-4);
+  expect(box.y, `${label} top`).toBeGreaterThanOrEqual(-4);
+  expect(box.x + box.width, `${label} right`).toBeLessThanOrEqual(viewport.width + 4);
+  expect(box.y + box.height, `${label} bottom`).toBeLessThanOrEqual(viewport.height + 4);
 }
 
 test.describe('layout visibility and overflow', () => {
   test('Build workspace: primary controls visible, no horizontal overflow', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await assertPrimaryNavVisible(page);
+    const build = page.locator('header nav button').filter({ hasText: /^\s*Build\s*$/ }).locator('visible=true').first();
+    const shots = page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first();
+    await expect(build).toBeVisible();
+    await expect(shots).toBeVisible();
     await assertNoHorizontalOverflow(page);
   });
 
-  test('Shots workspace: primary capture chrome fits viewport', async ({ page }) => {
+  test('Shots workspace: primary capture chrome required and on-screen', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
     await page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first().click();
     await dismissOverlays(page);
-    await assertPrimaryNavVisible(page);
-    await assertNoHorizontalOverflow(page);
 
-    // Shutter / primary capture control should be on-screen when present.
-    const shutter = page.locator('[data-shutter], [data-capture-shutter], button').filter({
-      hasText: /Capture|Shutter|Still|Video|Land/i,
-    }).first();
-    if (await shutter.isVisible().catch(() => false)) {
-      const box = await shutter.boundingBox();
-      expect(box).toBeTruthy();
-      if (box) {
-        const viewport = page.viewportSize();
-        expect(viewport).toBeTruthy();
-        if (viewport) {
-          expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 2);
-          expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 2);
-          expect(box.y).toBeGreaterThanOrEqual(-2);
-        }
-      }
+    const chrome = page.locator('[data-shots-capture-chrome], [data-shots-camera-chrome]').first();
+    await expect(chrome, 'capture chrome must mount').toBeVisible({ timeout: 10000 });
+
+    const shutter = page.locator('[data-shots-shutter], [data-capture-shutter]').first();
+    await expect(shutter, 'primary shutter must be visible').toBeVisible();
+
+    const viewport = page.viewportSize();
+    expect(viewport).toBeTruthy();
+    const shutterBox = await shutter.boundingBox();
+    expect(shutterBox, 'shutter bounding box').toBeTruthy();
+    if (shutterBox && viewport) {
+      assertInViewport(shutterBox, viewport, 'shutter');
     }
+
+    // Mode switcher must remain visible (not covered by drawers).
+    const modeSwitcher = page.locator('[data-shots-mode-switcher]').first();
+    await expect(modeSwitcher).toBeVisible();
+    const modeBox = await modeSwitcher.boundingBox();
+    if (modeBox && viewport) {
+      assertInViewport(modeBox, viewport, 'mode switcher');
+    }
+
+    await assertNoHorizontalOverflow(page);
   });
 
-  test('dialogs fit onscreen when opened from brand menu', async ({ page }) => {
+  test('settings drawer opens and fits onscreen without covering shutter', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    // Open brand / project menu if present.
-    const brand = page.getByRole('button', { name: /Continuity Stage|PanoRef|Project menu|Menu/i }).first();
-    if (await brand.isVisible().catch(() => false)) {
-      await brand.click();
-      await page.waitForTimeout(200);
+    await page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first().click();
+    await dismissOverlays(page);
+
+    const shutter = page.locator('[data-shots-shutter], [data-capture-shutter]').first();
+    await expect(shutter).toBeVisible();
+
+    const settingsBtn = page.locator('[data-shots-settings-trigger]').first();
+    await expect(settingsBtn, 'settings gear must be visible').toBeVisible();
+    await settingsBtn.click();
+
+    // Content marker proves ShotSettings mounted; dialog is the on-screen shell.
+    await expect(page.locator('[data-shot-settings], [data-shots-advanced-settings]').first())
+      .toBeVisible({ timeout: 8000 });
+    const dialog = page.getByRole('dialog', { name: /Camera Settings|Shot settings/i }).first();
+    await expect(dialog, 'settings dialog must open').toBeVisible({ timeout: 8000 });
+
+    const viewport = page.viewportSize();
+    expect(viewport).toBeTruthy();
+    const box = await dialog.boundingBox();
+    expect(box, 'settings dialog box').toBeTruthy();
+    if (box && viewport) {
+      expect(box.width, 'dialog width fits').toBeLessThanOrEqual(viewport.width + 2);
+      expect(box.height, 'dialog height fits').toBeLessThanOrEqual(viewport.height + 2);
+      expect(box.x).toBeGreaterThanOrEqual(-4);
+      expect(box.y).toBeGreaterThanOrEqual(-4);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 4);
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 4);
     }
-    const dialog = page.getByRole('dialog').first();
-    if (await dialog.isVisible().catch(() => false)) {
-      const box = await dialog.boundingBox();
-      const viewport = page.viewportSize();
-      expect(box).toBeTruthy();
-      expect(viewport).toBeTruthy();
-      if (box && viewport) {
-        expect(box.width).toBeLessThanOrEqual(viewport.width + 2);
-        expect(box.height).toBeLessThanOrEqual(viewport.height + 2);
-        expect(box.x).toBeGreaterThanOrEqual(-4);
-        expect(box.y).toBeGreaterThanOrEqual(-4);
-      }
+
+    // Drawer must not cover the primary shutter center.
+    const shutterBox = await shutter.boundingBox();
+    expect(shutterBox).toBeTruthy();
+    if (box && shutterBox) {
+      const shutterCenter = {
+        x: shutterBox.x + shutterBox.width / 2,
+        y: shutterBox.y + shutterBox.height / 2,
+      };
+      const coversShutterCenter = (
+        shutterCenter.x >= box.x
+        && shutterCenter.x <= box.x + box.width
+        && shutterCenter.y >= box.y
+        && shutterCenter.y <= box.y + box.height
+      );
+      expect(coversShutterCenter, 'settings drawer should not cover shutter center').toBe(false);
     }
+
     await assertNoHorizontalOverflow(page);
   });
 });

@@ -17,12 +17,13 @@ export interface ShotSettingsProps {
   onClose: () => void;
   shot?: Shot;
   onUpdate: (updates: Partial<Shot>) => void;
-  peopleExportMode: PeopleExportMode;
-  onPeopleExportMode: (mode: PeopleExportMode) => void;
+  peopleExportMode?: PeopleExportMode;
+  onPeopleExportMode?: (mode: PeopleExportMode) => void;
+  title?: string;
   children?: React.ReactNode;
 }
 
-/** Shot settings drawer (status, notes, export people mode, extensible children). */
+/** Shot / camera settings drawer — composition surface for advanced Shots controls. */
 export function ShotSettings({
   open,
   onClose,
@@ -30,58 +31,62 @@ export function ShotSettings({
   onUpdate,
   peopleExportMode,
   onPeopleExportMode,
+  title = 'Camera Settings',
   children,
 }: ShotSettingsProps) {
-  if (!shot) return null;
-
   return (
     <PrecisionDrawer
-      open={open}
+      open={open && Boolean(shot)}
       onClose={onClose}
-      title="Shot settings"
+      title={title}
     >
-      <div className="space-y-3 p-1" data-shot-settings data-shot-settings-panel>
-        <Field label="Title">
-          <TextInput
-            value={shot.name}
-            onChange={(event) => onUpdate({ name: event.target.value })}
-          />
-        </Field>
-        <Field label="Production ID">
-          <TextInput
-            value={shot.productionShotId ?? ''}
-            onChange={(event) => onUpdate({ productionShotId: event.target.value })}
-          />
-        </Field>
-        <Field label="Status">
-          <Select
-            value={shot.status}
-            onChange={(event) => onUpdate({ status: event.target.value as ShotStatus })}
-          >
-            {statuses.map((status) => (
-              <option key={status} value={status}>{STATUS_LABELS[status]}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Description">
-          <TextArea
-            value={shot.description ?? ''}
-            onChange={(event) => onUpdate({ description: event.target.value })}
-            rows={3}
-          />
-        </Field>
-        <Field label="People export">
-          <Select
-            value={peopleExportMode}
-            onChange={(event) => onPeopleExportMode(event.target.value as PeopleExportMode)}
-          >
-            <option value="with_people">With people</option>
-            <option value="clean_plate">Clean plate</option>
-            <option value="both">Both</option>
-          </Select>
-        </Field>
-        {children}
-      </div>
+      {shot && (
+        <div className="space-y-4" data-shot-settings data-shots-advanced-settings>
+          <Field label="Title">
+            <TextInput
+              value={shot.name}
+              onChange={(event) => onUpdate({ name: event.target.value })}
+            />
+          </Field>
+          <Field label="Production ID">
+            <TextInput
+              value={shot.productionShotId ?? ''}
+              onChange={(event) => onUpdate({ productionShotId: event.target.value })}
+            />
+          </Field>
+          <Field label="Status">
+            <Select
+              value={shot.status}
+              onChange={(event) => onUpdate({ status: event.target.value as ShotStatus })}
+            >
+              {statuses.map((status) => (
+                <option key={status} value={status}>{STATUS_LABELS[status]}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Description">
+            <TextArea
+              value={shot.description ?? ''}
+              onChange={(event) => onUpdate({ description: event.target.value })}
+              rows={2}
+            />
+          </Field>
+          {peopleExportMode !== undefined && onPeopleExportMode && (
+            <Field label="People export" hint="Clean plate keeps the same camera and staging but hides every object classified as a person.">
+              <Select
+                value={peopleExportMode}
+                onChange={(event) => onPeopleExportMode(event.target.value as PeopleExportMode)}
+                data-shots-people-export-mode
+              >
+                <option value="with_people">With people</option>
+                <option value="clean_plate">Clean plate</option>
+                <option value="both">Both</option>
+              </Select>
+            </Field>
+          )}
+          {children}
+        </div>
+      )}
     </PrecisionDrawer>
   );
 }

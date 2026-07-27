@@ -5,7 +5,7 @@ describe('startup loading boundaries', () => {
   it('does not mount Continuity Stage rendering work before a mode is selected', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/useContinuityStore.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     const secondCapture = readFileSync(
       new URL('../src/engine/prepareSuggestedSecondCapture.ts', import.meta.url),
       'utf8',
@@ -28,8 +28,8 @@ describe('startup loading boundaries', () => {
     expect(app).toContain("import('./engine/projectIO')");
     expect(app).not.toContain("from './engine/projectIO'");
     expect(main).not.toContain('ensureHumanMannequinModel');
-    expect(store).toContain("await import('../engine/renderers')");
-    expect(store).not.toContain("from '../engine/renderers'");
+    expect(store).toContain("await import('../../engine/renderers')");
+    expect(store).not.toContain("from '../../engine/renderers'");
     expect(secondCapture).toContain("await import('./renderers')");
     expect(secondCapture).not.toContain("from './renderers'");
     expect(viewport).toContain("from '../../engine/flyCamera'");
