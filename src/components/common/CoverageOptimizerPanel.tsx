@@ -66,7 +66,7 @@ export function CoverageOptimizerPanel({
     && analysisRegion.min.every((value, axis) => value <= analysisRegion.max[axis]);
   const selectedObjects = project.scene.objects.filter((object) => selectedObjectIds.includes(object.id));
   const selectionRegion = coverageBoundsFromSelection(selectedObjects);
-  const taskRef = useRef<CoverageOptimizationTask>();
+  const taskRef = useRef<CoverageOptimizationTask | undefined>(undefined);
   const analysisIdRef = useRef(0);
   const analysisRegionTouchedRef = useRef(false);
   const captureInputKey = [

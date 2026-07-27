@@ -211,7 +211,7 @@ describe('occlusion generation key', () => {
     const base = computeProjectorOcclusionKey(project, origin);
     const withExtraSettings = {
       ...project,
-      settings: { ...project.settings, projectedStyle: { ...project.settings.projectedStyle, exposure: 3 } },
+      settings: { ...project.settings, projectedStyle: { ...project.settings.projectedStyle!, exposure: 3 } },
     };
     expect(computeProjectorOcclusionKey(withExtraSettings, origin)).toBe(base);
   });

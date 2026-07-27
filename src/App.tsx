@@ -95,7 +95,7 @@ function hasSeenSplash(): boolean {
 export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
-  const persistenceControllerRef = useRef<ProjectPersistenceController>();
+  const persistenceControllerRef = useRef<ProjectPersistenceController | undefined>(undefined);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);

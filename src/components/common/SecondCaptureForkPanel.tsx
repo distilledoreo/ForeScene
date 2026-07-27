@@ -61,7 +61,7 @@ export function SecondCaptureForkContent({
   const [seedDownloadStatus, setSeedDownloadStatus] = useState<SeedDownloadStatus>('idle');
   const [seedResult, setSeedResult] = useState<SuggestedSecondCaptureResult | undefined>();
   const [seedRedownloading, setSeedRedownloading] = useState(false);
-  const taskRef = useRef<SuggestedSecondCaptureTask | undefined>();
+  const taskRef = useRef<SuggestedSecondCaptureTask | undefined>(undefined);
   const startedAtRef = useRef<number>(0);
 
   useEffect(() => {

@@ -205,11 +205,11 @@ describe('project workflow logic', () => {
     expect(parsed.scene.panoRotation).toEqual([0, 0, 0]);
     expect(Array.isArray(parsed.scene.panoOrigin)).toBe(true);
     expect(parsed.scene.panoOrigin).toHaveLength(3);
-    expect(parsed.settings.projectedStyle.blendMode).toBe('primary_only');
-    expect(parsed.settings.projectedStyle.secondaryPanoId).toBeUndefined();
-    expect(parsed.settings.projectedStyle.panoId).toBeUndefined();
-    expect(parsed.settings.projectedStyle.opacity).toBe(0.8);
-    expect(parsed.settings.projectedStyle.fallbackMode).toBe('neutral');
+    expect(parsed.settings.projectedStyle!.blendMode).toBe('primary_only');
+    expect(parsed.settings.projectedStyle!.secondaryPanoId).toBeUndefined();
+    expect(parsed.settings.projectedStyle!.panoId).toBeUndefined();
+    expect(parsed.settings.projectedStyle!.opacity).toBe(0.8);
+    expect(parsed.settings.projectedStyle!.fallbackMode).toBe('neutral');
 
     // Origin rotate path must be able to read Euler components without throwing.
     const [rx, ry, rz] = parsed.scene.panoRotation;
@@ -919,7 +919,7 @@ describe('project workflow logic', () => {
     project.workflow.referenceAlignmentAcceptedForPanoId = first.id;
     project.shots[0] = { ...project.shots[0], linkedPanoId: first.id };
     project.settings.projectedStyle = {
-      ...project.settings.projectedStyle,
+      ...project.settings.projectedStyle!,
       panoId: first.id,
       blendMode: 'primary_only',
     };
@@ -962,7 +962,7 @@ describe('project workflow logic', () => {
     state.project.workflow.referenceAlignmentAcceptedForPanoId = primary.id;
     state.project.shots[0] = { ...state.project.shots[0], linkedPanoId: primary.id };
     state.project.settings.projectedStyle = {
-      ...state.project.settings.projectedStyle,
+      ...state.project.settings.projectedStyle!,
       panoId: primary.id,
       blendMode: 'primary_only',
       secondaryPanoId: undefined,
@@ -984,9 +984,9 @@ describe('project workflow logic', () => {
     expect(state.project.panoRefs.find((pano) => pano.id === primary.id)?.isCanonical).toBe(true);
     expect(state.project.workflow.referenceAlignmentAcceptedForPanoId).toBe(primary.id);
     expect(state.project.shots[0]?.linkedPanoId).toBe(primary.id);
-    expect(state.project.settings.projectedStyle.secondaryPanoId).toBeTruthy();
-    expect(state.project.settings.projectedStyle.blendMode).toBe('primary_dominant');
-    expect(state.project.settings.projectedStyle.panoId).toBe(primary.id);
+    expect(state.project.settings.projectedStyle!.secondaryPanoId).toBeTruthy();
+    expect(state.project.settings.projectedStyle!.blendMode).toBe('primary_dominant');
+    expect(state.project.settings.projectedStyle!.panoId).toBe(primary.id);
     expect(state.activePanoId).toBe(primary.id);
   });
 
@@ -1014,7 +1014,7 @@ describe('project workflow logic', () => {
     project.workflow.referenceAlignmentAcceptedForPanoId = primary.id;
     project.shots[0] = { ...project.shots[0], linkedPanoId: primary.id };
     project.settings.projectedStyle = {
-      ...project.settings.projectedStyle,
+      ...project.settings.projectedStyle!,
       panoId: primary.id,
       blendMode: 'primary_only',
       secondaryPanoId: undefined,
@@ -1046,11 +1046,11 @@ describe('project workflow logic', () => {
     expect(addMode).toBe('add_secondary');
     const state = useContinuityStore.getState();
     expect(state.project.panoRefs.find((pano) => pano.id === primary.id)?.isCanonical).toBe(true);
-    expect(state.project.settings.projectedStyle.secondaryPanoId).toBeTruthy();
+    expect(state.project.settings.projectedStyle!.secondaryPanoId).toBeTruthy();
     expect(state.pendingSecondCapturePlan).toBeUndefined();
     expect(state.activePanoId).toBe(primary.id);
     const secondary = state.project.panoRefs.find(
-      (pano) => pano.id === state.project.settings.projectedStyle.secondaryPanoId,
+      (pano) => pano.id === state.project.settings.projectedStyle!.secondaryPanoId,
     );
     expect(secondary?.origin).toEqual(frozenOrigin);
     expect(secondary?.rotation).toEqual(frozenRotation);
@@ -1093,7 +1093,7 @@ describe('project workflow logic', () => {
     project.assets.assets[bAsset.id] = bAsset;
     project.panoRefs = [a, b];
     project.settings.projectedStyle = {
-      ...project.settings.projectedStyle,
+      ...project.settings.projectedStyle!,
       panoId: a.id,
       secondaryPanoId: b.id,
       blendMode: 'primary_dominant',
@@ -1101,8 +1101,8 @@ describe('project workflow logic', () => {
     useContinuityStore.setState({ project, activePanoId: a.id });
     useContinuityStore.getState().removePanoReference(b.id);
     const state = useContinuityStore.getState();
-    expect(state.project.settings.projectedStyle.secondaryPanoId).toBeUndefined();
-    expect(state.project.settings.projectedStyle.panoId).toBe(a.id);
+    expect(state.project.settings.projectedStyle!.secondaryPanoId).toBeUndefined();
+    expect(state.project.settings.projectedStyle!.panoId).toBe(a.id);
   });
 
   it('replaces a shot viewport preview without retaining its superseded asset', () => {

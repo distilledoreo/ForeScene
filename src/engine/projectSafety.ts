@@ -604,7 +604,7 @@ export async function recoverLatestProject(): Promise<RecoveredProject | undefin
       head.previousRevisionId,
       ...snapshots.map((revision) => revision.id),
       ...olderRevisions.map((revision) => revision.id),
-    ].filter((revisionId, index, all): revisionId is string => Boolean(revisionId)
+    ].filter((revisionId, index, all): revisionId is string => typeof revisionId === 'string' && revisionId.length > 0
       && all.indexOf(revisionId) === index
       && revisionById.has(revisionId));
     for (const revisionId of candidates) {
