@@ -238,7 +238,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
             <p className="doc-lead">Treat Shots like a live phone camera inside the graybox. The viewfinder stays live after capture so you can move directly to the next composition.</p>
             <FeatureGrid items={[
               ['Still mode', 'Fly the camera, set the FOV, and press Capture at 4K (3840×2160) by default. A persisted thumbnail is added to the library.'],
-              ['Video mode', 'Capture start, then Capture next for each pose in order, then Finish capture. The timeline under Length shows Start, intermediates, and End at their real times — select a gap to Insert here, or select a node to Update pose. Preview move plays the path without encoding; Render MP4 from Camera Settings encodes a smooth fog-free 1080p30 H.264 file (Resolve-safe). Quick Preview remains as a real-time fallback.'],
+              ['Video mode', 'Simple (default): capture start, fly to end, capture end — the move finishes automatically with Preview and Export MP4 on chrome. Pro: unlimited sequential poses on a timeline (Capture next → Finish), segment insert, intermediate retiming, and Continue sequence. Mode switch never erases keyframes; only Retake clears. Preview plays camera + staged objects; Render MP4 from chrome or Camera Settings encodes Resolve-safe 1080p30 H.264.'],
               ['Shot library', 'Open the bottom-left thumbnail to review, rename, duplicate, or delete captured shots.'],
               ['Camera settings', 'Fine-tune FOV, duration, keyframes, preview downloads, and pano matching.'],
             ]} />

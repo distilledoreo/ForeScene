@@ -500,6 +500,15 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('data-shots-video-refresh-thumbnail');
     expect(shots).toContain('interpolateObjectOverrides');
     expect(shots).toContain('viewportObjectOverrides');
+    // Simple vs Pro authoring chrome (Simple default; strip is Pro-only).
+    expect(shots).toContain("type VideoAuthoringMode = 'simple' | 'pro'");
+    expect(shots).toContain("useState<VideoAuthoringMode>('simple')");
+    expect(shots).toContain('data-shots-video-mode-simple');
+    expect(shots).toContain('data-shots-video-mode-pro');
+    expect(shots).toContain('data-shots-video-simple-chrome');
+    expect(shots).toContain('data-shots-video-export');
+    expect(shots).toMatch(/videoAuthoringMode === 'pro' && \(\s*<KeyframeStrip/);
+    expect(shots).toMatch(/simpleComplete = videoAuthoringMode === 'simple' && nextKeyframes\.length >= 2/);
     // Intermediate sequential captures must not thrash snapshotPreview.
     expect(shots).toMatch(/if \(wasEmpty\) \{\s*snapshotPreview/);
     expect(shots).toMatch(/finishSequentialCapture[\s\S]*snapshotPreview/);

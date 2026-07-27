@@ -397,7 +397,7 @@ test.describe('workflow path smoke', () => {
     expect(thumbnailSources[0]).not.toBe(thumbnailSources[1]);
   });
 
-  test('video sequential capture appends poses, finishes, and continues', async ({ page }) => {
+  test('video simple mode finishes a two-pose move with preview and export chrome', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -406,6 +406,45 @@ test.describe('workflow path smoke', () => {
 
     await page.getByRole('button', { name: /^Video$/ }).click();
     await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-simple-chrome]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-shots-video-authoring-mode-value]')).toHaveAttribute(
+      'data-shots-video-authoring-mode-value',
+      'simple',
+    );
+    await expect(page.locator('[data-camera-keyframe-strip]')).toHaveCount(0);
+
+    const shutter = page.locator('[data-shots-shutter]');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-simple-start-set]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-simple-finished]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-preview]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-export]')).toBeVisible();
+    await expect(shutter).toBeDisabled();
+  });
+
+  test('video pro mode sequential capture appends poses, finishes, and continues', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+    await page.locator('[data-shots-video-mode-pro]').click({ force: true });
+    await dismissOverlays(page);
+
     const strip = page.locator('[data-camera-keyframe-strip]');
     await expect(strip).toBeVisible({ timeout: 20_000 });
     await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'empty');
@@ -438,6 +477,7 @@ test.describe('workflow path smoke', () => {
     await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'finished');
     await expect(page.locator('[data-camera-keyframe-preview]')).toBeVisible();
     await expect(page.locator('[data-camera-keyframe-continue]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-export]')).toBeVisible();
     await expect(shutter).toBeDisabled();
 
     await dismissOverlays(page);
