@@ -12,22 +12,16 @@ interface WorkspaceErrorBoundaryState {
   error: Error | null;
 }
 
-// This project resolves React without @types/react (allowJs → untyped module).
-// Error boundaries still require a class component; use the runtime base.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ReactComponent: any = (React as any).Component;
-
 /**
  * Surfaces lazy-workspace chunk / module evaluation failures instead of
  * leaving Suspense stuck on “Loading workspace…”.
  */
-export class WorkspaceErrorBoundary extends ReactComponent {
-  props: WorkspaceErrorBoundaryProps;
-  state: WorkspaceErrorBoundaryState;
-
+export class WorkspaceErrorBoundary extends React.Component<
+  WorkspaceErrorBoundaryProps,
+  WorkspaceErrorBoundaryState
+> {
   constructor(props: WorkspaceErrorBoundaryProps) {
     super(props);
-    this.props = props;
     this.state = { error: null };
   }
 

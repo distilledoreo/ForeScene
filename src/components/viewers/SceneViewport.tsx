@@ -303,7 +303,7 @@ export function SceneViewport({
   const freeCameraModeRef = useRef(freeCameraActive);
   const renderDistanceRef = useRef(clampBuildRenderDistance(renderDistance));
   const dragRef = useRef<DragState>({ kind: 'idle', x: 0, y: 0, moved: false });
-  const lastFloorPointRef = useRef<Vec3 | undefined>();
+  const lastFloorPointRef = useRef<Vec3 | undefined>(undefined);
   const selectedObjectIdsRef = useRef(selectedObjectIds);
   const projectRef = useRef(project);
   const snapToGridRef = useRef(snapToGrid);
@@ -322,7 +322,7 @@ export function SceneViewport({
     onRequestPanoOriginEdit,
   });
   const editBatchActiveRef = useRef(false);
-  const previewPointRef = useRef<Vec3 | undefined>();
+  const previewPointRef = useRef<Vec3 | undefined>(undefined);
   const previewMeshRef = useRef<THREE.Object3D | null>(null);
   const placementTypeRef = useRef(placementType);
   const shotFramingRef = useRef(shotFraming);
@@ -350,8 +350,8 @@ export function SceneViewport({
   const [secondaryLoadError, setSecondaryLoadError] = useState(false);
   const wheelFovAccumRef = useRef(0);
   const wheelBatchActiveRef = useRef(false);
-  const wheelBatchShotIdRef = useRef<string | undefined>();
-  const wheelBatchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const wheelBatchShotIdRef = useRef<string | undefined>(undefined);
+  const wheelBatchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const finalizeShotFovWheelBatchRef = useRef<() => void>(() => {});
   const handledCameraReseedRef = useRef(shotFraming?.cameraReseedGeneration ?? 0);
   const altHeldRef = useRef(false);
@@ -365,11 +365,11 @@ export function SceneViewport({
   }, []);
 
   // Live geometry-occlusion cubemaps (shared across all projected objects).
-  const primaryOcclusionRef = useRef<ProjectorOcclusionMap | undefined>();
-  const secondaryOcclusionRef = useRef<ProjectorOcclusionMap | undefined>();
+  const primaryOcclusionRef = useRef<ProjectorOcclusionMap | undefined>(undefined);
+  const secondaryOcclusionRef = useRef<ProjectorOcclusionMap | undefined>(undefined);
   const occlusionGenerationTokenRef = useRef(0);
-  const occlusionKeyRef = useRef<string | undefined>();
-  const occlusionDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const occlusionKeyRef = useRef<string | undefined>(undefined);
+  const occlusionDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Bumped whenever the renderer is recreated so occlusion regenerates for it.
   const rendererRevisionRef = useRef(0);
 
@@ -532,11 +532,13 @@ export function SceneViewport({
       });
     }
 
+    const gizmo = gizmoRef.current;
+    if (!gizmo) return;
     if (selectedIds.length === 1) {
       const object = projectRef.current.scene.objects.find((item) => item.id === selectedIds[0]);
-      if (object) updateTransformGizmo(gizmoRef.current, selectionOutlineRefs.current[0], objectMeshes[0], object);
+      if (object) updateTransformGizmo(gizmo, selectionOutlineRefs.current[0], objectMeshes[0], object);
     } else {
-      updateGroupTransformGizmo(gizmoRef.current, selectionOutlineRefs.current, objectMeshes);
+      updateGroupTransformGizmo(gizmo, selectionOutlineRefs.current, objectMeshes);
     }
   }, [clearTransformGizmo]);
 

@@ -30,8 +30,8 @@ export function ShotViewfinderOverlay({
   const [hudPhase, setHudPhase] = useState<'hidden' | 'visible' | 'fading'>(
     () => (focalLengthHudPulse > 0 ? 'visible' : 'hidden'),
   );
-  const fadeCompleteTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const fadeCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     const container = containerRef.current;

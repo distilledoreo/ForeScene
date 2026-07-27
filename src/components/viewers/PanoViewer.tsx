@@ -337,12 +337,12 @@ function setPanoSphereMaterial(params: {
 }
 
 function setSphereMaterial(
-  sphere: THREE.Mesh,
+  sphere: THREE.Mesh | null,
   material: THREE.Material,
   isCancelled: () => boolean,
   onMaterialReady: () => void,
 ) {
-  if (isCancelled()) {
+  if (isCancelled() || !sphere) {
     disposeMaterial(material);
     return;
   }

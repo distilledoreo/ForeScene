@@ -86,7 +86,7 @@ export function StyledPanoImportButton({
       } else {
         importedMode = applyImport();
       }
-      onImported?.(importedMode);
+      if (importedMode) onImported?.(importedMode);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not import panorama image.');
     } finally {

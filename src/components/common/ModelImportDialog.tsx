@@ -48,7 +48,7 @@ export function ModelImportDialog({
   const [allowHeavy, setAllowHeavy] = useState(false);
   const [pending, setPending] = useState<{ job: ModelImportJob; analysis: ModelImportAnalysis }>();
   const [extremeText, setExtremeText] = useState('');
-  const abortRef = useRef<AbortController>();
+  const abortRef = useRef<AbortController | undefined>(undefined);
 
   const selectFiles = () => {
     if (!busy) inputRef.current?.click();

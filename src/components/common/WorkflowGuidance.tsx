@@ -125,7 +125,7 @@ export function WorkflowGuidance() {
   const lastHandledObjectiveRequest = useRef(0);
   const lastHandledAlignmentIntroRequest = useRef(0);
   const lastHandledAlignmentRetryRequest = useRef(0);
-  const lastOpenedAdvanceKey = useRef<string | undefined>();
+  const lastOpenedAdvanceKey = useRef<string | undefined>(undefined);
 
   const context = useMemo(() => ({
     project,

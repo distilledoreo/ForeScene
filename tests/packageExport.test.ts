@@ -316,7 +316,7 @@ describe('package export', () => {
 
     vi.mocked(renderPanoCubemapFacesAsBlobs).mockImplementation(async (_uri, options) => {
       for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
-        await options.onFaceRendered?.(face, faces[face]);
+        await options!.onFaceRendered?.(face, faces[face]);
       }
       return { faceSize: 2, faces };
     });
