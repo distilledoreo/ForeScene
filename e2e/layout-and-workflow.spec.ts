@@ -107,10 +107,11 @@ function multiNodeGltfBuffer() {
 
 /**
  * Tag taxonomy (see CI workflows):
- * @smoke      — essential workflow / workspace mount (desktop + WebKit PR)
- * @responsive — layout, overflow, menus, drawers (tablet + phone PR)
- * @visual     — screenshot baselines
- * @heavy      — optimizer, projected, MP4, multi-import, video authoring (main/nightly)
+ * @smoke       — essential workflow / workspace mount (desktop Chromium PR; WebKit subset)
+ * @responsive  — layout, overflow, menus, drawers (tablet + phone PR)
+ * @visual      — screenshot baselines
+ * @heavy       — optimizer, projected, MP4, multi-import, video authoring (main/nightly)
+ * @webkit-gpu  — WebGL/Shots capture paths that crash Linux Playwright WebKit (canary only)
  */
 test.describe('@responsive layout and core chrome', () => {
   test('header actions stay in viewport', async ({ page }, testInfo) => {
@@ -327,7 +328,19 @@ test.describe('@heavy model import variants', () => {
 });
 
 test.describe('@smoke workflow path', () => {
-  test('build graybox, approve reference, open shots and export', async ({ page }) => {
+  // Lightweight Shots mount — required on WebKit. Avoid capture / multi-workspace GPU churn.
+  test('Shots workspace mounts camera shell without capture', async ({ page }) => {
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-shots-shutter]')).toBeVisible();
+    await expect(page.locator('[data-shots-mode-switcher]').first()).toBeVisible();
+  });
+
+  // GPU-heavy on Linux WebKit (canary only). Still required on Chromium desktop smoke.
+  test('@webkit-gpu build graybox, approve reference, open shots and export', async ({ page }) => {
     test.setTimeout(180_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
@@ -389,7 +402,7 @@ test.describe('@smoke workflow path', () => {
     await expect(page.getByRole('button', { name: /Export Selected Shots|Export \d+ Shots/i })).toBeVisible();
   });
 
-  test('repeated still captures create distinct persisted shot thumbnails', async ({ page }) => {
+  test('@webkit-gpu repeated still captures create distinct persisted shot thumbnails', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);

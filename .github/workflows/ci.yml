@@ -152,6 +152,7 @@ jobs:
           name: dist
           path: dist/
       - run: npx playwright install --with-deps webkit
+      # Required: excludes @webkit-gpu capture/transition paths that crash Linux SW WebKit.
       - run: npm run test:e2e:webkit
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
@@ -159,6 +160,37 @@ jobs:
         if: failure()
         with:
           name: playwright-webkit-smoke-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  e2e-webkit-gpu-canary:
+    name: WebKit GPU canary
+    needs: build
+    runs-on: ubuntu-latest
+    # Linux Playwright WebKit frequently kills the page process under multi-context WebGL.
+    # Keep the signal visible with traces, but do not block PR merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps webkit
+      - run: npm run test:e2e:webkit-gpu
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-webkit-gpu-artifacts
           path: |
             test-results/
             playwright-report/
