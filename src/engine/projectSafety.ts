@@ -517,10 +517,49 @@ export async function createProjectSnapshot(project: LocationProject, reason = '
   return saveProjectRevision(project, { kind: 'snapshot', reason });
 }
 
+/**
+ * Pure schema migration may attach planned storage keys to assets that still hold
+ * inline data URLs (e.g. legacy keyframe previews). Stage those binaries into
+ * content-addressed recovery storage before treating the asset as already persisted.
+ */
+async function hydrateInlineRasterOrVideoAsset(asset: ProjectAsset): Promise<void> {
+  const blob = dataUrlToBlob(asset.uri);
+  validateBlob(asset, blob);
+  const resource = await ensureProjectAssetResource(asset);
+  asset.storageKey = resource.key;
+  asset.uri = `${PROJECT_ASSET_URI_PREFIX}${resource.key}`;
+  const uri = await resolveProjectAssetUri(asset);
+  if (!uri) throw new Error(`Recovery revision is missing binary asset ${asset.name}.`);
+  asset.uri = uri;
+}
+
+function retargetKeyframePreviewStorageKeys(
+  project: LocationProject,
+  assetId: string,
+  storageKey: string,
+): void {
+  for (const shot of project.shots) {
+    for (const keyframe of shot.cameraKeyframes ?? []) {
+      if (keyframe.previewAssetId === assetId) {
+        keyframe.previewStorageKey = storageKey;
+      }
+    }
+  }
+}
+
 async function hydrateRevision(record: ProjectRevisionRecord): Promise<LocationProject> {
   const project = validateProjectStructure(JSON.parse(record.manifest) as LocationProject);
   for (const asset of Object.values(project.assets.assets)) {
     if (isRasterOrVideoAsset(asset)) {
+      // Migrated inline payloads are available on the asset itself even when the
+      // planned storage key was never written to IndexedDB.
+      if (asset.uri.startsWith('data:')) {
+        await hydrateInlineRasterOrVideoAsset(asset);
+        if (asset.storageKey) {
+          retargetKeyframePreviewStorageKeys(project, asset.id, asset.storageKey);
+        }
+        continue;
+      }
       const key = storageKeyFromAsset(asset);
       if (!key) throw new Error(`Recovery revision is missing a storage key for ${asset.name}.`);
       await verifyProjectAssetResource(asset, key, resourceMetadataFor(record, 'projectAsset', key));

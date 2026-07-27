@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultProject, createPanoAsset, createPanoReference, createSceneObject } from '../src/domain/defaults';
+import {
+  createCameraKeyframe,
+  createDefaultProject,
+  createPanoAsset,
+  createPanoReference,
+  createSceneObject,
+} from '../src/domain/defaults';
 import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
 import { getModelAsset, putModelAsset, resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import { createProjectPackage, readProjectFile, validateProjectPackage } from '../src/engine/projectIO';
@@ -29,6 +35,8 @@ import {
   failNextProjectRevisionCommitForTests,
   failNextProjectRevisionDeleteForTests,
   resetProjectRevisionStoreForTests,
+  writeProjectRevision,
+  type ProjectRevisionRecord,
 } from '../src/engine/projectRevisionStore';
 
 async function resetSafetyStorage() {
@@ -68,6 +76,77 @@ describe('project safety revisions', () => {
     expect(recovered?.project.name).toBe('Reliable courtyard');
     expect(recovered?.project.assets.assets[asset.id]?.uri.startsWith('blob:')).toBe(true);
     expect(recovered?.recoveredPreviousRevision).toBe(false);
+  });
+
+  it('recovers schema 0.1 revisions with inline keyframe previews via migration staging', async () => {
+    // Simulate a revision written on main before keyframe previews became project assets.
+    // The raw manifest still has previewUri data URLs; recovery must migrate + stage binaries.
+    const base = createDefaultProject();
+    const keyframe = createCameraKeyframe({
+      label: 'Start',
+      timeSeconds: 0,
+      camera: base.shots[0]!.camera,
+    });
+    const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const legacyManifest = {
+      ...base,
+      schemaVersion: '0.1',
+      name: 'Legacy keyframe thumbs',
+      shots: base.shots.map((shot, index) => (
+        index === 0
+          ? {
+            ...shot,
+            cameraKeyframes: [{
+              ...keyframe,
+              previewUri: tinyPng,
+            }],
+          }
+          : shot
+      )),
+    };
+    // Strip fields formalized after 0.1 so the revision looks like pre-migration storage.
+    delete (legacyManifest as { productVersion?: string }).productVersion;
+
+    const revision: ProjectRevisionRecord = {
+      id: 'rev-legacy-schema-0.1-keyframe-preview',
+      projectId: base.id,
+      kind: 'autosave',
+      reason: 'Pre-migration local autosave',
+      createdAt: new Date().toISOString(),
+      manifest: JSON.stringify(legacyManifest),
+      // Old revisions did not list content-addressed project asset resources for keyframe thumbs.
+      resources: {
+        projectAssetKeys: [],
+        modelAssetKeys: [],
+      },
+    };
+    await writeProjectRevision(revision);
+
+    // Exercise full recovery hydration, not parse-only migration.
+    const loaded = await loadProjectRevision(revision.id);
+    expect(loaded.project.name).toBe('Legacy keyframe thumbs');
+    expect(loaded.project.schemaVersion).toBe('1.0');
+
+    const recoveredKf = loaded.project.shots[0]?.cameraKeyframes[0];
+    expect(recoveredKf?.previewAssetId).toBeTruthy();
+    const previewAsset = loaded.project.assets.assets[recoveredKf!.previewAssetId!];
+    expect(previewAsset).toBeDefined();
+    expect(previewAsset.uri.startsWith('blob:') || previewAsset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)).toBe(true);
+    expect(previewAsset.storageKey).toBeTruthy();
+    // Binary must be durable after recovery staging (not only present as an inline data URL).
+    const durableBlob = await getProjectAssetBlob(previewAsset.storageKey!);
+    expect(durableBlob).toBeInstanceOf(Blob);
+    expect(durableBlob!.size).toBeGreaterThan(0);
+
+    const recovered = await recoverLatestProject();
+    expect(recovered?.project.id).toBe(base.id);
+    expect(recovered?.project.name).toBe('Legacy keyframe thumbs');
+    const recoveredPreviewId = recovered?.project.shots[0]?.cameraKeyframes[0]?.previewAssetId;
+    expect(recoveredPreviewId).toBeTruthy();
+    const again = recovered!.project.assets.assets[recoveredPreviewId!];
+    // Content-addressed staging reuses the same durable key even if migration mints a new asset id.
+    expect(again.storageKey).toBe(previewAsset.storageKey);
+    expect(await getProjectAssetBlob(again.storageKey!)).toBeInstanceOf(Blob);
   });
 
   it('keeps the active revision recoverable when a later save has a missing blob', async () => {
