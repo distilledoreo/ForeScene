@@ -520,6 +520,12 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toMatch(/!thumbnailFreshAfterFinishRef\.current/);
     expect(shots).toContain('markThumbnailFreshOnSuccess');
     expect(shots).toMatch(/markThumbnailFreshOnSuccess[\s\S]*thumbnailFreshAfterFinishRef\.current = true/);
+    // Captured moves show a keyframe filmstrip / path preview (not only Export).
+    expect(shots).toContain('CameraMovePreviewStrip');
+    expect(shots).toContain('captureKeyframeThumb');
+    const previewStrip = readFileSync(new URL('../src/components/workspaces/CameraMovePreviewStrip.tsx', import.meta.url), 'utf8');
+    expect(previewStrip).toContain('data-camera-move-preview-strip');
+    expect(previewStrip).toContain('data-camera-move-preview-play');
     // Re-entering Video preserves existing keyframes and restores capture state from them.
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start on enter.
     const enterVideoModeBody = shots.match(

@@ -64,6 +64,7 @@ import {
   updateCameraMoveDuration,
   updateIntermediateCameraKeyframeTime,
 } from '../../engine/cameraKeyframes';
+import { CameraMovePreviewStrip } from './CameraMovePreviewStrip';
 import { KeyframeStrip } from './KeyframeStrip';
 import { runSettledSequentially } from '../../engine/asyncJobs';
 import {
@@ -290,6 +291,9 @@ export function ShotsWorkspace() {
   const resumeVideoAfterNextShotRef = useRef(false);
   /** Avoid re-running the full still matrix when Finish already refreshed the thumbnail. */
   const thumbnailFreshAfterFinishRef = useRef(false);
+  /** Lightweight per-keyframe stills for the move filmstrip (not the full gallery matrix). */
+  const [keyframeThumbById, setKeyframeThumbById] = useState<Record<string, string>>({});
+  const keyframeThumbGenerationRef = useRef(0);
   const [framingCamera, setFramingCamera] = useState<CameraData | undefined>();
   const [focalLengthHudPulse, setFocalLengthHudPulse] = useState(0);
   const [cameraReseedGeneration, setCameraReseedGeneration] = useState(0);
@@ -941,6 +945,47 @@ export function ShotsWorkspace() {
     setShotCameraFlying(true, options);
   }, [bumpCameraReseed, selectedShot, setShotCameraFlying, shotCameraFlying]);
 
+  /**
+   * Cheap clay still for the move filmstrip (192×108). Non-blocking; safe to call per pose.
+   */
+  const captureKeyframeThumb = useCallback((
+    keyframeId: string,
+    camera: CameraData,
+    shotOverride?: Shot,
+  ) => {
+    const shot = shotOverride
+      ?? useContinuityStore.getState().project.shots.find((item) => item.id === selectedShotId)
+      ?? selectedShot;
+    if (!shot) return;
+    const generation = keyframeThumbGenerationRef.current;
+    const latestProject = useContinuityStore.getState().project;
+    const thumbShot: Shot = {
+      ...shot,
+      camera: {
+        ...camera,
+        position: [...camera.position] as CameraData['position'],
+        target: [...camera.target] as CameraData['target'],
+      },
+      exportSettings: {
+        ...shot.exportSettings,
+        width: 192,
+        height: 108,
+      },
+    };
+    void renderShotFrame(latestProject, thumbShot, { peopleVariant: 'with_people' })
+      .then((frame) => {
+        if (keyframeThumbGenerationRef.current !== generation) return;
+        setKeyframeThumbById((current) => (
+          current[keyframeId] === frame.dataUrl
+            ? current
+            : { ...current, [keyframeId]: frame.dataUrl }
+        ));
+      })
+      .catch(() => {
+        // Filmstrip falls back to labeled placeholders.
+      });
+  }, [selectedShot, selectedShotId]);
+
   const snapshotPreview = useCallback((
     shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData },
     camera: CameraData,
@@ -1127,11 +1172,20 @@ export function ShotsWorkspace() {
     if (wasEmpty) {
       snapshotPreview(selectedShot, pose);
     }
+    // Always refresh a cheap filmstrip still for the newest pose (and keep prior thumbs).
+    const newest = nextKeyframes[nextKeyframes.length - 1];
+    if (newest) {
+      captureKeyframeThumb(newest.id, pose, {
+        ...selectedShot,
+        cameraKeyframes: nextKeyframes,
+      });
+    }
     setLandFlash(true);
     window.setTimeout(() => setLandFlash(false), 500);
   }, [
     cameraMoveDurationSeconds,
     cameraMoveEasing,
+    captureKeyframeThumb,
     clearKeyframeSelection,
     clearViewportObjectInspection,
     getEffectiveCamera,
@@ -1154,11 +1208,19 @@ export function ShotsWorkspace() {
     if (selectedShot && camera) {
       snapshotPreview(selectedShot, camera, { markThumbnailFreshOnSuccess: true });
     }
+    // Fill any missing filmstrip stills so finished moves always show a path preview.
+    for (const keyframe of cameraMoveKeyframes) {
+      if (!keyframeThumbById[keyframe.id]) {
+        captureKeyframeThumb(keyframe.id, keyframe.camera, selectedShot);
+      }
+    }
   }, [
     cameraMoveKeyframes,
+    captureKeyframeThumb,
     clearKeyframeSelection,
     clearViewportObjectInspection,
     getEffectiveCamera,
+    keyframeThumbById,
     selectedShot,
     snapshotPreview,
     stopCameraMovePreview,
@@ -1201,6 +1263,10 @@ export function ShotsWorkspace() {
     setSelectedSegmentStartId(null);
     if (inserted) {
       setSelectedKeyframeId(inserted.id);
+      captureKeyframeThumb(inserted.id, camera, {
+        ...latestShot,
+        cameraKeyframes: nextKeyframes,
+      });
       // Inspect the newly inserted pose's object snapshot without binding the camera.
       if (inserted.objectOverrides !== undefined) {
         setViewportObjectOverrides(structuredClone(inserted.objectOverrides));
@@ -1210,6 +1276,7 @@ export function ShotsWorkspace() {
     }
   }, [
     cameraMoveEasing,
+    captureKeyframeThumb,
     clearViewportObjectInspection,
     getEffectiveCamera,
     selectedSegmentStartId,
@@ -1237,7 +1304,12 @@ export function ShotsWorkspace() {
     });
     updateCameraMoveKeyframes(next);
     setViewportObjectOverrides(objectSnapshot);
+    captureKeyframeThumb(keyframeId, camera, {
+      ...latestShot,
+      cameraKeyframes: next,
+    });
   }, [
+    captureKeyframeThumb,
     getEffectiveCamera,
     selectedShot,
     stopCameraMovePreview,
@@ -1394,6 +1466,8 @@ export function ShotsWorkspace() {
     clearViewportObjectInspection();
     stopCameraMovePreview();
     thumbnailFreshAfterFinishRef.current = false;
+    keyframeThumbGenerationRef.current += 1;
+    setKeyframeThumbById({});
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
@@ -1668,6 +1742,8 @@ export function ShotsWorkspace() {
     setVideoCaptureState(captureStateFromKeyframes(shot?.cameraKeyframes ?? []));
     setTimelineOpen((shot?.cameraKeyframes.length ?? 0) > 2);
     thumbnailFreshAfterFinishRef.current = false;
+    keyframeThumbGenerationRef.current += 1;
+    setKeyframeThumbById({});
     // Intentionally only selectedShotId — stable chrome reset per shot switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId]);
@@ -2076,6 +2152,23 @@ export function ShotsWorkspace() {
                 <p className="text-[11px] font-medium text-white/80" data-shots-video-start-set>
                   Start set · fly to the next pose and capture
                 </p>
+              )}
+
+              {/* Keyframe filmstrip + play path (and exported MP4 when available). */}
+              {cameraMoveKeyframes.length >= 2 && (
+                <CameraMovePreviewStrip
+                  keyframes={cameraMoveKeyframes}
+                  durationSeconds={cameraMoveDurationSeconds}
+                  thumbsById={keyframeThumbById}
+                  isPreviewing={isPreviewingCameraMove}
+                  exportedVideoUrl={cameraMovePreviewUrl}
+                  onPreview={previewCameraMove}
+                  onStopPreview={() => {
+                    stopCameraMovePreview();
+                    clearViewportObjectInspection();
+                  }}
+                  onSelectKeyframe={(id) => selectKeyframeNode(id)}
+                />
               )}
 
               {/* Compact path after second pose: Finish + Capture next (timeline still hidden). */}

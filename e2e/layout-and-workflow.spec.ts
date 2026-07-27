@@ -428,6 +428,10 @@ test.describe('workflow path smoke', () => {
     await expect(page.locator('[data-shots-video-finish]')).toBeVisible();
     await expect(page.locator('[data-shots-video-capture-next]')).toBeVisible();
     await expect(page.locator('[data-camera-keyframe-strip]')).toHaveCount(0);
+    // Move preview filmstrip appears once a path exists.
+    await expect(page.locator('[data-camera-move-preview-strip]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-play]')).toBeVisible();
+    await expect(page.locator('[data-camera-move-preview-frame]')).toHaveCount(2);
 
     await page.locator('[data-shots-video-finish]').click({ force: true });
     await dismissOverlays(page);
