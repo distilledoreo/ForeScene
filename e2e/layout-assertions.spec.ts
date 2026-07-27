@@ -141,10 +141,13 @@ test.describe('layout visibility and overflow', () => {
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 4);
     }
 
-    // Drawer must not cover the primary shutter center.
+    // Desktop/side drawers must not cover the primary shutter.
+    // On phone/tablet the drawer is intentionally full-bleed; required control
+    // must return after close (cannot leave shutter permanently covered).
+    const viewportWidth = viewport?.width ?? 1440;
     const shutterBox = await shutter.boundingBox();
     expect(shutterBox).toBeTruthy();
-    if (box && shutterBox) {
+    if (box && shutterBox && viewportWidth >= 1024) {
       const shutterCenter = {
         x: shutterBox.x + shutterBox.width / 2,
         y: shutterBox.y + shutterBox.height / 2,
@@ -155,8 +158,13 @@ test.describe('layout visibility and overflow', () => {
         && shutterCenter.y >= box.y
         && shutterCenter.y <= box.y + box.height
       );
-      expect(coversShutterCenter, 'settings drawer should not cover shutter center').toBe(false);
+      expect(coversShutterCenter, 'desktop settings drawer should not cover shutter center').toBe(false);
     }
+
+    // Close drawer and require shutter still visible (drawer must not trap the chrome).
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden({ timeout: 5000 });
+    await expect(shutter, 'shutter must remain after settings close').toBeVisible();
 
     await assertNoHorizontalOverflow(page);
   });
