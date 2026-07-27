@@ -1480,9 +1480,21 @@ export function SceneViewport({
       // Render targets are owned by this WebGL context and must be released
       // while the renderer can still dispose their GPU resources.
       disposeOcclusionMaps();
-      if (sceneRef.current) disposeScene(sceneRef.current);
+
+      const activeScene = sceneRef.current;
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      if (activeScene) disposeScene(activeScene);
+
+      // Match offline renderers: explicitly release the WebGL context so WebKit
+      // does not retain GPU resources when Build → Shots remounts the viewport.
       renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.width = 1;
+      renderer.domElement.height = 1;
       renderer.domElement.remove();
+
       if (parentFinalizeShotFovWheelBatchRef) {
         parentFinalizeShotFovWheelBatchRef.current = () => {};
       }
