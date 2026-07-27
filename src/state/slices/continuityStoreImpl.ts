@@ -1191,6 +1191,7 @@ export function createContinuityStoreState(
       dataUrl,
     });
     if (!committed) return undefined;
+    // commitKeyframePreviewAsset reuses/prunes preview assets; touch only.
     set({ project: touchProject(committed.project) });
     return committed.project.assets.assets[committed.previewAssetId];
   },

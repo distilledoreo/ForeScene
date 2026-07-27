@@ -1,19 +1,31 @@
 /**
  * Ordered project schema migrations.
  * Each step upgrades one version; load always runs the full chain to CURRENT_SCHEMA_VERSION.
+ *
+ * Migrations are pure: they only rewrite the in-memory project graph. Binary staging
+ * (IndexedDB / object URLs) is the caller's job after validation accepts the result.
  */
 
-import type { CameraKeyframe, LocationProject, ProjectVersion } from '../domain/types';
+import type { CameraKeyframe, LocationProject, ProjectAsset, ProjectVersion } from '../domain/types';
 import { createId } from '../utils/ids';
-import {
-  createProjectAssetStorageKey,
-  storeProjectAssetDataUrl,
-} from './projectAssetStore';
+import { dataUrlToBlob } from './fileTransfers';
+import { createProjectAssetStorageKey } from './projectAssetStore';
 
 /** Product schema lineage (manifest field). */
 export const SCHEMA_VERSIONS = ['0.1', '0.2', '1.0'] as const;
 export type MigratableSchemaVersion = (typeof SCHEMA_VERSIONS)[number];
 export const CURRENT_SCHEMA_VERSION: ProjectVersion = '1.0';
+
+/** Binary payloads produced by pure migration; stage only after the project is accepted. */
+export interface PendingProjectAsset {
+  asset: ProjectAsset;
+  blob: Blob;
+}
+
+export interface ProjectMigrationResult {
+  project: LocationProject;
+  pendingAssets: PendingProjectAsset[];
+}
 
 export interface SchemaMigration {
   from: MigratableSchemaVersion;
@@ -27,7 +39,9 @@ function isKnownSchemaVersion(value: unknown): value is MigratableSchemaVersion 
 
 /**
  * 0.1 → 0.2: keyframe previews move from inline data URLs to project assets.
- * Legacy `previewUri` data URLs become assets + `previewAssetId`; short non-data URIs are kept as previewUri for session.
+ * Legacy `previewUri` data URLs become assets + `previewAssetId` (still holding the
+ * data URL on the asset until a later staging step). Short non-data URIs stay as
+ * session `previewUri`.
  */
 export function migrateProject01To02(project: LocationProject): LocationProject {
   const assets = { ...project.assets.assets };
@@ -82,9 +96,11 @@ function migrateKeyframePreviewToAsset(
     return { keyframe, assetsChanged: false };
   }
 
+  // Pure in-memory asset record. Keep the data URL on `uri` so validators / recovery
+  // can read bytes without touching IndexedDB until the project is accepted.
   const assetId = createId('asset');
   const storageKey = createProjectAssetStorageKey(projectId, assetId);
-  const asset = storeProjectAssetDataUrl(projectId, {
+  const asset: ProjectAsset = {
     id: assetId,
     type: 'image',
     name: `keyframe-preview-${keyframe.id}`,
@@ -92,14 +108,14 @@ function migrateKeyframePreviewToAsset(
     uri,
     storageKey,
     createdAt: new Date().toISOString(),
-  });
+  };
   assets[assetId] = asset;
   const { previewUri: _drop, ...rest } = keyframe;
   return {
     keyframe: {
       ...rest,
       previewAssetId: assetId,
-      previewStorageKey: asset.storageKey ?? storageKey,
+      previewStorageKey: storageKey,
     },
     assetsChanged: true,
   };
@@ -140,8 +156,30 @@ export function listMigrationPath(
   return path;
 }
 
-/** Run ordered migrations until CURRENT_SCHEMA_VERSION. */
+/**
+ * Collect raster/video assets that still hold inline data URLs (e.g. after pure migration).
+ * Callers stage these only after the full project has been validated and accepted.
+ */
+export function collectPendingInlineProjectAssets(project: LocationProject): PendingProjectAsset[] {
+  const pending: PendingProjectAsset[] = [];
+  for (const asset of Object.values(project.assets.assets)) {
+    if ((asset.type !== 'image' && asset.type !== 'video') || !asset.uri.startsWith('data:')) continue;
+    pending.push({ asset, blob: dataUrlToBlob(asset.uri) });
+  }
+  return pending;
+}
+
+/** Run ordered migrations until CURRENT_SCHEMA_VERSION (pure; no local storage writes). */
 export function migrateProjectToCurrent(project: LocationProject): LocationProject {
+  return migrateProjectToCurrentResult(project).project;
+}
+
+/**
+ * Same as migrateProjectToCurrent, plus pending binary payloads for transactional staging.
+ * `parseProject` / validators should use the project graph only; storage writers stage
+ * `pendingAssets` after accept.
+ */
+export function migrateProjectToCurrentResult(project: LocationProject): ProjectMigrationResult {
   const version = project.schemaVersion;
   if (!isKnownSchemaVersion(version)) {
     throw new Error(`Unsupported project schema version: ${String(version)}`);
@@ -153,7 +191,10 @@ export function migrateProjectToCurrent(project: LocationProject): LocationProje
       throw new Error(`Migration ${step.from} → ${step.to} did not set schemaVersion.`);
     }
   }
-  return next;
+  return {
+    project: next,
+    pendingAssets: collectPendingInlineProjectAssets(next),
+  };
 }
 
 /** Strip ephemeral runtime preview fields before serializing to JSON. */

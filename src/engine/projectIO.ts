@@ -39,7 +39,11 @@ function createPortableProject(project: LocationProject): LocationProject {
   portable.schemaVersion = CURRENT_SCHEMA_VERSION;
   portable.productVersion = portable.productVersion ?? '0.1.0';
   for (const asset of Object.values(portable.assets.assets)) {
-    if (asset.storageKey) asset.uri = `${PROJECT_ASSET_URI_PREFIX}${asset.storageKey}`;
+    // Keep inline data URLs until package staging extracts them. Pure migrations
+    // may assign a planned storageKey without having written binary storage yet.
+    if (asset.storageKey && !asset.uri.startsWith('data:')) {
+      asset.uri = `${PROJECT_ASSET_URI_PREFIX}${asset.storageKey}`;
+    }
   }
   return portable;
 }
