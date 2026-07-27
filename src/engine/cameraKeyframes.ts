@@ -15,6 +15,28 @@ export const CAMERA_KEYFRAME_TIME_EPSILON = 0.001;
 export type CameraMoveKeyframeSlot = 'start' | 'end';
 export type VideoCaptureState = 'empty' | 'capturing' | 'finished';
 
+/** Derive authoring capture state from keyframe count when loading a shot. */
+export function captureStateFromKeyframes(keyframes: readonly unknown[]): VideoCaptureState {
+  if (keyframes.length === 0) return 'empty';
+  if (keyframes.length === 1) return 'capturing';
+  return 'finished';
+}
+
+/**
+ * After undo/redo, resync capture UI to restored keyframe data.
+ * Preserve an intentional multi-pose capturing session when ≥2 poses remain;
+ * never leave finished when fewer than 2 poses exist.
+ */
+export function captureStateAfterKeyframeRestore(
+  keyframes: readonly unknown[],
+  previous: VideoCaptureState,
+): VideoCaptureState {
+  if (keyframes.length === 0) return 'empty';
+  if (keyframes.length === 1) return 'capturing';
+  if (previous === 'capturing') return 'capturing';
+  return 'finished';
+}
+
 export const CAMERA_KEYFRAME_EASING_OPTIONS: readonly {
   value: CameraKeyframeEasing;
   label: string;

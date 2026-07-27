@@ -500,21 +500,24 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('data-shots-video-refresh-thumbnail');
     expect(shots).toContain('interpolateObjectOverrides');
     expect(shots).toContain('viewportObjectOverrides');
-    // Simple vs Pro authoring chrome (Simple default; strip is Pro-only).
-    expect(shots).toContain("type VideoAuthoringMode = 'simple' | 'pro'");
-    expect(shots).toContain("useState<VideoAuthoringMode>('simple')");
-    expect(shots).toContain('data-shots-video-mode-simple');
-    expect(shots).toContain('data-shots-video-mode-pro');
-    expect(shots).toContain('data-shots-video-simple-chrome');
+    // Progressive disclosure (no Simple/Pro split): compact actions then optional timeline.
+    expect(shots).not.toContain("type VideoAuthoringMode = 'simple' | 'pro'");
+    expect(shots).not.toContain('data-shots-video-mode-simple');
+    expect(shots).toContain('data-shots-video-compact-actions');
+    expect(shots).toContain('data-shots-video-edit-timeline');
+    expect(shots).toContain('data-shots-video-finished');
     expect(shots).toContain('data-shots-video-export');
     expect(shots).toContain('data-shots-video-next-shot');
     expect(shots).toContain('completeVideoAndNextShot');
     expect(shots).toContain('resumeVideoAfterNextShotRef');
-    expect(shots).toMatch(/videoAuthoringMode === 'pro' && \(\s*<KeyframeStrip/);
-    expect(shots).toMatch(/simpleComplete = videoAuthoringMode === 'simple' && nextKeyframes\.length >= 2/);
+    expect(shots).toContain('captureStateAfterKeyframeRestore');
+    expect(shots).toContain('thumbnailFreshAfterFinishRef');
+    expect(shots).toMatch(/showTimeline = timelineOpen \|\| cameraMoveKeyframes\.length > 2/);
     // Intermediate sequential captures must not thrash snapshotPreview.
     expect(shots).toMatch(/if \(wasEmpty\) \{\s*snapshotPreview/);
     expect(shots).toMatch(/finishSequentialCapture[\s\S]*snapshotPreview/);
+    // Next shot reuses finish thumbnail when fresh.
+    expect(shots).toMatch(/!thumbnailFreshAfterFinishRef\.current/);
     // Re-entering Video preserves existing keyframes and restores capture state from them.
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start on enter.
     const enterVideoModeBody = shots.match(

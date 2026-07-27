@@ -49,6 +49,8 @@ import {
   CameraMoveKeyframeSlot,
   VideoCaptureState,
   appendSequentialCameraKeyframe,
+  captureStateAfterKeyframeRestore,
+  captureStateFromKeyframes,
   getCameraMoveDurationSeconds,
   getSortedCameraKeyframes,
   hasManualCameraKeyframeTiming,
@@ -142,8 +144,6 @@ const VIDEO_DURATION_UI_MIN_SECONDS = 1;
 const VIDEO_DURATION_UI_MAX_SECONDS = 20;
 
 type CaptureMode = 'still' | 'video';
-/** Simple = two-pose finish path; Pro = full multi-keyframe strip. */
-type VideoAuthoringMode = 'simple' | 'pro';
 
 function clampVideoDuration(seconds: number): number {
   if (!Number.isFinite(seconds)) return DEFAULT_CAMERA_MOVE_DURATION_SECONDS;
@@ -160,13 +160,6 @@ function clampVideoDurationUiSeconds(seconds: number): number {
     VIDEO_DURATION_UI_MAX_SECONDS,
     Math.max(VIDEO_DURATION_UI_MIN_SECONDS, rounded),
   );
-}
-
-/** Derive authoring capture state from keyframe count when restoring a shot. */
-function captureStateFromKeyframes(keyframes: readonly unknown[]): VideoCaptureState {
-  if (keyframes.length === 0) return 'empty';
-  if (keyframes.length === 1) return 'capturing';
-  return 'finished';
 }
 
 export function ShotsWorkspace() {
@@ -284,14 +277,19 @@ export function ShotsWorkspace() {
    * Export progress stays on isExportingCameraMove — never overloaded into capture state.
    */
   const [videoCaptureState, setVideoCaptureState] = useState<VideoCaptureState>('empty');
-  /** Simple (default): two-pose capture without timeline chrome. Pro: full keyframe strip. */
-  const [videoAuthoringMode, setVideoAuthoringMode] = useState<VideoAuthoringMode>('simple');
+  /**
+   * Progressive disclosure: timeline stays hidden until a third pose or "Edit timeline".
+   * Default flow is Start → End (Capture next + Finish) without a mode switch.
+   */
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
   const [isPreviewingCameraMove, setIsPreviewingCameraMove] = useState(false);
   const previewAbortRef = useRef<{ cancelled: boolean; frame?: number }>({ cancelled: false });
   /** After "Next shot" from a finished video move, keep Video mode empty on the new shot. */
   const resumeVideoAfterNextShotRef = useRef(false);
+  /** Avoid re-running the full still matrix when Finish already refreshed the thumbnail. */
+  const thumbnailFreshAfterFinishRef = useRef(false);
   const [framingCamera, setFramingCamera] = useState<CameraData | undefined>();
   const [focalLengthHudPulse, setFocalLengthHudPulse] = useState(0);
   const [cameraReseedGeneration, setCameraReseedGeneration] = useState(0);
@@ -770,12 +768,40 @@ export function ShotsWorkspace() {
 
     handledRestoreGenerationRef.current = shotCameraHistoryRestoreGeneration;
 
-    if (!selectedShot) return;
+    // Read latest shot after store restore (camera + cameraKeyframes).
+    const restoredShot = useContinuityStore.getState().project.shots.find(
+      (item) => item.id === selectedShotId,
+    );
+    if (!restoredShot) return;
 
-    draftCameraRef.current = selectedShot.camera;
-    setFramingCamera(selectedShot.camera);
+    draftCameraRef.current = restoredShot.camera;
+    setFramingCamera(restoredShot.camera);
     bumpCameraReseed();
-  }, [bumpCameraReseed, shotCameraHistoryRestoreGeneration, selectedShot?.id]);
+
+    // Keep authoring chrome consistent with restored keyframe data (undo/redo blocker).
+    if (captureMode === 'video') {
+      const restoredKeyframes = restoredShot.cameraKeyframes;
+      setVideoCaptureState((previous) => captureStateAfterKeyframeRestore(
+        restoredKeyframes,
+        previous,
+      ));
+      clearKeyframeSelection();
+      clearViewportObjectInspection();
+      stopCameraMovePreview();
+      thumbnailFreshAfterFinishRef.current = false;
+      if (restoredKeyframes.length <= 2) {
+        setTimelineOpen(false);
+      }
+    }
+  }, [
+    bumpCameraReseed,
+    captureMode,
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    selectedShotId,
+    shotCameraHistoryRestoreGeneration,
+    stopCameraMovePreview,
+  ]);
 
   const pulseFocalLengthHud = useCallback(() => {
     setFocalLengthHudPulse((value) => value + 1);
@@ -1075,18 +1101,16 @@ export function ShotsWorkspace() {
     clearKeyframeSelection();
     clearViewportObjectInspection();
     landShotFraming(selectedShot.id, pose, { keepFlying: true });
-    // Simple mode: two poses complete the move automatically so finish is always obvious.
-    // Pro mode stays in capturing until Finish capture.
-    const simpleComplete = videoAuthoringMode === 'simple' && nextKeyframes.length >= 2;
-    if (simpleComplete) {
-      setVideoCaptureState('finished');
+    // Stay capturing until Finish — second pose offers Capture next + Finish (no auto-finish).
+    setVideoCaptureState('capturing');
+    thumbnailFreshAfterFinishRef.current = false;
+    // Progressive disclosure: open timeline once a third pose exists.
+    if (nextKeyframes.length > 2) {
+      setTimelineOpen(true);
+    }
+    // Thumbnail only on first Start — intermediate appends stay light.
+    if (wasEmpty) {
       snapshotPreview(selectedShot, pose);
-    } else {
-      setVideoCaptureState('capturing');
-      // Thumbnail only on first Start — intermediate Pro appends stay light.
-      if (wasEmpty) {
-        snapshotPreview(selectedShot, pose);
-      }
     }
     setLandFlash(true);
     window.setTimeout(() => setLandFlash(false), 500);
@@ -1101,7 +1125,6 @@ export function ShotsWorkspace() {
     snapshotPreview,
     stopCameraMovePreview,
     updateShot,
-    videoAuthoringMode,
     videoCaptureState,
   ]);
 
@@ -1111,10 +1134,11 @@ export function ShotsWorkspace() {
     setVideoCaptureState('finished');
     clearKeyframeSelection();
     clearViewportObjectInspection();
-    // Refresh gallery thumbnail once the authored move is finished.
+    // Refresh gallery thumbnail once when finishing; Next shot reuses this.
     const camera = getEffectiveCamera();
     if (selectedShot && camera) {
       snapshotPreview(selectedShot, camera);
+      thumbnailFreshAfterFinishRef.current = true;
     }
   }, [
     cameraMoveKeyframes,
@@ -1132,6 +1156,7 @@ export function ShotsWorkspace() {
     setVideoCaptureState('capturing');
     clearKeyframeSelection();
     clearViewportObjectInspection();
+    thumbnailFreshAfterFinishRef.current = false;
   }, [
     cameraMoveKeyframes,
     clearKeyframeSelection,
@@ -1311,9 +1336,11 @@ export function ShotsWorkspace() {
     // Preserve authored keyframes when re-entering Video (e.g. after shot switch forces Still).
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start here.
     setVideoCaptureState(captureStateFromKeyframes(existing));
+    setTimelineOpen(existing.length > 2);
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
+    thumbnailFreshAfterFinishRef.current = false;
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
@@ -1329,9 +1356,11 @@ export function ShotsWorkspace() {
   const enterStillMode = useCallback(() => {
     setCaptureMode('still');
     setVideoCaptureState('empty');
+    setTimelineOpen(false);
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
+    thumbnailFreshAfterFinishRef.current = false;
     // Still camera is always live — like a phone camera app.
     startFlyCamera({ clearFramingAcceptance: false });
   }, [clearKeyframeSelection, clearViewportObjectInspection, startFlyCamera, stopCameraMovePreview]);
@@ -1346,9 +1375,11 @@ export function ShotsWorkspace() {
     if (!selectedShot) return;
     updateCameraMoveKeyframes([]);
     setVideoCaptureState('empty');
+    setTimelineOpen(false);
     clearKeyframeSelection();
     clearViewportObjectInspection();
     stopCameraMovePreview();
+    thumbnailFreshAfterFinishRef.current = false;
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
@@ -1378,9 +1409,15 @@ export function ShotsWorkspace() {
     };
     // Accept framing so the completed move appears as a landed gallery shot.
     landShotFraming(selectedShot.id, pose, { keepFlying: true });
-    if (hasRenderableCameraMove(selectedShot.cameraKeyframes)) {
+    // Skip duplicate still-matrix work when Finish just refreshed the thumbnail.
+    if (
+      hasRenderableCameraMove(selectedShot.cameraKeyframes)
+      && !thumbnailFreshAfterFinishRef.current
+    ) {
       snapshotPreview(selectedShot, pose);
     }
+    thumbnailFreshAfterFinishRef.current = false;
+    setTimelineOpen(false);
     resumeVideoAfterNextShotRef.current = true;
     addCamera({ navigateToShots: false });
     setLandFlash(true);
@@ -1424,17 +1461,32 @@ export function ShotsWorkspace() {
   const enterStagingMode = useCallback(() => {
     if (!selectedShot) return;
     stopCameraMovePreview();
-    clearViewportObjectInspection();
+    // Keep keyframe object inspection so staging can edit the selected keyframe's pose.
+    if (selectedKeyframeId && viewportObjectOverrides === undefined) {
+      const keyframe = getSortedCameraKeyframes(selectedShot.cameraKeyframes)
+        .find((item) => item.id === selectedKeyframeId);
+      if (keyframe?.objectOverrides !== undefined) {
+        setViewportObjectOverrides(structuredClone(keyframe.objectOverrides));
+      } else {
+        setViewportObjectOverrides(
+          snapshotStageableObjectOverrides(
+            useContinuityStore.getState().project,
+            selectedShot,
+          ),
+        );
+      }
+    }
     const camera = getEffectiveCamera();
     landShotFraming(selectedShot.id, camera);
     setStagingMode(true);
     setStagedObjectId(undefined);
   }, [
-    clearViewportObjectInspection,
     getEffectiveCamera,
     landShotFraming,
+    selectedKeyframeId,
     selectedShot,
     stopCameraMovePreview,
+    viewportObjectOverrides,
   ]);
 
   const exitStagingMode = useCallback(() => {
@@ -1456,10 +1508,24 @@ export function ShotsWorkspace() {
     if (!selectedShot) return;
     const baseObject = project.scene.objects.find((object) => object.id === objectId);
     if (!baseObject || !canStageObjectPerShot(baseObject)) return;
+    // When a keyframe is selected, stage into the transient inspection map so Update pose can commit it.
+    if (selectedKeyframeId) {
+      setViewportObjectOverrides((previous) => {
+        const base = previous !== undefined
+          ? previous
+          : (selectedShot.objectOverrides ?? {});
+        return updateShotObjectOverrides(
+          { objectOverrides: base },
+          baseObject,
+          { transform },
+        );
+      });
+      return;
+    }
     updateShot(selectedShot.id, {
       objectOverrides: updateShotObjectOverrides(selectedShot, baseObject, { transform }),
     });
-  }, [project.scene.objects, selectedShot, updateShot]);
+  }, [project.scene.objects, selectedKeyframeId, selectedShot, updateShot]);
 
   const moveStagedObject = useCallback((objectId: string, position: Vec3) => {
     const object = shotSceneProject.scene.objects.find((item) => item.id === objectId);
@@ -1477,17 +1543,35 @@ export function ShotsWorkspace() {
     if (!selectedShot || !stagedObject) return;
     const baseObject = project.scene.objects.find((object) => object.id === stagedObject.id);
     if (!baseObject) return;
+    if (selectedKeyframeId) {
+      setViewportObjectOverrides((previous) => {
+        const base = previous !== undefined ? previous : (selectedShot.objectOverrides ?? {});
+        return updateShotObjectOverrides(
+          { objectOverrides: base },
+          baseObject,
+          { visible: !stagedObject.visible },
+        );
+      });
+      return;
+    }
     updateShot(selectedShot.id, {
       objectOverrides: updateShotObjectOverrides(selectedShot, baseObject, { visible: !stagedObject.visible }),
     });
-  }, [project.scene.objects, selectedShot, stagedObject, updateShot]);
+  }, [project.scene.objects, selectedKeyframeId, selectedShot, stagedObject, updateShot]);
 
   const resetStagedObject = useCallback(() => {
     if (!selectedShot || !stagedObjectId) return;
+    if (selectedKeyframeId) {
+      setViewportObjectOverrides((previous) => {
+        const base = previous !== undefined ? previous : (selectedShot.objectOverrides ?? {});
+        return clearShotObjectOverride({ objectOverrides: base }, stagedObjectId);
+      });
+      return;
+    }
     updateShot(selectedShot.id, {
       objectOverrides: clearShotObjectOverride(selectedShot, stagedObjectId),
     });
-  }, [selectedShot, stagedObjectId, updateShot]);
+  }, [selectedKeyframeId, selectedShot, stagedObjectId, updateShot]);
 
   const panoMatch = selectedShot && linkedPano
     ? getPanoMatchQuality(selectedShot.camera, linkedPano, project.settings)
@@ -1559,6 +1643,8 @@ export function ShotsWorkspace() {
       resumeVideoAfterNextShotRef.current = false;
       setCaptureMode('video');
       setVideoCaptureState('empty');
+      setTimelineOpen(false);
+      thumbnailFreshAfterFinishRef.current = false;
       setCameraMoveError(undefined);
       setCameraMoveNotice(undefined);
       setShotCameraFlying(true, { clearFramingAcceptance: false });
@@ -1566,6 +1652,8 @@ export function ShotsWorkspace() {
     }
     setCaptureMode('still');
     setVideoCaptureState(captureStateFromKeyframes(shot?.cameraKeyframes ?? []));
+    setTimelineOpen((shot?.cameraKeyframes.length ?? 0) > 2);
+    thumbnailFreshAfterFinishRef.current = false;
     // Intentionally only selectedShotId — stable chrome reset per shot switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId]);
@@ -1611,8 +1699,8 @@ export function ShotsWorkspace() {
     ?? selectedShot
     ?? project.shots[0];
 
-  const isProVideo = videoAuthoringMode === 'pro';
-  const simpleHasIntermediates = !isProVideo && cameraMoveKeyframes.length > 2;
+  /** Timeline shows after third pose or explicit Edit timeline. */
+  const showTimeline = timelineOpen || cameraMoveKeyframes.length > 2;
 
   const captureLabel = !selectedShot
     ? 'Add shot'
@@ -1620,9 +1708,7 @@ export function ShotsWorkspace() {
       ? (videoCaptureState === 'empty'
         ? 'Capture start'
         : videoCaptureState === 'capturing'
-          ? (isProVideo
-            ? 'Capture next pose'
-            : (cameraMoveKeyframes.length < 1 ? 'Capture start' : 'Capture end'))
+          ? (cameraMoveKeyframes.length < 1 ? 'Capture start' : 'Capture next pose')
           : isExportingCameraMove
             ? `${cameraMoveProgressMessage} · ${Math.round(cameraMoveProgress * 100)}%`
             : isPreviewingCameraMove
@@ -1634,11 +1720,9 @@ export function ShotsWorkspace() {
     ? (videoCaptureState === 'empty'
       ? 'Pose the first camera position · capture start'
       : videoCaptureState === 'capturing'
-        ? (isProVideo
-          ? (cameraMoveKeyframes.length < 2
-            ? 'Move to the next pose · capture again'
-            : 'Capture another pose or finish the move')
-          : 'Fly to the end pose · capture end')
+        ? (cameraMoveKeyframes.length < 2
+          ? 'Move to the next pose · capture again'
+          : 'Capture another pose or finish the move')
         : 'Move complete · next shot, preview, or export')
     : 'Capture adds a shot — viewfinder stays live';
 
@@ -1647,29 +1731,8 @@ export function ShotsWorkspace() {
       ? 'Next shot'
       : cameraMoveKeyframes.length <= 1
         ? 'Start set'
-        : (videoAuthoringMode === 'simple' && cameraMoveKeyframes.length === 2
-          ? 'End set · ready'
-          : 'Pose captured'))
+        : 'Pose captured')
     : 'Captured';
-
-  const setVideoAuthoringModeSafe = useCallback((mode: VideoAuthoringMode) => {
-    if (mode === videoAuthoringMode) return;
-    stopCameraMovePreview();
-    clearKeyframeSelection();
-    clearViewportObjectInspection();
-    setVideoAuthoringMode(mode);
-    // Never wipe keyframes on mode switch — only Retake clears.
-    // Multi-keyframe moves stay intact; Simple simply hides the timeline chrome.
-    if (mode === 'simple' && cameraMoveKeyframes.length >= 2) {
-      setVideoCaptureState('finished');
-    }
-  }, [
-    cameraMoveKeyframes.length,
-    clearKeyframeSelection,
-    clearViewportObjectInspection,
-    stopCameraMovePreview,
-    videoAuthoringMode,
-  ]);
 
   const goAdjacentShot = (direction: -1 | 1) => {
     if (selectedIndex < 0) return;
@@ -1945,40 +2008,10 @@ export function ShotsWorkspace() {
           </div>
 
           {captureMode === 'video' && (
-            <div className="pointer-events-auto flex w-full max-w-md flex-col items-center gap-2">
-              <div
-                data-shots-video-authoring-mode
-                data-shots-video-authoring-mode-value={videoAuthoringMode}
-                className="flex items-center gap-1 rounded-full bg-black/40 p-0.5 backdrop-blur-md"
-                role="group"
-                aria-label="Video authoring complexity"
-              >
-                <button
-                  type="button"
-                  data-shots-video-mode-simple
-                  onClick={() => setVideoAuthoringModeSafe('simple')}
-                  className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
-                    videoAuthoringMode === 'simple'
-                      ? 'bg-white text-zinc-900'
-                      : 'text-white/65 hover:text-white'
-                  }`}
-                >
-                  Simple
-                </button>
-                <button
-                  type="button"
-                  data-shots-video-mode-pro
-                  onClick={() => setVideoAuthoringModeSafe('pro')}
-                  className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
-                    videoAuthoringMode === 'pro'
-                      ? 'bg-white text-zinc-900'
-                      : 'text-white/65 hover:text-white'
-                  }`}
-                >
-                  Pro
-                </button>
-              </div>
-
+            <div
+              className="pointer-events-auto flex w-full max-w-md flex-col items-center gap-2"
+              data-shots-video-chrome
+            >
               <div className="flex items-center gap-2">
                 {videoCaptureState === 'capturing' && (
                   <span
@@ -2020,95 +2053,53 @@ export function ShotsWorkspace() {
                 </span>
               </div>
 
-              {/* Simple: two-pose chrome without timeline complexity */}
-              {videoAuthoringMode === 'simple' && (
+              {videoCaptureState === 'empty' && (
+                <p className="text-[11px] text-white/55" data-shots-video-empty-hint>
+                  No camera move captured
+                </p>
+              )}
+              {videoCaptureState === 'capturing' && cameraMoveKeyframes.length === 1 && (
+                <p className="text-[11px] font-medium text-white/80" data-shots-video-start-set>
+                  Start set · fly to the next pose and capture
+                </p>
+              )}
+
+              {/* Compact path after second pose: Finish + Capture next (timeline still hidden). */}
+              {videoCaptureState === 'capturing' && cameraMoveKeyframes.length >= 2 && !showTimeline && (
                 <div
-                  className="flex w-full flex-col items-center gap-2"
-                  data-shots-video-simple-chrome
+                  className="flex flex-wrap items-center justify-center gap-2"
+                  data-shots-video-compact-actions
                 >
-                  {simpleHasIntermediates && (
-                    <p
-                      className="max-w-sm text-center text-[10px] text-amber-100/90"
-                      data-shots-video-simple-pro-hint
-                    >
-                      This move has {cameraMoveKeyframes.length} poses.
-                      {' '}
-                      <button
-                        type="button"
-                        className="font-semibold underline underline-offset-2"
-                        onClick={() => setVideoAuthoringModeSafe('pro')}
-                      >
-                        Open Pro
-                      </button>
-                      {' '}
-                      to edit the timeline.
-                    </p>
-                  )}
-                  {videoCaptureState === 'empty' && (
-                    <p className="text-[11px] text-white/55">No camera move captured</p>
-                  )}
-                  {videoCaptureState === 'capturing' && cameraMoveKeyframes.length === 1 && (
-                    <p className="text-[11px] font-medium text-white/80" data-shots-video-simple-start-set>
-                      Start set · fly to end and capture
-                    </p>
-                  )}
-                  {videoCaptureState === 'finished' && cameraMoveReady && (
-                    <div className="flex w-full flex-col items-center gap-2" data-shots-video-simple-finished>
-                      <div className="flex flex-wrap items-center justify-center gap-2">
-                        <button
-                          type="button"
-                          data-shots-video-next-shot
-                          onClick={completeVideoAndNextShot}
-                          disabled={isExportingCameraMove || isPreviewingCameraMove}
-                          className="rounded-full bg-white px-4 py-2 text-[12px] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
-                        >
-                          Next shot
-                        </button>
-                        {isPreviewingCameraMove ? (
-                          <button
-                            type="button"
-                            data-camera-keyframe-stop-preview
-                            onClick={() => {
-                              stopCameraMovePreview();
-                              clearViewportObjectInspection();
-                            }}
-                            className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
-                          >
-                            Stop preview
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            data-camera-keyframe-preview
-                            data-shots-video-preview
-                            onClick={previewCameraMove}
-                            className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
-                          >
-                            Preview
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          data-shots-video-export
-                          onClick={() => void exportCameraMoveVideo()}
-                          disabled={isExportingCameraMove || !canExportVideo || !selectedExportModeAvailable || isPreviewingCameraMove}
-                          className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-40"
-                        >
-                          {isExportingCameraMove
-                            ? `${Math.round(cameraMoveProgress * 100)}%`
-                            : 'Export MP4'}
-                        </button>
-                      </div>
-                      <p className="text-center text-[10px] text-white/55">
-                        Next shot saves this move and starts a new one · export is optional
-                      </p>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    data-camera-keyframe-capture-next
+                    data-shots-video-capture-next
+                    onClick={appendSequentialCapture}
+                    className="rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-white/90"
+                  >
+                    Capture next
+                  </button>
+                  <button
+                    type="button"
+                    data-camera-keyframe-finish
+                    data-shots-video-finish
+                    onClick={finishSequentialCapture}
+                    className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
+                  >
+                    Finish capture
+                  </button>
+                  <button
+                    type="button"
+                    data-shots-video-edit-timeline
+                    onClick={() => setTimelineOpen(true)}
+                    className="text-[11px] font-semibold text-white/70 underline-offset-2 hover:text-white hover:underline"
+                  >
+                    Edit timeline
+                  </button>
                 </div>
               )}
 
-              {/* Pro: full multi-keyframe strip */}
-              {videoAuthoringMode === 'pro' && (
+              {showTimeline && (
                 <KeyframeStrip
                   keyframes={cameraMoveKeyframes}
                   durationSeconds={cameraMoveDurationSeconds}
@@ -2138,27 +2129,72 @@ export function ShotsWorkspace() {
                 />
               )}
 
-              {/* Finished Pro: next-shot primary + optional export */}
-              {videoAuthoringMode === 'pro' && videoCaptureState === 'finished' && cameraMoveReady && !isExportingCameraMove && (
-                <div className="flex flex-wrap items-center justify-center gap-2" data-shots-video-pro-finished>
-                  <button
-                    type="button"
-                    data-shots-video-next-shot
-                    onClick={completeVideoAndNextShot}
-                    disabled={isPreviewingCameraMove}
-                    className="rounded-full bg-white px-4 py-2 text-[12px] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
-                  >
-                    Next shot
-                  </button>
-                  <button
-                    type="button"
-                    data-shots-video-export
-                    onClick={() => void exportCameraMoveVideo()}
-                    disabled={!canExportVideo || !selectedExportModeAvailable || isPreviewingCameraMove}
-                    className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-40"
-                  >
-                    Export MP4
-                  </button>
+              {videoCaptureState === 'finished' && cameraMoveReady && (
+                <div
+                  className="flex w-full flex-col items-center gap-2"
+                  data-shots-video-finished
+                >
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      data-shots-video-next-shot
+                      onClick={completeVideoAndNextShot}
+                      disabled={isExportingCameraMove || isPreviewingCameraMove}
+                      className="rounded-full bg-white px-4 py-2 text-[12px] font-bold text-black transition hover:bg-white/90 disabled:opacity-40"
+                    >
+                      Next shot
+                    </button>
+                    {/* When timeline is open, strip owns Preview / Continue; keep Export here. */}
+                    {!showTimeline && (
+                      isPreviewingCameraMove ? (
+                        <button
+                          type="button"
+                          data-camera-keyframe-stop-preview
+                          onClick={() => {
+                            stopCameraMovePreview();
+                            clearViewportObjectInspection();
+                          }}
+                          className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
+                        >
+                          Stop preview
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-camera-keyframe-preview
+                          data-shots-video-preview
+                          onClick={previewCameraMove}
+                          className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
+                        >
+                          Preview
+                        </button>
+                      )
+                    )}
+                    <button
+                      type="button"
+                      data-shots-video-export
+                      onClick={() => void exportCameraMoveVideo()}
+                      disabled={isExportingCameraMove || !canExportVideo || !selectedExportModeAvailable || isPreviewingCameraMove}
+                      className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-40"
+                    >
+                      {isExportingCameraMove
+                        ? `${Math.round(cameraMoveProgress * 100)}%`
+                        : 'Export MP4'}
+                    </button>
+                    {!showTimeline && (
+                      <button
+                        type="button"
+                        data-shots-video-edit-timeline
+                        onClick={() => setTimelineOpen(true)}
+                        className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
+                      >
+                        Edit timeline
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-center text-[10px] text-white/55">
+                    Next shot saves this move and starts a new one · export is optional
+                  </p>
                 </div>
               )}
 
@@ -2180,7 +2216,10 @@ export function ShotsWorkspace() {
                       type="button"
                       onClick={() => {
                         const camera = getEffectiveCamera();
-                        if (selectedShot && camera) snapshotPreview(selectedShot, camera);
+                        if (selectedShot && camera) {
+                          snapshotPreview(selectedShot, camera);
+                          thumbnailFreshAfterFinishRef.current = true;
+                        }
                       }}
                       className="text-[11px] font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"
                       data-shots-video-refresh-thumbnail

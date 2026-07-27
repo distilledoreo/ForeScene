@@ -4,6 +4,8 @@ import {
   appendSequentialCameraKeyframe,
   CAMERA_KEYFRAME_TIME_EPSILON,
   canInsertCameraKeyframeAfter,
+  captureStateAfterKeyframeRestore,
+  captureStateFromKeyframes,
   clampDuration,
   getCameraKeyframeDisplayLabel,
   getCameraMoveDurationSeconds,
@@ -616,6 +618,24 @@ describe('hasManualCameraKeyframeTiming', () => {
     expect(getCameraKeyframeDisplayLabel(1, 4)).toBe('K1');
     expect(getCameraKeyframeDisplayLabel(2, 4)).toBe('K2');
     expect(getCameraKeyframeDisplayLabel(3, 4)).toBe('End');
+  });
+});
+
+describe('video capture state after keyframe restore', () => {
+  it('maps keyframe counts to empty/capturing/finished for load', () => {
+    expect(captureStateFromKeyframes([])).toBe('empty');
+    expect(captureStateFromKeyframes([{}])).toBe('capturing');
+    expect(captureStateFromKeyframes([{}, {}])).toBe('finished');
+  });
+
+  it('undo from finished two-pose to start-only returns capturing (not stuck finished)', () => {
+    expect(captureStateAfterKeyframeRestore([{}], 'finished')).toBe('capturing');
+    expect(captureStateAfterKeyframeRestore([], 'finished')).toBe('empty');
+  });
+
+  it('preserves capturing when multi-pose sequence is still being authored', () => {
+    expect(captureStateAfterKeyframeRestore([{}, {}, {}], 'capturing')).toBe('capturing');
+    expect(captureStateAfterKeyframeRestore([{}, {}], 'finished')).toBe('finished');
   });
 });
 
