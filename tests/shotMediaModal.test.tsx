@@ -5,6 +5,48 @@ import { createDefaultProject, createPanoAsset, createVideoAsset } from '../src/
 import { ShotMediaModal } from '../src/components/common/ShotMediaModal';
 
 describe('ShotMediaModal', () => {
+  it('opens multi-keyframe shots on the animated keyframe path', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    shot.cameraKeyframes = [
+      {
+        id: 's',
+        label: 'Start',
+        timeSeconds: 0,
+        camera: shot.camera,
+        previewUri: 'data:image/png;base64,STARTKF',
+      },
+      {
+        id: 'e',
+        label: 'End',
+        timeSeconds: 3,
+        camera: shot.camera,
+        previewUri: 'data:image/png;base64,ENDKF',
+      },
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotMediaModal
+        open
+        project={project}
+        shots={project.shots}
+        shotId={shot.id}
+        onClose={() => undefined}
+        onOpenShot={() => undefined}
+        onUpdateShot={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('data-shot-media-modal');
+    expect(html).toContain('data-shot-media-stage-mode="keyframe_path"');
+    expect(html).toContain('data-shot-keyframe-roll');
+    expect(html).toContain('data-shot-media-keyframe-strip');
+    expect(html).toContain('data-shot-media-keyframe-frame');
+    expect(html).toContain('STARTKF');
+    expect(html).toContain('ENDKF');
+    expect(html).toContain('Keyframes');
+  });
+
   it('renders image captures without selecting the live shot', () => {
     const project = createDefaultProject();
     const shot = project.shots[0];
