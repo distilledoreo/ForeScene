@@ -15,6 +15,7 @@
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
+    "test:e2e:webkit": "playwright test --project=desktop-webkit --grep-invert \"@visual\"",
     "test:e2e:visual": "playwright test e2e/visual-baselines.spec.ts e2e/layout-assertions.spec.ts"
   },
   "dependencies": {

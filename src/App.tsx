@@ -33,6 +33,7 @@ import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
 import SplashScreen from './components/common/SplashScreen';
 import { TextInput } from './components/common/Field';
+import { WorkspaceErrorBoundary } from './components/common/WorkspaceErrorBoundary';
 
 const BuildWorkspace = lazy(() => import('./components/workspaces/BuildWorkspace').then((m) => ({ default: m.BuildWorkspace })));
 const ReferenceWorkspace = lazy(() => import('./components/workspaces/ReferenceWorkspace').then((m) => ({ default: m.ReferenceWorkspace })));
@@ -459,15 +460,44 @@ export default function App() {
           )}
         >
           {helpOpen ? (
-            <HelpWorkspace onClose={() => setHelpOpen(false)} />
+            <WorkspaceErrorBoundary workspaceName="Help">
+              <HelpWorkspace onClose={() => setHelpOpen(false)} />
+            </WorkspaceErrorBoundary>
           ) : isPanoViewer ? (
-            <PanoViewerWorkspace />
+            <WorkspaceErrorBoundary workspaceName="360 Viewer">
+              <PanoViewerWorkspace />
+            </WorkspaceErrorBoundary>
           ) : isContinuityStage ? (
             <>
-              {workspace === 'build' && <BuildWorkspace />}
-              {workspace === 'reference' && <ReferenceWorkspace />}
-              {workspace === 'shots' && <ShotsWorkspace />}
-              {workspace === 'export' && <ExportWorkspace />}
+              {workspace === 'build' && (
+                <WorkspaceErrorBoundary workspaceName="Build">
+                  <BuildWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'reference' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Reference"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ReferenceWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'shots' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Shots"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ShotsWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
+              {workspace === 'export' && (
+                <WorkspaceErrorBoundary
+                  workspaceName="Export"
+                  onReturnHome={() => setWorkspace('build')}
+                >
+                  <ExportWorkspace />
+                </WorkspaceErrorBoundary>
+              )}
             </>
           ) : null}
         </Suspense>

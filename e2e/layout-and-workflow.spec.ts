@@ -203,11 +203,11 @@ test.describe('layout and core chrome', () => {
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
 
-    await page.keyboard.press('Control+A');
+    await page.keyboard.press('ControlOrMeta+A');
     await expect(page.locator('[data-build-selection-count]')).toContainText(/objects selected/);
-    await page.keyboard.press('Control+C');
+    await page.keyboard.press('ControlOrMeta+C');
     await expect(page.locator('[data-build-command-status]')).toContainText(/Copied/);
-    await page.keyboard.press('Control+V');
+    await page.keyboard.press('ControlOrMeta+V');
     await expect(page.locator('[data-build-command-status]')).toContainText(/Pasted/);
     await page.keyboard.type('?');
     await expect(page.locator('[data-build-shortcut-reference]')).toBeVisible();
@@ -484,7 +484,7 @@ test.describe('workflow path smoke', () => {
 
     // Undo must restore Start-only keyframes AND resync React authoring state.
     await page.locator('body').click({ position: { x: 8, y: 8 } });
-    await page.keyboard.press('Control+z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await dismissOverlays(page);
 
     await expect(page.locator('[data-shots-video-finished]')).toHaveCount(0, { timeout: 10_000 });
@@ -675,7 +675,7 @@ test.describe('workflow path smoke', () => {
       if (await startChecking.isVisible().catch(() => false)) await startChecking.click();
       await dismissOverlays(page);
     }
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     await page.locator('[data-coverage-optimizer] summary').click();
@@ -800,7 +800,7 @@ test.describe('workflow path smoke', () => {
       if (await fillGapsInModal.isVisible().catch(() => false)) {
         await fillGapsInModal.click();
       } else {
-        await page.getByRole('button', { name: 'Settings', exact: true }).click().catch(() => undefined);
+        await page.getByRole('button', { name: /Reference settings|Settings/i }).click().catch(() => undefined);
         await openFillGaps.click();
         await page.locator('[data-second-capture-fill-gaps]').click();
       }
@@ -894,7 +894,7 @@ test.describe('workflow path smoke', () => {
     await expect(page.locator('[data-reference-pano-origins]')).toHaveAttribute('data-graybox-count', '2');
 
     // Enable dual projection blend.
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     const blendToggle = drawer.locator('[data-projected-blend-toggle] button, [data-projected-blend-toggle] [role="switch"]').first();

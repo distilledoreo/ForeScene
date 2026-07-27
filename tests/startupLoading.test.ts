@@ -18,6 +18,7 @@ describe('startup loading boundaries', () => {
     );
     const packageExport = readFileSync(new URL('../src/engine/packageExport.ts', import.meta.url), 'utf8');
     const splash = readFileSync(new URL('../src/components/common/SplashScreen.tsx', import.meta.url), 'utf8');
+    const videoEncode = readFileSync(new URL('../src/engine/videoEncode.ts', import.meta.url), 'utf8');
 
     expect(app).toContain("const isContinuityStage = appMode === 'continuity';");
     expect(app).toContain(') : isContinuityStage ? (');
@@ -25,6 +26,7 @@ describe('startup loading boundaries', () => {
     expect(app).toContain('{isContinuityStage && !helpOpen && (');
     expect(app).toContain('<Suspense fallback={null}>');
     expect(app).toContain('<WorkflowGuidance />');
+    expect(app).toContain('WorkspaceErrorBoundary');
     expect(app).toContain("import('./engine/projectIO')");
     expect(app).not.toContain("from './engine/projectIO'");
     expect(main).not.toContain('ensureHumanMannequinModel');
@@ -43,5 +45,9 @@ describe('startup loading boundaries', () => {
     expect(panoViewerWorkspace).not.toContain('projectIO');
     expect(packageExport).not.toContain('ensureHumanMannequinModel');
     expect(splash).toContain('preload="metadata"');
+    // Mediabunny must not evaluate when Shots/renderers load — only on MP4 export.
+    expect(videoEncode).toContain("import('mediabunny')");
+    expect(videoEncode).not.toMatch(/import\s*\{[^}]*\}\s*from\s*['"]mediabunny['"]/);
+    expect(videoEncode).toMatch(/import\s+type\s+\{[^}]*\}\s*from\s*['"]mediabunny['"]/);
   });
 });

@@ -79,7 +79,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps webkit
-      - run: npm run test:e2e -- --project=desktop-webkit
+      # Chromium owns screenshot baselines; WebKit has no committed snapshots yet.
+      - run: npm run test:e2e -- --project=desktop-webkit --grep-invert "@visual"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -1,12 +1,22 @@
-import {
-  BufferTarget,
-  CanvasSource,
-  Mp4OutputFormat,
-  Output,
-  canEncodeVideo,
-  type VideoEncodingConfig,
-} from 'mediabunny';
+/**
+ * Deterministic canvas → H.264 → MP4 encoding via Mediabunny.
+ *
+ * Mediabunny is loaded on demand so opening Shots (which pulls renderers → this
+ * module) does not evaluate the encoder library at workspace import time.
+ * Safari/WebKit can open Shots even when WebCodecs MP4 export is unavailable.
+ */
+
+import type { VideoEncodingConfig } from 'mediabunny';
 import type { VideoResolutionPreset } from './videoPresets';
+
+type MediabunnyModule = typeof import('mediabunny');
+
+let mediabunnyPromise: Promise<MediabunnyModule> | undefined;
+
+function loadMediabunny(): Promise<MediabunnyModule> {
+  mediabunnyPromise ??= import('mediabunny');
+  return mediabunnyPromise;
+}
 
 export interface DeterministicEncodeOptions {
   canvas: HTMLCanvasElement;
@@ -70,6 +80,7 @@ export async function canUseDeterministicMp4Export(
   if (typeof VideoEncoder === 'undefined') return false;
   const encoding = buildDeterministicAvcEncodingConfig(preset);
   try {
+    const { canEncodeVideo } = await loadMediabunny();
     const mediabunnyOk = await canEncodeVideo('avc', {
       width: preset.width,
       height: preset.height,
@@ -115,6 +126,13 @@ export async function encodeCanvasFramesToMp4(
       `H.264 ${preset.label} (${preset.avcCodecString}) is not supported in this browser.`,
     );
   }
+
+  const {
+    BufferTarget,
+    CanvasSource,
+    Mp4OutputFormat,
+    Output,
+  } = await loadMediabunny();
 
   const target = new BufferTarget();
   const output = new Output({

@@ -45,7 +45,7 @@ async function dismissOverlays(page: Page) {
   }
 }
 
-test.describe('screenshot baselines', () => {
+test.describe('@visual screenshot baselines', () => {
   test('build workspace baseline', async ({ page }, testInfo) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
