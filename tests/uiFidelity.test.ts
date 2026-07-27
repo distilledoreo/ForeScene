@@ -523,6 +523,11 @@ describe('ui revamp fidelity surfaces', () => {
     // Captured moves show a keyframe filmstrip / path preview (not only Export).
     expect(shots).toContain('CameraMovePreviewStrip');
     expect(shots).toContain('captureKeyframeThumb');
+    expect(shots).toContain('buildKeyframeThumbCacheFromKeyframes');
+    expect(shots).toContain('shouldCommitKeyframeThumb');
+    // History restore must invalidate in-flight thumbs so late renders cannot overwrite undo.
+    expect(shots).toMatch(/shotCameraHistoryRestoreGeneration[\s\S]*keyframeThumbGenerationRef\.current \+= 1/);
+    expect(shots).toMatch(/buildKeyframeThumbCacheFromKeyframes\(restoredKeyframes\)/);
     const previewStrip = readFileSync(new URL('../src/components/workspaces/CameraMovePreviewStrip.tsx', import.meta.url), 'utf8');
     expect(previewStrip).toContain('data-camera-move-preview-strip');
     expect(previewStrip).toContain('data-camera-move-preview-play');

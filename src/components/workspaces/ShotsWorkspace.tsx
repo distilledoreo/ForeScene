@@ -119,6 +119,10 @@ import {
   snapshotStageableObjectOverrides,
 } from '../../engine/objectKeyframes';
 import {
+  buildKeyframeThumbCacheFromKeyframes,
+  shouldCommitKeyframeThumb,
+} from '../../engine/keyframePreviewThumbs';
+import {
   type ShotStillViewSelection,
 } from '../../domain/shotStillViews';
 import type { GizmoMode } from '../../engine/transformGizmo';
@@ -782,9 +786,15 @@ export function ShotsWorkspace() {
     setFramingCamera(restoredShot.camera);
     bumpCameraReseed();
 
+    // Invalidate in-flight keyframe stills and rebuild local cache from restored URIs.
+    // Without this, a late captureKeyframeThumb can overwrite the restored previewUri.
+    const restoredKeyframes = restoredShot.cameraKeyframes;
+    keyframeThumbGenerationRef.current += 1;
+    setKeyframeThumbById(buildKeyframeThumbCacheFromKeyframes(restoredKeyframes));
+    thumbnailFreshAfterFinishRef.current = false;
+
     // Keep authoring chrome consistent with restored keyframe data (undo/redo blocker).
     if (captureMode === 'video') {
-      const restoredKeyframes = restoredShot.cameraKeyframes;
       setVideoCaptureState((previous) => captureStateAfterKeyframeRestore(
         restoredKeyframes,
         previous,
@@ -792,7 +802,6 @@ export function ShotsWorkspace() {
       clearKeyframeSelection();
       clearViewportObjectInspection();
       stopCameraMovePreview();
-      thumbnailFreshAfterFinishRef.current = false;
       if (restoredKeyframes.length <= 2) {
         setTimelineOpen(false);
       }
@@ -986,7 +995,13 @@ export function ShotsWorkspace() {
     };
     void renderShotFrame(latestProject, thumbShot, { peopleVariant: 'with_people' })
       .then((frame) => {
-        if (keyframeThumbGenerationRef.current !== generation) return;
+        // Drop if undo/redo (or retake/shot switch) advanced the generation while rendering.
+        if (!shouldCommitKeyframeThumb({
+          renderGeneration: generation,
+          currentGeneration: keyframeThumbGenerationRef.current,
+        })) {
+          return;
+        }
         setKeyframeThumbById((current) => (
           current[keyframeId] === frame.dataUrl
             ? current
@@ -995,6 +1010,13 @@ export function ShotsWorkspace() {
         // Persist for camera-roll GIF animation (no undo step).
         const live = useContinuityStore.getState().project.shots.find((item) => item.id === shot.id);
         if (!live) return;
+        // Re-check generation after reading live state — restore may have raced the await.
+        if (!shouldCommitKeyframeThumb({
+          renderGeneration: generation,
+          currentGeneration: keyframeThumbGenerationRef.current,
+        })) {
+          return;
+        }
         const nextKeyframes = live.cameraKeyframes.map((item) => (
           item.id === keyframeId
             ? { ...item, previewUri: frame.dataUrl }
