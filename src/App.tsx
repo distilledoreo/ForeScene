@@ -732,6 +732,7 @@ export default function App() {
                       className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium transition ${
                         active ? 'bg-[var(--accent)] text-white' : 'bg-surface-overlay/80 text-secondary backdrop-blur-sm'
                       }`}
+                      aria-current={active ? 'page' : undefined}
                     >
                       <Icon className="h-3.5 w-3.5" />
                       {item.label}

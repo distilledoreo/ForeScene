@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { goToWorkspace } from './workspace-navigation';
+
 async function enterContinuityStage(page: Page) {
   await page.addInitScript(() => {
     try {
@@ -81,7 +83,7 @@ test.describe('@responsive layout visibility and overflow', () => {
   test('Shots workspace: primary capture chrome required and on-screen', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first().click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     const chrome = page.locator('[data-shots-capture-chrome], [data-shots-camera-chrome]').first();
@@ -112,7 +114,7 @@ test.describe('@responsive layout visibility and overflow', () => {
   test('settings drawer opens and fits onscreen without covering shutter', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first().click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     const shutter = page.locator('[data-shots-shutter], [data-capture-shutter]').first();

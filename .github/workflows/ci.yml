@@ -171,7 +171,8 @@ jobs:
     runs-on: ubuntu-latest
     # Linux Playwright WebKit frequently kills the page process under multi-context WebGL.
     # Keep the signal visible with traces, but do not block PR merge.
-    continue-on-error: true
+    # Step-level continue-on-error finishes the job green-with-warning; job-level
+    # continue-on-error still surfaced a failure conclusion in the Actions UI.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -184,11 +185,18 @@ jobs:
           name: dist
           path: dist/
       - run: npx playwright install --with-deps webkit
-      - run: npm run test:e2e:webkit-gpu
+      - name: Run WebKit GPU canary
+        id: webkit_gpu
+        continue-on-error: true
+        run: npm run test:e2e:webkit-gpu
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
+      - name: Report WebKit GPU instability
+        if: steps.webkit_gpu.outcome == 'failure'
+        run: |
+          echo "::warning::Linux WebKit GPU canary failed. See uploaded traces."
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: steps.webkit_gpu.outcome == 'failure'
         with:
           name: playwright-webkit-gpu-artifacts
           path: |

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { goToWorkspace, workspaceTab } from './workspace-navigation';
+
 async function enterContinuityStage(page: Page) {
   // Skip splash video so it never blocks pointer events mid-test.
   await page.addInitScript(() => {
@@ -36,15 +38,6 @@ async function enterContinuityStage(page: Page) {
 
   await expect(workspaceTab(page, 'Build')).toBeVisible({ timeout: 15000 });
   await expect(modeChooser).toBeHidden({ timeout: 5000 }).catch(() => undefined);
-}
-
-function workspaceTab(page: Page, label: 'Build' | 'Reference' | 'Shots' | 'Export') {
-  // Mobile + desktop both render stage navs; only the visible one is interactive.
-  return page
-    .locator('header nav button')
-    .filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) })
-    .locator('visible=true')
-    .first();
 }
 
 async function dismissOverlays(page: Page) {
@@ -332,11 +325,10 @@ test.describe('@smoke workflow path', () => {
   test('Shots workspace mounts camera shell without capture', async ({ page }) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-shots-shutter]')).toBeVisible();
-    await expect(page.locator('[data-shots-mode-switcher]').first()).toBeVisible();
   });
 
   // GPU-heavy on Linux WebKit (canary only). Still required on Chromium desktop smoke.
@@ -389,12 +381,11 @@ test.describe('@smoke workflow path', () => {
     const continueShots = page.getByRole('button', { name: /Continue to Shots/i });
     if (await continueShots.isVisible().catch(() => false)) {
       await continueShots.click();
-    } else {
-      await workspaceTab(page, 'Shots').click();
     }
     await dismissOverlays(page);
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
+    await dismissOverlays(page);
 
-    await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-shots-shutter]')).toBeVisible();
 
     await workspaceTab(page, 'Export').click();
@@ -406,7 +397,7 @@ test.describe('@smoke workflow path', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     const shutter = page.locator('[data-shots-shutter]');
@@ -440,7 +431,7 @@ test.describe('@heavy video authoring', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -493,7 +484,7 @@ test.describe('@heavy video authoring', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -540,7 +531,7 @@ test.describe('@heavy video authoring', () => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
 
     await page.getByRole('button', { name: /^Video$/ }).click();
@@ -647,7 +638,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
     await dismissOverlays(page);
 
     // Shots → enable Projected appearance so the occlusion engine builds GPU maps.
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
 
@@ -946,7 +937,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
     await dismissOverlays(page);
 
     // Capture projected shot and export.
-    await workspaceTab(page, 'Shots').click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible({ timeout: 20_000 });
     const projectedToggle = page

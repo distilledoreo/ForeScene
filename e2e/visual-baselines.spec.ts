@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { goToWorkspace } from './workspace-navigation';
+
 async function enterContinuityStage(page: Page) {
   await page.addInitScript(() => {
     try {
@@ -58,8 +60,9 @@ test.describe('@visual screenshot baselines', () => {
   test('shots workspace baseline', async ({ page }, testInfo) => {
     await enterContinuityStage(page);
     await dismissOverlays(page);
-    await page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first().click();
+    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
+    // Let the viewfinder finish settling so the screenshot matches the baseline.
     await page.waitForTimeout(400);
     await expect(page).toHaveScreenshot(`shots-${testInfo.project.name}.png`, {
       fullPage: false,
