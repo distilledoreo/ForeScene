@@ -8,7 +8,7 @@ import {
   normalizeShotTitle,
 } from '../../domain/shotIdentity';
 import {
-  resolveCameraKeyframePreviewUris,
+  resolveCameraKeyframePreviewFrames,
   resolveShotMedia,
   ShotMediaItem,
 } from '../../domain/shotMedia';
@@ -62,7 +62,7 @@ export function ShotMediaModal({
   const [draftTitle, setDraftTitle] = useState('');
   const [stillAppearance, setStillAppearance] = useState<ShotStillAppearance>('clay');
   const [stillPeople, setStillPeople] = useState<ShotStillPeople>('with_people');
-  const [keyframeRollIndex, setKeyframeRollIndex] = useState(0);
+  const [activeKeyframeId, setActiveKeyframeId] = useState<string | null>(null);
   const [keyframeRollPaused, setKeyframeRollPaused] = useState(false);
 
   const shotIndex = shots.findIndex((item) => item.id === shotId);
@@ -71,15 +71,15 @@ export function ShotMediaModal({
     () => (shot ? resolveShotMedia(project, shot) : []),
     [project, shot],
   );
-  const keyframePreviewUris = useMemo(
-    () => (shot ? resolveCameraKeyframePreviewUris(shot) : []),
+  const keyframePreviewFrames = useMemo(
+    () => (shot ? resolveCameraKeyframePreviewFrames(shot) : []),
     [shot],
   );
   const sortedKeyframes = useMemo(
     () => (shot ? getSortedCameraKeyframes(shot.cameraKeyframes ?? []) : []),
     [shot],
   );
-  const hasKeyframePath = keyframePreviewUris.length >= 2;
+  const hasKeyframePath = keyframePreviewFrames.length >= 2;
   // Treat unset selection as keyframe path when available (covers first paint / SSR before effects).
   const showingKeyframePath = hasKeyframePath && (
     activeMediaId === SHOT_MEDIA_KEYFRAME_PATH_ID
@@ -134,14 +134,14 @@ export function ShotMediaModal({
   const preferredMediaIdForShot = useCallback((nextShot: Shot, preferredId?: string) => {
     const items = resolveShotMedia(project, nextShot);
     if (preferredId === SHOT_MEDIA_KEYFRAME_PATH_ID
-      && resolveCameraKeyframePreviewUris(nextShot).length >= 2) {
+      && resolveCameraKeyframePreviewFrames(nextShot).length >= 2) {
       return SHOT_MEDIA_KEYFRAME_PATH_ID;
     }
     if (preferredId && items.some((item) => item.id === preferredId)) {
       return preferredId;
     }
     // Prefer keyframe path so multi-pose moves open with the animated preview.
-    if (resolveCameraKeyframePreviewUris(nextShot).length >= 2) {
+    if (resolveCameraKeyframePreviewFrames(nextShot).length >= 2) {
       return SHOT_MEDIA_KEYFRAME_PATH_ID;
     }
     return items[0]?.id;
@@ -154,7 +154,8 @@ export function ShotMediaModal({
     pauseVideo();
     const nextShot = shots[nextIndex];
     setActiveMediaId(preferredMediaIdForShot(nextShot));
-    setKeyframeRollIndex(0);
+    const frames = resolveCameraKeyframePreviewFrames(nextShot);
+    setActiveKeyframeId(frames[0]?.keyframeId ?? null);
     setKeyframeRollPaused(false);
     syncStillViewForShot(nextShot);
     onNavigateShot?.(nextShot.id);
@@ -167,7 +168,8 @@ export function ShotMediaModal({
     setEditingProductionId(false);
     setEditingTitle(false);
     setActiveMediaId(preferredMediaIdForShot(shot, initialMediaId));
-    setKeyframeRollIndex(0);
+    const frames = resolveCameraKeyframePreviewFrames(shot);
+    setActiveKeyframeId(frames[0]?.keyframeId ?? null);
     setKeyframeRollPaused(false);
     const still = resolvePreferredShotStillView(project, shot, {
       appearance: 'clay',
@@ -251,7 +253,7 @@ export function ShotMediaModal({
     pauseVideo();
     setActiveMediaId(item.id);
     if (item.id === SHOT_MEDIA_KEYFRAME_PATH_ID) {
-      setKeyframeRollIndex(0);
+      setActiveKeyframeId(keyframePreviewFrames[0]?.keyframeId ?? null);
       setKeyframeRollPaused(false);
     }
   };
@@ -361,11 +363,12 @@ export function ShotMediaModal({
           {showingKeyframePath ? (
             <div className="flex h-full max-h-full w-full max-w-full items-center justify-center p-2">
               <KeyframePreviewRoll
-                uris={keyframePreviewUris}
+                frames={keyframePreviewFrames}
                 size="full"
+                animate
                 paused={keyframeRollPaused}
-                activeIndex={keyframeRollPaused ? keyframeRollIndex : undefined}
-                onIndexChange={setKeyframeRollIndex}
+                activeKeyframeId={keyframeRollPaused ? activeKeyframeId : null}
+                onActiveKeyframeIdChange={setActiveKeyframeId}
               />
             </div>
           ) : activeMedia?.kind === 'video' ? (
@@ -431,19 +434,24 @@ export function ShotMediaModal({
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {sortedKeyframes.map((keyframe, index) => {
+                // Highlight by keyframe id against the preview-frame set (may omit missing stills).
+                const hasPreview = keyframePreviewFrames.some((frame) => frame.keyframeId === keyframe.id);
                 const uri = keyframe.previewUri;
                 const label = getCameraKeyframeDisplayLabel(index, sortedKeyframes.length);
-                const selected = showingKeyframePath && keyframeRollIndex === index;
+                const selected = showingKeyframePath && activeKeyframeId === keyframe.id;
                 return (
                   <button
                     key={keyframe.id}
                     type="button"
                     data-shot-media-keyframe-frame
                     data-keyframe-id={keyframe.id}
+                    data-has-preview={hasPreview ? 'true' : 'false'}
                     onClick={() => {
                       handleMediaSelect({ id: SHOT_MEDIA_KEYFRAME_PATH_ID });
-                      setKeyframeRollPaused(true);
-                      setKeyframeRollIndex(index);
+                      if (hasPreview) {
+                        setKeyframeRollPaused(true);
+                        setActiveKeyframeId(keyframe.id);
+                      }
                     }}
                     className={`relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border transition ${
                       selected

@@ -100,6 +100,7 @@ export function ShotsLibraryCard({
           showMediaCount
           showCapturedBadge
           landed={landed}
+          animateKeyframeRoll={selected}
         />
       </button>
 

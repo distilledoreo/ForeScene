@@ -1,8 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Film, Play } from 'lucide-react';
 import {
   hasShotCapture,
-  resolveCameraKeyframePreviewUris,
+  resolveCameraKeyframePreviewFrames,
   resolveShotMedia,
   resolveShotMediaPoster,
   shotHasCameraKeyframeMove,
@@ -34,6 +34,8 @@ export function ShotCameraRollThumbnail({
   showMediaCount,
   showCapturedBadge,
   landed,
+  /** Force continuous animation (e.g. selected library card). */
+  animateKeyframeRoll,
 }: {
   project: LocationProject;
   shot: Shot;
@@ -45,17 +47,21 @@ export function ShotCameraRollThumbnail({
   showMediaCount?: boolean;
   showCapturedBadge?: boolean;
   landed?: boolean;
+  animateKeyframeRoll?: boolean;
 }) {
+  const [hovered, setHovered] = useState(false);
   const poster = resolveShotMediaPoster(project, shot);
   const mediaCount = resolveShotMedia(project, shot).length;
   const hasCapture = hasShotCapture(project, shot);
   const hasCameraMove = shotHasCameraMoveVideo(project, shot);
   const hasKeyframeMove = shotHasCameraKeyframeMove(shot);
-  const keyframePreviewUris = useMemo(
-    () => resolveCameraKeyframePreviewUris(shot),
+  const keyframeFrames = useMemo(
+    () => resolveCameraKeyframePreviewFrames(shot),
     [shot.cameraKeyframes],
   );
-  const useKeyframeRoll = keyframePreviewUris.length >= 2;
+  const useKeyframeRoll = keyframeFrames.length >= 2;
+  // Animate when hovered, or when parent forces it (selected card). Default: static first frame.
+  const animate = animateKeyframeRoll ?? hovered;
   const src = poster?.kind === 'image' ? poster.asset.uri : undefined;
   const videoSrc = poster?.kind === 'video' ? poster.asset.uri : undefined;
   const previewSrc = allowLivePreview && !hasCapture ? overrideSrc : undefined;
@@ -67,9 +73,17 @@ export function ShotCameraRollThumbnail({
       data-shot-camera-roll-thumb
       data-shot-has-capture={hasCapture ? 'true' : 'false'}
       data-shot-has-keyframe-move={hasKeyframeMove ? 'true' : 'false'}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
     >
       {useKeyframeRoll ? (
-        <KeyframePreviewRoll uris={keyframePreviewUris} size="thumb" />
+        <KeyframePreviewRoll
+          frames={keyframeFrames}
+          size="thumb"
+          animate={animate}
+        />
       ) : src ? (
         <img
           src={src}
@@ -90,12 +104,13 @@ export function ShotCameraRollThumbnail({
           preload="metadata"
           className="h-full w-full object-cover"
         />
-      ) : keyframePreviewUris.length === 1 ? (
+      ) : keyframeFrames.length === 1 ? (
         <img
-          src={keyframePreviewUris[0]}
+          src={keyframeFrames[0].uri}
           alt=""
           className="h-full w-full object-cover"
           data-shot-keyframe-still
+          data-keyframe-id={keyframeFrames[0].keyframeId}
         />
       ) : (
         <NoCapturePlaceholder compact={compact} />

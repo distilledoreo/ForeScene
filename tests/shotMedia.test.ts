@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createPanoAsset, createPanoReference, createVideoAsset } from '../src/domain/defaults';
 import {
   hasShotCapture,
-  resolveCameraKeyframePreviewUris,
+  keyframePreviewFramesSignature,
+  resolveCameraKeyframePreviewFrames,
   resolveShotMedia,
   resolveShotMediaPoster,
   shotHasCameraKeyframeMove,
@@ -113,13 +114,13 @@ describe('camera keyframe roll previews', () => {
     ];
     expect(shotHasCameraKeyframeMove(shot)).toBe(true);
     expect(hasShotCapture(project, shot)).toBe(true);
-    expect(resolveCameraKeyframePreviewUris(shot)).toEqual([
-      'data:image/png;base64,S',
-      'data:image/png;base64,E',
+    expect(resolveCameraKeyframePreviewFrames(shot)).toEqual([
+      { keyframeId: 's', uri: 'data:image/png;base64,S', timeSeconds: 0 },
+      { keyframeId: 'e', uri: 'data:image/png;base64,E', timeSeconds: 3 },
     ]);
   });
 
-  it('sorts preview uris by time and drops missing stills', () => {
+  it('keeps keyframeId when dropping missing stills (no index misalignment)', () => {
     const project = createDefaultProject();
     const shot = project.shots[0];
     shot.cameraKeyframes = [
@@ -127,10 +128,13 @@ describe('camera keyframe roll previews', () => {
       { id: 's', label: 'Start', timeSeconds: 0, camera: shot.camera },
       { id: 'm', label: 'Mid', timeSeconds: 2, camera: shot.camera, previewUri: 'data:image/png;base64,M' },
     ];
-    expect(resolveCameraKeyframePreviewUris(shot)).toEqual([
-      'data:image/png;base64,M',
-      'data:image/png;base64,E',
-    ]);
+    const frames = resolveCameraKeyframePreviewFrames(shot);
+    expect(frames.map((frame) => frame.keyframeId)).toEqual(['m', 'e']);
+    expect(frames[0].uri).toContain('M');
+    // First strip keyframe "Start" is missing — animation must not claim index 0 is Start.
+    expect(frames[0].keyframeId).not.toBe('s');
+    expect(keyframePreviewFramesSignature(frames)).toContain('m:');
+    expect(keyframePreviewFramesSignature(frames)).not.toContain(frames[0].uri);
   });
 });
 

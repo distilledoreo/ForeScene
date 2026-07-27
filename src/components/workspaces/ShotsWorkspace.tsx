@@ -947,19 +947,27 @@ export function ShotsWorkspace() {
 
   /**
    * Cheap clay still for the move filmstrip + camera roll (192×108).
+   * Uses the target keyframe's objectOverrides so object animation is correct.
    * Persists previewUri on the keyframe (silent history) so the library can animate it.
    */
-  const captureKeyframeThumb = useCallback((
-    keyframeId: string,
-    camera: CameraData,
-    shotOverride?: Shot,
-  ) => {
+  const captureKeyframeThumb = useCallback((params: {
+    keyframeId: string;
+    camera: CameraData;
+    objectOverrides?: ShotObjectOverrides;
+    shotOverride?: Shot;
+  }) => {
+    const { keyframeId, camera, objectOverrides, shotOverride } = params;
     const shot = shotOverride
       ?? useContinuityStore.getState().project.shots.find((item) => item.id === selectedShotId)
       ?? selectedShot;
     if (!shot) return;
     const generation = keyframeThumbGenerationRef.current;
     const latestProject = useContinuityStore.getState().project;
+    // Prefer explicit keyframe snapshot; fall back to existing keyframe data, then shot-level.
+    const keyframe = shot.cameraKeyframes.find((item) => item.id === keyframeId);
+    const resolvedOverrides = objectOverrides
+      ?? keyframe?.objectOverrides
+      ?? shot.objectOverrides;
     const thumbShot: Shot = {
       ...shot,
       camera: {
@@ -967,6 +975,9 @@ export function ShotsWorkspace() {
         position: [...camera.position] as CameraData['position'],
         target: [...camera.target] as CameraData['target'],
       },
+      objectOverrides: resolvedOverrides !== undefined
+        ? structuredClone(resolvedOverrides)
+        : undefined,
       exportSettings: {
         ...shot.exportSettings,
         width: 192,
@@ -984,13 +995,13 @@ export function ShotsWorkspace() {
         // Persist for camera-roll GIF animation (no undo step).
         const live = useContinuityStore.getState().project.shots.find((item) => item.id === shot.id);
         if (!live) return;
-        const nextKeyframes = live.cameraKeyframes.map((keyframe) => (
-          keyframe.id === keyframeId
-            ? { ...keyframe, previewUri: frame.dataUrl }
-            : keyframe
+        const nextKeyframes = live.cameraKeyframes.map((item) => (
+          item.id === keyframeId
+            ? { ...item, previewUri: frame.dataUrl }
+            : item
         ));
-        if (nextKeyframes.every((keyframe, index) => (
-          keyframe.previewUri === live.cameraKeyframes[index]?.previewUri
+        if (nextKeyframes.every((item, index) => (
+          item.previewUri === live.cameraKeyframes[index]?.previewUri
         ))) {
           return;
         }
@@ -1190,9 +1201,14 @@ export function ShotsWorkspace() {
     // Always refresh a cheap filmstrip still for the newest pose (and keep prior thumbs).
     const newest = nextKeyframes[nextKeyframes.length - 1];
     if (newest) {
-      captureKeyframeThumb(newest.id, pose, {
-        ...selectedShot,
-        cameraKeyframes: nextKeyframes,
+      captureKeyframeThumb({
+        keyframeId: newest.id,
+        camera: pose,
+        objectOverrides: newest.objectOverrides,
+        shotOverride: {
+          ...selectedShot,
+          cameraKeyframes: nextKeyframes,
+        },
       });
     }
     setLandFlash(true);
@@ -1225,8 +1241,13 @@ export function ShotsWorkspace() {
     }
     // Fill any missing filmstrip stills so finished moves always show a path preview.
     for (const keyframe of cameraMoveKeyframes) {
-      if (!keyframeThumbById[keyframe.id]) {
-        captureKeyframeThumb(keyframe.id, keyframe.camera, selectedShot);
+      if (!keyframeThumbById[keyframe.id] && !keyframe.previewUri) {
+        captureKeyframeThumb({
+          keyframeId: keyframe.id,
+          camera: keyframe.camera,
+          objectOverrides: keyframe.objectOverrides,
+          shotOverride: selectedShot,
+        });
       }
     }
   }, [
@@ -1278,9 +1299,14 @@ export function ShotsWorkspace() {
     setSelectedSegmentStartId(null);
     if (inserted) {
       setSelectedKeyframeId(inserted.id);
-      captureKeyframeThumb(inserted.id, camera, {
-        ...latestShot,
-        cameraKeyframes: nextKeyframes,
+      captureKeyframeThumb({
+        keyframeId: inserted.id,
+        camera,
+        objectOverrides: inserted.objectOverrides,
+        shotOverride: {
+          ...latestShot,
+          cameraKeyframes: nextKeyframes,
+        },
       });
       // Inspect the newly inserted pose's object snapshot without binding the camera.
       if (inserted.objectOverrides !== undefined) {
@@ -1319,9 +1345,14 @@ export function ShotsWorkspace() {
     });
     updateCameraMoveKeyframes(next);
     setViewportObjectOverrides(objectSnapshot);
-    captureKeyframeThumb(keyframeId, camera, {
-      ...latestShot,
-      cameraKeyframes: next,
+    captureKeyframeThumb({
+      keyframeId,
+      camera,
+      objectOverrides: objectSnapshot,
+      shotOverride: {
+        ...latestShot,
+        cameraKeyframes: next,
+      },
     });
   }, [
     captureKeyframeThumb,
@@ -2274,32 +2305,7 @@ export function ShotsWorkspace() {
                     >
                       Next shot
                     </button>
-                    {/* When timeline is open, strip owns Preview / Continue; keep Export here. */}
-                    {!showTimeline && (
-                      isPreviewingCameraMove ? (
-                        <button
-                          type="button"
-                          data-camera-keyframe-stop-preview
-                          onClick={() => {
-                            stopCameraMovePreview();
-                            clearViewportObjectInspection();
-                          }}
-                          className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
-                        >
-                          Stop preview
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          data-camera-keyframe-preview
-                          data-shots-video-preview
-                          onClick={previewCameraMove}
-                          className="rounded-full bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-white/25"
-                        >
-                          Preview
-                        </button>
-                      )
-                    )}
+                    {/* Path preview lives on CameraMovePreviewStrip (Play path / native MP4 controls). */}
                     <button
                       type="button"
                       data-shots-video-export

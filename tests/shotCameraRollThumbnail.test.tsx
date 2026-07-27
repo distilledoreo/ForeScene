@@ -31,9 +31,12 @@ describe('ShotCameraRollThumbnail keyframe roll', () => {
 
     expect(html).toContain('data-shot-keyframe-roll');
     expect(html).toContain('data-shot-keyframe-roll-count="2"');
+    expect(html).toContain('data-shot-keyframe-roll-keyframe-id="s"');
     expect(html).toContain('data:image/png;base64,START');
     expect(html).toContain('data-shot-has-keyframe-move="true"');
     expect(html).toContain('data-shot-keyframe-move-badge');
+    // Default: not animating until hover/selected (avoids N library intervals).
+    expect(html).toContain('data-shot-keyframe-roll-animate="false"');
   });
 
   it('falls back to empty placeholder without previews or assets', () => {

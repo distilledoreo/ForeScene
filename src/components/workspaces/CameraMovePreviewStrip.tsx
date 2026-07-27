@@ -10,7 +10,7 @@ export interface CameraMovePreviewStripProps {
   durationSeconds: number;
   thumbsById: Readonly<Record<string, string>>;
   isPreviewing: boolean;
-  /** When an MP4 has been encoded, prefer playing that over keyframe scrubbing. */
+  /** When an MP4 has been encoded, prefer native video controls over a second play button. */
   exportedVideoUrl?: string;
   onPreview: () => void;
   onStopPreview: () => void;
@@ -35,28 +35,53 @@ export function CameraMovePreviewStrip({
   if (sorted.length < 2) return null;
 
   const duration = Math.max(durationSeconds, Number.EPSILON);
+  const hasExportedVideo = Boolean(exportedVideoUrl);
 
   return (
     <div
       className="flex w-full max-w-sm flex-col gap-2 rounded-2xl border border-white/15 bg-black/50 p-2 shadow-soft backdrop-blur-md"
       data-camera-move-preview-strip
       data-previewing={isPreviewing ? 'true' : 'false'}
+      data-has-exported-video={hasExportedVideo ? 'true' : 'false'}
     >
       <div className="flex items-center justify-between gap-2 px-0.5">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-white/55">
           Move preview
         </p>
-        <button
-          type="button"
-          data-camera-move-preview-play
-          onClick={isPreviewing ? onStopPreview : onPreview}
-          className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-black transition hover:bg-white/90"
-        >
-          {isPreviewing ? 'Stop' : exportedVideoUrl ? 'Play path' : 'Play path'}
-        </button>
+        {/* With an MP4, native video controls are primary; optional live path is secondary. */}
+        {hasExportedVideo ? (
+          isPreviewing ? (
+            <button
+              type="button"
+              data-camera-move-preview-live
+              onClick={onStopPreview}
+              className="rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-white/25"
+            >
+              Stop live preview
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-camera-move-preview-live
+              onClick={onPreview}
+              className="text-[10px] font-semibold text-white/60 underline-offset-2 hover:text-white hover:underline"
+            >
+              Preview live in viewfinder
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            data-camera-move-preview-play
+            onClick={isPreviewing ? onStopPreview : onPreview}
+            className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-black transition hover:bg-white/90"
+          >
+            {isPreviewing ? 'Stop' : 'Play path'}
+          </button>
+        )}
       </div>
 
-      {exportedVideoUrl ? (
+      {hasExportedVideo ? (
         <video
           src={exportedVideoUrl}
           controls
@@ -73,7 +98,7 @@ export function CameraMovePreviewStrip({
         >
           {sorted.map((keyframe, index) => {
             const label = getCameraKeyframeDisplayLabel(index, sorted.length);
-            const thumb = thumbsById[keyframe.id];
+            const thumb = thumbsById[keyframe.id] ?? keyframe.previewUri;
             const timeLabel = `${keyframe.timeSeconds.toFixed(keyframe.timeSeconds % 1 === 0 ? 0 : 1)}s`;
             return (
               <button
@@ -113,7 +138,7 @@ export function CameraMovePreviewStrip({
         </div>
       )}
 
-      {!exportedVideoUrl && (
+      {!hasExportedVideo && (
         <p className="px-0.5 text-[10px] leading-snug text-white/45">
           {isPreviewing
             ? 'Playing camera path in the viewfinder…'

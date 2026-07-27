@@ -51,7 +51,7 @@ describe('CameraMovePreviewStrip', () => {
     expect(html).toContain('End');
   });
 
-  it('prefers exported video when available', () => {
+  it('prefers exported video controls and demotes live path to secondary', () => {
     const html = renderToStaticMarkup(
       <CameraMovePreviewStrip
         keyframes={[
@@ -69,5 +69,8 @@ describe('CameraMovePreviewStrip', () => {
     expect(html).toContain('data-camera-move-preview-video');
     expect(html).toContain('blob:http://localhost/video');
     expect(html).not.toContain('data-camera-move-preview-filmstrip');
+    expect(html).not.toContain('data-camera-move-preview-play');
+    expect(html).toContain('data-camera-move-preview-live');
+    expect(html).toContain('Preview live in viewfinder');
   });
 });
