@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createPanoAsset, createPanoReference, createVideoAsset } from '../src/domain/defaults';
-import { resolveShotMedia, resolveShotMediaPoster } from '../src/domain/shotMedia';
+import {
+  hasShotCapture,
+  resolveCameraKeyframePreviewUris,
+  resolveShotMedia,
+  resolveShotMediaPoster,
+  shotHasCameraKeyframeMove,
+} from '../src/domain/shotMedia';
 
 describe('resolveShotMedia', () => {
   it('includes video and stored captured images in stable order', () => {
@@ -94,3 +100,37 @@ describe('resolveShotMedia', () => {
     expect(resolveShotMedia(project, shot)).toEqual([]);
   });
 });
+
+describe('camera keyframe roll previews', () => {
+  it('treats multi-keyframe moves as captures even without exported media', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    expect(hasShotCapture(project, shot)).toBe(false);
+
+    shot.cameraKeyframes = [
+      { id: 's', label: 'Start', timeSeconds: 0, camera: shot.camera, previewUri: 'data:image/png;base64,S' },
+      { id: 'e', label: 'End', timeSeconds: 3, camera: shot.camera, previewUri: 'data:image/png;base64,E' },
+    ];
+    expect(shotHasCameraKeyframeMove(shot)).toBe(true);
+    expect(hasShotCapture(project, shot)).toBe(true);
+    expect(resolveCameraKeyframePreviewUris(shot)).toEqual([
+      'data:image/png;base64,S',
+      'data:image/png;base64,E',
+    ]);
+  });
+
+  it('sorts preview uris by time and drops missing stills', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    shot.cameraKeyframes = [
+      { id: 'e', label: 'End', timeSeconds: 4, camera: shot.camera, previewUri: 'data:image/png;base64,E' },
+      { id: 's', label: 'Start', timeSeconds: 0, camera: shot.camera },
+      { id: 'm', label: 'Mid', timeSeconds: 2, camera: shot.camera, previewUri: 'data:image/png;base64,M' },
+    ];
+    expect(resolveCameraKeyframePreviewUris(shot)).toEqual([
+      'data:image/png;base64,M',
+      'data:image/png;base64,E',
+    ]);
+  });
+});
+

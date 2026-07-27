@@ -946,7 +946,8 @@ export function ShotsWorkspace() {
   }, [bumpCameraReseed, selectedShot, setShotCameraFlying, shotCameraFlying]);
 
   /**
-   * Cheap clay still for the move filmstrip (192×108). Non-blocking; safe to call per pose.
+   * Cheap clay still for the move filmstrip + camera roll (192×108).
+   * Persists previewUri on the keyframe (silent history) so the library can animate it.
    */
   const captureKeyframeThumb = useCallback((
     keyframeId: string,
@@ -980,11 +981,25 @@ export function ShotsWorkspace() {
             ? current
             : { ...current, [keyframeId]: frame.dataUrl }
         ));
+        // Persist for camera-roll GIF animation (no undo step).
+        const live = useContinuityStore.getState().project.shots.find((item) => item.id === shot.id);
+        if (!live) return;
+        const nextKeyframes = live.cameraKeyframes.map((keyframe) => (
+          keyframe.id === keyframeId
+            ? { ...keyframe, previewUri: frame.dataUrl }
+            : keyframe
+        ));
+        if (nextKeyframes.every((keyframe, index) => (
+          keyframe.previewUri === live.cameraKeyframes[index]?.previewUri
+        ))) {
+          return;
+        }
+        updateShot(shot.id, { cameraKeyframes: nextKeyframes }, { cameraHistory: 'silent' });
       })
       .catch(() => {
         // Filmstrip falls back to labeled placeholders.
       });
-  }, [selectedShot, selectedShotId]);
+  }, [selectedShot, selectedShotId, updateShot]);
 
   const snapshotPreview = useCallback((
     shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData },
@@ -1791,6 +1806,14 @@ export function ShotsWorkspace() {
 
   /** Timeline shows after third pose or explicit Edit timeline. */
   const showTimeline = timelineOpen || cameraMoveKeyframes.length > 2;
+  /** Merge persisted keyframe stills with in-flight local thumbs for the filmstrip. */
+  const movePreviewThumbsById = useMemo(() => {
+    const fromKeyframes: Record<string, string> = {};
+    for (const keyframe of cameraMoveKeyframes) {
+      if (keyframe.previewUri) fromKeyframes[keyframe.id] = keyframe.previewUri;
+    }
+    return { ...fromKeyframes, ...keyframeThumbById };
+  }, [cameraMoveKeyframes, keyframeThumbById]);
 
   const captureLabel = !selectedShot
     ? 'Add shot'
@@ -2159,7 +2182,7 @@ export function ShotsWorkspace() {
                 <CameraMovePreviewStrip
                   keyframes={cameraMoveKeyframes}
                   durationSeconds={cameraMoveDurationSeconds}
-                  thumbsById={keyframeThumbById}
+                  thumbsById={movePreviewThumbsById}
                   isPreviewing={isPreviewingCameraMove}
                   exportedVideoUrl={cameraMovePreviewUrl}
                   onPreview={previewCameraMove}

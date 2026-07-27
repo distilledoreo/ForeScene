@@ -84,10 +84,30 @@ export function shotHasCameraMoveVideo(project: LocationProject, shot: Shot): bo
   return resolveShotMedia(project, shot).some((item) => item.source === 'camera_move');
 }
 
+/** True when the shot has a multi-pose camera path (exported video not required). */
+export function shotHasCameraKeyframeMove(shot: Pick<Shot, 'cameraKeyframes'>): boolean {
+  return (shot.cameraKeyframes?.length ?? 0) >= 2;
+}
+
+/**
+ * Preview stills for a GIF-like camera-roll animation of keyframes.
+ * Sorted by time; only includes frames that have a stored previewUri.
+ */
+export function resolveCameraKeyframePreviewUris(
+  shot: Pick<Shot, 'cameraKeyframes'>,
+): string[] {
+  const sorted = [...(shot.cameraKeyframes ?? [])].sort(
+    (a, b) => a.timeSeconds - b.timeSeconds,
+  );
+  return sorted
+    .map((keyframe) => keyframe.previewUri)
+    .filter((uri): uri is string => Boolean(uri));
+}
+
 export function getShotMediaCount(project: LocationProject, shot: Shot): number {
   return resolveShotMedia(project, shot).length;
 }
 
 export function hasShotCapture(project: LocationProject, shot: Shot): boolean {
-  return getShotMediaCount(project, shot) > 0;
+  return getShotMediaCount(project, shot) > 0 || shotHasCameraKeyframeMove(shot);
 }

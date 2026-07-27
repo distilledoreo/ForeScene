@@ -161,6 +161,11 @@ export interface CameraKeyframe {
    * Used to animate props/people between start and end during camera-move video export.
    */
   objectOverrides?: ShotObjectOverrides;
+  /**
+   * Lightweight still (data URL or asset URI) for filmstrip / camera-roll animation.
+   * Not used for export; regenerated cheaply when missing.
+   */
+  previewUri?: string;
 }
 
 export interface PanoCropSettings {
