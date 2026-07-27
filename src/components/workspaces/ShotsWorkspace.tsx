@@ -25,6 +25,7 @@ import {
   PeopleExportMode,
   SceneObject,
   Shot,
+  ShotObjectOverrides,
   ShotStatus,
   Transform,
   Vec3,
@@ -110,7 +111,10 @@ import {
   getCameraMoveExportCompletionMessage,
   runCameraMoveExportPasses,
 } from '../../engine/cameraMoveExportPasses';
-import { snapshotStageableObjectOverrides } from '../../engine/objectKeyframes';
+import {
+  interpolateObjectOverrides,
+  snapshotStageableObjectOverrides,
+} from '../../engine/objectKeyframes';
 import {
   type ShotStillViewSelection,
 } from '../../domain/shotStillViews';
@@ -213,11 +217,25 @@ export function ShotsWorkspace() {
   const [stagedObjectId, setStagedObjectId] = useState<string>();
   const [showPeopleInViewport, setShowPeopleInViewport] = useState(true);
   const selectedShot = project.shots.find((shot) => shot.id === selectedShotId) ?? project.shots[0];
+  /**
+   * Transient object overrides for keyframe inspection / move preview.
+   * Not written to the shot until Update pose (or staging edits) commits them.
+   */
+  const [viewportObjectOverrides, setViewportObjectOverrides] = useState<
+    ShotObjectOverrides | undefined
+  >(undefined);
+  const shotForViewport = useMemo(() => {
+    if (!selectedShot) return undefined;
+    if (viewportObjectOverrides !== undefined) {
+      return { ...selectedShot, objectOverrides: viewportObjectOverrides };
+    }
+    return selectedShot;
+  }, [selectedShot, viewportObjectOverrides]);
   const shotSceneProject = useMemo(
-    () => selectedShot
-      ? resolveProjectForShot(project, selectedShot, { hidePeople: !showPeopleInViewport })
+    () => shotForViewport
+      ? resolveProjectForShot(project, shotForViewport, { hidePeople: !showPeopleInViewport })
       : project,
-    [project, selectedShot, showPeopleInViewport],
+    [project, shotForViewport, showPeopleInViewport],
   );
   const stagedObject = stagedObjectId
     ? shotSceneProject.scene.objects.find((object) => object.id === stagedObjectId)
@@ -514,31 +532,6 @@ export function ShotsWorkspace() {
     updateCameraMoveKeyframes(updateCameraKeyframeEasing(selectedShot.cameraKeyframes, easing));
   }, [selectedShot, updateCameraMoveKeyframes]);
 
-  const changeIntermediateCameraMoveKeyframeTime = useCallback((keyframeId: string, timeSeconds: number) => {
-    if (!selectedShot) return;
-    updateCameraMoveKeyframes(updateIntermediateCameraKeyframeTime(
-      selectedShot.cameraKeyframes,
-      keyframeId,
-      timeSeconds,
-    ));
-  }, [selectedShot, updateCameraMoveKeyframes]);
-
-  const deleteIntermediateCameraMoveKeyframe = useCallback((keyframeId: string) => {
-    if (!selectedShot) return;
-    updateCameraMoveKeyframes(removeIntermediateCameraKeyframe(
-      selectedShot.cameraKeyframes,
-      keyframeId,
-    ));
-    if (selectedKeyframeId === keyframeId) {
-      clearKeyframeSelection();
-    }
-  }, [
-    clearKeyframeSelection,
-    selectedKeyframeId,
-    selectedShot,
-    updateCameraMoveKeyframes,
-  ]);
-
   const stopCameraMovePreview = useCallback(() => {
     previewAbortRef.current.cancelled = true;
     if (previewAbortRef.current.frame != null) {
@@ -548,12 +541,46 @@ export function ShotsWorkspace() {
     setIsPreviewingCameraMove(false);
   }, []);
 
+  const clearViewportObjectInspection = useCallback(() => {
+    setViewportObjectOverrides(undefined);
+  }, []);
+
   useEffect(() => () => {
     previewAbortRef.current.cancelled = true;
     if (previewAbortRef.current.frame != null) {
       cancelAnimationFrame(previewAbortRef.current.frame);
     }
   }, []);
+
+  const changeIntermediateCameraMoveKeyframeTime = useCallback((keyframeId: string, timeSeconds: number) => {
+    if (!selectedShot) return;
+    stopCameraMovePreview();
+    updateCameraMoveKeyframes(updateIntermediateCameraKeyframeTime(
+      selectedShot.cameraKeyframes,
+      keyframeId,
+      timeSeconds,
+    ));
+  }, [selectedShot, stopCameraMovePreview, updateCameraMoveKeyframes]);
+
+  const deleteIntermediateCameraMoveKeyframe = useCallback((keyframeId: string) => {
+    if (!selectedShot) return;
+    stopCameraMovePreview();
+    updateCameraMoveKeyframes(removeIntermediateCameraKeyframe(
+      selectedShot.cameraKeyframes,
+      keyframeId,
+    ));
+    if (selectedKeyframeId === keyframeId) {
+      clearKeyframeSelection();
+      clearViewportObjectInspection();
+    }
+  }, [
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    selectedKeyframeId,
+    selectedShot,
+    stopCameraMovePreview,
+    updateCameraMoveKeyframes,
+  ]);
 
   const changeCameraMoveDuration = useCallback((durationSeconds: number) => {
     if (!selectedShot) return;
@@ -1005,10 +1032,12 @@ export function ShotsWorkspace() {
   const appendSequentialCapture = useCallback(() => {
     if (!selectedShot) return;
     if (videoCaptureState === 'finished') return;
+    stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
     const latest = useContinuityStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
+    const wasEmpty = latestShot.cameraKeyframes.length === 0;
     const duration = cameraMoveDurationSeconds;
     const preserveManualTiming = hasManualCameraKeyframeTiming(latestShot.cameraKeyframes, duration);
     const pose: CameraData = {
@@ -1039,36 +1068,65 @@ export function ShotsWorkspace() {
     draftCameraRef.current = pose;
     setVideoCaptureState('capturing');
     clearKeyframeSelection();
+    clearViewportObjectInspection();
     landShotFraming(selectedShot.id, pose, { keepFlying: true });
-    snapshotPreview(selectedShot, pose);
+    // Thumbnail render only on first Start capture — intermediate appends stay light.
+    if (wasEmpty) {
+      snapshotPreview(selectedShot, pose);
+    }
     setLandFlash(true);
     window.setTimeout(() => setLandFlash(false), 500);
   }, [
     cameraMoveDurationSeconds,
     cameraMoveEasing,
     clearKeyframeSelection,
+    clearViewportObjectInspection,
     getEffectiveCamera,
     landShotFraming,
     selectedShot,
     snapshotPreview,
+    stopCameraMovePreview,
     updateShot,
     videoCaptureState,
   ]);
 
   const finishSequentialCapture = useCallback(() => {
     if (!hasRenderableCameraMove(cameraMoveKeyframes)) return;
+    stopCameraMovePreview();
     setVideoCaptureState('finished');
     clearKeyframeSelection();
-  }, [cameraMoveKeyframes, clearKeyframeSelection]);
+    clearViewportObjectInspection();
+    // Refresh gallery thumbnail once the authored move is finished.
+    const camera = getEffectiveCamera();
+    if (selectedShot && camera) {
+      snapshotPreview(selectedShot, camera);
+    }
+  }, [
+    cameraMoveKeyframes,
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    getEffectiveCamera,
+    selectedShot,
+    snapshotPreview,
+    stopCameraMovePreview,
+  ]);
 
   const continueSequentialCapture = useCallback(() => {
     if (!hasRenderableCameraMove(cameraMoveKeyframes)) return;
+    stopCameraMovePreview();
     setVideoCaptureState('capturing');
     clearKeyframeSelection();
-  }, [cameraMoveKeyframes, clearKeyframeSelection]);
+    clearViewportObjectInspection();
+  }, [
+    cameraMoveKeyframes,
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    stopCameraMovePreview,
+  ]);
 
   const insertInSelectedSegment = useCallback(() => {
     if (!selectedShot || !selectedSegmentStartId) return;
+    stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
     const latest = useContinuityStore.getState().project;
@@ -1087,36 +1145,66 @@ export function ShotsWorkspace() {
     updateCameraMoveKeyframes(nextKeyframes);
     const inserted = nextKeyframes.find((keyframe) => !beforeIds.has(keyframe.id));
     setSelectedSegmentStartId(null);
-    if (inserted) setSelectedKeyframeId(inserted.id);
+    if (inserted) {
+      setSelectedKeyframeId(inserted.id);
+      // Inspect the newly inserted pose's object snapshot without binding the camera.
+      if (inserted.objectOverrides !== undefined) {
+        setViewportObjectOverrides(structuredClone(inserted.objectOverrides));
+      } else {
+        clearViewportObjectInspection();
+      }
+    }
   }, [
     cameraMoveEasing,
+    clearViewportObjectInspection,
     getEffectiveCamera,
     selectedSegmentStartId,
     selectedShot,
+    stopCameraMovePreview,
     updateCameraMoveKeyframes,
   ]);
 
   const updateSelectedKeyframePose = useCallback((keyframeId: string) => {
     if (!selectedShot) return;
+    stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
     const latest = useContinuityStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
-    updateCameraMoveKeyframes(recaptureCameraKeyframe({
+    // Prefer live viewport inspection overrides when the user staged objects after selection.
+    const objectSnapshot = viewportObjectOverrides !== undefined
+      ? structuredClone(viewportObjectOverrides)
+      : snapshotStageableObjectOverrides(latest, latestShot);
+    const next = recaptureCameraKeyframe({
       keyframes: latestShot.cameraKeyframes,
       keyframeId,
       camera,
-      objectOverrides: snapshotStageableObjectOverrides(latest, latestShot),
-    }));
-  }, [getEffectiveCamera, selectedShot, updateCameraMoveKeyframes]);
+      objectOverrides: objectSnapshot,
+    });
+    updateCameraMoveKeyframes(next);
+    setViewportObjectOverrides(objectSnapshot);
+  }, [
+    getEffectiveCamera,
+    selectedShot,
+    stopCameraMovePreview,
+    updateCameraMoveKeyframes,
+    viewportObjectOverrides,
+  ]);
 
   const selectKeyframeNode = useCallback((keyframeId: string | null) => {
+    stopCameraMovePreview();
     setSelectedSegmentStartId(null);
     setSelectedKeyframeId(keyframeId);
-    if (!keyframeId || !selectedShot) return;
+    if (!keyframeId || !selectedShot) {
+      clearViewportObjectInspection();
+      return;
+    }
     const keyframe = getSortedCameraKeyframes(selectedShot.cameraKeyframes)
       .find((item) => item.id === keyframeId);
-    if (!keyframe) return;
+    if (!keyframe) {
+      clearViewportObjectInspection();
+      return;
+    }
     // One-time jump to the stored pose, then leave the camera free.
     const pose: CameraData = {
       ...keyframe.camera,
@@ -1126,17 +1214,33 @@ export function ShotsWorkspace() {
     draftCameraRef.current = pose;
     setFramingCamera(pose);
     bumpCameraReseed();
+    // Restore stored object snapshot for inspection (viewport-only, not committed).
+    if (keyframe.objectOverrides !== undefined) {
+      setViewportObjectOverrides(structuredClone(keyframe.objectOverrides));
+    } else {
+      clearViewportObjectInspection();
+    }
     if (!shotCameraFlying) {
       setShotCameraFlying(true);
     }
-  }, [bumpCameraReseed, selectedShot, setShotCameraFlying, shotCameraFlying]);
+  }, [
+    bumpCameraReseed,
+    clearViewportObjectInspection,
+    selectedShot,
+    setShotCameraFlying,
+    shotCameraFlying,
+    stopCameraMovePreview,
+  ]);
 
   const previewCameraMove = useCallback(() => {
     if (!selectedShot || !hasRenderableCameraMove(cameraMoveKeyframes)) return;
     stopCameraMovePreview();
+    clearKeyframeSelection();
     const keyframes = getSortedCameraKeyframes(cameraMoveKeyframes);
     const duration = getCameraMoveDurationSeconds(keyframes, cameraMoveDurationSeconds);
     const startTime = performance.now();
+    const latestProject = useContinuityStore.getState().project;
+    const latestShot = latestProject.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     previewAbortRef.current = { cancelled: false };
     setIsPreviewingCameraMove(true);
     startFlyCamera({ clearFramingAcceptance: false });
@@ -1146,7 +1250,8 @@ export function ShotsWorkspace() {
       const elapsed = (now - startTime) / 1000;
       const t = Math.min(elapsed, duration);
       const firstTime = keyframes[0].timeSeconds;
-      const camera = interpolateCameraKeyframes(keyframes, firstTime + t);
+      const sampleTime = firstTime + t;
+      const camera = interpolateCameraKeyframes(keyframes, sampleTime);
       const pose: CameraData = {
         ...camera,
         position: [...camera.position] as CameraData['position'],
@@ -1155,17 +1260,26 @@ export function ShotsWorkspace() {
       draftCameraRef.current = pose;
       setFramingCamera(pose);
       bumpCameraReseed();
+      setViewportObjectOverrides(interpolateObjectOverrides(
+        keyframes,
+        sampleTime,
+        latestShot.objectOverrides,
+        latestProject.scene.objects,
+      ));
       if (elapsed < duration) {
         previewAbortRef.current.frame = requestAnimationFrame(tick);
         return;
       }
       setIsPreviewingCameraMove(false);
+      // Leave the end pose; clear transient inspection overrides so live staging returns.
+      setViewportObjectOverrides(undefined);
     };
     previewAbortRef.current.frame = requestAnimationFrame(tick);
   }, [
     bumpCameraReseed,
     cameraMoveDurationSeconds,
     cameraMoveKeyframes,
+    clearKeyframeSelection,
     selectedShot,
     startFlyCamera,
     stopCameraMovePreview,
@@ -1183,12 +1297,14 @@ export function ShotsWorkspace() {
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start here.
     setVideoCaptureState(captureStateFromKeyframes(existing));
     clearKeyframeSelection();
+    clearViewportObjectInspection();
     stopCameraMovePreview();
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
   }, [
     clearKeyframeSelection,
+    clearViewportObjectInspection,
     selectedShot,
     startFlyCamera,
     stopCameraMovePreview,
@@ -1199,10 +1315,11 @@ export function ShotsWorkspace() {
     setCaptureMode('still');
     setVideoCaptureState('empty');
     clearKeyframeSelection();
+    clearViewportObjectInspection();
     stopCameraMovePreview();
     // Still camera is always live — like a phone camera app.
     startFlyCamera({ clearFramingAcceptance: false });
-  }, [clearKeyframeSelection, startFlyCamera, stopCameraMovePreview]);
+  }, [clearKeyframeSelection, clearViewportObjectInspection, startFlyCamera, stopCameraMovePreview]);
 
   const setMode = useCallback((mode: CaptureMode) => {
     if (mode === captureMode) return;
@@ -1215,12 +1332,14 @@ export function ShotsWorkspace() {
     updateCameraMoveKeyframes([]);
     setVideoCaptureState('empty');
     clearKeyframeSelection();
+    clearViewportObjectInspection();
     stopCameraMovePreview();
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
     startFlyCamera({ clearFramingAcceptance: false });
   }, [
     clearKeyframeSelection,
+    clearViewportObjectInspection,
     selectedShot,
     startFlyCamera,
     stopCameraMovePreview,
@@ -1250,11 +1369,19 @@ export function ShotsWorkspace() {
 
   const enterStagingMode = useCallback(() => {
     if (!selectedShot) return;
+    stopCameraMovePreview();
+    clearViewportObjectInspection();
     const camera = getEffectiveCamera();
     landShotFraming(selectedShot.id, camera);
     setStagingMode(true);
     setStagedObjectId(undefined);
-  }, [getEffectiveCamera, landShotFraming, selectedShot]);
+  }, [
+    clearViewportObjectInspection,
+    getEffectiveCamera,
+    landShotFraming,
+    selectedShot,
+    stopCameraMovePreview,
+  ]);
 
   const exitStagingMode = useCallback(() => {
     setStagingMode(false);
@@ -1363,6 +1490,7 @@ export function ShotsWorkspace() {
     setLibraryOpen(false);
     setVideoCaptureState(captureStateFromKeyframes(selectedShot?.cameraKeyframes ?? []));
     clearKeyframeSelection();
+    clearViewportObjectInspection();
     stopCameraMovePreview();
     setStagedObjectId(undefined);
     if (selectedShot) {
@@ -1370,7 +1498,7 @@ export function ShotsWorkspace() {
         getCameraMoveDurationSeconds(selectedShot.cameraKeyframes, DEFAULT_CAMERA_MOVE_DURATION_SECONDS),
       );
     }
-  }, [clearKeyframeSelection, selectedShot?.id, stopCameraMovePreview]);
+  }, [clearKeyframeSelection, clearViewportObjectInspection, selectedShot?.id, stopCameraMovePreview]);
 
   const duplicateSelectedShot = useCallback(() => {
     if (!selectedShot) return;
@@ -1761,15 +1889,22 @@ export function ShotsWorkspace() {
                 keyframes={cameraMoveKeyframes}
                 durationSeconds={cameraMoveDurationSeconds}
                 captureState={videoCaptureState}
+                isPreviewing={isPreviewingCameraMove}
                 selectedKeyframeId={selectedKeyframeId}
                 selectedSegmentStartId={selectedSegmentStartId}
                 onCaptureNext={appendSequentialCapture}
                 onFinishCapture={finishSequentialCapture}
                 onContinueCapture={continueSequentialCapture}
                 onPreview={previewCameraMove}
+                onStopPreview={() => {
+                  stopCameraMovePreview();
+                  clearViewportObjectInspection();
+                }}
                 onSelectKeyframe={selectKeyframeNode}
                 onSelectSegment={(startId) => {
+                  stopCameraMovePreview();
                   setSelectedKeyframeId(null);
+                  clearViewportObjectInspection();
                   setSelectedSegmentStartId(startId);
                 }}
                 onInsertInSelectedSegment={insertInSelectedSegment}
@@ -1779,14 +1914,29 @@ export function ShotsWorkspace() {
               />
 
               {(videoCaptureState === 'finished' || cameraMoveKeyframes.length > 0) && !isExportingCameraMove && (
-                <button
-                  type="button"
-                  onClick={retakeVideoMove}
-                  className="text-[11px] font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"
-                  data-shots-video-retake
-                >
-                  Retake move
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={retakeVideoMove}
+                    className="text-[11px] font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"
+                    data-shots-video-retake
+                  >
+                    Retake move
+                  </button>
+                  {cameraMoveKeyframes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const camera = getEffectiveCamera();
+                        if (selectedShot && camera) snapshotPreview(selectedShot, camera);
+                      }}
+                      className="text-[11px] font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"
+                      data-shots-video-refresh-thumbnail
+                    >
+                      Refresh thumbnail
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}

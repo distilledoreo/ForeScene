@@ -113,7 +113,7 @@ describe('shot camera store history', () => {
       selectedShotId: shotA,
       shotCameraHistoryByShotId: {
         [shotA]: {
-          past: [cameraWithFov(10)],
+          past: [{ camera: cameraWithFov(10), cameraKeyframes: [] }],
           future: [],
         },
       },
@@ -179,4 +179,50 @@ describe('shot camera store history', () => {
     expect(restored.fovDegrees).toBeCloseTo(originalFov, 5);
     expect(Math.round(verticalFovToFocalLength(restored.fovDegrees, restored.aspectRatio))).toBe(20);
   });
+
+  it('undoes camera keyframe sequence edits independently of the live fly pose', () => {
+    useContinuityStore.setState({
+      project: createDefaultProject(),
+      selectedShotId: undefined,
+      shotCameraHistoryByShotId: {},
+    });
+    const shotId = useContinuityStore.getState().project.shots[0].id;
+    const baseCamera = useContinuityStore.getState().project.shots[0].camera;
+    useContinuityStore.getState().selectShot(shotId);
+
+    const start = {
+      id: 'kf-start',
+      label: 'Start',
+      timeSeconds: 0,
+      camera: { ...baseCamera, position: [0, 1.6, 0] as [number, number, number] },
+    };
+    const end = {
+      id: 'kf-end',
+      label: 'End',
+      timeSeconds: 4,
+      camera: { ...baseCamera, position: [4, 1.6, 0] as [number, number, number] },
+    };
+    const mid = {
+      id: 'kf-mid',
+      label: 'Keyframe 1',
+      timeSeconds: 2,
+      camera: { ...baseCamera, position: [2, 1.6, 0] as [number, number, number] },
+    };
+
+    useContinuityStore.getState().updateShot(shotId, {
+      cameraKeyframes: [start, end],
+    });
+    useContinuityStore.getState().updateShot(shotId, {
+      cameraKeyframes: [start, mid, end],
+    });
+
+    expect(useContinuityStore.getState().project.shots.find((s) => s.id === shotId)?.cameraKeyframes).toHaveLength(3);
+    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
+    const afterUndo = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!;
+    expect(afterUndo.cameraKeyframes.map((k) => k.id)).toEqual(['kf-start', 'kf-end']);
+    expect(useContinuityStore.getState().redoShotCamera()).toBe(true);
+    const afterRedo = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!;
+    expect(afterRedo.cameraKeyframes.map((k) => k.id)).toEqual(['kf-start', 'kf-mid', 'kf-end']);
+  });
 });
+

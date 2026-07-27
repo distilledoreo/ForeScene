@@ -495,6 +495,14 @@ describe('ui revamp fidelity surfaces', () => {
     expect(strip).toContain('data-camera-keyframe-continue');
     expect(strip).toContain('data-camera-keyframe-insert');
     expect(strip).toContain('data-camera-keyframe-update-pose');
+    expect(strip).toContain('data-camera-keyframe-stop-preview');
+    expect(strip).toContain('Stop preview');
+    expect(shots).toContain('data-shots-video-refresh-thumbnail');
+    expect(shots).toContain('interpolateObjectOverrides');
+    expect(shots).toContain('viewportObjectOverrides');
+    // Intermediate sequential captures must not thrash snapshotPreview.
+    expect(shots).toMatch(/if \(wasEmpty\) \{\s*snapshotPreview/);
+    expect(shots).toMatch(/finishSequentialCapture[\s\S]*snapshotPreview/);
     // Re-entering Video preserves existing keyframes and restores capture state from them.
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start on enter.
     const enterVideoModeBody = shots.match(

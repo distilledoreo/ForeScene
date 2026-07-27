@@ -11,6 +11,7 @@ export interface KeyframeStripProps {
   keyframes: CameraKeyframe[];
   durationSeconds: number;
   captureState: VideoCaptureState;
+  isPreviewing?: boolean;
 
   selectedKeyframeId: string | null;
   selectedSegmentStartId: string | null;
@@ -19,6 +20,7 @@ export interface KeyframeStripProps {
   onFinishCapture: () => void;
   onContinueCapture: () => void;
   onPreview: () => void;
+  onStopPreview?: () => void;
 
   onSelectKeyframe: (keyframeId: string | null) => void;
   onSelectSegment: (startKeyframeId: string | null) => void;
@@ -37,12 +39,14 @@ export function KeyframeStrip({
   keyframes,
   durationSeconds,
   captureState,
+  isPreviewing = false,
   selectedKeyframeId,
   selectedSegmentStartId,
   onCaptureNext,
   onFinishCapture,
   onContinueCapture,
   onPreview,
+  onStopPreview,
   onSelectKeyframe,
   onSelectSegment,
   onInsertInSelectedSegment,
@@ -54,8 +58,8 @@ export function KeyframeStrip({
   const duration = Math.max(durationSeconds, Number.EPSILON);
   const editorId = useId();
   const trackRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<HTMLDivElement>(null);
   const [editorStyle, setEditorStyle] = useState<React.CSSProperties>({});
+  const [timeDraft, setTimeDraft] = useState<string | null>(null);
 
   const selectedIndex = selectedKeyframeId
     ? sorted.findIndex((keyframe) => keyframe.id === selectedKeyframeId)
@@ -66,8 +70,13 @@ export function KeyframeStrip({
     ? getIntermediateCameraKeyframeTimeBounds(sorted, selectedKeyframe.id)
     : undefined;
 
-  const showSegments = sorted.length >= 2 && captureState === 'finished';
+  const showSegments = sorted.length >= 2 && captureState === 'finished' && !isPreviewing;
   const canFinish = captureState === 'capturing' && sorted.length >= 2;
+  const editingLocked = isPreviewing;
+
+  useEffect(() => {
+    setTimeDraft(null);
+  }, [selectedKeyframeId, selectedKeyframe?.timeSeconds]);
 
   // Position the node editor so it stays inside the strip when near edges.
   useEffect(() => {
@@ -78,13 +87,14 @@ export function KeyframeStrip({
     const track = trackRef.current;
     const leftPercent = (selectedKeyframe.timeSeconds / duration) * 100;
     const trackWidth = track.clientWidth || 1;
-    const editorWidth = 200;
+    const editorWidth = Math.min(200, Math.max(140, trackWidth));
     const centerPx = (leftPercent / 100) * trackWidth;
     let leftPx = centerPx - editorWidth / 2;
-    leftPx = Math.max(0, Math.min(trackWidth - editorWidth, leftPx));
+    leftPx = Math.max(0, Math.min(Math.max(0, trackWidth - editorWidth), leftPx));
     setEditorStyle({
       left: `${leftPx}px`,
       width: `${editorWidth}px`,
+      maxWidth: '100%',
     });
   }, [duration, selectedKeyframe, selectedKeyframe?.timeSeconds, sorted.length]);
 
@@ -101,15 +111,25 @@ export function KeyframeStrip({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onSelectKeyframe, selectedKeyframe]);
 
+  const commitTimeDraft = useCallback(() => {
+    if (!selectedKeyframe || timeDraft === null) return;
+    const parsed = Number(timeDraft);
+    if (Number.isFinite(parsed)) {
+      onChangeTime(selectedKeyframe.id, parsed);
+    }
+    setTimeDraft(null);
+  }, [onChangeTime, selectedKeyframe, timeDraft]);
+
   const focusAdjacent = useCallback((fromIndex: number, direction: -1 | 1) => {
+    if (editingLocked) return;
     const nextIndex = fromIndex + direction;
     if (nextIndex < 0 || nextIndex >= sorted.length) return;
     onSelectSegment(null);
     onSelectKeyframe(sorted[nextIndex].id);
-  }, [onSelectKeyframe, onSelectSegment, sorted]);
+  }, [editingLocked, onSelectKeyframe, onSelectSegment, sorted]);
 
   const handleTrackKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (sorted.length === 0) return;
+    if (sorted.length === 0 || editingLocked) return;
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
       event.preventDefault();
       const direction = event.key === 'ArrowRight' ? 1 : -1;
@@ -125,13 +145,18 @@ export function KeyframeStrip({
       event.preventDefault();
       onSelectKeyframe(sorted[0].id);
     }
-  }, [focusAdjacent, onSelectKeyframe, onSelectSegment, selectedIndex, sorted]);
+  }, [editingLocked, focusAdjacent, onSelectKeyframe, onSelectSegment, selectedIndex, sorted]);
+
+  const timeDisplay = timeDraft ?? (
+    selectedKeyframe ? String(selectedKeyframe.timeSeconds) : ''
+  );
 
   return (
     <div
       className="flex w-full flex-col gap-2"
       data-camera-keyframe-strip
       data-camera-keyframe-capture-state={captureState}
+      data-camera-keyframe-previewing={isPreviewing ? 'true' : 'false'}
     >
       {sorted.length === 0 ? (
         <p className="text-center text-[11px] font-medium text-white/55">
@@ -143,13 +168,14 @@ export function KeyframeStrip({
           className="relative h-12 w-full touch-manipulation outline-none"
           role="listbox"
           aria-label="Camera keyframes"
+          aria-disabled={editingLocked || undefined}
           tabIndex={0}
           onKeyDown={handleTrackKeyDown}
         >
           {/* Baseline */}
           <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-white/25" />
 
-          {/* Segments (finished only) */}
+          {/* Segments (finished only, not while previewing) */}
           {showSegments && sorted.slice(0, -1).map((keyframe, index) => {
             const next = sorted[index + 1];
             const startPercent = (keyframe.timeSeconds / duration) * 100;
@@ -165,7 +191,8 @@ export function KeyframeStrip({
                 aria-label={`Insert between ${getCameraKeyframeDisplayLabel(index, sorted.length)} and ${getCameraKeyframeDisplayLabel(index + 1, sorted.length)}`}
                 data-camera-keyframe-segment
                 data-segment-after={keyframe.id}
-                className={`absolute top-1/2 z-[1] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition ${
+                disabled={editingLocked}
+                className={`absolute top-1/2 z-[1] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition disabled:opacity-40 ${
                   selected
                     ? 'bg-[var(--accent)]/30 text-white ring-2 ring-[var(--accent)]'
                     : 'text-white/70 hover:bg-white/15 hover:text-white'
@@ -202,7 +229,8 @@ export function KeyframeStrip({
                 data-camera-keyframe-node
                 data-keyframe-id={keyframe.id}
                 data-keyframe-role={isStart ? 'start' : isEnd ? 'end' : 'intermediate'}
-                className={`absolute top-1/2 z-[2] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 outline-none ${
+                disabled={editingLocked}
+                className={`absolute top-1/2 z-[2] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 outline-none disabled:opacity-40 ${
                   selected ? 'z-[3]' : ''
                 }`}
                 style={{ left: `${leftPercent}%` }}
@@ -238,14 +266,13 @@ export function KeyframeStrip({
           })}
 
           {/* Selected node editor */}
-          {selectedKeyframe && (
+          {selectedKeyframe && !editingLocked && (
             <div
-              ref={editorRef}
               id={editorId}
               role="dialog"
               aria-label="Keyframe editor"
               data-camera-keyframe-editor-popover
-              className="absolute bottom-[calc(100%+0.35rem)] z-10 rounded-xl border border-white/20 bg-black/85 p-2 text-white shadow-soft backdrop-blur-md"
+              className="absolute bottom-[calc(100%+0.35rem)] z-10 box-border rounded-xl border border-white/20 bg-black/85 p-2 text-white shadow-soft backdrop-blur-md"
               style={editorStyle}
             >
               <div className="flex flex-wrap items-center gap-1.5">
@@ -262,14 +289,25 @@ export function KeyframeStrip({
                     <label className="flex items-center gap-1 text-[11px] text-white/70">
                       <span className="sr-only">Time seconds</span>
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         data-camera-keyframe-time
-                        min={timeBounds?.minimumTimeSeconds}
-                        max={timeBounds?.maximumTimeSeconds}
-                        step="any"
-                        value={selectedKeyframe.timeSeconds}
+                        value={timeDisplay}
                         disabled={!timeBounds || captureState !== 'finished'}
-                        onChange={(event) => onChangeTime(selectedKeyframe.id, Number(event.target.value))}
+                        onChange={(event) => setTimeDraft(event.target.value)}
+                        onBlur={commitTimeDraft}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            commitTimeDraft();
+                            (event.target as HTMLInputElement).blur();
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setTimeDraft(null);
+                            (event.target as HTMLInputElement).blur();
+                          }
+                        }}
                         className="w-16 rounded-md border border-white/20 bg-black/40 px-1.5 py-1 text-[11px] text-white outline-none focus:border-[var(--accent)]"
                         aria-label="Keyframe time in seconds"
                       />
@@ -309,19 +347,21 @@ export function KeyframeStrip({
               label={sorted.length === 0 ? 'Capture start' : 'Capture next'}
               onClick={onCaptureNext}
               primary
+              disabled={editingLocked}
             />
             {canFinish && (
               <StripAction
                 dataAttr="data-camera-keyframe-finish"
                 label="Finish capture"
                 onClick={onFinishCapture}
+                disabled={editingLocked}
               />
             )}
           </>
         )}
         {captureState === 'finished' && (
           <>
-            {selectedSegmentStartId && (
+            {selectedSegmentStartId && !isPreviewing && (
               <StripAction
                 dataAttr="data-camera-keyframe-insert"
                 label="Insert here"
@@ -329,16 +369,26 @@ export function KeyframeStrip({
                 primary
               />
             )}
-            <StripAction
-              dataAttr="data-camera-keyframe-preview"
-              label="Preview move"
-              onClick={onPreview}
-              primary={!selectedSegmentStartId}
-            />
+            {isPreviewing ? (
+              <StripAction
+                dataAttr="data-camera-keyframe-stop-preview"
+                label="Stop preview"
+                onClick={() => onStopPreview?.()}
+                primary
+              />
+            ) : (
+              <StripAction
+                dataAttr="data-camera-keyframe-preview"
+                label="Preview move"
+                onClick={onPreview}
+                primary={!selectedSegmentStartId}
+              />
+            )}
             <StripAction
               dataAttr="data-camera-keyframe-continue"
               label="Continue sequence"
               onClick={onContinueCapture}
+              disabled={isPreviewing}
             />
           </>
         )}
@@ -352,18 +402,21 @@ function StripAction({
   onClick,
   primary = false,
   dataAttr,
+  disabled = false,
 }: {
   label: string;
   onClick: () => void;
   primary?: boolean;
   dataAttr: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       {...{ [dataAttr]: true }}
       onClick={onClick}
-      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
+      disabled={disabled}
+      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
         primary
           ? 'bg-white text-black hover:bg-white/90'
           : 'bg-white/15 text-white hover:bg-white/25'

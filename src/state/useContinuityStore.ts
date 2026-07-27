@@ -61,6 +61,7 @@ import {
 } from '../engine/buildHistory';
 import {
   cameraDataEqual,
+  cameraKeyframesEqual,
   clearAllShotCameraHistory,
   getShotCameraHistoryStacks,
   pushShotCameraHistoryPast,
@@ -373,10 +374,16 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const shot = state.project.shots.find((item) => item.id === state.selectedShotId);
     if (!shot) return false;
     const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, shot.id);
-    const result = undoShotCameraHistory(currentStacks, shot.camera);
+    const result = undoShotCameraHistory(currentStacks, {
+      camera: shot.camera,
+      cameraKeyframes: shot.cameraKeyframes,
+    });
     if (!result) return false;
     shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, { camera: result.restored }, { cameraHistory: 'silent' });
+    get().updateShot(shot.id, {
+      camera: result.restored.camera,
+      cameraKeyframes: result.restored.cameraKeyframes,
+    }, { cameraHistory: 'silent' });
     shotCameraHistoryRestoring = false;
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
@@ -393,10 +400,16 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     const shot = state.project.shots.find((item) => item.id === state.selectedShotId);
     if (!shot) return false;
     const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, shot.id);
-    const result = redoShotCameraHistory(currentStacks, shot.camera);
+    const result = redoShotCameraHistory(currentStacks, {
+      camera: shot.camera,
+      cameraKeyframes: shot.cameraKeyframes,
+    });
     if (!result) return false;
     shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, { camera: result.restored }, { cameraHistory: 'silent' });
+    get().updateShot(shot.id, {
+      camera: result.restored.camera,
+      cameraKeyframes: result.restored.cameraKeyframes,
+    }, { cameraHistory: 'silent' });
     shotCameraHistoryRestoring = false;
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
@@ -1225,19 +1238,25 @@ export const useContinuityStore = create<ContinuityStore>((set, get) => ({
     }
 
     const nextCamera = updates.camera ?? shot.camera;
+    const nextKeyframes = updates.cameraKeyframes ?? shot.cameraKeyframes;
     const cameraChanged = updates.camera !== undefined && !cameraDataEqual(shot.camera, nextCamera);
+    const keyframesChanged = updates.cameraKeyframes !== undefined
+      && !cameraKeyframesEqual(shot.cameraKeyframes, nextKeyframes);
     let historyPatch: Partial<Pick<
       ContinuityStore,
       'shotCameraHistoryByShotId' | 'shotCameraHistoryBatchCaptured'
     >> = {};
 
-    if (cameraChanged && !shotCameraHistoryRestoring) {
+    if ((cameraChanged || keyframesChanged) && !shotCameraHistoryRestoring) {
       const mode = options?.cameraHistory ?? 'step';
       if (mode !== 'silent') {
         const effectiveMode: ShotCameraHistoryMode = state.shotCameraHistoryBatchDepth > 0 ? 'batch' : mode;
         if (effectiveMode !== 'batch' || !state.shotCameraHistoryBatchCaptured) {
           const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, id);
-          const stacks = pushShotCameraHistoryPast(currentStacks, shot.camera);
+          const stacks = pushShotCameraHistoryPast(currentStacks, {
+            camera: shot.camera,
+            cameraKeyframes: shot.cameraKeyframes,
+          });
           historyPatch = {
             shotCameraHistoryByShotId: withShotCameraHistoryStacks(
               state.shotCameraHistoryByShotId,

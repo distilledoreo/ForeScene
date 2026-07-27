@@ -29,12 +29,14 @@ function renderStrip(props: Partial<React.ComponentProps<typeof KeyframeStrip>> 
       keyframes={props.keyframes ?? []}
       durationSeconds={props.durationSeconds ?? 6}
       captureState={props.captureState ?? 'empty'}
+      isPreviewing={props.isPreviewing}
       selectedKeyframeId={props.selectedKeyframeId ?? null}
       selectedSegmentStartId={props.selectedSegmentStartId ?? null}
       onCaptureNext={props.onCaptureNext ?? noop}
       onFinishCapture={props.onFinishCapture ?? noop}
       onContinueCapture={props.onContinueCapture ?? noop}
       onPreview={props.onPreview ?? noop}
+      onStopPreview={props.onStopPreview ?? noop}
       onSelectKeyframe={props.onSelectKeyframe ?? noop}
       onSelectSegment={props.onSelectSegment ?? noop}
       onInsertInSelectedSegment={props.onInsertInSelectedSegment ?? noop}
@@ -96,6 +98,23 @@ describe('KeyframeStrip', () => {
     expect(html).toContain('data-camera-keyframe-continue');
     expect(html).not.toContain('Capture next');
     expect(html).not.toContain('Finish capture');
+  });
+
+  it('shows Stop preview and locks timeline while previewing', () => {
+    const html = renderStrip({
+      captureState: 'finished',
+      isPreviewing: true,
+      keyframes: [
+        kf({ id: 's', timeSeconds: 0 }),
+        kf({ id: 'e', timeSeconds: 6 }),
+      ],
+    });
+    expect(html).toContain('Stop preview');
+    expect(html).toContain('data-camera-keyframe-stop-preview');
+    expect(html).toContain('data-camera-keyframe-previewing="true"');
+    expect(html).not.toContain('Preview move');
+    expect(html).not.toContain('data-camera-keyframe-segment');
+    expect(html).not.toContain('data-camera-keyframe-update-pose');
   });
 
   it('segment selection reveals Insert here', () => {
