@@ -507,6 +507,9 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('data-shots-video-mode-pro');
     expect(shots).toContain('data-shots-video-simple-chrome');
     expect(shots).toContain('data-shots-video-export');
+    expect(shots).toContain('data-shots-video-next-shot');
+    expect(shots).toContain('completeVideoAndNextShot');
+    expect(shots).toContain('resumeVideoAfterNextShotRef');
     expect(shots).toMatch(/videoAuthoringMode === 'pro' && \(\s*<KeyframeStrip/);
     expect(shots).toMatch(/simpleComplete = videoAuthoringMode === 'simple' && nextKeyframes\.length >= 2/);
     // Intermediate sequential captures must not thrash snapshotPreview.

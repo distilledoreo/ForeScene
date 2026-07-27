@@ -428,9 +428,18 @@ test.describe('workflow path smoke', () => {
     await dismissOverlays(page);
 
     await expect(page.locator('[data-shots-video-simple-finished]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-next-shot]')).toBeVisible();
     await expect(page.locator('[data-shots-video-preview]')).toBeVisible();
     await expect(page.locator('[data-shots-video-export]')).toBeVisible();
-    await expect(shutter).toBeDisabled();
+    await expect(shutter).toBeEnabled();
+    await expect(shutter).toHaveAttribute('data-shots-video-shutter-next', 'true');
+
+    await dismissOverlays(page);
+    await page.locator('[data-shots-video-next-shot]').click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-simple-chrome]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-simple-finished]')).toHaveCount(0);
+    await expect(page.getByText('No camera move captured')).toBeVisible({ timeout: 10_000 });
   });
 
   test('video pro mode sequential capture appends poses, finishes, and continues', async ({ page }) => {
@@ -477,8 +486,9 @@ test.describe('workflow path smoke', () => {
     await expect(strip).toHaveAttribute('data-camera-keyframe-capture-state', 'finished');
     await expect(page.locator('[data-camera-keyframe-preview]')).toBeVisible();
     await expect(page.locator('[data-camera-keyframe-continue]')).toBeVisible();
+    await expect(page.locator('[data-shots-video-next-shot]')).toBeVisible();
     await expect(page.locator('[data-shots-video-export]')).toBeVisible();
-    await expect(shutter).toBeDisabled();
+    await expect(shutter).toBeEnabled();
 
     await dismissOverlays(page);
     await page.locator('[data-camera-keyframe-continue]').click({ force: true });
