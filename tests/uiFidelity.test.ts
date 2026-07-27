@@ -516,8 +516,10 @@ describe('ui revamp fidelity surfaces', () => {
     // Intermediate sequential captures must not thrash snapshotPreview.
     expect(shots).toMatch(/if \(wasEmpty\) \{\s*snapshotPreview/);
     expect(shots).toMatch(/finishSequentialCapture[\s\S]*snapshotPreview/);
-    // Next shot reuses finish thumbnail when fresh.
+    // Next shot reuses finish thumbnail only after a successful primary still render.
     expect(shots).toMatch(/!thumbnailFreshAfterFinishRef\.current/);
+    expect(shots).toContain('markThumbnailFreshOnSuccess');
+    expect(shots).toMatch(/markThumbnailFreshOnSuccess[\s\S]*thumbnailFreshAfterFinishRef\.current = true/);
     // Re-entering Video preserves existing keyframes and restores capture state from them.
     // Only Retake / explicit clear wipes the sequence — never auto-capture Start on enter.
     const enterVideoModeBody = shots.match(

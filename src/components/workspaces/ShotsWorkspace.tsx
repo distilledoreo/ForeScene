@@ -941,7 +941,11 @@ export function ShotsWorkspace() {
     setShotCameraFlying(true, options);
   }, [bumpCameraReseed, selectedShot, setShotCameraFlying, shotCameraFlying]);
 
-  const snapshotPreview = useCallback((shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData }, camera: CameraData) => {
+  const snapshotPreview = useCallback((
+    shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData },
+    camera: CameraData,
+    options?: { markThumbnailFreshOnSuccess?: boolean },
+  ) => {
     // Use latest project from the store so freshly created shots are not missing
     // from a stale React closure after addCamera.
     const latestProject = useContinuityStore.getState().project;
@@ -955,6 +959,10 @@ export function ShotsWorkspace() {
       },
     };
     setSnapshotError(undefined);
+    // Fresh flag is only set after the primary clay still succeeds — never on kickoff.
+    if (options?.markThumbnailFreshOnSuccess) {
+      thumbnailFreshAfterFinishRef.current = false;
+    }
     const shotForNaming = previewShot as typeof latestProject.shots[number];
     const viewportFileName = getViewportStillDownloadName(shotForNaming);
     const attach = useContinuityStore.getState().attachViewportRenderToShot;
@@ -985,6 +993,10 @@ export function ShotsWorkspace() {
           frame.height,
           viewportFileName,
         );
+        // Primary still is enough for Next-shot skip; companions continue in the background.
+        if (options?.markThumbnailFreshOnSuccess) {
+          thumbnailFreshAfterFinishRef.current = true;
+        }
 
         // Capture companion stills for camera-roll view toggles (projection × people).
         const companionJobs: Array<() => Promise<void>> = [
@@ -1025,6 +1037,9 @@ export function ShotsWorkspace() {
         await runSettledSequentially(companionJobs);
       })
       .catch(() => {
+        if (options?.markThumbnailFreshOnSuccess) {
+          thumbnailFreshAfterFinishRef.current = false;
+        }
         setSnapshotError('Could not save the shot preview. Try Capture again.');
       });
   }, [setShotFramePreview]);
@@ -1134,11 +1149,10 @@ export function ShotsWorkspace() {
     setVideoCaptureState('finished');
     clearKeyframeSelection();
     clearViewportObjectInspection();
-    // Refresh gallery thumbnail once when finishing; Next shot reuses this.
+    // Refresh gallery thumbnail once when finishing; Next shot reuses only if render succeeds.
     const camera = getEffectiveCamera();
     if (selectedShot && camera) {
-      snapshotPreview(selectedShot, camera);
-      thumbnailFreshAfterFinishRef.current = true;
+      snapshotPreview(selectedShot, camera, { markThumbnailFreshOnSuccess: true });
     }
   }, [
     cameraMoveKeyframes,
@@ -2217,8 +2231,7 @@ export function ShotsWorkspace() {
                       onClick={() => {
                         const camera = getEffectiveCamera();
                         if (selectedShot && camera) {
-                          snapshotPreview(selectedShot, camera);
-                          thumbnailFreshAfterFinishRef.current = true;
+                          snapshotPreview(selectedShot, camera, { markThumbnailFreshOnSuccess: true });
                         }
                       }}
                       className="text-[11px] font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"

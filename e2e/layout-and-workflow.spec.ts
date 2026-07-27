@@ -446,6 +446,53 @@ test.describe('workflow path smoke', () => {
     await expect(page.locator('[data-shots-video-empty-hint]')).toBeVisible({ timeout: 10_000 });
   });
 
+  test('video finish then undo resyncs capture state to start-only', async ({ page }) => {
+    test.setTimeout(120_000);
+    await enterContinuityStage(page);
+    await dismissOverlays(page);
+    await workspaceTab(page, 'Shots').click();
+    await dismissOverlays(page);
+
+    await page.getByRole('button', { name: /^Video$/ }).click();
+    await dismissOverlays(page);
+
+    const shutter = page.locator('[data-shots-shutter]');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+    await expect(page.locator('[data-shots-video-start-set]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.down('d');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('d');
+    await dismissOverlays(page);
+    await shutter.click({ force: true });
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-compact-actions]')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-shots-video-finish]').click({ force: true });
+    await dismissOverlays(page);
+
+    // Finished: Next shot shutter semantics.
+    await expect(page.locator('[data-shots-video-finished]')).toBeVisible({ timeout: 10_000 });
+    await expect(shutter).toHaveAttribute('data-shots-video-shutter-next', 'true');
+    await expect(shutter).toHaveAttribute('data-shots-video-capture-state', 'finished');
+
+    // Undo must restore Start-only keyframes AND resync React authoring state.
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
+    await page.keyboard.press('Control+z');
+    await dismissOverlays(page);
+
+    await expect(page.locator('[data-shots-video-finished]')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('[data-shots-video-compact-actions]')).toHaveCount(0);
+    await expect(page.locator('[data-shots-video-start-set]')).toBeVisible({ timeout: 10_000 });
+    await expect(shutter).toHaveAttribute('data-shots-video-capture-state', 'capturing');
+    await expect(shutter).not.toHaveAttribute('data-shots-video-shutter-next', 'true');
+    await expect(shutter).toBeEnabled();
+    // Shutter is Capture next again — not Next shot.
+    await expect(shutter).toHaveAttribute('aria-label', /Capture next/i);
+  });
+
   test('video timeline opens on third pose, finish, continue, and next shot', async ({ page }) => {
     test.setTimeout(120_000);
     await enterContinuityStage(page);
