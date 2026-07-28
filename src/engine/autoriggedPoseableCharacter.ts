@@ -212,21 +212,30 @@ export function createAutoriggedPoseableCharacterShell(params: {
         });
         // For createInstance (sync), use inline skin arrays when present.
         if (rig.skin.indices && rig.skin.weights) {
-          const buffers = {
-            influencesPerVertex: rig.skin.influencesPerVertex || 4,
-            indices: Uint16Array.from(rig.skin.indices),
-            weights: Float32Array.from(rig.skin.weights),
-            jointOrder: (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
-          };
-          const skinned = buildSkinnedCharacterFromTemplate({
-            template: oriented,
-            rig,
-            buffers,
-            materialFallback: material,
-          });
-          root.add(skinned);
+          try {
+            const buffers = {
+              influencesPerVertex: rig.skin.influencesPerVertex || 4,
+              indices: Uint16Array.from(rig.skin.indices),
+              weights: Float32Array.from(rig.skin.weights),
+              jointOrder: (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
+            };
+            const skinned = buildSkinnedCharacterFromTemplate({
+              template: oriented,
+              rig,
+              buffers,
+              materialFallback: material,
+            });
+            root.add(skinned);
+          } catch {
+            // Corrupt/mismatched skin payloads must not break the scene — show rigid mesh.
+            root.add(oriented);
+            root.userData.poseableSkinFallback = 'corrupt-or-mismatched-skin';
+          }
         } else {
           root.add(oriented);
+          if (rig.skin?.skinAssetId && !rig.skin.indices) {
+            root.userData.poseableSkinFallback = 'missing-inline-skin';
+          }
         }
       } else {
         root.add(oriented);
