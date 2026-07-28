@@ -123,7 +123,11 @@ type ContinuityGet = () => ContinuityStore;
 let activeSet: ContinuitySet | undefined;
 let activeGet: ContinuityGet | undefined;
 
-/** Full store state factory. Domain slice creators pick partitions of this object. */
+/**
+ * Full store state factory (legacy composition target for unmigrated slices).
+ * Session keys below are still present so pickSlice typing remains complete, but
+ * `createSessionSlice` owns the live session state/actions (spread last in useContinuityStore).
+ */
 export function createContinuityStoreState(
   set: ContinuitySet,
   get: ContinuityGet,
@@ -140,6 +144,7 @@ export function createContinuityStoreState(
   selectedShotId: initialProject.shots[0]?.id,
   selectedLandmarkId: undefined,
   activePanoId: undefined,
+  // Session domain (owned by createSessionSlice — values here are factory placeholders).
   panoView: {
     yawDegrees: 0,
     pitchDegrees: 0,

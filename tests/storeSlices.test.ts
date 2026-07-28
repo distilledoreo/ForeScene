@@ -73,4 +73,44 @@ describe('continuity store domain slices', () => {
     // Keep first shot id selected for other tests that share store.
     useContinuityStore.getState().selectShot(first.id);
   });
+
+  it('implements session slice without picking from the monolithic factory', () => {
+    const sessionSrc = readFileSync(join(root, 'src/state/slices/sessionSlice.ts'), 'utf8');
+    expect(sessionSrc).not.toContain('pickSlice');
+    expect(sessionSrc).not.toContain('getSharedContinuityState');
+    expect(sessionSrc).toContain('setPanoView:');
+    expect(sessionSrc).toContain('landShotFraming:');
+    expect(sessionSrc).toContain('setShotCameraFlying:');
+  });
+
+  it('session actions own fly mode, pano view, and land framing acceptance', () => {
+    const before = useContinuityStore.getState();
+    const shotId = before.selectedShotId ?? before.project.shots[0]?.id;
+    expect(shotId).toBeTruthy();
+
+    before.setPanoView({ yawDegrees: 42, pitchDegrees: -5 });
+    expect(useContinuityStore.getState().panoView.yawDegrees).toBe(42);
+    expect(useContinuityStore.getState().panoView.pitchDegrees).toBe(-5);
+
+    before.setShotCameraFlying(true, { clearFramingAcceptance: false });
+    expect(useContinuityStore.getState().shotCameraFlying).toBe(true);
+
+    before.setExportingPackage(true);
+    expect(useContinuityStore.getState().isExportingPackage).toBe(true);
+    before.setExportingPackage(false);
+    expect(useContinuityStore.getState().isExportingPackage).toBe(false);
+
+    const camera = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera;
+    useContinuityStore.getState().landShotFraming(shotId!, camera, { keepFlying: true });
+    const afterLand = useContinuityStore.getState();
+    expect(afterLand.shotCameraFlying).toBe(true);
+    expect(afterLand.project.workflow.shotFramingAcceptedAtByShotId[shotId!]).toBeTruthy();
+
+    afterLand.lockShotCamera();
+    expect(useContinuityStore.getState().shotCameraFlying).toBe(false);
+
+    afterLand.setProjectedOcclusionStatus('ready');
+    expect(useContinuityStore.getState().projectedOcclusionStatus).toBe('ready');
+    afterLand.setProjectedOcclusionStatus('disabled');
+  });
 });
