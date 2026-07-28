@@ -637,7 +637,8 @@ describe('ui revamp fidelity surfaces', () => {
     const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
     const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
-    expect(shots).toContain('getStageableObjectsForShot');
+    expect(shots).toContain('filterStagingObjectList');
+    expect(shots).toContain('data-shots-staging-scope-people-props');
     expect(shots).toContain("title={object.visible ? undefined : 'Hidden in this shot'}");
     expect(shots).toContain('aria-label="Hidden in this shot"');
     expect(shots).toContain("object.visible ? '' : 'opacity-55'");

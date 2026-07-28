@@ -3,11 +3,14 @@ import { createDefaultProject, createSceneObject } from '../src/domain/defaults'
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
+  filterStagingObjectList,
   getStageableObjectsForShot,
   getSceneObjectStagingRole,
   resolveProjectForShot,
+  STAGING_OBJECT_LIST_LIMIT,
   updateShotObjectOverrides,
 } from '../src/engine/shotSceneState';
+import type { SceneObject } from '../src/domain/types';
 
 describe('per-shot scene state', () => {
   it('applies sparse transforms without mutating the Build scene', () => {
@@ -82,5 +85,56 @@ describe('per-shot scene state', () => {
 
     expect(hidden?.visible).toBe(false);
     expect(stageable.map((object) => object.id)).toContain(hiddenProp.id);
+  });
+
+  it('defaults the Stage panel list to people/props and caps large inventories', () => {
+    const objects: SceneObject[] = [];
+    for (let index = 0; index < 800; index += 1) {
+      const wall = createSceneObject('wall', index + 1);
+      wall.name = `Wall ${index + 1}`;
+      objects.push(wall);
+    }
+    for (let index = 0; index < 120; index += 1) {
+      const prop = createSceneObject('box', index + 1);
+      prop.stagingRole = 'prop';
+      prop.name = `Prop ${index + 1}`;
+      objects.push(prop);
+    }
+    const person = createSceneObject('human_dummy', 1);
+    person.name = 'Lead actor';
+    objects.push(person);
+    const locked = createSceneObject('box', 999);
+    locked.locked = true;
+    locked.stagingRole = 'prop';
+    objects.push(locked);
+
+    const started = performance.now();
+    const primary = filterStagingObjectList({ objects, scope: 'people_props' });
+    const all = filterStagingObjectList({ objects, scope: 'all' });
+    const searched = filterStagingObjectList({ objects, scope: 'all', query: 'Wall 799' });
+    const pinnedFar = filterStagingObjectList({
+      objects,
+      scope: 'all',
+      pinnedObjectId: objects[700]?.id,
+    });
+    const elapsedMs = performance.now() - started;
+
+    expect(primary.stageableTotal).toBe(921); // 800 walls + 120 props + 1 person
+    expect(primary.primaryTotal).toBe(121);
+    expect(primary.items).toHaveLength(STAGING_OBJECT_LIST_LIMIT);
+    expect(primary.items.every((object) => getSceneObjectStagingRole(object) !== 'set')).toBe(true);
+    expect(primary.truncated).toBe(true);
+    expect(primary.totalMatching).toBe(121);
+
+    expect(all.items).toHaveLength(STAGING_OBJECT_LIST_LIMIT);
+    expect(all.totalMatching).toBe(921);
+    expect(all.truncated).toBe(true);
+
+    expect(searched.items).toHaveLength(1);
+    expect(searched.items[0]?.name).toBe('Wall 799');
+    expect(pinnedFar.items.some((object) => object.id === objects[700]?.id)).toBe(true);
+    expect(pinnedFar.items).toHaveLength(STAGING_OBJECT_LIST_LIMIT);
+    // Filtering 900+ objects for Stage open must stay well under a frame budget.
+    expect(elapsedMs).toBeLessThan(50);
   });
 });
