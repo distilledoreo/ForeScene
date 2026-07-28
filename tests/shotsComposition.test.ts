@@ -26,6 +26,10 @@ describe('Shots composition structure', () => {
     expect(shots).toMatch(/const captureMode: CaptureMode = videoAuthoring\.mode/);
     expect(shots).not.toMatch(/useState<VideoCaptureState>/);
     expect(shots).not.toMatch(/useState<CaptureMode>/);
+    // Still-capture lifecycle lives in the dedicated controller (not inline orchestration).
+    expect(shots).toMatch(/useStillCaptureController\(/);
+    expect(shots).not.toMatch(/const captureStill = useCallback/);
+    expect(shots).not.toMatch(/const snapshotPreview = useCallback/);
   });
 
   it('ShotsCaptureChrome ships data-shots-capture-chrome and data-shots-shutter', () => {
@@ -54,6 +58,7 @@ describe('Shots composition structure', () => {
       'src/hooks/useVideoAuthoringController.ts',
       'src/hooks/useShotRenderController.ts',
       'src/hooks/useShotStagingController.ts',
+      'src/components/shots/useStillCaptureController.ts',
       'src/components/shots/ShotsCaptureChrome.tsx',
       'src/components/shots/ShotsLibrary.tsx',
       'src/components/shots/ShotSettings.tsx',

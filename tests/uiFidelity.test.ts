@@ -90,7 +90,10 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('viewfinder stays live');
     expect(shots).toContain('AppearanceModeToggle');
     expect(shots).toContain('data-shots-dual-output-hint');
-    expect(shots).toContain('renderShotProjectedFrame');
+    expect(shots).toContain('useStillCaptureController');
+    const stillCapture = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    expect(stillCapture).toContain('renderShotProjectedFrame');
+    expect(stillCapture).toContain('runSettledSequentially');
     expect(shots).not.toContain('data-shots-action-dock');
     expect(shots).not.toContain('data-shots-land-fork');
     expect(shots).not.toContain('ShotInfoCard');
@@ -550,7 +553,8 @@ describe('ui revamp fidelity surfaces', () => {
     // Next shot reuses finish thumbnail only after a successful primary still render.
     expect(shots).toMatch(/!thumbnailFreshAfterFinishRef\.current/);
     expect(shots).toContain('markThumbnailFreshOnSuccess');
-    expect(shots).toMatch(/markThumbnailFreshOnSuccess[\s\S]*thumbnailFreshAfterFinishRef\.current = true/);
+    const stillCaptureCtrl = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    expect(stillCaptureCtrl).toMatch(/markThumbnailFreshOnSuccess[\s\S]*thumbnailFreshAfterFinishRef\.current = true/);
     // Captured moves show a keyframe filmstrip / path preview (not only Export).
     expect(shots).toContain('CameraMovePreviewStrip');
     expect(shots).toContain('captureKeyframeThumb');

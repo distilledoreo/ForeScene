@@ -63,20 +63,16 @@ import {
 } from '../../engine/cameraKeyframes';
 import { CameraMovePreviewStrip } from './CameraMovePreviewStrip';
 import { KeyframeStrip } from './KeyframeStrip';
-import { runSettledSequentially } from '../../engine/asyncJobs';
 import {
   getCameraMoveDownloadName,
   getProjectedCameraMoveDownloadName,
-  getProjectedStillDownloadName,
-  getViewportStillDownloadName,
 } from '../../engine/exportNaming';
-import { downloadBlob, downloadDataUrl } from '../../engine/fileTransfers';
+import { downloadBlob } from '../../engine/fileTransfers';
 import {
   canUseRenderMp4Export,
   getSupportedCameraMoveMp4MimeType,
   renderShotCameraMoveMp4,
   renderShotFrame,
-  renderShotProjectedFrame,
   renderViewportProjected,
   type CameraMoveExportProgress,
 } from '../../engine/renderers';
@@ -120,9 +116,6 @@ import {
   shouldCommitKeyframeThumb,
 } from '../../engine/keyframePreviewThumbs';
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
-import {
-  type ShotStillViewSelection,
-} from '../../domain/shotStillViews';
 import type { GizmoMode } from '../../engine/transformGizmo';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { FullBleedLayout } from './WorkspaceShell';
@@ -141,6 +134,7 @@ import { SequenceStoryboardView } from '../shots/SequenceStoryboardView';
 import { ShotsCaptureChrome } from '../shots/ShotsCaptureChrome';
 import { ShotsLibrary } from '../shots/ShotsLibrary';
 import { ShotSettings } from '../shots/ShotSettings';
+import { useStillCaptureController } from '../shots/useStillCaptureController';
 
 // Plan-named extractions re-exported for structural tests / composition visibility.
 export {
@@ -153,6 +147,7 @@ export {
   ShotsCaptureChrome,
   ShotsLibrary,
   ShotSettings,
+  useStillCaptureController,
 };
 
 const statuses: ShotStatus[] = ['planned', 'exported', 'needs_fix', 'approved', 'rejected'];
@@ -200,7 +195,6 @@ export function ShotsWorkspace() {
     setShotCameraFlying,
     landShotFraming,
     attachCameraMoveVideoToShot,
-    attachViewportRenderToShot,
     attachKeyframePreviewToShot,
     setWorkspace,
     setActivePano,
@@ -222,7 +216,6 @@ export function ShotsWorkspace() {
     setShotCameraFlying: state.setShotCameraFlying,
     landShotFraming: state.landShotFraming,
     attachCameraMoveVideoToShot: state.attachCameraMoveVideoToShot,
-    attachViewportRenderToShot: state.attachViewportRenderToShot,
     attachKeyframePreviewToShot: state.attachKeyframePreviewToShot,
     setWorkspace: state.setWorkspace,
     setActivePano: state.setActivePano,
@@ -325,7 +318,6 @@ export function ShotsWorkspace() {
   const [shotPendingDelete, setShotPendingDelete] = useState<Shot | null>(null);
   const [mediaModalShotId, setMediaModalShotId] = useState<string | null>(null);
   const [appearance, setAppearance] = useState<'clay' | 'projected'>('clay');
-  const [landFlash, setLandFlash] = useState(false);
   /** Pending move length — applied when end is captured (and updates existing end if present). */
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(DEFAULT_CAMERA_MOVE_DURATION_SECONDS);
   /**
@@ -355,8 +347,6 @@ export function ShotsWorkspace() {
   const previewAbortRef = useRef<{ cancelled: boolean; frame?: number }>({ cancelled: false });
   /** After "Next shot" from a finished video move, keep Video mode empty on the new shot. */
   const resumeVideoAfterNextShotRef = useRef(false);
-  /** Avoid re-running the full still matrix when Finish already refreshed the thumbnail. */
-  const thumbnailFreshAfterFinishRef = useRef(false);
   /** Lightweight per-keyframe stills for the move filmstrip (not the full gallery matrix). */
   const [keyframeThumbById, setKeyframeThumbById] = useState<Record<string, string>>({});
   const keyframeThumbGenerationRef = useRef(0);
@@ -365,6 +355,25 @@ export function ShotsWorkspace() {
   const focalLengthHudPulse = shotCamera.focalLengthHudPulse;
   const cameraReseedGeneration = shotCamera.cameraReseedGeneration;
   const bumpCameraReseed = shotCamera.bumpCameraReseed;
+
+  const stillCapture = useStillCaptureController({
+    selectedShot,
+    draftCameraRef,
+    shotCameraFlying,
+    setShotFramePreview,
+    setSnapshotError,
+    setIsExportingFrame,
+    isExportingFrame,
+    snapshotError,
+  });
+  const {
+    captureStill,
+    exportCameraFrame,
+    snapshotPreview,
+    thumbnailFreshAfterFinishRef,
+    landFlash,
+    setLandFlash,
+  } = stillCapture;
 
   const clearKeyframeSelection = useCallback(() => {
     setSelectedKeyframeId(null);
@@ -498,71 +507,6 @@ export function ShotsWorkspace() {
     setMediaModalShotId(null);
     setLibraryOpen(false);
   }, [selectShot]);
-
-  const exportCameraFrame = useCallback(async () => {
-    const previewShot = getPreviewShot();
-    if (!previewShot) return;
-    setIsExportingFrame(true);
-    setSnapshotError(undefined);
-    try {
-      if (!flushProject) throw new Error('Local project recovery is still starting. Please wait before rendering a still.');
-      // A downloaded still must be traceable to a durable project state, not
-      // merely the transient editor state that happened to be on screen.
-      updateShot(previewShot.id, { camera: previewShot.camera });
-      const verified = await flushProject('Verified save before still render');
-      if (!verified) throw new Error('No verified project revision is available for still rendering.');
-      const renderProject = verified.project;
-      const renderShot = renderProject.shots.find((shot) => shot.id === previewShot.id) ?? previewShot;
-      const peopleMode = renderShot.exportSettings.peopleExportMode;
-      const variants = getPeopleRenderVariants(peopleMode);
-      const viewportFileName = getViewportStillDownloadName(renderShot);
-      for (const variant of variants) {
-        const frame = await renderShotFrame(renderProject, renderShot, { peopleVariant: variant });
-        const clayName = getPeopleVariantPath(viewportFileName, variant, peopleMode);
-        const stillPeople = variant === 'clean_plate' ? 'clean_plate' as const : 'with_people' as const;
-        if (variant === 'with_people' || variants.length === 1) {
-          setShotFramePreview(renderShot.id, frame.dataUrl);
-        }
-        attachViewportRenderToShot(renderShot.id, {
-          name: clayName,
-          dataUrl: frame.dataUrl,
-          width: frame.width,
-          height: frame.height,
-          stillView: { appearance: 'clay', people: stillPeople },
-        });
-        downloadDataUrl(frame.dataUrl, clayName);
-        if (canUseProjectedAppearance(renderProject)) {
-          try {
-            const projected = await renderShotProjectedFrame(renderProject, renderShot, { peopleVariant: variant });
-            const baseProjectedName = getProjectedStillDownloadName(renderShot);
-            const projectedName = getPeopleVariantPath(baseProjectedName, variant, peopleMode);
-            attachViewportRenderToShot(renderShot.id, {
-              name: projectedName,
-              dataUrl: projected.dataUrl,
-              width: projected.width,
-              height: projected.height,
-              stillView: { appearance: 'projected', people: stillPeople },
-            });
-            downloadDataUrl(projected.dataUrl, projectedName);
-          } catch {
-            // Soft-fail projected companion; clay already succeeded.
-          }
-        }
-      }
-      if (!shotCameraFlying) updateShot(renderShot.id, { status: 'exported' });
-    } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'Could not save the project before rendering this still.');
-    } finally {
-      setIsExportingFrame(false);
-    }
-  }, [
-    attachViewportRenderToShot,
-    flushProject,
-    getPreviewShot,
-    setShotFramePreview,
-    shotCameraFlying,
-    updateShot,
-  ]);
 
   const updateCameraMoveKeyframes = useCallback((keyframes: typeof cameraMoveKeyframes) => {
     if (!selectedShot) return;
@@ -1087,141 +1031,6 @@ export function ShotsWorkspace() {
         // Filmstrip falls back to labeled placeholders.
       });
   }, [attachKeyframePreviewToShot, selectedShot, selectedShotId]);
-
-  const snapshotPreview = useCallback((
-    shot: { id: string; name?: string; exportSettings: { width: number; height: number }; camera: CameraData },
-    camera: CameraData,
-    options?: { markThumbnailFreshOnSuccess?: boolean },
-  ) => {
-    // Use latest project from the store so freshly created shots are not missing
-    // from a stale React closure after addCamera.
-    const latestProject = useContinuityStore.getState().project;
-    const latestShot = latestProject.shots.find((item) => item.id === shot.id) ?? shot;
-    const previewShot = {
-      ...latestShot,
-      camera: {
-        ...camera,
-        position: [...camera.position] as CameraData['position'],
-        target: [...camera.target] as CameraData['target'],
-      },
-    };
-    setSnapshotError(undefined);
-    // Fresh flag is only set after the primary clay still succeeds — never on kickoff.
-    if (options?.markThumbnailFreshOnSuccess) {
-      thumbnailFreshAfterFinishRef.current = false;
-    }
-    const shotForNaming = previewShot as typeof latestProject.shots[number];
-    const viewportFileName = getViewportStillDownloadName(shotForNaming);
-    const attach = useContinuityStore.getState().attachViewportRenderToShot;
-
-    const attachStillView = async (
-      selection: ShotStillViewSelection,
-      dataUrl: string,
-      width: number,
-      height: number,
-      fileName: string,
-    ) => {
-      attach(shot.id, {
-        name: fileName,
-        dataUrl,
-        width,
-        height,
-        stillView: selection,
-      });
-    };
-
-    void renderShotFrame(latestProject, shotForNaming, { peopleVariant: 'with_people' })
-      .then(async (frame) => {
-        setShotFramePreview(shot.id, frame.dataUrl);
-        await attachStillView(
-          { appearance: 'clay', people: 'with_people' },
-          frame.dataUrl,
-          frame.width,
-          frame.height,
-          viewportFileName,
-        );
-        // Primary still is enough for Next-shot skip; companions continue in the background.
-        if (options?.markThumbnailFreshOnSuccess) {
-          thumbnailFreshAfterFinishRef.current = true;
-        }
-
-        // Capture companion stills for camera-roll view toggles (projection × people).
-        const companionJobs: Array<() => Promise<void>> = [
-          () => renderShotFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
-            .then((clean) => attachStillView(
-              { appearance: 'clay', people: 'clean_plate' },
-              clean.dataUrl,
-              clean.width,
-              clean.height,
-              getPeopleVariantPath(viewportFileName, 'clean_plate', 'both'),
-            )),
-        ];
-
-        if (canUseProjectedAppearance(latestProject)) {
-          const projectedBaseName = getProjectedStillDownloadName(shotForNaming);
-          companionJobs.push(
-            () => renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'with_people' })
-              .then(async (projected) => {
-                await attachStillView(
-                  { appearance: 'projected', people: 'with_people' },
-                  projected.dataUrl,
-                  projected.width,
-                  projected.height,
-                  projectedBaseName,
-                );
-              }),
-            () => renderShotProjectedFrame(latestProject, shotForNaming, { peopleVariant: 'clean_plate' })
-              .then((projectedClean) => attachStillView(
-                { appearance: 'projected', people: 'clean_plate' },
-                projectedClean.dataUrl,
-                projectedClean.width,
-                projectedClean.height,
-                getPeopleVariantPath(projectedBaseName, 'clean_plate', 'both'),
-              )),
-          );
-        }
-
-        await runSettledSequentially(companionJobs);
-      })
-      .catch(() => {
-        if (options?.markThumbnailFreshOnSuccess) {
-          thumbnailFreshAfterFinishRef.current = false;
-        }
-        setSnapshotError('Could not save the shot preview. Try Capture again.');
-      });
-  }, [setShotFramePreview]);
-
-  /**
-   * Still capture = iPhone shutter: commit pose to gallery, keep viewfinder live.
-   * First press fills the active unlanded shot; later presses create new gallery shots.
-   */
-  const captureStill = useCallback(() => {
-    if (!selectedShot) {
-      addCamera();
-      return;
-    }
-    const camera = draftCameraRef.current ?? selectedShot.camera;
-    const alreadyCaptured = isShotFramingAccepted(
-      useContinuityStore.getState().project,
-      selectedShot.id,
-    );
-
-    let targetShot = selectedShot;
-    if (alreadyCaptured) {
-      targetShot = addCamera({ navigateToShots: false });
-    }
-
-    landShotFraming(targetShot.id, camera, { keepFlying: true });
-    // Stay live at the same pose — do not clear draft / freeze the viewfinder.
-    draftCameraRef.current = {
-      ...camera,
-      position: [...camera.position] as CameraData['position'],
-      target: [...camera.target] as CameraData['target'],
-    };
-    snapshotPreview(targetShot, camera);
-    setLandFlash(true);
-    window.setTimeout(() => setLandFlash(false), 700);
-  }, [addCamera, landShotFraming, selectedShot, snapshotPreview]);
 
   const appendSequentialCapture = useCallback(() => {
     if (!selectedShot) return;

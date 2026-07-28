@@ -69,7 +69,8 @@ describe('workflow guidance UI', () => {
     expect(shots).toContain('landShotFraming');
     expect(shots).toContain('Still');
     expect(shots).toContain('Video');
-    expect(shots).toContain("flushProject('Verified save before still render')");
+    const stillCapture = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    expect(stillCapture).toContain("flushProject('Verified save before still render')");
     expect(shots).toContain("flushProject('Verified save before video render')");
     expect(shots).not.toContain('ShotFilmstrip');
     expect(shots).not.toContain('ShotInfoCard');
@@ -85,7 +86,7 @@ describe('workflow guidance UI', () => {
     expect(exportWorkspace).toContain('Handoff packages');
     expect(exportWorkspace).toContain("flushProject('Verified save before package export')");
     expect(exportWorkspace).toContain('const exportProject = verified.project');
-    expect(shots).toContain('const renderProject = verified.project');
+    expect(stillCapture).toContain('const renderProject = verified.project');
     expect(app).not.toContain('ReviewWorkspace');
     expect(app).not.toContain("id: 'review'");
     expect(shotThumbnail).toContain('resolveShotThumbnail');
