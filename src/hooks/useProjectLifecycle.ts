@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { LocationProject } from '../domain/types';
 import { createDefaultProject } from '../domain/defaults';
+import type { CompiledSetBlueprint } from '../engine/setBlueprintCompiler';
 import type { ProjectPersistenceController } from '../engine/projectPersistenceController';
 import { useAppModeStore } from '../state/useAppModeStore';
 import { useContinuityStore } from '../state/useContinuityStore';
@@ -243,6 +244,42 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     setProjectImportStatus({ tone: 'success', message: 'Safe project health repairs were saved locally.' });
   };
 
+  /**
+   * Replace the live project with a compiled SetBlueprint result.
+   * Mirrors new-project / import-project: snapshot → commit → ignore subscription → setProject.
+   */
+  const createProjectFromBlueprint = async (compiled: CompiledSetBlueprint) => {
+    if (criticalProjectWrite) {
+      throw new Error('Please wait for the current local save to finish before creating a generated set.');
+    }
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+
+    const current = useContinuityStore.getState().project;
+    const next = compiled.project;
+    await controller.createSnapshot(
+      current,
+      `Before creating AI-generated set “${next.name}”`,
+    );
+    await controller.commitProject(next, {
+      kind: 'import',
+      reason: `Created AI-generated set: ${next.name}`,
+    });
+    controller.ignoreNextProjectChange(next);
+    setProject(next);
+    useContinuityStore.getState().clearObjectSelection();
+    setWorkspace('build');
+    setAppMode('continuity');
+    closeProjectOverlays();
+
+    const objectCount = next.scene.objects.length;
+    const landmarkCount = next.landmarks.length;
+    setProjectImportStatus({
+      tone: 'success',
+      message: `Created “${next.name}” with ${objectCount} object${objectCount === 1 ? '' : 's'} and ${landmarkCount} landmark${landmarkCount === 1 ? '' : 's'}.`,
+    });
+  };
+
   useEffect(() => {
     let active = true;
     let unsubscribe: (() => void) | undefined;
@@ -355,6 +392,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     openLocalProjectHistory,
     removeLocalProjectHistory,
     applyProjectHealthRepair,
+    createProjectFromBlueprint,
   };
 }
 
