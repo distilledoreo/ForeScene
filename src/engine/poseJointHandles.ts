@@ -12,6 +12,7 @@ export function createPoseJointHandleGroup(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'pose-joint-handles';
   group.renderOrder = 20;
+  group.frustumCulled = false;
   return group;
 }
 
@@ -23,7 +24,10 @@ export function syncPoseJointHandles(params: {
 }): void {
   const { group, joints, selectedJointId, visible } = params;
   group.visible = visible;
-  if (!visible) return;
+  if (!visible) {
+    for (const child of group.children) child.visible = false;
+    return;
+  }
 
   const existing = new Map<string, THREE.Mesh>();
   for (const child of group.children) {
@@ -38,24 +42,27 @@ export function syncPoseJointHandles(params: {
     let mesh = existing.get(joint.id);
     if (!mesh) {
       mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 12, 12),
+        new THREE.SphereGeometry(0.08, 14, 14),
         new THREE.MeshBasicMaterial({
           color: 0x3b82f6,
           depthTest: false,
           depthWrite: false,
           transparent: true,
-          opacity: 0.92,
+          opacity: 0.95,
         }),
       );
       mesh.userData[HANDLE_USERDATA] = joint.id;
       mesh.renderOrder = 21;
+      mesh.frustumCulled = false;
       group.add(mesh);
     }
+    joint.node.updateWorldMatrix(true, false);
     joint.node.getWorldPosition(world);
     mesh.position.copy(world);
+    mesh.visible = true;
     const material = mesh.material as THREE.MeshBasicMaterial;
-    material.color.setHex(joint.id === selectedJointId ? 0xf59e0b : 0x3b82f6);
-    material.opacity = joint.id === selectedJointId ? 1 : 0.85;
+    material.color.setHex(joint.id === selectedJointId ? 0xf59e0b : 0x38bdf8);
+    material.opacity = joint.id === selectedJointId ? 1 : 0.9;
   }
 
   for (const [jointId, mesh] of existing) {
