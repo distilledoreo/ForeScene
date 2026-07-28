@@ -79,15 +79,13 @@ import {
   updateShotObjectOverrides,
   type StagingObjectListScope,
 } from '../../engine/shotSceneState';
-import {
-  snapshotStageableObjectOverrides,
-} from '../../engine/objectKeyframes';
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
 import type { GizmoMode } from '../../engine/transformGizmo';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { normalizeShotDepthSettings, defaultShotDepthSettings } from '../../domain/defaults';
 import { formatDepthRangeLegend } from '../../engine/depthRender';
+import { cameraDataEqual } from '../../engine/shotCameraHistory';
 import { FullBleedLayout } from './WorkspaceShell';
 import {
   getShotPrimaryLabel,
@@ -112,6 +110,9 @@ import {
   VIDEO_DURATION_UI_MIN_SECONDS,
 } from '../shots/useCameraMoveController';
 import { useCameraMovePreviewController } from '../shots/useCameraMovePreviewController';
+
+/** Stable empty selection for SceneViewport — avoid `[]` identity churn → requestRender. */
+const EMPTY_STAGED_OBJECT_IDS: string[] = [];
 
 // Plan-named extractions re-exported for structural tests / composition visibility.
 export {
@@ -695,22 +696,23 @@ export function ShotsWorkspace() {
     if (!selectedShot) return;
     stopCameraMovePreview();
     // Keep keyframe object inspection so staging can edit the selected keyframe's pose.
+    // Use a sparse override map — never eagerly snapshot every stageable object
+    // (that O(n) clone freezes large imported scenes on Stage open).
     if (selectedKeyframeId && viewportObjectOverrides === undefined) {
       const keyframe = getSortedCameraKeyframes(selectedShot.cameraKeyframes)
         .find((item) => item.id === selectedKeyframeId);
-      if (keyframe?.objectOverrides !== undefined) {
-        setViewportObjectOverrides(structuredClone(keyframe.objectOverrides));
-      } else {
-        setViewportObjectOverrides(
-          snapshotStageableObjectOverrides(
-            useContinuityStore.getState().project,
-            selectedShot,
-          ),
-        );
-      }
+      setViewportObjectOverrides(
+        keyframe?.objectOverrides !== undefined
+          ? structuredClone(keyframe.objectOverrides)
+          : {},
+      );
     }
-    const camera = getEffectiveCamera();
-    landShotFraming(selectedShot.id, camera);
+    const camera = getEffectiveCamera() ?? selectedShot.camera;
+    // Avoid no-op project writes: landShotFraming stamps updatedAt and can trigger
+    // autosave + SceneViewport invalidation over thousands of imported meshes.
+    if (shotCameraFlying || !cameraDataEqual(selectedShot.camera, camera)) {
+      landShotFraming(selectedShot.id, camera);
+    }
     setStagingMode(true);
     setStagedObjectId(undefined);
     setStagingListScope('people_props');
@@ -720,6 +722,7 @@ export function ShotsWorkspace() {
     landShotFraming,
     selectedKeyframeId,
     selectedShot,
+    shotCameraFlying,
     stopCameraMovePreview,
     viewportObjectOverrides,
   ]);
@@ -821,7 +824,8 @@ export function ShotsWorkspace() {
         camera: framingCamera ?? selectedShot.camera,
         frameAspectRatio: selectedShot.exportSettings.width / selectedShot.exportSettings.height,
         frameResolutionLabel: `${selectedShot.exportSettings.width}×${selectedShot.exportSettings.height}`,
-        flyActive: stagingMode ? false : shotCameraFlying,
+        // Staging uses objectEditingActive for picks; do not recreate framing on Stage toggle.
+        flyActive: shotCameraFlying,
         cameraReseedGeneration,
         focalLengthHudPulse,
         onCameraChange: handleFramingCameraChange,
@@ -849,7 +853,6 @@ export function ShotsWorkspace() {
     selectedShot?.exportSettings.height,
     selectedShot?.exportSettings.width,
     shotCameraFlying,
-    stagingMode,
     videoCaptureState,
   ]);
 
@@ -973,7 +976,7 @@ export function ShotsWorkspace() {
         <div className="absolute inset-0">
           <SceneViewport
             project={shotSceneProject}
-            selectedObjectIds={stagedObjectId ? [stagedObjectId] : []}
+            selectedObjectIds={stagedObjectId ? [stagedObjectId] : EMPTY_STAGED_OBJECT_IDS}
             selectedShotId={selectedShot?.id}
             shotFraming={shotFraming}
             appearance={appearance}

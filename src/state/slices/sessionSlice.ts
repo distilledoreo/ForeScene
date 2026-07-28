@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { CameraData } from '../../domain/types';
+import { cameraDataEqual } from '../../engine/shotCameraHistory';
 import { withShotPanoLink } from '../../engine/sync';
 import type { ContinuityStoreSlices, SessionSliceState } from './types';
 
@@ -72,6 +73,16 @@ export const createSessionSlice: StateCreator<
       const shot = state.project.shots.find((item) => item.id === shotId);
       if (!shot) return state;
       const nextCamera: CameraData = camera ?? shot.camera;
+      const framingAccepted = Boolean(
+        state.project.workflow.shotFramingAcceptedAtByShotId[shotId],
+      );
+      const cameraUnchanged = cameraDataEqual(shot.camera, nextCamera);
+      const alreadyLanded = !state.shotCameraFlying && !keepFlying;
+      // Stage / Done re-entry must not rewrite the project (and trigger autosave
+      // + SceneViewport invalidation) when the landed camera is already current.
+      if (alreadyLanded && cameraUnchanged && framingAccepted) {
+        return state;
+      }
       return {
         shotCameraFlying: keepFlying ? true : false,
         project: touchProjectUpdatedAt({
