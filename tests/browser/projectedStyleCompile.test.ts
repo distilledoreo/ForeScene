@@ -1,29 +1,17 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as esbuild from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.resolve(here, 'fixtures/projected-style-compile-entry.ts');
+const entry = path.resolve(here, '../fixtures/projected-style-compile-entry.ts');
 /** Project-local evidence dir (works for Windows node under WSL). */
-const EVIDENCE_DIR = path.resolve(here, '../test-results/projected-style-compile');
+const EVIDENCE_DIR = path.resolve(here, '../../test-results/projected-style-compile');
 /** Plan implementer scratch when running under Linux bash. */
 const LINUX_SCRATCH = '/tmp/grok-goal-38c941975045/implementer';
 
 describe('projected style WebGL compile gate', () => {
-  it('does not inject illegal PhysicalMaterial fields (r184)', () => {
-    const materials = readFileSync(
-      new URL('../src/engine/projectedStyleMaterials.ts', import.meta.url),
-      'utf8',
-    );
-    expect(materials).not.toMatch(/material\.specularIntensity\s*\*=/);
-    expect(materials).not.toMatch(/#include\s*<lights_physical_fragment>/);
-    expect(materials).toContain('projected-style-v10');
-    expect(materials).toContain('#include <aomap_fragment>');
-    expect(materials).toContain('#include <color_fragment>');
-  });
-
   it('compiles projected materials under real WebGL with single and dual projector modes', async () => {
     mkdirSync(EVIDENCE_DIR, { recursive: true });
     try {

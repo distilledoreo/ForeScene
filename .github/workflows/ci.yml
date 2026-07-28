@@ -1,3 +1,5 @@
+# Required PR validation + path-conditional extras.
+# Broad browser suites live in ci-full.yml (main / nightly / manual).
 name: CI
 
 on:
@@ -23,7 +25,7 @@ jobs:
       - run: npm run lint
 
   unit:
-    name: Vitest
+    name: Fast unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +34,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # Fast suite excludes tests/browser/** — no Playwright install needed.
       - run: npm run test
 
   build:
@@ -80,9 +82,76 @@ jobs:
             playwright-report/
           retention-days: 7
 
+  detect-changes:
+    name: Detect changed paths
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      ui: ${{ steps.filter.outputs.ui }}
+      browser_compat: ${{ steps.filter.outputs.browser_compat }}
+      visual: ${{ steps.filter.outputs.visual }}
+      renderer: ${{ steps.filter.outputs.renderer }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          CHANGED="$(git diff --name-only "$BASE...$HEAD" || true)"
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          matches() {
+            local pattern="$1"
+            echo "$CHANGED" | grep -E "$pattern" >/dev/null
+          }
+
+          ui=false
+          browser_compat=false
+          visual=false
+          renderer=false
+
+          if matches '^(src/components/|src/index\.css|src/styles/|e2e/|index\.html|tailwind)'; then
+            ui=true
+          fi
+          if matches '^(src/components/viewers/|src/hooks/|src/engine/(flyCamera|forwardSprint|buildShortcuts|shotCamera)|e2e/|playwright\.config)'; then
+            browser_compat=true
+          fi
+          if matches '^(src/components/|src/index\.css|e2e/.*visual|e2e/.*screenshot|playwright\.config)'; then
+            visual=true
+          fi
+          if matches '^(src/engine/(projected|depth|render|occlusion|sceneObjects|human)|tests/browser/|tests/fixtures/(projected|occlusion))'; then
+            renderer=true
+          fi
+
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "browser_compat=$browser_compat" >> "$GITHUB_OUTPUT"
+          echo "visual=$visual" >> "$GITHUB_OUTPUT"
+          echo "renderer=$renderer" >> "$GITHUB_OUTPUT"
+
+  unit-browser:
+    name: Browser-backed Vitest
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.renderer == 'true'
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+
   e2e-tablet-responsive:
     name: Chromium tablet responsive
-    needs: build
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.ui == 'true'
+    needs: [build, detect-changes]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +179,8 @@ jobs:
 
   e2e-phone-responsive:
     name: Chromium phone responsive
-    needs: build
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.ui == 'true'
+    needs: [build, detect-changes]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -138,7 +208,8 @@ jobs:
 
   e2e-webkit-smoke:
     name: WebKit desktop smoke
-    needs: build
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.browser_compat == 'true'
+    needs: [build, detect-changes]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -152,7 +223,7 @@ jobs:
           name: dist
           path: dist/
       - run: npx playwright install --with-deps webkit
-      # Required: excludes @webkit-gpu capture/transition paths that crash Linux SW WebKit.
+      # Required when triggered: excludes @webkit-gpu capture/transition paths that crash Linux SW WebKit.
       - run: npm run test:e2e:webkit
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
@@ -167,12 +238,11 @@ jobs:
 
   e2e-webkit-gpu-canary:
     name: WebKit GPU canary
-    needs: build
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.browser_compat == 'true'
+    needs: [build, detect-changes]
     runs-on: ubuntu-latest
     # Linux Playwright WebKit frequently kills the page process under multi-context WebGL.
     # Keep the signal visible with traces, but do not block PR merge.
-    # Step-level continue-on-error finishes the job green-with-warning; job-level
-    # continue-on-error still surfaced a failure conclusion in the Actions UI.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -206,7 +276,8 @@ jobs:
 
   e2e-visual:
     name: Screenshot baselines
-    needs: build
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.visual == 'true'
+    needs: [build, detect-changes]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

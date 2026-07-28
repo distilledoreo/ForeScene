@@ -274,7 +274,7 @@ fill; otherwise a neutral clay/neutral fallback shows.
 |-----------|----------------|
 | `tests/projectorOcclusion.test.ts` | Depth packing round-trips, blue hit-flag semantics, front/rear/seam visibility, dual-origin fill + both-occluded fallback, occlusion key stability/exclusion, settings normalization (no GPU resources serialized) |
 | `tests/projectedStyleMath.test.ts` | Pack/unpack/decode math + blend-weight gating |
-| `tests/projectedStyleCompile.test.ts` | Real WebGL compile of every variant: single/dual, occlusion on/off, primary/secondary-only occlusion, coverage debug |
+| `tests/browser/projectedStyleCompile.test.ts` | Real WebGL compile of every variant: single/dual, occlusion on/off, primary/secondary-only occlusion, coverage debug |
 | `tests/uiFidelity.test.ts` | Viewport stays free of build-mode globals; occlusion status flows via an `onOcclusionStatusChange` callback, not a direct store import |
 | `scripts/goal-workflow-smoke.mjs` | End-to-end: switches Shots to Projected, waits for viewport occlusion to reach `ready` or `unavailable`, captures a shot, and verifies a ZIP package download |
 

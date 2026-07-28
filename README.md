@@ -205,10 +205,19 @@ shot_001/
 
 ## Verification
 
+Prefer targeted checks while iterating; run the pre-merge set once the change is stable (see `AGENTS.md`).
+
 ```bash
+# Inner loop (example)
+npx vitest run tests/<relevant>.test.ts
+npm run lint:fast
+
+# Pre-merge
 npm run lint
-npm run test
+npm run test          # fast unit suite (no Chromium)
+npm run test:browser  # only when renderer / projection / WebGL changed
 npm run build
+npm run test:e2e:smoke
 npm run goal:smoke
 ```
 

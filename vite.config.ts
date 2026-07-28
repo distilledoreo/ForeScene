@@ -32,6 +32,9 @@ export default defineConfig(() => {
     },
     test: {
       include: ['tests/**/*.{test,spec}.{ts,tsx}'],
+      // Default includes browser gates so path-targeted runs work:
+      //   npx vitest run tests/browser/<file>.test.ts
+      // `npm run test` / `test:changed` use vitest.fast.config.ts to skip them.
       exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
     },
   };

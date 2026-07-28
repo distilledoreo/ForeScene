@@ -5,8 +5,8 @@ import * as esbuild from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.resolve(here, 'fixtures/projected-receive-entry.ts');
-const EVIDENCE_DIR = path.resolve(here, '../test-results/projected-receive');
+const entry = path.resolve(here, '../fixtures/projected-receive-entry.ts');
+const EVIDENCE_DIR = path.resolve(here, '../../test-results/projected-receive');
 
 describe('receiving projected-style material (real WebGL pixel readback)', () => {
   it('single-projector is not blended 50/50, rears fall back, modes differ', async () => {
@@ -41,7 +41,7 @@ describe('receiving projected-style material (real WebGL pixel readback)', () =>
       });
       await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
       const result = await page.evaluate(() => (window as unknown as {
-        __PROJECTED_RECEIVE__?: import('./fixtures/projected-receive-entry').ProjectedReceiveResult;
+        __PROJECTED_RECEIVE__?: import('../fixtures/projected-receive-entry').ProjectedReceiveResult;
       }).__PROJECTED_RECEIVE__);
       writeFileSync(path.join(EVIDENCE_DIR, 'projected-receive.json'), JSON.stringify({ result, pageErrors }, null, 2));
 
