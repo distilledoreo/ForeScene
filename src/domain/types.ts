@@ -69,9 +69,64 @@ export interface Transform {
 
 export type StagingRole = 'set' | 'prop' | 'person';
 
+export type QuaternionTuple = [number, number, number, number];
+
+/**
+ * Stable semantic joints for poseable humanoids.
+ * Persisted poses use these IDs — never GLB-specific bone names.
+ */
+export type HumanJointId =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'neck'
+  | 'head'
+  | 'leftUpperArm'
+  | 'leftLowerArm'
+  | 'leftHand'
+  | 'rightUpperArm'
+  | 'rightLowerArm'
+  | 'rightHand'
+  | 'leftUpperLeg'
+  | 'leftLowerLeg'
+  | 'leftFoot'
+  | 'rightUpperLeg'
+  | 'rightLowerLeg'
+  | 'rightFoot';
+
+export interface HumanJointPose {
+  /** Local rotation relative to the character rest/bind pose. */
+  rotation: QuaternionTuple;
+  /** Optional hips/root positional adjustment in character-local meters. */
+  position?: Vec3;
+}
+
+export interface HumanPose {
+  version: 1;
+  joints: Partial<Record<HumanJointId, HumanJointPose>>;
+  presetId?: string;
+}
+
+/**
+ * Where a poseable character came from.
+ * Autorigged imports will use `{ kind: 'autorigged', assetId, rigId }` later.
+ */
+export type PoseableCharacterSource =
+  | {
+      kind: 'builtin';
+      characterId: 'adult-male' | 'adult-female';
+    }
+  | {
+      kind: 'autorigged';
+      assetId: string;
+      rigId: string;
+    };
+
 export interface ShotObjectOverride {
   transform?: Transform;
   visible?: boolean;
+  /** Skeletal pose override; only applies to poseable characters. */
+  humanPose?: HumanPose;
 }
 
 export type ShotObjectOverrides = Record<string, ShotObjectOverride>;
@@ -101,6 +156,13 @@ export interface SceneObject {
   /** Canonical texture-free mesh asset used by imported graybox geometry. */
   modelAssetId?: string;
   importedModel?: ImportedModelInfo;
+  /**
+   * Poseable-character identity. Distinct from `transform` (set placement)
+   * and `humanPose` (limb articulation).
+   */
+  poseableCharacter?: PoseableCharacterSource;
+  /** Skeletal articulation; only has effect when the object is poseable. */
+  humanPose?: HumanPose;
   metadata?: Record<string, unknown>;
 }
 

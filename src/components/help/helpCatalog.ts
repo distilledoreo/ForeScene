@@ -457,7 +457,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Keyframe stills', description: 'Shows generated previews for each captured pose.' },
           { label: 'Play path / Preview move', description: 'Plays camera and staged-object interpolation live in the viewfinder.' },
           { label: 'Stop preview', description: 'Stops playback and restores normal authoring controls.' },
-          { label: 'Update pose', description: 'Replaces a selected keyframe with the current camera and staged-object pose.' },
+          { label: 'Recapture keyframe', description: 'Replaces a selected keyframe with the current camera and staged-object state.' },
           { label: 'Time seconds', description: 'Sets the selected keyframe time.' },
           { label: 'Insert here', description: 'Adds a keyframe at the current playhead or camera pose.' },
           { label: 'Delete keyframe', description: 'Removes the selected pose while preserving valid move ordering.' },

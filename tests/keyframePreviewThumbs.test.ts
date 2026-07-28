@@ -20,7 +20,7 @@ describe('keyframe preview thumb generation guard', () => {
   });
 
   it('rejects stale thumbnail commits after generation advances (undo race)', () => {
-    // Update pose starts render at generation 5.
+    // Recapture keyframe starts render at generation 5.
     const renderGeneration = 5;
     // Undo bumps generation to 6 and rebuilds cache from restored previews.
     const currentGeneration = 6;
@@ -61,7 +61,7 @@ describe('keyframe preview thumb generation guard', () => {
     expect(result!.nextKeyframes.find((k) => k.id === 'e')?.previewUri).toBe('data:image/png;base64,END');
   });
 
-  it('models the full Update pose → pending render → Undo → resolve sequence', () => {
+  it('models the full Recapture keyframe → pending render → Undo → resolve sequence', () => {
     let generation = 0;
     let cache: Record<string, string> = {
       s: 'data:image/png;base64,START_V1',
@@ -72,7 +72,7 @@ describe('keyframe preview thumb generation guard', () => {
       { id: 'e', previewUri: cache.e },
     ];
 
-    // Update pose starts a thumb render for Start at generation 1.
+    // Recapture keyframe starts a thumb render for Start at generation 1.
     generation += 1;
     const renderGeneration = generation;
 

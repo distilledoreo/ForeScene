@@ -219,6 +219,9 @@ export function createSceneObject(type: SceneObjectType, index = 1, position?: V
     locked: false,
     visible: true,
     stagingRole: type === 'human_dummy' ? 'person' : 'set',
+    ...(type === 'human_dummy'
+      ? { poseableCharacter: { kind: 'builtin' as const, characterId: 'adult-male' as const } }
+      : {}),
   };
 
   if (type === 'wall') object.transform.position = [0, 1.5, 5];

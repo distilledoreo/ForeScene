@@ -40,7 +40,7 @@ import {
   type ProjectorOcclusionSet,
 } from '../../engine/projectorOcclusion';
 import {
-  applySceneObjectPose,
+  applySceneObjectTransform,
   buildScene,
   computeBuildFogRange,
   createPreviewMesh,
@@ -48,6 +48,8 @@ import {
   disposeScene,
   sceneObjectUsesProceduralScale,
 } from '../../engine/sceneObjects';
+import { applyHumanPoseToObject3D } from '../../engine/poseableCharacter';
+import '../../engine/builtinMannequinCharacter';
 import {
   renderDepthGrayscale,
   type DepthRangeMeters,
@@ -145,6 +147,7 @@ function sceneObjectStructureSignature(project: LocationProject): string {
       color: object.color,
       secondaryColor: object.secondaryColor,
       modelAssetId: object.modelAssetId,
+      poseableCharacter: object.poseableCharacter,
       importedModel: object.importedModel && {
         sourceImportId: object.importedModel.sourceImportId,
         meshCount: object.importedModel.meshCount,
@@ -158,11 +161,12 @@ function sceneObjectStructureSignature(project: LocationProject): string {
   }));
 }
 
-function sceneObjectPoseSignature(project: LocationProject): string {
+function sceneObjectTransformSignature(project: LocationProject): string {
   return JSON.stringify(project.scene.objects.map((object) => ({
     id: object.id,
     name: object.name,
     transform: object.transform,
+    humanPose: object.humanPose,
   })));
 }
 
@@ -1803,8 +1807,8 @@ export function SceneViewport({
     () => sceneObjectStructureSignature(project),
     [project.assets.assets, project.scene.objects],
   );
-  const objectPoseKey = useMemo(
-    () => sceneObjectPoseSignature(project),
+  const objectTransformKey = useMemo(
+    () => sceneObjectTransformSignature(project),
     [project.scene.objects],
   );
   const landmarkStructureKey = useMemo(
@@ -1824,8 +1828,8 @@ export function SceneViewport({
     [project.scene.panoOrigin],
   );
   const occlusionGeometryKey = useMemo(
-    () => `${objectStructureKey}:${objectPoseKey}:${panoOriginKey}`,
-    [objectPoseKey, objectStructureKey, panoOriginKey],
+    () => `${objectStructureKey}:${objectTransformKey}:${panoOriginKey}`,
+    [objectTransformKey, objectStructureKey, panoOriginKey],
   );
   const shotFrustumStructureKey = useMemo(
     () => JSON.stringify(project.shots.map((shot) => ({ id: shot.id, shotNumber: shot.shotNumber }))),
@@ -2062,10 +2066,11 @@ export function SceneViewport({
       const node = objectNodes.get(object.id);
       if (!node) continue;
       node.name = object.name;
-      applySceneObjectPose(node, object.transform, {
+      applySceneObjectTransform(node, object.transform, {
         applyScale: !sceneObjectUsesProceduralScale(object.type),
         visible: object.visible,
       });
+      applyHumanPoseToObject3D(node, object);
     }
 
     panoOriginMarker?.position.fromArray(project.scene.panoOrigin);
@@ -2097,7 +2102,7 @@ export function SceneViewport({
     requestRender();
   }, [
     landmarkPoseKey,
-    objectPoseKey,
+    objectTransformKey,
     panoOriginKey,
     requestRender,
     sceneStructureKey,

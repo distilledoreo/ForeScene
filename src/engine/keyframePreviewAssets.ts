@@ -36,7 +36,7 @@ export function createKeyframePreviewAssetFromDataUrl(params: {
 /**
  * Attach a rendered still to a keyframe via project assets.
  * Reuses the keyframe's previous preview asset id/storage key when present so
- * repeated Update pose / thumbnail refresh does not accumulate dead assets.
+ * repeated Recapture keyframe / thumbnail refresh does not accumulate dead assets.
  * Returns updated keyframes + asset registry entry (caller merges into project).
  */
 export function commitKeyframePreviewAsset(params: {

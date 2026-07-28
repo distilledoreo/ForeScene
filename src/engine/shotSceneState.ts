@@ -7,6 +7,7 @@ import type {
   StagingRole,
   Transform,
 } from '../domain/types';
+import { cloneHumanPose, humanPosesEqual } from './humanPose';
 
 export interface ResolveShotSceneOptions {
   hidePeople?: boolean;
@@ -71,6 +72,7 @@ export function resolveSceneObjectsForShot(
       visible: options.hidePeople && stagingRole === 'person'
         ? false
         : (override?.visible ?? object.visible),
+      humanPose: cloneHumanPose(override?.humanPose ?? object.humanPose),
     };
   });
 }
@@ -118,6 +120,9 @@ export function resolveProjectForAnimatedCameraMove(
       stagingRole,
       transform: cloneTransform(startOverride?.transform ?? endOverride?.transform ?? object.transform),
       visible: hiddenByPeople ? false : (startVisible || endVisible),
+      humanPose: cloneHumanPose(
+        startOverride?.humanPose ?? endOverride?.humanPose ?? object.humanPose,
+      ),
     };
   });
 
@@ -139,14 +144,21 @@ export function updateShotObjectOverrides(
     ...(shot.objectOverrides?.[baseObject.id] ?? {}),
     ...(patch.transform ? { transform: cloneTransform(patch.transform) } : {}),
     ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
+    ...(patch.humanPose !== undefined ? { humanPose: cloneHumanPose(patch.humanPose) } : {}),
   };
   const compact = { ...(shot.objectOverrides ?? {}) };
   const transformMatchesBase = !next.transform || transformsEqual(next.transform, baseObject.transform);
   const visibilityMatchesBase = next.visible === undefined || next.visible === baseObject.visible;
-  if (transformMatchesBase && visibilityMatchesBase) {
+  const poseMatchesBase = humanPosesEqual(next.humanPose, baseObject.humanPose);
+  if (transformMatchesBase && visibilityMatchesBase && poseMatchesBase) {
     delete compact[baseObject.id];
   } else {
-    compact[baseObject.id] = next;
+    compact[baseObject.id] = {
+      ...(!transformMatchesBase && next.transform ? { transform: next.transform } : {}),
+      ...(!visibilityMatchesBase && next.visible !== undefined ? { visible: next.visible } : {}),
+      ...(!poseMatchesBase && next.humanPose ? { humanPose: next.humanPose } : {}),
+    };
+    if (Object.keys(compact[baseObject.id]).length === 0) delete compact[baseObject.id];
   }
   return compact;
 }
