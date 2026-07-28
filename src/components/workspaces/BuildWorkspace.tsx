@@ -89,6 +89,10 @@ import { ModelImportDialog } from '../common/ModelImportDialog';
 import { PoseableCharacterImportDialog } from '../common/PoseableCharacterImportDialog';
 import { AutorigMarkerWizardDialog } from '../common/AutorigMarkerWizardDialog';
 import { SetGenerationDialog } from '../common/SetGenerationDialog';
+import {
+  generateSkinWeightsForRigAsset,
+  hydrateAutoriggedCharactersFromAssets,
+} from '../../engine/autoriggedPoseableCharacter';
 import type { CompiledSetBlueprint } from '../../engine/setBlueprintCompiler';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
@@ -1269,7 +1273,33 @@ useEffect(() => {
             open={autorigMarkerOpen}
             onClose={() => setAutorigMarkerOpen(false)}
             rig={rig}
-            onSave={(next) => updatePoseableRigAsset(rigAsset.id, next)}
+            onSave={(next) => {
+              updatePoseableRigAsset(rigAsset.id, next);
+              const sourceId = next.originalSourceAssetId ?? next.sourceMeshAssetId;
+              if (!sourceId) return;
+              void generateSkinWeightsForRigAsset({
+                rig: next,
+                sourceAssetId: sourceId,
+                assets: useContinuityStore.getState().project.assets,
+              }).then(({ rig: skinnedRig, skinAsset }) => {
+                const state = useContinuityStore.getState();
+                state.updatePoseableRigAsset(rigAsset.id, skinnedRig);
+                // Register skin binary asset without a separate history step API.
+                useContinuityStore.setState((current) => ({
+                  project: {
+                    ...current.project,
+                    assets: {
+                      assets: {
+                        ...current.project.assets.assets,
+                        [skinAsset.id]: skinAsset,
+                      },
+                    },
+                  },
+                }));
+                // Re-hydrate adapter so the next viewport rebuild uses skinned mesh.
+                hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+              }).catch(() => undefined);
+            }}
           />
         );
       })()}

@@ -1,20 +1,37 @@
 import * as THREE from 'three';
 import type {
   AssetRegistry,
+  HumanJointId,
   HumanPose,
   PoseableCharacterOrientation,
   PoseableRigAsset,
+  ProjectAsset,
   SceneObject,
 } from '../domain/types';
 import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
 import { getModelAsset } from './modelAssetStore';
 import { createCanonicalHumanoidSkeleton } from './humanoidSkeleton';
 import {
+  applySemanticPoseToBones,
+  captureBoneRests,
   registerAutoriggedPoseableCharacter,
+  type BoneRestPose,
   type PoseableCharacter,
   type PoseableJoint,
 } from './poseableCharacter';
 import { degreesToRadians } from './sync';
+import {
+  applySkinBuffersToRig,
+  generateDeterministicSkinWeights,
+  writeSkinWeightBinaryAsset,
+} from './autorigSkinWeights';
+import {
+  buildSkinnedCharacterFromTemplate,
+  extractWorldPositionsFromObject,
+  jointPositionsFromRig,
+  loadSkinWeightBuffers,
+  loadSkinWeightBuffersFromUri,
+} from './autorigSkinnedMesh';
 
 function axisToVector(axis: NonNullable<PoseableCharacterOrientation['frontAxis']>): THREE.Vector3 {
   switch (axis) {
@@ -126,9 +143,12 @@ export function createAutoriggedPoseableCharacterShell(params: {
   orientation?: PoseableCharacterOrientation;
   approximateHeightMeters?: number;
   assets?: AssetRegistry;
+  rig?: PoseableRigAsset;
 }): PoseableCharacter {
   const height = params.approximateHeightMeters ?? 1.75;
   const orientation = params.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 };
+  const REST_USERDATA_KEY = 'panorefPoseRests';
+  const BONES_USERDATA_KEY = 'panorefPoseBones';
 
   return {
     source: { kind: 'autorigged', assetId: params.assetId, rigId: params.rigId },
@@ -150,9 +170,10 @@ export function createAutoriggedPoseableCharacterShell(params: {
 
       const root = new THREE.Group();
       root.name = object.name;
+
+      const rig = params.rig
+        ?? (params.assets?.assets[params.assetId]?.metadata?.poseableRig as PoseableRigAsset | undefined);
       const clone = template.clone(true);
-      // Preserve original materials/textures from the import. Clay export paths
-      // may still override materials later; the live Build view keeps author look.
       const oriented = new THREE.Group();
       oriented.quaternion.copy(orientationQuaternion(orientation));
       oriented.add(clone);
@@ -169,11 +190,48 @@ export function createAutoriggedPoseableCharacterShell(params: {
 
       const scaledBox = new THREE.Box3().setFromObject(oriented);
       oriented.position.y += -scaledBox.min.y;
-      // Center XZ inside the object transform.
       oriented.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
       oriented.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
 
-      root.add(oriented);
+      // Prefer skinned display when bind matrices + skin weights exist.
+      if (rig?.bindMatrices && rig.skin) {
+        const syncBuffers = loadSkinWeightBuffers(rig);
+        // Async skin URI load is handled by ensure path; sync path uses inline weights.
+        void syncBuffers.then(async (inline) => {
+          let buffers = inline;
+          if (!buffers && rig.skin?.skinAssetId && params.assets) {
+            const skinAsset = params.assets.assets[rig.skin.skinAssetId];
+            if (skinAsset?.uri) {
+              buffers = await loadSkinWeightBuffersFromUri(
+                skinAsset.uri,
+                (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
+              ).catch(() => undefined);
+            }
+          }
+          if (!buffers) return;
+        });
+        // For createInstance (sync), use inline skin arrays when present.
+        if (rig.skin.indices && rig.skin.weights) {
+          const buffers = {
+            influencesPerVertex: rig.skin.influencesPerVertex || 4,
+            indices: Uint16Array.from(rig.skin.indices),
+            weights: Float32Array.from(rig.skin.weights),
+            jointOrder: (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
+          };
+          const skinned = buildSkinnedCharacterFromTemplate({
+            template: oriented,
+            rig,
+            buffers,
+            materialFallback: material,
+          });
+          root.add(skinned);
+        } else {
+          root.add(oriented);
+        }
+      } else {
+        root.add(oriented);
+      }
+
       root.position.fromArray(object.transform.position);
       root.rotation.set(
         degreesToRadians(object.transform.rotation[0]),
@@ -183,18 +241,93 @@ export function createAutoriggedPoseableCharacterShell(params: {
       return root;
     },
 
-    bindInstance(_instance: THREE.Object3D) {
-      // 2A: no skeleton bones yet. Markers / skin arrive in later PRs.
+    bindInstance(instance: THREE.Object3D) {
+      if (instance.userData[BONES_USERDATA_KEY]) return;
+      const existing = instance.userData[BONES_USERDATA_KEY] as Map<HumanJointId, THREE.Bone> | undefined;
+      if (existing) {
+        instance.userData[REST_USERDATA_KEY] = captureBoneRests(existing);
+        return;
+      }
+      const bones = new Map<HumanJointId, THREE.Bone>();
+      instance.traverse((node) => {
+        const bone = node as THREE.Bone;
+        if (!bone.isBone) return;
+        const jointId = bone.userData.humanJointId as HumanJointId | undefined;
+        if (jointId) bones.set(jointId, bone);
+      });
+      if (bones.size === 0) return;
+      instance.userData[BONES_USERDATA_KEY] = bones;
+      instance.userData[REST_USERDATA_KEY] = captureBoneRests(bones);
     },
 
-    getJoints(_instance: THREE.Object3D): readonly PoseableJoint[] {
-      return [];
+    getJoints(instance: THREE.Object3D): readonly PoseableJoint[] {
+      this.bindInstance(instance);
+      const bones = instance.userData[BONES_USERDATA_KEY] as Map<HumanJointId, THREE.Bone> | undefined;
+      if (!bones) return [];
+      const joints: PoseableJoint[] = [];
+      for (const [id, node] of bones) {
+        joints.push({
+          id,
+          displayName: id,
+          parentId: undefined,
+          node,
+        });
+      }
+      return joints;
     },
 
-    applyPose(_instance: THREE.Object3D, _pose: HumanPose | undefined) {
-      // 2A intentionally does not deform the mesh. Pose UI can still store humanPose.
+    applyPose(instance: THREE.Object3D, pose: HumanPose | undefined) {
+      this.bindInstance(instance);
+      const bones = instance.userData[BONES_USERDATA_KEY] as Map<HumanJointId, THREE.Bone> | undefined;
+      const rests = instance.userData[REST_USERDATA_KEY] as Map<HumanJointId, BoneRestPose> | undefined;
+      if (!bones || !rests) return;
+      applySemanticPoseToBones({ bones, rests, pose });
+      instance.traverse((node) => {
+        const skinned = node as THREE.SkinnedMesh;
+        if (skinned.isSkinnedMesh) skinned.skeleton.update();
+      });
     },
   };
+}
+
+/** Generate skin weights for a rig from its loaded source template and persist binary skin asset. */
+export async function generateSkinWeightsForRigAsset(params: {
+  rig: PoseableRigAsset;
+  sourceAssetId: string;
+  assets?: AssetRegistry;
+}): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset }> {
+  await ensureTemplateLoaded(params.sourceAssetId, params.assets);
+  const template = templates.get(params.sourceAssetId);
+  if (!template) throw new Error('Poseable source mesh is not loaded.');
+
+  const oriented = template.clone(true);
+  const jointPositions = jointPositionsFromRig(params.rig);
+  const positions = extractWorldPositionsFromObject(oriented);
+  const buffers = generateDeterministicSkinWeights({
+    positions,
+    jointPositions,
+    heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+  });
+  const written = await writeSkinWeightBinaryAsset(buffers);
+  const skinAsset: ProjectAsset = {
+    id: written.assetId,
+    type: 'model',
+    name: `${params.rig.id}-skin.bin`,
+    uri: written.uri,
+    mimeType: 'application/octet-stream',
+    createdAt: new Date().toISOString(),
+    metadata: { poseableSkin: true, byteLength: written.byteLength },
+  };
+  // Keep compact inline copy for small fixtures / immediate use; binary ref for persistence.
+  const rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
+  // Also keep inline for sync createInstance until cold-load URI hydration is universal.
+  rig.skin = {
+    influencesPerVertex: buffers.influencesPerVertex,
+    indices: Array.from(buffers.indices),
+    weights: Array.from(buffers.weights),
+    skinAssetId: skinAsset.id,
+  };
+  return { rig, skinAsset };
 }
 
 /** Hydrate in-memory adapters from poseable_rig assets after project load. */
