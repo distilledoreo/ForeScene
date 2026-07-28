@@ -56,6 +56,7 @@ export function buildSetBlueprintSystemPrompt(): string {
     '',
     'Output rules:',
     '- Respond with JSON only. No markdown fences. No prose before or after the JSON object.',
+    '- Emit raw JSON punctuation. Do not escape brackets, underscores, or ordinary JSON punctuation (write [0, 1.65, 0] and hall_floor — never \\[0, 1.65, 0] or hall\\_floor).',
     `- schemaVersion must be ${SET_BLUEPRINT_SCHEMA_VERSION}.`,
     '- units must be "meters".',
     '- Coordinate system: Y-up. Positive Z is the default forward direction from the capture origin.',

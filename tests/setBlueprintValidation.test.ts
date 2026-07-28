@@ -183,6 +183,59 @@ describe('parseSetBlueprint', () => {
     expect(result.blueprint?.name).toBe('Minimal Floor');
   });
 
+  it('auto-repairs Markdown-style escapes like \\[ and \\_ with a warning', () => {
+    const mangled = [
+      '{',
+      '  "schemaVersion": 1,',
+      '  "name": "Hall",',
+      '  "units": "meters",',
+      '  "panoOrigin": \\[0, 1.65, 0],',
+      '  "objects": [',
+      '    {',
+      '      "key": "hall\\_floor",',
+      '      "name": "Hall Floor",',
+      '      "type": "floor",',
+      '      "position": \\[0, 0, 0],',
+      '      "dimensions": \\[8, 0.08, 6]',
+      '    }',
+      '  ]',
+      '}',
+    ].join('\n');
+
+    const result = parseSetBlueprint(mangled);
+    expect(result.errors).toEqual([]);
+    expect(result.blueprint?.name).toBe('Hall');
+    expect(result.blueprint?.objects[0].key).toBe('hall_floor');
+    expect(result.blueprint?.panoOrigin).toEqual([0, 1.65, 0]);
+    expect(result.warnings.some((warning) => warning.code === 'json_markdown_escapes_repaired')).toBe(true);
+  });
+
+  it('reports line and column for unrepaired invalid escapes', () => {
+    const mangled = [
+      '{',
+      '  "schemaVersion": 1,',
+      '  "name": "Broken",',
+      '  "units": "meters",',
+      '  "objects": [',
+      '    {',
+      '      "key": "x",',
+      '      "name": "X",',
+      '      "type": "box",',
+      '      "position": [0, 0, 0],',
+      '      "dimensions": [1, 1, 1],',
+      '      "surface": { "style": "solid", "color": "\\qffffff" }',
+      '    }',
+      '  ]',
+      '}',
+    ].join('\n');
+
+    const result = parseSetBlueprint(mangled);
+    expect(result.blueprint).toBeUndefined();
+    const diagnostic = result.errors.find((error) => error.code === 'json_markdown_escape');
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.message).toMatch(/Invalid JSON escape \\q at line \d+, column \d+/);
+  });
+
   it('applies documented defaults by omitting optional fields rather than inventing them', () => {
     const result = parseSetBlueprint(minimalSetBlueprint);
     expect(result.blueprint?.objects[0].rotation).toBeUndefined();

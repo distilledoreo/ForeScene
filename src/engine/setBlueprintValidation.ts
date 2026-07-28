@@ -28,7 +28,7 @@ export function parseSetBlueprint(input: unknown): SetBlueprintParseResult {
   const errors: BlueprintDiagnostic[] = [];
   const warnings: BlueprintDiagnostic[] = [];
 
-  const root = coerceJsonRoot(input, errors);
+  const root = coerceJsonRoot(input, errors, warnings);
   if (!root) {
     return { errors, warnings };
   }
@@ -143,6 +143,7 @@ export function parseSetBlueprint(input: unknown): SetBlueprintParseResult {
 function coerceJsonRoot(
   input: unknown,
   errors: BlueprintDiagnostic[],
+  warnings: BlueprintDiagnostic[],
 ): Record<string, unknown> | undefined {
   if (input === null || input === undefined) {
     errors.push({ code: 'empty', message: 'Blueprint input is empty.', path: '' });
@@ -156,13 +157,16 @@ function coerceJsonRoot(
       errors.push({ code: 'empty', message: 'Blueprint input is empty.', path: '' });
       return undefined;
     }
-    const extracted = extractJsonObject(trimmed);
+    const extracted = extractJsonObject(trimmed, errors, warnings);
     if (extracted === undefined || extracted === null) {
-      errors.push({
-        code: 'json_parse',
-        message: 'Could not parse blueprint JSON. Provide a single JSON object with no markdown fences.',
-        path: '',
-      });
+      // extractJsonObject already pushed a specific diagnostic when possible.
+      if (!errors.some((error) => error.code === 'json_parse' || error.code === 'json_markdown_escape')) {
+        errors.push({
+          code: 'json_parse',
+          message: 'Could not parse blueprint JSON. Provide a single JSON object with no markdown fences.',
+          path: '',
+        });
+      }
       return undefined;
     }
     value = extracted;
@@ -180,32 +184,162 @@ function coerceJsonRoot(
   return value as Record<string, unknown>;
 }
 
-function extractJsonObject(text: string): unknown | undefined {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    // Fall through — try fence or prose-wrapped JSON.
-  }
+/**
+ * Valid JSON single-character escapes after a backslash.
+ * Anything else (e.g. Markdown `\[`, `\_`) is illegal and common in model output.
+ */
+const JSON_SINGLE_ESCAPES = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't']);
 
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    try {
-      return JSON.parse(fenced[1].trim()) as unknown;
-    } catch {
-      // continue
+/** Markdown-style escapes that are safe to unwrap for SetBlueprint paste repair. */
+const MARKDOWN_ESCAPE_REPAIRS: ReadonlyArray<{ from: string; to: string }> = [
+  { from: '\\[', to: '[' },
+  { from: '\\]', to: ']' },
+  { from: '\\_', to: '_' },
+];
+
+interface JsonExtractResult {
+  value?: unknown;
+  /** True when Markdown-style escapes were normalized before a successful parse. */
+  repairedMarkdownEscapes?: boolean;
+  repairCount?: number;
+}
+
+function extractJsonObject(
+  text: string,
+  errors: BlueprintDiagnostic[],
+  warnings: BlueprintDiagnostic[],
+): unknown | undefined {
+  const candidates = collectJsonTextCandidates(text);
+  let markdownEscapeDiagnostic: BlueprintDiagnostic | undefined;
+
+  for (const candidate of candidates) {
+    const direct = tryParseJson(candidate);
+    if (direct.ok) return direct.value;
+
+    const escapeInfo = findInvalidJsonEscape(candidate);
+    if (escapeInfo && !markdownEscapeDiagnostic) {
+      markdownEscapeDiagnostic = describeMarkdownEscapeError(escapeInfo);
+    }
+
+    const repaired = repairMarkdownJsonEscapes(candidate);
+    if (repaired.count > 0) {
+      const repairedParse = tryParseJson(repaired.text);
+      if (repairedParse.ok) {
+        warnings.push({
+          code: 'json_markdown_escapes_repaired',
+          message: `Removed ${repaired.count} Markdown-style escape${repaired.count === 1 ? '' : 's'} (e.g. \\[, \\], \\_) before parsing. Prefer raw JSON without backslash escapes.`,
+          path: '',
+        });
+        return repairedParse.value;
+      }
     }
   }
 
+  if (markdownEscapeDiagnostic) {
+    errors.push(markdownEscapeDiagnostic);
+    return undefined;
+  }
+
+  errors.push({
+    code: 'json_parse',
+    message: 'Could not parse blueprint JSON. Provide a single JSON object with no markdown fences.',
+    path: '',
+  });
+  return undefined;
+}
+
+function collectJsonTextCandidates(text: string): string[] {
+  const candidates: string[] = [text];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1)) as unknown;
-    } catch {
-      return undefined;
+    const sliced = text.slice(start, end + 1);
+    if (sliced !== text) candidates.push(sliced);
+  }
+  return [...new Set(candidates.filter((candidate) => candidate.length > 0))];
+}
+
+function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export interface InvalidJsonEscapeInfo {
+  escape: string;
+  index: number;
+  line: number;
+  column: number;
+}
+
+/** Locate the first backslash escape that is illegal in JSON. */
+export function findInvalidJsonEscape(text: string): InvalidJsonEscapeInfo | undefined {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '\\') continue;
+    const next = text[index + 1];
+    if (next === undefined) {
+      return { escape: '\\', index, ...offsetToLineColumn(text, index) };
     }
+    if (JSON_SINGLE_ESCAPES.has(next)) {
+      index += 1;
+      continue;
+    }
+    if (next === 'u') {
+      const hex = text.slice(index + 2, index + 6);
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+        index += 5;
+        continue;
+      }
+    }
+    return {
+      escape: `\\${next}`,
+      index,
+      ...offsetToLineColumn(text, index),
+    };
   }
   return undefined;
+}
+
+/** Unwrap common Markdown escapes that models inject into otherwise-valid JSON. */
+export function repairMarkdownJsonEscapes(text: string): { text: string; count: number } {
+  let next = text;
+  let count = 0;
+  for (const { from, to } of MARKDOWN_ESCAPE_REPAIRS) {
+    if (!next.includes(from)) continue;
+    const parts = next.split(from);
+    count += parts.length - 1;
+    next = parts.join(to);
+  }
+  return { text: next, count };
+}
+
+function describeMarkdownEscapeError(info: InvalidJsonEscapeInfo): BlueprintDiagnostic {
+  const hint = info.escape === '\\[' || info.escape === '\\]' || info.escape === '\\_'
+    ? ' The response appears to contain Markdown-style escaping. Remove backslashes before [, ], or _.'
+    : ' Remove invalid backslash escapes; only JSON escapes (\\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX) are legal.';
+  return {
+    code: 'json_markdown_escape',
+    message: `Invalid JSON escape ${info.escape} at line ${info.line}, column ${info.column}.${hint}`,
+    path: '',
+  };
+}
+
+function offsetToLineColumn(text: string, index: number): { line: number; column: number } {
+  let line = 1;
+  let column = 1;
+  for (let i = 0; i < index; i += 1) {
+    if (text[i] === '\n') {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line, column };
 }
 
 function parseObject(

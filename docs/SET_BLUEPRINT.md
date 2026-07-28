@@ -61,6 +61,8 @@ Excluded from blueprint output (native project concerns only):
 4. Switch to **Paste blueprint JSON**, paste the result, **Validate and review**.
 5. **Create generated project** — current work is snapshotted first under Project Safety & Recovery.
 
+If a model returns Markdown-style escapes such as `\[0, 1.65, 0]` or `hall\_floor`, the importer auto-repairs common cases (`\[` → `[`, `\]` → `]`, `\_` → `_`), retries parse, and shows a warning. Unrepaired invalid escapes report the exact line/column instead of a generic “markdown fences” message.
+
 ## Provider configuration
 
 | Mode | Behavior |

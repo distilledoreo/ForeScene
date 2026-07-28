@@ -19,6 +19,7 @@ describe('set blueprint prompt contract', () => {
     }
     expect(prompt).toContain('JSON only');
     expect(prompt).toContain('imported_model');
+    expect(prompt).toMatch(/Do not escape brackets, underscores/i);
     expect(prompt).not.toMatch(/```/);
   });
 
