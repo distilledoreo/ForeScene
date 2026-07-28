@@ -709,7 +709,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
       if (await startChecking.isVisible().catch(() => false)) await startChecking.click();
       await dismissOverlays(page);
     }
-    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
+    await page.locator('[data-reference-settings-gear]').click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     await page.locator('[data-coverage-optimizer] summary').click();
@@ -834,7 +834,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
       if (await fillGapsInModal.isVisible().catch(() => false)) {
         await fillGapsInModal.click();
       } else {
-        await page.getByRole('button', { name: /Reference settings|Settings/i }).click().catch(() => undefined);
+        await page.locator('[data-reference-settings-gear]').click().catch(() => undefined);
         await openFillGaps.click();
         await page.locator('[data-second-capture-fill-gaps]').click();
       }
@@ -928,7 +928,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
     await expect(page.locator('[data-reference-pano-origins]')).toHaveAttribute('data-graybox-count', '2');
 
     // Enable dual projection blend.
-    await page.getByRole('button', { name: /Reference settings|Settings/i }).click();
+    await page.locator('[data-reference-settings-gear]').click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
     const blendToggle = drawer.locator('[data-projected-blend-toggle] button, [data-projected-blend-toggle] [role="switch"]').first();
