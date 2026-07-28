@@ -125,3 +125,49 @@ export async function importProjectBackup(page: Page, projectPath: string) {
     timeout: 30_000,
   }).catch(() => undefined);
 }
+
+/**
+ * Wait until the header reports a verified local save.
+ * Status attribute is written from ProjectPersistenceController → useProjectSafetyStore.
+ * Use attribute matching (not toBeVisible) because the status chip is `hidden md:flex`.
+ */
+export async function waitForVerifiedSave(page: Page, timeoutMs = 90_000) {
+  await expect(page.locator('[data-project-save-status]')).toHaveAttribute(
+    'data-project-save-status',
+    'saved',
+    { timeout: timeoutMs },
+  );
+}
+
+/**
+ * Full browser reload that preserves IndexedDB, then wait for startup recovery
+ * to restore Continuity Stage from the latest verified revision.
+ */
+export async function reloadAndAwaitRecovery(page: Page) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  // Splash is skipped via enterContinuityStage init script (re-runs on navigation).
+  // Recovery sets continuity mode automatically when a verified revision exists.
+  const modeChooser = page.locator('[data-mode-chooser]');
+  if (await modeChooser.isVisible().catch(() => false)) {
+    // Fallback: if recovery did not auto-enter continuity, choose it so we can still assert.
+    await page.getByRole('button', { name: /Build continuity packages/i }).click();
+  }
+
+  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  if (await splash.isVisible().catch(() => false)) {
+    await splash.click({ force: true });
+    await expect(splash).toBeHidden({ timeout: 5000 });
+  }
+
+  await expect(workspaceTab(page, 'Build')).toBeVisible({ timeout: 30_000 });
+
+  // Startup recovery publishes status=recovered (or saved after re-verify).
+  await expect.poll(
+    async () => page.locator('[data-project-save-status]').getAttribute('data-project-save-status'),
+    {
+      timeout: 60_000,
+      message: 'Expected verified recovery status after reload',
+    },
+  ).toMatch(/^(recovered|saved)$/);
+}

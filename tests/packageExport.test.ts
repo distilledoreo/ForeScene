@@ -1,11 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
-import { createDefaultProject, createPanoAsset, createPanoReference } from '../src/domain/defaults';
+import { createDefaultProject, createPanoAsset, createPanoReference, createSceneObject } from '../src/domain/defaults';
 import { getShotPackageBaseName } from '../src/engine/exportNaming';
 import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES, type CameraMoveCubemapFaceId } from '../src/engine/cameraMoveCubemap';
 import { stitchCubemapFaceBlobsCrossAsync } from '../src/engine/cubemapStitch';
+import {
+  cameraKeyframesHaveObjectAnimation,
+  snapshotStageableObjectOverrides,
+} from '../src/engine/objectKeyframes';
 import {
   buildMultiShotPackage,
   buildShotPackage,
@@ -14,6 +18,7 @@ import {
   resolveClayCameraMovePackageSource,
 } from '../src/engine/packageExport';
 import { type BlobImageRenderResult, renderPanoCubemapFacesAsBlobs, renderShotCameraMoveMp4 } from '../src/engine/renderers';
+import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 
 vi.mock('../src/engine/renderers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/renderers')>();
@@ -217,6 +222,67 @@ describe('package export', () => {
     const packed = new TextDecoder().decode(await zip.file(motionPath!)!.async('uint8array'));
     expect(packed).toContain('FRESH_DETERMINISTIC_ENCODE');
     expect(packed).not.toContain('LEGACY_QUICK_PREVIEW_BYTES');
+  });
+
+  it('packs clay motion for camera moves that carry staged object animation', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    const prop = createSceneObject('box', 1);
+    prop.stagingRole = 'prop';
+    project.scene.objects.push(prop);
+
+    const startOverrides = snapshotStageableObjectOverrides(project, { objectOverrides: {} });
+    shot.objectOverrides = updateShotObjectOverrides(shot, prop, { visible: false });
+    const endOverrides = snapshotStageableObjectOverrides(project, shot);
+
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeCameraMoveVideo: true,
+    };
+    shot.cameraKeyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: shot.camera,
+        durationSeconds: 2,
+        objectOverrides: startOverrides,
+      }),
+      slot: 'end',
+      camera: {
+        ...shot.camera,
+        position: [1, 1.6, 3],
+        target: [1, 1.6, 8],
+      },
+      durationSeconds: 2,
+      objectOverrides: endOverrides,
+    });
+    expect(cameraKeyframesHaveObjectAnimation(shot.cameraKeyframes)).toBe(true);
+
+    vi.mocked(renderShotCameraMoveMp4).mockResolvedValue({
+      blob: new Blob([Uint8Array.from(Buffer.from('OBJECT_ANIM_MOTION'))], { type: 'video/mp4' }),
+      width: 1920,
+      height: 1080,
+      durationSeconds: 2,
+      frameRate: 30,
+      mimeType: 'video/mp4',
+      fileExtension: 'mp4',
+      encodeMode: 'render',
+      frameCount: 60,
+      codecString: 'avc1.640028',
+    });
+
+    const result = await buildShotPackage(project, shot);
+    expect(renderShotCameraMoveMp4).toHaveBeenCalled();
+    // Encoder receives the shot that still has objectOverrides on keyframes.
+    const encodedShot = vi.mocked(renderShotCameraMoveMp4).mock.calls[0]?.[1];
+    expect(cameraKeyframesHaveObjectAnimation(encodedShot?.cameraKeyframes ?? [])).toBe(true);
+    expect(result.manifestPaths.some((path) => path.includes('viewport_clay_motion.mp4'))).toBe(true);
+    // Real package bytes include the motion file (manifestPaths is the download inventory).
+    const zip = await JSZip.loadAsync(await result.blob.arrayBuffer());
+    const motionPath = Object.keys(zip.files).find((path) => path.endsWith('viewport_clay_motion.mp4'));
+    expect(motionPath).toBeTruthy();
+    const packed = new TextDecoder().decode(await zip.file(motionPath!)!.async('uint8array'));
+    expect(packed).toContain('OBJECT_ANIM_MOTION');
   });
 
   it('copies a stored clay asset only when keyframes cannot be re-encoded', () => {

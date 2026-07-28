@@ -10,6 +10,7 @@ import {
   snapshotStageableObjectOverrides,
 } from '../src/engine/objectKeyframes';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
+import { createShotPackageManifest } from '../src/engine/exportManifest';
 
 describe('object keyframes', () => {
   it('snapshots absolute stageable poses for camera keyframes', () => {
@@ -233,5 +234,47 @@ describe('object keyframes', () => {
 
     const mid = interpolateObjectOverrides(keyframes, 1, {}, project.scene.objects);
     expect(mid[prop.id]?.transform?.rotation[1]).toBeCloseTo(360);
+  });
+
+  it('visibility toggles between start/end keyframes count as object animation for packaging', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    const prop = createSceneObject('box', 1);
+    prop.stagingRole = 'prop';
+    project.scene.objects.push(prop);
+
+    const startSnapshot = snapshotStageableObjectOverrides(project, { objectOverrides: {} });
+    shot.objectOverrides = updateShotObjectOverrides(shot, prop, { visible: false });
+    const endSnapshot = snapshotStageableObjectOverrides(project, shot);
+
+    const keyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: shot.camera,
+        durationSeconds: 2,
+        objectOverrides: startSnapshot,
+      }),
+      slot: 'end',
+      camera: {
+        ...shot.camera,
+        position: [0, 2, -4],
+      },
+      durationSeconds: 2,
+      objectOverrides: endSnapshot,
+    });
+
+    expect(cameraKeyframesHaveObjectAnimation(keyframes)).toBe(true);
+    expect(keyframes[0].objectOverrides?.[prop.id]?.visible).not.toBe(false);
+    expect(keyframes[1].objectOverrides?.[prop.id]?.visible).toBe(false);
+
+    shot.cameraKeyframes = keyframes;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeCameraMoveVideo: true,
+    };
+    const manifest = createShotPackageManifest(project, shot);
+    const motionPaths = manifest.files.map((file) => file.path).filter((path) => path.includes('viewport_clay_motion'));
+    expect(motionPaths.length).toBeGreaterThan(0);
   });
 });
