@@ -1,8 +1,9 @@
 import type { PeopleRenderVariant } from './peopleExport';
 import { peopleVariantLabel } from './peopleExport';
+import type { SceneRenderPass } from './depthRender';
 
 export interface CameraMoveExportPass {
-  appearance: 'clay' | 'projected';
+  appearance: SceneRenderPass;
   peopleVariant: PeopleRenderVariant;
 }
 
@@ -28,10 +29,12 @@ export interface CameraMoveExportPassResults<T> {
 export function createCameraMoveExportPasses(
   peopleVariants: readonly PeopleRenderVariant[],
   includeProjected: boolean,
+  includeDepth = false,
 ): CameraMoveExportPass[] {
   return peopleVariants.flatMap((peopleVariant) => [
     { appearance: 'clay' as const, peopleVariant },
     ...(includeProjected ? [{ appearance: 'projected' as const, peopleVariant }] : []),
+    ...(includeDepth ? [{ appearance: 'depth' as const, peopleVariant }] : []),
   ]);
 }
 
@@ -64,7 +67,11 @@ export async function runCameraMoveExportPasses<T>(
 }
 
 export function cameraMoveExportPassLabel(pass: CameraMoveExportPass): string {
-  const appearance = pass.appearance === 'projected' ? 'Projected' : 'Clay';
+  const appearance = pass.appearance === 'projected'
+    ? 'Projected'
+    : pass.appearance === 'depth'
+      ? 'Depth'
+      : 'Clay';
   return `${appearance} ${peopleVariantLabel(pass.peopleVariant)}`;
 }
 

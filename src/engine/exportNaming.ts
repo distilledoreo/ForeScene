@@ -99,3 +99,7 @@ export function getCameraMoveDownloadName(shot: Shot): string {
 export function getProjectedCameraMoveDownloadName(shot: Shot): string {
   return `${getShotCaptureDownloadBaseName(shot)}_camera_move_projected.mp4`;
 }
+
+export function getDepthCameraMoveDownloadName(shot: Shot): string {
+  return `${getShotCaptureDownloadBaseName(shot)}_camera_move_depth.mp4`;
+}
