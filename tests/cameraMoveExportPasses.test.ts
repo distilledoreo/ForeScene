@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cameraMoveExportPassLabel,
   createCameraMoveExportPasses,
   getCameraMoveExportCompletionMessage,
   runCameraMoveExportPasses,
@@ -33,5 +34,23 @@ describe('camera-move export passes', () => {
       passes.length,
       results.failures,
     )).toBe('Completed 3 of 4 outputs. Projected clean plate failed.');
+  });
+
+  it('includes depth after projected for each people variant', () => {
+    const passes = createCameraMoveExportPasses(['with_people', 'clean_plate'], true, true);
+    expect(passes.map((pass) => `${pass.appearance}:${pass.peopleVariant}`)).toEqual([
+      'clay:with_people',
+      'projected:with_people',
+      'depth:with_people',
+      'clay:clean_plate',
+      'projected:clean_plate',
+      'depth:clean_plate',
+    ]);
+    expect(cameraMoveExportPassLabel(passes[2])).toBe('Depth with people');
+  });
+
+  it('omits depth when not requested', () => {
+    const passes = createCameraMoveExportPasses(['with_people'], false, false);
+    expect(passes).toEqual([{ appearance: 'clay', peopleVariant: 'with_people' }]);
   });
 });

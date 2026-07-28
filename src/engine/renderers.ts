@@ -57,6 +57,12 @@ import {
 } from './cameraClipping';
 import { computeCameraMoveClippingRange } from './exportClipping';
 import {
+  createDepthPassResources,
+  renderDepthGrayscale,
+  type DepthPassResources,
+  type SceneRenderPass,
+} from './depthRender';
+import {
   canUseDeterministicMp4Export,
   encodeCanvasFramesToMp4,
 } from './videoEncode';
@@ -81,6 +87,7 @@ export {
 export type {
   DepthMetadata,
   DepthRenderResult,
+  SceneRenderPass,
 } from './depthRender';
 
 export interface BlobImageRenderResult {
@@ -156,8 +163,16 @@ export interface CameraMoveVideoOptions {
   /**
    * Scene appearance for the encoded move.
    * `projected` requires a valid styled panorama projector.
+   * `depth` renders linear camera-space depth with a fixed shot range.
    */
-  appearance?: 'clay' | 'projected';
+  appearance?: 'clay' | 'projected' | 'depth';
+  /**
+   * Fixed metric depth range for `appearance: 'depth'`.
+   * Required for depth video so every frame shares one normalization.
+   */
+  depthRange?: { nearMeters: number; farMeters: number };
+  /** Depth invert flag (white = near by default). */
+  depthInvert?: boolean;
   /**
    * `render` = fixed-step WebCodecs + Mediabunny MP4 (default).
    * `quickPreview` = real-time MediaRecorder only when explicitly requested.
@@ -376,6 +391,9 @@ export async function renderShotCameraMoveMp4(
       'Projected camera-move MP4 requires an importable styled panorama with a valid image asset.',
     );
   }
+  if (appearance === 'depth' && !options.depthRange) {
+    throw new Error('Depth camera-move MP4 requires a fixed depthRange for the shot.');
+  }
 
   const requestedMode = options.mode ?? 'render';
   const resolutionPresetId = options.resolutionPreset ?? '1080p';
@@ -408,6 +426,8 @@ export async function renderShotCameraMoveMp4(
       animateObjects,
       sourceProject: project,
       peopleVariant: options.peopleVariant,
+      depthRange: options.depthRange,
+      depthInvert: options.depthInvert === true,
     });
   }
 
@@ -428,6 +448,8 @@ export async function renderShotCameraMoveMp4(
     animateObjects,
     sourceProject: project,
     peopleVariant: options.peopleVariant,
+    depthRange: options.depthRange,
+    depthInvert: options.depthInvert === true,
   });
 }
 
@@ -436,7 +458,7 @@ interface CameraMoveRenderContext {
   frameRate: number;
   width: number;
   height: number;
-  appearance: 'clay' | 'projected';
+  appearance: 'clay' | 'projected' | 'depth';
   durationSeconds: number;
   keyframes: ReturnType<typeof getSortedCameraKeyframes>;
   onProgress?: CameraMoveVideoOptions['onProgress'];
@@ -451,6 +473,8 @@ interface CameraMoveRenderContext {
   sourceProject?: LocationProject;
   /** Must reach each frame so clean-plate visibility cannot be overridden by a keyframe. */
   peopleVariant: PeopleRenderVariant | undefined;
+  depthRange?: { nearMeters: number; farMeters: number };
+  depthInvert?: boolean;
 }
 
 async function renderShotCameraMoveMp4Deterministic(
@@ -473,6 +497,8 @@ async function renderShotCameraMoveMp4Deterministic(
     animateObjects = false,
     sourceProject,
     peopleVariant,
+    depthRange,
+    depthInvert = false,
   } = ctx;
 
   if (!preset) {
@@ -496,6 +522,7 @@ async function renderShotCameraMoveMp4Deterministic(
   const renderer = createRenderer(width, height);
   let projectedResources: ProjectedSceneResources | undefined;
   let scene: THREE.Scene | undefined;
+  let depthResources: DepthPassResources | undefined;
 
   try {
     if (appearance === 'projected') {
@@ -509,6 +536,11 @@ async function renderShotCameraMoveMp4Deterministic(
       appearance: projectedResources ? 'projected' : 'clay',
       projected: projectedResources?.options,
     });
+    if (appearance === 'depth') {
+      scene.background = new THREE.Color(0x000000);
+      scene.fog = null;
+      depthResources = createDepthPassResources(width, height);
+    }
 
     const nearMeters = Math.max(
       ...keyframes.map((keyframe) =>
@@ -555,13 +587,24 @@ async function renderShotCameraMoveMp4Deterministic(
           width,
           height,
           clipping,
-          animateObjects
-            ? {
-              shot,
-              baseObjects: (sourceProject ?? project).scene.objects,
-              peopleVariant,
-            }
-            : undefined,
+          {
+            pass: appearance,
+            objectAnimation: animateObjects
+              ? {
+                shot,
+                baseObjects: (sourceProject ?? project).scene.objects,
+                peopleVariant,
+              }
+              : undefined,
+            depth: appearance === 'depth' && depthRange
+              ? {
+                nearMeters: depthRange.nearMeters,
+                farMeters: depthRange.farMeters,
+                invert: depthInvert,
+                resources: depthResources,
+              }
+              : undefined,
+          },
         );
       },
       onFrameEncoded: (completedFrames, frames) => {
@@ -609,6 +652,7 @@ async function renderShotCameraMoveMp4Deterministic(
     return result;
   } finally {
     if (scene) disposeScene(scene);
+    depthResources?.dispose();
     projectedResources?.dispose();
     disposeRenderer(renderer);
   }
@@ -637,6 +681,8 @@ async function renderShotCameraMoveMp4QuickPreview(
     animateObjects = false,
     sourceProject,
     peopleVariant,
+    depthRange,
+    depthInvert = false,
   } = ctx;
 
   if (!mimeType) {
@@ -652,6 +698,7 @@ async function renderShotCameraMoveMp4QuickPreview(
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   let projectedResources: ProjectedSceneResources | undefined;
+  let depthResources: DepthPassResources | undefined;
   if (appearance === 'projected') {
     projectedResources = await loadProjectedSceneResources(renderer, project, {
       occlusionFilterMode: occlusionFilter,
@@ -662,6 +709,11 @@ async function renderShotCameraMoveMp4QuickPreview(
     appearance: projectedResources ? 'projected' : 'clay',
     projected: projectedResources?.options,
   });
+  if (appearance === 'depth') {
+    scene.background = new THREE.Color(0x000000);
+    scene.fog = null;
+    depthResources = createDepthPassResources(width, height);
+  }
 
   const nearMeters = Math.max(
     ...keyframes.map((keyframe) =>
@@ -684,6 +736,7 @@ async function renderShotCameraMoveMp4QuickPreview(
   const captureStream = renderer.domElement.captureStream?.bind(renderer.domElement);
   if (!captureStream) {
     disposeScene(scene);
+    depthResources?.dispose();
     projectedResources?.dispose();
     disposeRenderer(renderer);
     throw new Error('Canvas video capture is not supported in this browser.');
@@ -756,13 +809,24 @@ async function renderShotCameraMoveMp4QuickPreview(
           width,
           height,
           clipping,
-          animateObjects
-            ? {
-              shot,
-              baseObjects: (sourceProject ?? project).scene.objects,
-              peopleVariant,
-            }
-            : undefined,
+          {
+            pass: appearance,
+            objectAnimation: animateObjects
+              ? {
+                shot,
+                baseObjects: (sourceProject ?? project).scene.objects,
+                peopleVariant,
+              }
+              : undefined,
+            depth: appearance === 'depth' && depthRange
+              ? {
+                nearMeters: depthRange.nearMeters,
+                farMeters: depthRange.farMeters,
+                invert: depthInvert,
+                resources: depthResources,
+              }
+              : undefined,
+          },
         );
         emitProgress(onProgress, {
           phase: 'rendering',
@@ -790,13 +854,24 @@ async function renderShotCameraMoveMp4QuickPreview(
         )));
       }, timeoutMs);
 
-      renderCameraMoveFrame(renderer, scene, camera, keyframes, 0, width, height, clipping);
+      renderCameraMoveFrame(renderer, scene, camera, keyframes, 0, width, height, clipping, {
+        pass: appearance,
+        depth: appearance === 'depth' && depthRange
+          ? {
+            nearMeters: depthRange.nearMeters,
+            farMeters: depthRange.farMeters,
+            invert: depthInvert,
+            resources: depthResources,
+          }
+          : undefined,
+      });
       recorder.start(250);
       animationFrame = requestAnimationFrame(renderFrame);
     });
   } finally {
     stream.getTracks().forEach((track) => track.stop());
     disposeScene(scene);
+    depthResources?.dispose();
     projectedResources?.dispose();
     disposeRenderer(renderer);
   }
@@ -837,12 +912,23 @@ export function renderCameraMoveFrame(
   width: number,
   height: number,
   clipping: { near: number; far: number },
-  objectAnimation?: {
-    shot: Pick<Shot, 'objectOverrides'>;
-    baseObjects: LocationProject['scene']['objects'];
-    peopleVariant: PeopleRenderVariant | undefined;
+  options?: {
+    pass?: SceneRenderPass;
+    objectAnimation?: {
+      shot: Pick<Shot, 'objectOverrides'>;
+      baseObjects: LocationProject['scene']['objects'];
+      peopleVariant: PeopleRenderVariant | undefined;
+    };
+    depth?: {
+      nearMeters: number;
+      farMeters: number;
+      invert: boolean;
+      resources?: DepthPassResources;
+    };
   },
 ) {
+  // Legacy callers passed objectAnimation as the 9th argument.
+  const normalized = normalizeCameraMoveFrameOptions(options);
   const cameraData = interpolateCameraKeyframes(keyframes, timeSeconds);
   // Always use the fixed move clipping range — never interpolated cameraData.near/far.
   applyFlyCameraToPerspectiveCamera(
@@ -854,21 +940,73 @@ export function renderCameraMoveFrame(
     clipping.far,
   );
 
-  if (objectAnimation) {
+  if (normalized.objectAnimation) {
     applyAnimatedObjectOverridesToScene(
       scene,
       interpolateObjectOverrides(
         keyframes,
         timeSeconds,
-        objectAnimation.shot.objectOverrides,
-        objectAnimation.baseObjects,
+        normalized.objectAnimation.shot.objectOverrides,
+        normalized.objectAnimation.baseObjects,
       ),
-      objectAnimation.baseObjects,
-      objectAnimation.peopleVariant,
+      normalized.objectAnimation.baseObjects,
+      normalized.objectAnimation.peopleVariant,
     );
   }
 
+  if (normalized.pass === 'depth' && normalized.depth) {
+    renderDepthGrayscale(
+      renderer,
+      scene,
+      camera,
+      {
+        nearMeters: normalized.depth.nearMeters,
+        farMeters: normalized.depth.farMeters,
+        invert: normalized.depth.invert,
+        cameraNear: clipping.near,
+        cameraFar: clipping.far,
+      },
+      normalized.depth.resources,
+    );
+    return;
+  }
+
   renderer.render(scene, camera);
+}
+
+function normalizeCameraMoveFrameOptions(
+  options: Parameters<typeof renderCameraMoveFrame>[8],
+): {
+  pass: SceneRenderPass;
+  objectAnimation?: {
+    shot: Pick<Shot, 'objectOverrides'>;
+    baseObjects: LocationProject['scene']['objects'];
+    peopleVariant: PeopleRenderVariant | undefined;
+  };
+  depth?: {
+    nearMeters: number;
+    farMeters: number;
+    invert: boolean;
+    resources?: DepthPassResources;
+  };
+} {
+  if (!options) return { pass: 'clay' };
+  // Detect legacy objectAnimation-shaped 9th argument.
+  if ('shot' in options && 'baseObjects' in options && !('pass' in options) && !('objectAnimation' in options)) {
+    return {
+      pass: 'clay',
+      objectAnimation: options as {
+        shot: Pick<Shot, 'objectOverrides'>;
+        baseObjects: LocationProject['scene']['objects'];
+        peopleVariant: PeopleRenderVariant | undefined;
+      },
+    };
+  }
+  return {
+    pass: options.pass ?? (options.depth ? 'depth' : 'clay'),
+    objectAnimation: options.objectAnimation,
+    depth: options.depth,
+  };
 }
 
 function applyAnimatedObjectOverridesToScene(

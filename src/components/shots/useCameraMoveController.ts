@@ -27,6 +27,7 @@ import {
 } from '../../engine/cameraKeyframes';
 import {
   getCameraMoveDownloadName,
+  getDepthCameraMoveDownloadName,
   getProjectedCameraMoveDownloadName,
 } from '../../engine/exportNaming';
 import { downloadBlob } from '../../engine/fileTransfers';
@@ -43,6 +44,11 @@ import {
   getCameraMoveExportCompletionMessage,
   runCameraMoveExportPasses,
 } from '../../engine/cameraMoveExportPasses';
+import {
+  resolveShotDepthRangeForExport,
+  resolveShotDepthSettings,
+  shouldExportCameraMoveDepth,
+} from '../../engine/depthRender';
 import { snapshotStageableObjectOverrides } from '../../engine/objectKeyframes';
 import {
   buildKeyframeThumbCacheFromKeyframes,
@@ -392,9 +398,18 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
       const renderShot = renderProject.shots.find((shot) => shot.id === shotId);
       if (!renderShot) throw new Error('The selected shot changed before MP4 rendering could begin.');
       const variants = getPeopleRenderVariants(renderShot.exportSettings.peopleExportMode);
+      const includeDepth = shouldExportCameraMoveDepth(
+        renderShot.exportSettings.depth,
+        hasRenderableCameraMove(renderShot.cameraKeyframes),
+      );
+      const depthSettings = resolveShotDepthSettings(renderShot);
+      const depthRange = includeDepth
+        ? await resolveShotDepthRangeForExport(renderProject, renderShot)
+        : undefined;
       const passes = createCameraMoveExportPasses(
         variants,
         canUseProjectedAppearance(renderProject),
+        includeDepth,
       );
       const totalPasses = passes.length;
       const results = await runCameraMoveExportPasses(
@@ -408,6 +423,8 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
             peopleVariant: pass.peopleVariant,
             occlusionFilter: pass.appearance === 'projected' && videoExportMode === 'render' ? 'fast' : undefined,
             includeDataUrl: pass.appearance === 'clay',
+            depthRange: pass.appearance === 'depth' ? depthRange : undefined,
+            depthInvert: pass.appearance === 'depth' ? depthSettings.invert === true : undefined,
             signal: abortController.signal,
             onProgress: (progress) => {
               const value = typeof progress === 'number' ? progress : progress.progress;
@@ -444,6 +461,15 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
               setCameraMovePreviewUrl(asset.uri);
             }
             downloadBlob(video.blob, clayName);
+          } else if (pass.appearance === 'depth') {
+            downloadBlob(
+              video.blob,
+              getPeopleVariantPath(
+                getDepthCameraMoveDownloadName(renderShot),
+                pass.peopleVariant,
+                renderShot.exportSettings.peopleExportMode,
+              ),
+            );
           } else {
             downloadBlob(
               video.blob,

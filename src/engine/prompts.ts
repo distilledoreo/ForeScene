@@ -63,6 +63,11 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
     shot.exportSettings.depth?.enabled
     && shot.exportSettings.depth.includeViewportStill !== false,
   );
+  const hasDepthReferenceFrames = Boolean(
+    shot.exportSettings.depth?.enabled
+    && shot.exportSettings.depth.includeReferenceFrames !== false
+    && shot.cameraKeyframes.length >= 2,
+  );
 
   const referenceInstructions = [
     'Use viewport_clay.png as the strict camera, composition, perspective, scale, and layout reference.',
@@ -73,6 +78,11 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
     );
     referenceInstructions.push(
       'Do not copy its grayscale appearance into the generated result.',
+    );
+  }
+  if (hasDepthReferenceFrames) {
+    referenceInstructions.push(
+      'Use inputs/camera_move/depth_*.png as depth composition checkpoints along the camera move.',
     );
   }
   if (hasGlobalReference) {
@@ -123,22 +133,37 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
 }
 
 export function generateVideoPrompt(shot: Shot): string {
-  const hasCameraMove = shot.cameraKeyframes.length >= 2 && shot.assets.cameraMoveVideoAssetId;
+  const hasCameraMove = shot.cameraKeyframes.length >= 2
+    && (
+      Boolean(shot.assets.cameraMoveVideoAssetId)
+      || shot.exportSettings.includeCameraMoveVideo
+    );
+  const hasDepthMove = Boolean(
+    shot.exportSettings.depth?.enabled
+    && shot.exportSettings.depth.includeCameraMoveVideo !== false
+    && shot.cameraKeyframes.length >= 2,
+  );
   const hasCubemap = shot.exportSettings.includeFullPano;
   return [
     'Animate from the provided base frame while preserving the same environment, camera direction, landmarks, materials, lighting, and layout.',
     hasCameraMove
       ? 'Use viewport_clay_motion.mp4 as the camera-motion, parallax, composition, and timing guide.'
       : 'If no camera-motion clip is provided, keep camera motion subtle and composition-safe.',
+    hasDepthMove
+      ? 'Use the depth video only for spatial depth, occlusion, camera movement and relative subject placement.'
+      : '',
+    hasDepthMove
+      ? 'Do not copy its grayscale appearance into the generated result.'
+      : '',
     hasCubemap
       ? 'Use inputs/cubemap/ as the full aligned environment / texture reference. The video is the camera-control reference; the cubemap is not the camera lens.'
       : '',
-    hasCubemap || hasCameraMove
+    hasCubemap || hasCameraMove || hasDepthMove
       ? 'Avoid equirectangular, panoramic, fisheye, 360, or wide-lens distortion. The output lens and perspective must follow the input video or base frame.'
       : '',
     'Keep the background architecture stable.',
     'Do not redesign the set, move landmarks, or introduce new major objects.',
     '',
     `Shot motion: ${shot.promptOverrides.videoPrompt || shot.description || 'Subtle camera-safe motion only.'}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

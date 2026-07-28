@@ -47,9 +47,11 @@ describe('animated clean-plate MP4 frames', () => {
         1080,
         { near: 0.1, far: 100 },
         {
-          shot,
-          baseObjects: project.scene.objects,
-          peopleVariant: 'clean_plate',
+          objectAnimation: {
+            shot,
+            baseObjects: project.scene.objects,
+            peopleVariant: 'clean_plate',
+          },
         },
       );
       expect(personNode.visible).toBe(false);
