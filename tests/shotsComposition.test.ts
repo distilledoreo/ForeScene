@@ -34,6 +34,10 @@ describe('Shots composition structure', () => {
     expect(shots).toMatch(/useCameraMoveController\(/);
     expect(shots).not.toMatch(/const appendSequentialCapture = useCallback/);
     expect(shots).not.toMatch(/const exportCameraMoveVideo = useCallback/);
+    // Camera-move preview + timeline orchestration lives in the dedicated controller.
+    expect(shots).toMatch(/useCameraMovePreviewController\(/);
+    expect(shots).not.toMatch(/const previewCameraMove = useCallback/);
+    expect(shots).not.toMatch(/const stopCameraMovePreview = useCallback/);
   });
 
   it('ShotsCaptureChrome ships data-shots-capture-chrome and data-shots-shutter', () => {
@@ -64,6 +68,7 @@ describe('Shots composition structure', () => {
       'src/hooks/useShotStagingController.ts',
       'src/components/shots/useStillCaptureController.ts',
       'src/components/shots/useCameraMoveController.ts',
+      'src/components/shots/useCameraMovePreviewController.ts',
       'src/components/shots/ShotsCaptureChrome.tsx',
       'src/components/shots/ShotsLibrary.tsx',
       'src/components/shots/ShotSettings.tsx',
