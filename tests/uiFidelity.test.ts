@@ -66,7 +66,9 @@ describe('ui revamp fidelity surfaces', () => {
     const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
     const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
-    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
+    const stillCapture = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    const cameraMove = readFileSync(new URL('../src/components/shots/useCameraMoveController.ts', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings + '\n' + stillCapture + '\n' + cameraMove;
     expect(shots).toContain('data-shots-camera-shell');
     expect(shots).toContain('data-shots-shutter');
     expect(shots).toContain('data-shots-mode-switcher');
@@ -91,12 +93,12 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain('AppearanceModeToggle');
     expect(shots).toContain('data-shots-dual-output-hint');
     expect(shots).toContain('useStillCaptureController');
-    const stillCapture = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    expect(shots).toContain('useCameraMoveController');
     expect(stillCapture).toContain('renderShotProjectedFrame');
     expect(stillCapture).toContain('runSettledSequentially');
-    expect(shots).not.toContain('data-shots-action-dock');
-    expect(shots).not.toContain('data-shots-land-fork');
-    expect(shots).not.toContain('ShotInfoCard');
+    expect(shotsWorkspace).not.toContain('data-shots-action-dock');
+    expect(shotsWorkspace).not.toContain('data-shots-land-fork');
+    expect(shotsWorkspace).not.toContain('ShotInfoCard');
   });
 
   it('exposes clay/projected appearance controls and double-tap W sprint', () => {
@@ -508,17 +510,21 @@ describe('ui revamp fidelity surfaces', () => {
     const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
     const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
-    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
+    const cameraMoveCtrl = readFileSync(new URL('../src/components/shots/useCameraMoveController.ts', import.meta.url), 'utf8');
+    const stillCaptureCtrl = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    // Concat workspace + chrome + settings + controllers for symbol checks; data-attrs stay on workspace JSX.
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings + '\n' + cameraMoveCtrl + '\n' + stillCaptureCtrl;
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     const strip = readFileSync(new URL('../src/components/workspaces/KeyframeStrip.tsx', import.meta.url), 'utf8');
     expect(shots).toContain("VideoCaptureState");
+    // data-attrs live on workspace/chrome JSX (not the camera-move controller).
     expect(shots).toContain('data-shots-video-capture-state');
     expect(shots).toContain('appendSequentialCapture');
     expect(shots).toContain('finishSequentialCapture');
     expect(shots).toContain('continueSequentialCapture');
     expect(shots).toContain('retakeVideoMove');
-    expect(shots).toContain('data-shots-video-retake');
-    expect(shots).toContain('data-shots-video-rec-badge');
+    expect(shotsWorkspace).toContain('data-shots-video-retake');
+    expect(shotsWorkspace).toContain('data-shots-video-rec-badge');
     expect(shots).toContain('KeyframeStrip');
     expect(strip).toContain('data-camera-keyframe-strip');
     expect(strip).toContain('data-camera-keyframe-node');
@@ -530,39 +536,42 @@ describe('ui revamp fidelity surfaces', () => {
     expect(strip).toContain('data-camera-keyframe-update-pose');
     expect(strip).toContain('data-camera-keyframe-stop-preview');
     expect(strip).toContain('Stop preview');
-    expect(shots).toContain('data-shots-video-refresh-thumbnail');
+    expect(shotsWorkspace).toContain('data-shots-video-refresh-thumbnail');
     expect(shots).toContain('interpolateObjectOverrides');
     expect(shots).toContain('viewportObjectOverrides');
     // Progressive disclosure (no Simple/Pro split): compact actions then optional timeline.
     expect(shots).not.toContain("type VideoAuthoringMode = 'simple' | 'pro'");
     expect(shots).not.toContain('data-shots-video-mode-simple');
-    expect(shots).toContain('data-shots-video-compact-actions');
-    expect(shots).toContain('data-shots-video-edit-timeline');
-    expect(shots).toContain('data-shots-video-finished');
-    expect(shots).toContain('data-shots-video-export');
-    expect(shots).toContain('data-shots-video-next-shot');
+    expect(shotsWorkspace).toContain('data-shots-video-compact-actions');
+    expect(shotsWorkspace).toContain('data-shots-video-edit-timeline');
+    expect(shotsWorkspace).toContain('data-shots-video-finished');
+    expect(shotsWorkspace).toContain('data-shots-video-export');
+    expect(shotsWorkspace).toContain('data-shots-video-next-shot');
     expect(shots).toContain('completeVideoAndNextShot');
     expect(shots).toContain('resumeVideoAfterNextShotRef');
     expect(shots).toContain('UNDO_RESTORED');
     expect(shots).toContain('videoAuthoring.dispatch');
     expect(shots).toContain('thumbnailFreshAfterFinishRef');
-    expect(shots).toMatch(/showTimeline = timelineOpen \|\| cameraMoveKeyframes\.length > 2/);
+    expect(shotsWorkspace).toMatch(/showTimeline = timelineOpen \|\| cameraMoveKeyframes\.length > 2/);
     // Intermediate sequential captures must not thrash snapshotPreview.
     expect(shots).toMatch(/if \(wasEmpty\) \{\s*snapshotPreview/);
     expect(shots).toMatch(/finishSequentialCapture[\s\S]*snapshotPreview/);
     // Next shot reuses finish thumbnail only after a successful primary still render.
     expect(shots).toMatch(/!thumbnailFreshAfterFinishRef\.current/);
     expect(shots).toContain('markThumbnailFreshOnSuccess');
-    const stillCaptureCtrl = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
     expect(stillCaptureCtrl).toMatch(/markThumbnailFreshOnSuccess[\s\S]*thumbnailFreshAfterFinishRef\.current = true/);
     // Captured moves show a keyframe filmstrip / path preview (not only Export).
     expect(shots).toContain('CameraMovePreviewStrip');
     expect(shots).toContain('captureKeyframeThumb');
     expect(shots).toContain('buildKeyframeThumbCacheFromKeyframes');
     expect(shots).toContain('shouldCommitKeyframeThumb');
-    // History restore must invalidate in-flight thumbs so late renders cannot overwrite undo.
+    // History restore: workspace effect calls controller; controller owns generation bump.
+    expect(shotsWorkspace).toContain('shotCameraHistoryRestoreGeneration');
+    expect(shotsWorkspace).toContain('handleHistoryRestore');
+    expect(cameraMoveCtrl).toMatch(/keyframeThumbGenerationRef\.current \+= 1/);
+    expect(cameraMoveCtrl).toMatch(/buildKeyframeThumbCacheFromKeyframes\(restoredKeyframes\)/);
+    // Cross-module: restore generation in workspace precedes thumb invalidation in controller.
     expect(shots).toMatch(/shotCameraHistoryRestoreGeneration[\s\S]*keyframeThumbGenerationRef\.current \+= 1/);
-    expect(shots).toMatch(/buildKeyframeThumbCacheFromKeyframes\(restoredKeyframes\)/);
     const previewStrip = readFileSync(new URL('../src/components/workspaces/CameraMovePreviewStrip.tsx', import.meta.url), 'utf8');
     expect(previewStrip).toContain('data-camera-move-preview-strip');
     expect(previewStrip).toContain('data-camera-move-preview-play');
@@ -603,8 +612,9 @@ describe('ui revamp fidelity surfaces', () => {
     const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
     const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
-    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
-    expect(shots).toContain('data-camera-keyframe-easing');
+    const cameraMoveCtrl = readFileSync(new URL('../src/components/shots/useCameraMoveController.ts', import.meta.url), 'utf8');
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings + '\n' + cameraMoveCtrl;
+    expect(shotsWorkspace).toContain('data-camera-keyframe-easing');
     expect(shots).toContain('updateIntermediateCameraKeyframeTime');
     expect(shots).toContain('removeIntermediateCameraKeyframe');
     // Old drawer intermediate list/add path must not remain the primary editor.
@@ -612,8 +622,8 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).not.toContain('data-camera-keyframe-add');
     expect(shots).not.toContain('data-camera-intermediate-keyframe');
     expect(shots).not.toContain('Add in-between keyframe');
-    expect(shots).toContain('Set Start');
-    expect(shots).toContain('Set End');
+    expect(shotsWorkspace).toContain('Set Start');
+    expect(shotsWorkspace).toContain('Set End');
   });
 
   it('keeps hidden staged objects recoverable from the staging list', () => {
