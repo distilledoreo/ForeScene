@@ -6,7 +6,7 @@ describe('startup loading boundaries', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
     const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
     const secondCapture = readFileSync(
       new URL('../src/engine/prepareSuggestedSecondCapture.ts', import.meta.url),
       'utf8',

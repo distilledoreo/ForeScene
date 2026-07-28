@@ -75,9 +75,10 @@ describe('Shots composition structure', () => {
       'src/state/slices/projectSlice.ts',
       'src/state/slices/selectionSlice.ts',
       'src/state/slices/historySlice.ts',
+      'src/state/slices/historyRuntime.ts',
       'src/state/slices/workflowSlice.ts',
       'src/state/slices/sessionSlice.ts',
-      'src/state/slices/continuityStoreImpl.ts',
+      'src/state/slices/touchProject.ts',
     ];
     for (const rel of paths) {
       const text = readFileSync(join(root, rel), 'utf8');

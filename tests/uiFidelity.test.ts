@@ -177,7 +177,8 @@ describe('ui revamp fidelity surfaces', () => {
     const guidance = readFileSync(new URL('../src/components/common/WorkflowGuidance.tsx', import.meta.url), 'utf8');
     const referenceGuide = readFileSync(new URL('../src/components/common/GrayboxReferenceGuide.tsx', import.meta.url), 'utf8');
     const defaults = readFileSync(new URL('../src/domain/defaults.ts', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
+    const session = readFileSync(new URL('../src/state/slices/sessionSlice.ts', import.meta.url), 'utf8');
     const renderers = readFileSync(new URL('../src/engine/renderers.ts', import.meta.url), 'utf8');
     expect(build).toContain('Download Graybox 360');
     expect(build).toContain('Download Projected 360');
@@ -207,7 +208,7 @@ describe('ui revamp fidelity surfaces', () => {
     expect(defaults).toContain('DEFAULT_GRAYBOX_PANO_WIDTH = 4096');
     expect(defaults).toContain('DEFAULT_GRAYBOX_PANO_HEIGHT = 2048');
     expect(store).toContain('isCaptureOriginNearPano(captureOrigin, existing)');
-    expect(store).toContain('isRenderingGraybox: false');
+    expect(session).toContain('isRenderingGraybox: false');
     expect(store).toContain('shotCameraFlying: false');
     expect(store).toMatch(/setProject:[\s\S]*isExportingPackage: false/);
     expect(renderers).toContain('disposeRenderer');
@@ -256,15 +257,16 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('exposes remove controls for pano references in reference settings', () => {
     const reference = readFileSync(new URL('../src/components/workspaces/ReferenceWorkspace.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const store = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
+    const session = readFileSync(new URL('../src/state/slices/sessionSlice.ts', import.meta.url), 'utf8');
     expect(reference).toContain('data-pano-reference-list');
     expect(reference).toContain('data-remove-pano');
     expect(reference).toContain('Remove Uploaded Pano');
     expect(reference).toContain('removePanoReference');
     expect(store).toContain('removePanoReference:');
     expect(store).toContain('importStyledPano:');
-    expect(store).toContain('pendingSecondCapturePlan');
-    expect(store).toContain('setPendingSecondCapturePlan');
+    expect(session).toContain('pendingSecondCapturePlan');
+    expect(session).toContain('setPendingSecondCapturePlan');
   });
 
   it('keeps second-capture seed download status truthful', () => {
@@ -449,7 +451,7 @@ describe('ui revamp fidelity surfaces', () => {
   it('exposes build undo/redo controls and history batching on the viewport', () => {
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const projectSlice = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
     const historySlice = readFileSync(new URL('../src/state/slices/historySlice.ts', import.meta.url), 'utf8');
     const historyRuntime = readFileSync(new URL('../src/state/slices/historyRuntime.ts', import.meta.url), 'utf8');
     expect(build).toContain('data-build-undo');
@@ -462,7 +464,7 @@ describe('ui revamp fidelity surfaces', () => {
     expect(viewport).toContain('startEditBatch');
     expect(historySlice).toContain('beginBuildHistoryBatch');
     expect(historySlice).toContain('undoBuild');
-    expect(store).toContain('options?.history');
+    expect(projectSlice).toContain('options?.history');
     expect(historyRuntime).toContain('history?: BuildHistoryMode');
   });
 
@@ -643,7 +645,8 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('keeps export multi-select reconciled and add-camera local to export', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
-    const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const projectSlice = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
+    const workflowSlice = readFileSync(new URL('../src/state/slices/workflowSlice.ts', import.meta.url), 'utf8');
     expect(exportWorkspace).toContain('reconcileExportSelectedShotIds');
     expect(exportWorkspace).toContain('navigateToShots: false');
     expect(exportWorkspace).toContain('WarningDetailsButton');
@@ -657,8 +660,8 @@ describe('ui revamp fidelity surfaces', () => {
     expect(exportWorkspace).toContain('shouldShowMissingLandmarkPromptNote');
     expect(exportWorkspace).toContain('data-export-prompt-landmark-note');
     expect(exportWorkspace).toContain('Handoff packages');
-    expect(store).toContain('An export is currently running. Cancel it and leave?');
-    expect(store).toContain('navigateToShots?: boolean');
+    expect(workflowSlice).toContain('An export is currently running. Cancel it and leave?');
+    expect(projectSlice).toContain('navigateToShots?: boolean');
   });
 
   it('keeps export shot rows and composed package summary with a docked CTA footer', () => {

@@ -16,7 +16,7 @@ import { getHistoryRuntime } from './historyRuntime';
 /**
  * History domain slice: build + shot-camera undo/redo, batching, coalescing.
  * Owns history stacks/actions and per-store runtime (coalesce timer, restore flags)
- * via getHistoryRuntime(set) — not module-global activeSet / shared timers.
+ * via getHistoryRuntime(set) — not module-global restore flags or shared timers.
  */
 export const createHistorySlice: StateCreator<
   ContinuityStoreSlices,
