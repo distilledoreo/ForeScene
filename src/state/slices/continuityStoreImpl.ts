@@ -15,7 +15,6 @@ import {
 } from '../../domain/types';
 import { shotStillViewAssetKey, type ShotStillViewSelection } from '../../domain/shotStillViews';
 import {
-  createDefaultProject,
   createLandmark,
   createOriginShot,
   createPanoAsset,
@@ -28,6 +27,7 @@ import {
   normalizeProjectSettings,
   normalizeProjectedStyleSettings,
 } from '../../domain/defaults';
+import { initialContinuityProject as initialProject } from './initialProject';
 import {
   isCaptureOriginNearPano,
   primaryStyledPano,
@@ -110,8 +110,6 @@ function clearBuildHistoryCoalesceTimer() {
   }
 }
 
-const initialProject = createDefaultProject();
-
 type ContinuityStore = ContinuityStoreSlices;
 
 type ContinuitySet = (
@@ -125,8 +123,8 @@ let activeGet: ContinuityGet | undefined;
 
 /**
  * Full store state factory (legacy composition target for unmigrated slices).
- * Session + workflow keys below are still present so pickSlice typing remains complete, but
- * `createSessionSlice` / `createWorkflowSlice` own the live state/actions (spread later in useContinuityStore).
+ * Session + workflow + selection keys below are still present so pickSlice typing remains complete, but
+ * genuine slices own the live state/actions (spread later in useContinuityStore).
  */
 export function createContinuityStoreState(
   set: ContinuitySet,
@@ -139,6 +137,7 @@ export function createContinuityStoreState(
   project: initialProject,
   // Workflow domain (owned by createWorkflowSlice — values here are factory placeholders).
   workspace: 'build',
+  // Selection domain (owned by createSelectionSlice — factory placeholders).
   selectedObjectIds: [],
   buildClipboard: undefined,
   buildClipboardPasteCount: 0,
