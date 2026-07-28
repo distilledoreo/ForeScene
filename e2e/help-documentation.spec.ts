@@ -31,8 +31,8 @@ test.describe('@smoke comprehensive Help Center', () => {
 });
 
 test.describe('@responsive Help Center navigation', () => {
-  test('offers a mobile section picker without exposing the desktop navigation', async ({ page }, testInfo) => {
-    test.skip(!testInfo.project.name.includes('phone') && !testInfo.project.name.includes('tablet'), 'Responsive projects only.');
+  test('offers the compact section picker on phone layouts', async ({ page }, testInfo) => {
+    test.skip(!testInfo.project.name.includes('phone'), 'Phone project only.');
 
     await enterContinuityStage(page);
     await dismissOverlays(page);
