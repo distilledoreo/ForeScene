@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import type { PeopleExportMode } from '../../domain/types';
 import { Archive, Check, Download, FileJson, FolderArchive, Settings, X } from 'lucide-react';
+import { defaultShotDepthSettings, normalizeShotDepthSettings } from '../../domain/defaults';
 import { getShotDisplayName, getShotPrimaryLabel } from '../../domain/shotIdentity';
 import { getShotExportProgressLabel } from '../../engine/exportNaming';
 import { createShotPackageManifest, selectExportPathPreview } from '../../engine/exportManifest';
@@ -16,6 +17,7 @@ import {
 import { getExportSelectionWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../../engine/warnings';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
+import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { Field, IconButton, Select, TextInput } from '../common/Field';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
@@ -543,6 +545,60 @@ export function ExportWorkspace() {
                 <option value="both">Both</option>
               </Select>
             </Field>
+            {(() => {
+              const depth = normalizeShotDepthSettings(
+                selectedShot.exportSettings.depth ?? defaultShotDepthSettings,
+              );
+              const patchDepth = (next: typeof depth) => updateShot(selectedShot.id, {
+                exportSettings: {
+                  ...selectedShot.exportSettings,
+                  depth: next,
+                },
+              });
+              return (
+                <div className="space-y-2 rounded-xl border border-subtle p-3" data-export-depth-settings>
+                  <label className="flex items-center gap-2 text-sm text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={depth.enabled}
+                      onChange={(event) => patchDepth({ ...depth, enabled: event.target.checked })}
+                      className="accent-[var(--accent)]"
+                      data-export-depth-enabled
+                    />
+                    Depth reference (linear camera depth)
+                  </label>
+                  {depth.enabled && (
+                    <>
+                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={depth.includeViewportStill}
+                          onChange={(event) => patchDepth({
+                            ...depth,
+                            includeViewportStill: event.target.checked,
+                          })}
+                          className="accent-[var(--accent)]"
+                          data-export-depth-viewport-still
+                        />
+                        Viewport depth still
+                      </label>
+                      <DepthSettingsPanel
+                        depth={depth}
+                        resolvedRange={{
+                          nearMeters: depth.nearMeters ?? 0.5,
+                          farMeters: depth.farMeters ?? 18.2,
+                        }}
+                        onChange={patchDepth}
+                        compact
+                      />
+                      <p className="text-[11px] leading-snug text-muted">
+                        Camera-move depth frames and video land in a follow-up. Still range is shared across the shot.
+                      </p>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             {([
               ['includeViewport', 'Viewport clay render'],
               ['includeProjectedViewport', 'Viewport projected render (with clay when available)'],

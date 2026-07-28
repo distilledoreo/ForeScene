@@ -4,6 +4,7 @@ import {
   DEFAULT_CAMERA_HEIGHT_METERS,
   normalizeProjectSettings,
   normalizeProjectWorkflow,
+  normalizeShotDepthSettings,
 } from '../domain/defaults';
 import JSZip from 'jszip';
 import { digestFromRecoveryResourceKey, sha256Digest, verifyBinaryDigest } from './binaryIntegrity';
@@ -277,6 +278,7 @@ function normalizeShot(shot: Shot): Shot {
         legacyExportSettings.includeProjectedCameraMoveReferenceFrames ?? true,
       includeProjectedCameraMoveVideo:
         legacyExportSettings.includeProjectedCameraMoveVideo ?? true,
+      depth: normalizeShotDepthSettings(legacyExportSettings.depth),
     },
     assets: {
       ...shot.assets,

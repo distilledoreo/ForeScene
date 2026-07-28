@@ -189,6 +189,21 @@ export interface PanoCropSettings {
 
 export type PeopleExportMode = 'with_people' | 'clean_plate' | 'both';
 
+/** Linear camera-space depth reference for stills, keyframes, and camera-move video. */
+export interface ShotDepthSettings {
+  enabled: boolean;
+  includeViewportStill: boolean;
+  includeReferenceFrames: boolean;
+  includeCameraMoveVideo: boolean;
+
+  rangeMode: 'auto' | 'manual';
+  nearMeters?: number;
+  farMeters?: number;
+
+  /** Default: nearest surfaces are white. */
+  invert?: boolean;
+}
+
 export interface ShotExportSettings {
   width: number;
   height: number;
@@ -209,6 +224,8 @@ export interface ShotExportSettings {
   includeCameraMoveReferenceFrames: boolean;
   includeMetadata: boolean;
   includePrompt: boolean;
+  /** Nested depth-reference export + preview settings. */
+  depth?: ShotDepthSettings;
 }
 
 /** Multi-origin selection after per-projector occlusion and quality scoring. */

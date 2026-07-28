@@ -83,6 +83,9 @@ import {
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
 import type { GizmoMode } from '../../engine/transformGizmo';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
+import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
+import { normalizeShotDepthSettings, defaultShotDepthSettings } from '../../domain/defaults';
+import { formatDepthRangeLegend } from '../../engine/depthRender';
 import { FullBleedLayout } from './WorkspaceShell';
 import {
   getShotPrimaryLabel,
@@ -260,7 +263,8 @@ export function ShotsWorkspace() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [shotPendingDelete, setShotPendingDelete] = useState<Shot | null>(null);
   const [mediaModalShotId, setMediaModalShotId] = useState<string | null>(null);
-  const [appearance, setAppearance] = useState<'clay' | 'projected'>('clay');
+  const [appearance, setAppearance] = useState<'clay' | 'projected' | 'depth'>('clay');
+  const [depthPreviewRange, setDepthPreviewRange] = useState({ nearMeters: 0.1, farMeters: 100 });
   /**
    * Sequential capture authoring — videoAuthoring machine is the sole source of truth.
    * UI reads mode/captureState/isPreviewing/timelineOpen from the controller only.
@@ -958,6 +962,10 @@ export function ShotsWorkspace() {
             selectedShotId={selectedShot?.id}
             shotFraming={shotFraming}
             appearance={appearance}
+            depthSettings={normalizeShotDepthSettings(
+              selectedShot?.exportSettings.depth ?? defaultShotDepthSettings,
+            )}
+            onDepthRangeChange={setDepthPreviewRange}
             objectEditingActive={stagingMode}
             showTransformGizmo={stagingMode && Boolean(stagedObjectId)}
             gizmoMode={stagingGizmoMode}
@@ -1019,10 +1027,33 @@ export function ShotsWorkspace() {
                 <Settings2 className="h-4 w-4" />
               </button>
             </div>
+            {appearance === 'depth' && selectedShot && (
+              <div
+                className="mt-1 w-72 rounded-2xl border border-white/15 bg-black/75 p-3 text-white shadow-soft backdrop-blur-md"
+                data-shots-depth-settings
+              >
+                <DepthSettingsPanel
+                  depth={normalizeShotDepthSettings(
+                    selectedShot.exportSettings.depth ?? defaultShotDepthSettings,
+                  )}
+                  resolvedRange={depthPreviewRange}
+                  onChange={(next) => updateShot(selectedShot.id, {
+                    exportSettings: {
+                      ...selectedShot.exportSettings,
+                      depth: next,
+                    },
+                  })}
+                  compact
+                  className="[&_label]:text-white/80 [&_.text-secondary]:text-white/55 [&_.text-primary]:text-white [&_input]:bg-white/10 [&_select]:bg-white/10"
+                />
+              </div>
+            )}
             <p className="max-w-[14rem] text-right text-[10px] font-medium text-white/55" data-shots-dual-output-hint>
-              {canUseProjectedAppearance(project)
-                ? 'View mode only · exports include clay + projected'
-                : 'View mode only · exports save clay frames'}
+              {appearance === 'depth'
+                ? formatDepthRangeLegend(depthPreviewRange)
+                : canUseProjectedAppearance(project)
+                  ? 'View mode only · exports include clay + projected'
+                  : 'View mode only · exports save clay frames'}
             </p>
           </div>
         </div>

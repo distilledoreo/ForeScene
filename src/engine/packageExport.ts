@@ -23,9 +23,16 @@ import {
   renderViewportClay,
   renderViewportProjected,
 } from './renderers';
+import {
+  buildDepthMetadata,
+  renderShotDepthFrame,
+  resolveShotDepthRangeForExport,
+  shouldExportViewportDepth,
+} from './depthRender';
 import { resolveProjectForShot } from './shotSceneState';
 import { interpolateObjectOverrides } from './objectKeyframes';
 import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
+import { normalizeShotDepthSettings } from '../domain/defaults';
 
 export { downloadBlob };
 
@@ -175,6 +182,7 @@ export function countShotPackageUnits(project: LocationProject, shot: Shot): num
 
   if (shot.exportSettings.includeViewport) units += peopleVariants.length;
   if (shot.exportSettings.includeProjectedViewport && canProject) units += peopleVariants.length;
+  if (shouldExportViewportDepth(shot.exportSettings.depth)) units += peopleVariants.length;
   if (shot.exportSettings.includeAiResultFrame && aiResultAssetId) units += 1;
   if (shot.exportSettings.includeCameraMoveVideo) {
     if (shot.assets.cameraMoveVideoAssetId || hasRenderableCameraMove(shot.cameraKeyframes)) {
@@ -462,6 +470,31 @@ async function appendShotPackageToZip(
         viewport.dataUrl,
       );
       finishUnit('rendering', `Clay viewport (${peopleVariantLabel(variant)}) ready`);
+    }
+  }
+
+  if (shouldExportViewportDepth(shot.exportSettings.depth)) {
+    const depthSettings = normalizeShotDepthSettings(shot.exportSettings.depth);
+    const sharedRange = await resolveShotDepthRangeForExport(project, shot);
+    for (const variant of peopleVariants) {
+      throwIfAborted(signal);
+      emit('rendering', `Rendering depth viewport (${peopleVariantLabel(variant)})…`, { indeterminate: true });
+      const depthFrame = await renderShotDepthFrame(project, shot, {
+        peopleVariant: variant,
+        depthRange: sharedRange,
+      });
+      addDataUrl(
+        zip,
+        getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_depth.png`, variant, peopleMode),
+        depthFrame.dataUrl,
+      );
+      finishUnit('rendering', `Depth viewport (${peopleVariantLabel(variant)}) ready`);
+    }
+    if (shot.exportSettings.includeMetadata) {
+      zip.file(
+        `${resolvedRootFolder}/metadata/depth.json`,
+        JSON.stringify(buildDepthMetadata(depthSettings, sharedRange), null, 2),
+      );
     }
   }
 

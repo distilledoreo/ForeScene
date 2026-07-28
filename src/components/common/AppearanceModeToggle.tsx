@@ -42,6 +42,12 @@ export function AppearanceModeToggle({
           if (projectedAvailable) onChange('projected');
         }}
       />
+      <ModeButton
+        label="Depth"
+        active={value === 'depth'}
+        title="Linear camera-space depth reference (white = near)"
+        onClick={() => onChange('depth')}
+      />
     </div>
   );
 }

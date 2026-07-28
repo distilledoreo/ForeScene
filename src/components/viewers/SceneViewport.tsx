@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { objectDisplayName } from '../../domain/defaults';
-import { CameraData, Euler, LocationProject, SceneObject, SceneObjectType, Vec3 } from '../../domain/types';
+import { CameraData, Euler, LocationProject, SceneObject, SceneObjectType, ShotDepthSettings, Vec3 } from '../../domain/types';
 import { isBuildFreeCameraKey } from '../../engine/buildShortcuts';
 import {
   createForwardSprintState,
@@ -48,6 +48,15 @@ import {
   disposeScene,
   sceneObjectUsesProceduralScale,
 } from '../../engine/sceneObjects';
+import {
+  renderDepthGrayscale,
+  type DepthRangeMeters,
+} from '../../engine/depthRender';
+import {
+  defaultShotDepthSettings,
+  normalizeShotDepthSettings,
+} from '../../domain/defaults';
+import { computeCameraMoveClippingRange } from '../../engine/exportClipping';
 import {
   angleInAxisPlane,
   applyAxisRotationDelta,
@@ -212,6 +221,8 @@ export function SceneViewport({
   freeCameraActive = false,
   renderDistance = DEFAULT_BUILD_RENDER_DISTANCE,
   appearance = 'clay',
+  depthSettings,
+  onDepthRangeChange,
   objectEditingActive = false,
   onFreeCameraActiveChange,
   shotFraming,
@@ -248,6 +259,10 @@ export function SceneViewport({
   renderDistance?: number;
   /** Clay keeps existing materials; Projected applies world-space equirect styling when available. */
   appearance?: ViewportAppearanceMode;
+  /** Depth visualization settings when appearance is `depth`. */
+  depthSettings?: ShotDepthSettings;
+  /** Reports the resolved auto/manual depth range for HUD legends. */
+  onDepthRangeChange?: (range: DepthRangeMeters) => void;
   /** Allow object picking/gizmos while a landed shot camera remains active. */
   objectEditingActive?: boolean;
   onFreeCameraActiveChange?: (active: boolean) => void;
@@ -355,6 +370,13 @@ export function SceneViewport({
   const finalizeShotFovWheelBatchRef = useRef<() => void>(() => {});
   const handledCameraReseedRef = useRef(shotFraming?.cameraReseedGeneration ?? 0);
   const altHeldRef = useRef(false);
+
+  const appearanceRef = useRef(appearance);
+  const depthSettingsRef = useRef(normalizeShotDepthSettings(depthSettings ?? defaultShotDepthSettings));
+  const onDepthRangeChangeRef = useRef(onDepthRangeChange);
+  appearanceRef.current = appearance;
+  depthSettingsRef.current = normalizeShotDepthSettings(depthSettings ?? defaultShotDepthSettings);
+  onDepthRangeChangeRef.current = onDepthRangeChange;
 
   const requestRender = useCallback(() => {
     if (frameRef.current) return;
@@ -702,14 +724,32 @@ export function SceneViewport({
         setRendererRect(activeRenderer, 'viewport', viewport);
         setRendererRect(activeRenderer, 'scissor', viewport);
         activeRenderer.setScissorTest(false);
-        activeRenderer.render(activeScene, activeCamera);
+        if (appearanceRef.current === 'depth') {
+          renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
+            depth: depthSettingsRef.current,
+            cameraNear: framing?.camera.near ?? DEFAULT_SHOT_NEAR_CLIP_METERS,
+            cameraFar: framing?.camera.far ?? renderDistanceRef.current,
+            onRange: onDepthRangeChangeRef.current,
+          });
+        } else {
+          activeRenderer.render(activeScene, activeCamera);
+        }
       } else {
         const viewport = computeFullCssRendererRect(cssWidth, cssHeight);
         setRendererRect(activeRenderer, 'viewport', viewport);
         setRendererRect(activeRenderer, 'scissor', viewport);
         activeRenderer.setScissorTest(false);
         updateCamera(activeCamera, orbitRef.current);
-        activeRenderer.render(activeScene, activeCamera);
+        if (appearanceRef.current === 'depth') {
+          renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
+            depth: depthSettingsRef.current,
+            cameraNear: DEFAULT_SHOT_NEAR_CLIP_METERS,
+            cameraFar: renderDistanceRef.current,
+            onRange: onDepthRangeChangeRef.current,
+          });
+        } else {
+          activeRenderer.render(activeScene, activeCamera);
+        }
       }
       if (shouldAnimateFly) requestRender();
     };
@@ -1944,8 +1984,8 @@ export function SceneViewport({
       showPanoOrigin: shotFraming ? false : (showSceneGuides || originPlacementActive),
       showHelpers: shotFraming ? false : showSceneGuides,
       theme,
-      fog: !shotFraming,
-      fogDistance: shotFraming ? undefined : renderDistance,
+      fog: !shotFraming && appearance !== 'depth',
+      fogDistance: shotFraming || appearance === 'depth' ? undefined : renderDistance,
       appearance: projectedActive ? 'projected' : 'clay',
       projected: projectedActive && projectedTexture && projectedPano
         ? {
@@ -1990,7 +2030,12 @@ export function SceneViewport({
     syncTransformGizmo,
     theme,
     updatePreviewMesh,
+    appearance,
   ]);
+
+  useEffect(() => {
+    requestRender();
+  }, [appearance, depthSettings, requestRender]);
 
   // Cameras, object transforms, landmarks, and the capture origin all change frequently
   // while editing. Keep the existing Three.js resources and update their poses in place;
@@ -2349,4 +2394,60 @@ function findPanoOrigin(object: THREE.Object3D): boolean {
     current = current.parent;
   }
   return false;
+}
+
+function renderViewportDepthPreview(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  options: {
+    depth: ShotDepthSettings;
+    cameraNear: number;
+    cameraFar: number;
+    onRange?: (range: DepthRangeMeters) => void;
+  },
+) {
+  const lookDir = new THREE.Vector3();
+  camera.getWorldDirection(lookDir);
+  const position: Vec3 = [camera.position.x, camera.position.y, camera.position.z];
+  const target: Vec3 = [
+    camera.position.x + lookDir.x,
+    camera.position.y + lookDir.y,
+    camera.position.z + lookDir.z,
+  ];
+  const cameraData: CameraData = {
+    position,
+    target,
+    fovDegrees: camera.fov,
+    aspectRatio: camera.aspect,
+    near: options.cameraNear,
+    far: options.cameraFar,
+  };
+
+  const clipping = computeCameraMoveClippingRange({
+    scene,
+    keyframeCameras: [cameraData],
+    nearMeters: options.cameraNear,
+  });
+
+  // Match clay clipping so silhouettes stay pixel-aligned with the RGB pass.
+  camera.near = clipping.near;
+  camera.far = clipping.far;
+  camera.updateProjectionMatrix();
+
+  const range = options.depth.rangeMode === 'manual'
+    ? {
+      nearMeters: options.depth.nearMeters ?? clipping.near,
+      farMeters: options.depth.farMeters ?? clipping.far,
+    }
+    : { nearMeters: clipping.near, farMeters: clipping.far };
+  options.onRange?.(range);
+
+  renderDepthGrayscale(renderer, scene, camera, {
+    nearMeters: range.nearMeters,
+    farMeters: range.farMeters,
+    invert: options.depth.invert === true,
+    cameraNear: clipping.near,
+    cameraFar: clipping.far,
+  });
 }

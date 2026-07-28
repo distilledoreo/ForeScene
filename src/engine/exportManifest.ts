@@ -2,6 +2,7 @@ import { LocationProject, PanoReference, Shot } from '../domain/types';
 import { getShotPackageBaseName } from './exportNaming';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES } from './cameraMoveCubemap';
+import { shouldExportViewportDepth } from './depthRender';
 import { canUseProjectedAppearance } from './projectedStyle';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
@@ -57,6 +58,15 @@ export function createShotPackageManifest(
     for (const variant of peopleVariants) {
       files.push({
         path: getPeopleVariantPath(`${rootFolder}/inputs/viewport_clay.png`, variant, peopleMode),
+        kind: 'image',
+        required: true,
+      });
+    }
+  }
+  if (shouldExportViewportDepth(shot.exportSettings.depth)) {
+    for (const variant of peopleVariants) {
+      files.push({
+        path: getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth.png`, variant, peopleMode),
         kind: 'image',
         required: true,
       });
@@ -149,6 +159,9 @@ export function createShotPackageManifest(
     }
     if (cameraMoveReferenceFrames.length > 0) {
       files.push({ path: `${rootFolder}/metadata/camera_move_reference_frames.json`, kind: 'json', required: false });
+    }
+    if (shouldExportViewportDepth(shot.exportSettings.depth)) {
+      files.push({ path: `${rootFolder}/metadata/depth.json`, kind: 'json', required: false });
     }
     files.push({ path: `${rootFolder}/metadata/landmarks.json`, kind: 'json', required: true });
     files.push({ path: `${rootFolder}/metadata/location.json`, kind: 'json', required: true });

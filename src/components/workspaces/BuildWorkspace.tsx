@@ -38,6 +38,9 @@ import {
 } from 'lucide-react';
 import { Euler, ObjectSurfaceStyle, SceneObject, SceneObjectType, StagingRole, Vec3 } from '../../domain/types';
 import type { GizmoMode } from '../../engine/transformGizmo';
+import { defaultShotDepthSettings } from '../../domain/defaults';
+import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
+import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { objectDisplayName } from '../../domain/defaults';
 import { getLatestGrayboxPano, getPanoAsset, listGrayboxPanos } from '../../domain/selectors';
 import {
@@ -78,7 +81,6 @@ import { resolveWorkspacePrimaryAction } from '../../engine/workflow';
 import { BuildMode, useContinuityStore } from '../../state/useContinuityStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useThemeStore } from '../../state/useThemeStore';
-import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { ContextualPanel } from '../common/ContextualPanel';
 import { Field, Select, TextInput } from '../common/Field';
 import { ModelImportDialog } from '../common/ModelImportDialog';
@@ -134,7 +136,12 @@ export function BuildWorkspace({
   const [frameRequest, setFrameRequest] = useState(0);
   const [frameObjectIds, setFrameObjectIds] = useState<string[]>([]);
   const [freeCameraActive, setFreeCameraActive] = useState(false);
-  const [appearance, setAppearance] = useState<'clay' | 'projected'>('clay');
+  const [appearance, setAppearance] = useState<'clay' | 'projected' | 'depth'>('clay');
+  const [depthSettings, setDepthSettings] = useState(() => ({ ...defaultShotDepthSettings }));
+  const [depthPreviewRange, setDepthPreviewRange] = useState<{ nearMeters: number; farMeters: number }>({
+    nearMeters: 0.1,
+    farMeters: 100,
+  });
   const [renderDistanceOpen, setRenderDistanceOpen] = useState(false);
   const [renderDistance, setRenderDistance] = useState(DEFAULT_BUILD_RENDER_DISTANCE);
   const {
@@ -586,6 +593,8 @@ useEffect(() => {
           originPlacementActive={buildMode === 'pano_origin'}
           freeCameraActive={freeCameraActive}
           appearance={appearance}
+          depthSettings={depthSettings}
+          onDepthRangeChange={setDepthPreviewRange}
           renderDistance={renderDistance}
           onFreeCameraActiveChange={setFreeCameraActive}
           showSceneGuides={showSceneGuides}
@@ -796,6 +805,19 @@ useEffect(() => {
             projectedAvailable={canUseProjectedAppearance(project)}
             onChange={setAppearance}
           />
+          {appearance === 'depth' && (
+            <div
+              className="mt-2 max-w-sm rounded-2xl border border-subtle bg-surface-overlay/95 p-3 shadow-soft backdrop-blur-sm"
+              data-build-depth-settings
+            >
+              <DepthSettingsPanel
+                depth={depthSettings}
+                resolvedRange={depthPreviewRange}
+                onChange={setDepthSettings}
+                compact
+              />
+            </div>
+          )}
         </div>
 
         {freeCameraActive && (
