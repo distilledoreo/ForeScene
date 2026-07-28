@@ -52,6 +52,7 @@ import { KeyframeStrip } from './KeyframeStrip';
 import {
   renderShotFrame,
 } from '../../engine/renderers';
+import { shouldStartAutomaticShotFrameRender } from '../../engine/shotFramePreview';
 import type { VideoResolutionPresetId } from '../../engine/videoPresets';
 import { VIDEO_RESOLUTION_PRESETS } from '../../engine/videoPresets';
 import { getCameraMoveReferenceFrames } from '../../engine/cameraKeyframes';
@@ -198,7 +199,16 @@ export function ShotsWorkspace() {
     setViewportObjectOverrides,
     clearViewportObjectInspection: clearStagingInspection,
   } = useShotStagingController();
-  const shotCamera = useShotCameraController();
+  const {
+    draftCameraRef,
+    framingCamera,
+    setFramingCamera,
+    cameraReseedGeneration,
+    bumpCameraReseed,
+    focalLengthHudPulse,
+    pulseFocalLengthHud,
+    getEffectiveCamera: resolveEffectiveCamera,
+  } = useShotCameraController();
   const shotRender = useShotRenderController();
   const videoAuthoring = useVideoAuthoringController();
   const selectedShot = project.shots.find((shot) => shot.id === selectedShotId) ?? project.shots[0];
@@ -233,11 +243,11 @@ export function ShotsWorkspace() {
   const stageableObjects = stagingObjectList.items;
   const linkedPano = selectedShot ? resolveShotLinkedPano(project, selectedShot) : undefined;
   const linkedAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
-  const draftCameraRef = shotCamera.draftCameraRef;
   const shotCameraFlyingRef = useRef(shotCameraFlying);
   shotCameraFlyingRef.current = shotCameraFlying;
   const handledRestoreGenerationRef = useRef(shotCameraHistoryRestoreGeneration);
   const finalizeShotFovWheelBatchRef = useRef<() => void>(() => {});
+  const activeFrameRenderKeyRef = useRef<string | undefined>(undefined);
   const {
     framePreviewByShotId,
     setShotFramePreview,
@@ -287,11 +297,6 @@ export function ShotsWorkspace() {
   const isPreviewingCameraMove = videoAuthoring.isPreviewing;
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
-  const framingCamera = shotCamera.framingCamera;
-  const setFramingCamera = shotCamera.setFramingCamera;
-  const focalLengthHudPulse = shotCamera.focalLengthHudPulse;
-  const cameraReseedGeneration = shotCamera.cameraReseedGeneration;
-  const bumpCameraReseed = shotCamera.bumpCameraReseed;
 
   const stillCapture = useStillCaptureController({
     selectedShot,
@@ -319,8 +324,8 @@ export function ShotsWorkspace() {
 
   const getEffectiveCamera = useCallback((): CameraData | undefined => {
     if (!selectedShot) return undefined;
-    return shotCamera.getEffectiveCamera(selectedShot.camera);
-  }, [selectedShot, shotCamera]);
+    return resolveEffectiveCamera(selectedShot.camera);
+  }, [resolveEffectiveCamera, selectedShot]);
 
   const getPreviewShot = useCallback(() => {
     if (!selectedShot) return undefined;
@@ -522,8 +527,6 @@ export function ShotsWorkspace() {
     shotCameraHistoryRestoreGeneration,
   ]);
 
-  const pulseFocalLengthHud = shotCamera.pulseFocalLengthHud;
-
   const undoShotCameraWithActiveBatchFinalize = useCallback(() => {
     finalizeShotFovWheelBatchRef.current();
     undoShotCamera();
@@ -589,11 +592,24 @@ export function ShotsWorkspace() {
   ]);
 
   useEffect(() => {
-    if (shotCameraFlying) return;
+    // Flying / Stage must not kick off automatic full-scene thumbnails.
+    // Clear the in-flight key so a later land or Done can refresh once.
+    if (shotCameraFlying || stagingMode) {
+      activeFrameRenderKeyRef.current = undefined;
+    }
+    if (!shouldStartAutomaticShotFrameRender({
+      shotCameraFlying,
+      stagingMode,
+      framePreviewKey,
+      activeFrameRenderKey: activeFrameRenderKeyRef.current,
+    })) {
+      return;
+    }
 
     const previewShot = getPreviewShot();
     if (!previewShot) return;
 
+    activeFrameRenderKeyRef.current = framePreviewKey;
     let cancelled = false;
     setIsRenderingFrame(true);
     // Transient preview only — do not write project assets here (would re-trigger this effect).
@@ -609,7 +625,15 @@ export function ShotsWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [framePreviewKey, getPreviewShot, project, setShotFramePreview, shotCameraFlying]);
+  }, [
+    framePreviewKey,
+    getPreviewShot,
+    project,
+    setIsRenderingFrame,
+    setShotFramePreview,
+    shotCameraFlying,
+    stagingMode,
+  ]);
 
   const handleFramingCameraChange = useCallback((camera: CameraData) => {
     if (!selectedShot) return;

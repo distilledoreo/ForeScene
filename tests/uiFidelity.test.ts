@@ -158,7 +158,7 @@ describe('ui revamp fidelity surfaces', () => {
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
     const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     expect(shots).not.toContain('flyCameraRevision');
-    expect(shots).toMatch(/useEffect\(\(\) => \{[\s\S]*if \(shotCameraFlying\) return;[\s\S]*renderShotFrame\(project, previewShot\)/);
+    expect(shots).toMatch(/useEffect\(\(\) => \{[\s\S]*if \(shotCameraFlying \|\| stagingMode\)[\s\S]*renderShotFrame\(project, previewShot\)/);
     expect(shots).toMatch(/handleFramingCameraChange[\s\S]*if \(shotCameraFlying\) return;/);
     expect(shots).not.toMatch(/handleFramingCameraChange[\s\S]*setFlyCameraRevision/);
     expect(shots).not.toMatch(/startFlyCamera[\s\S]*setFramePreviewUrl\(undefined\)/);
