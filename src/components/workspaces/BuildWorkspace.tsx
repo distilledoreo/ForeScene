@@ -1273,6 +1273,8 @@ useEffect(() => {
             open={autorigMarkerOpen}
             onClose={() => setAutorigMarkerOpen(false)}
             rig={rig}
+            sourceAssetId={rig.originalSourceAssetId ?? rig.sourceMeshAssetId}
+            assets={project.assets}
             onSave={(next) => {
               updatePoseableRigAsset(rigAsset.id, next);
               const sourceId = next.originalSourceAssetId ?? next.sourceMeshAssetId;

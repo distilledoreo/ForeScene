@@ -7,6 +7,7 @@ import type {
   PoseableRigAsset,
   ProjectAsset,
   SceneObject,
+  Vec3,
 } from '../domain/types';
 import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
 import { getModelAsset } from './modelAssetStore';
@@ -40,6 +41,7 @@ import {
   skinBufferCacheKey,
   skinnedPrototypeCacheKey,
 } from './autorigSkinnedMesh';
+import type { OrientedMeshBounds } from './autorigMarkerFrame';
 
 function axisToVector(axis: NonNullable<PoseableCharacterOrientation['frontAxis']>): THREE.Vector3 {
   switch (axis) {
@@ -579,4 +581,71 @@ export function resetAutoriggedCharacterTemplatesForTests(): void {
 /** @internal test helper — count of adapter registrations performed (not skips). */
 export function getRegisteredAutorigFragmentCountForTests(): number {
   return registeredInventoryFragments.size;
+}
+
+/** True when the GLTF source for this asset is already in the shared template cache. */
+export function isAutorigSourceTemplateReady(sourceAssetId: string): boolean {
+  return templates.has(sourceAssetId);
+}
+
+/**
+ * Ensure the source GLB is loaded into the shared template cache (no second independent parse
+ * path once warm). Safe to call from the marker wizard.
+ */
+export async function ensureAutorigSourceTemplate(
+  sourceAssetId: string,
+  assets?: AssetRegistry,
+): Promise<void> {
+  await ensureTemplateLoaded(sourceAssetId, assets ?? assetsContext);
+}
+
+/**
+ * Build an oriented/scaled/grounded preview instance for the marker wizard.
+ * Reuses the same template cache + orient/fit path as the character adapter.
+ * Returns undefined until the source template is loaded.
+ */
+export function createAutorigPreviewInstance(params: {
+  sourceAssetId: string;
+  assets?: AssetRegistry;
+  orientation?: PoseableCharacterOrientation;
+  approximateHeightMeters?: number;
+  /** Optional override; default is a light semi-transparent clay for marker readability. */
+  material?: THREE.Material;
+}): { root: THREE.Object3D; bounds: OrientedMeshBounds } | undefined {
+  const template = templates.get(params.sourceAssetId);
+  if (!template) return undefined;
+
+  const orientation = params.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 };
+  const height = params.approximateHeightMeters ?? 1.75;
+  const { oriented } = orientAndFitTemplate(template, orientation, height);
+
+  const previewMaterial = params.material ?? new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    metalness: 0.04,
+    roughness: 0.88,
+  });
+
+  oriented.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.material = previewMaterial;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+  });
+
+  oriented.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(oriented);
+  const min: Vec3 = [box.min.x, box.min.y, box.min.z];
+  const max: Vec3 = [box.max.x, box.max.y, box.max.z];
+  return { root: oriented, bounds: { min, max } };
+}
+
+/** Test helper: inject a prebuilt template without GLB parse. */
+export function setAutorigSourceTemplateForTests(sourceAssetId: string, root: THREE.Object3D): void {
+  templates.set(sourceAssetId, root);
+  notifyReady();
 }

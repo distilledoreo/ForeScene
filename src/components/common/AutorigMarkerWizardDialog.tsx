@@ -1,6 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, FlipHorizontal2, RotateCcw, Sparkles } from 'lucide-react';
-import type { AutorigMarker, HumanJointId, PoseableRigAsset, Vec3 } from '../../domain/types';
+import type {
+  AssetRegistry,
+  AutorigMarker,
+  HumanJointId,
+  PoseableRigAsset,
+  Vec3,
+} from '../../domain/types';
 import {
   AUTORIG_MARKER_MIRROR,
   applyFittedSkeletonToRig,
@@ -14,6 +20,27 @@ import {
   validateAutorigMarkers,
   type AutorigMarkerMode,
 } from '../../engine/autorigMarkers';
+import {
+  canvasToWorld,
+  computeAutorigOrthoFrame,
+  drawAutorigMarkerMagnifier,
+  worldToCanvas,
+  type AutorigOrthoFrame,
+  type OrientedMeshBounds,
+} from '../../engine/autorigMarkerFrame';
+import {
+  createAutorigMarkerPreviewGl,
+  disposeAutorigMarkerPreviewGl,
+  renderAutorigMarkerPreview,
+  setAutorigMarkerPreviewRoot,
+  type AutorigMarkerPreviewGl,
+} from '../../engine/autorigMarkerPreviewRenderer';
+import {
+  createAutorigPreviewInstance,
+  ensureAutorigSourceTemplate,
+  isAutorigSourceTemplateReady,
+  subscribeAutoriggedCharacterReady,
+} from '../../engine/autoriggedPoseableCharacter';
 import { HUMAN_JOINT_LABELS } from '../../engine/humanPose';
 import { Modal } from './Modal';
 
@@ -21,18 +48,29 @@ interface HistoryEntry {
   markers: AutorigMarker[];
 }
 
+const CANVAS_W = 640;
+const CANVAS_H = 480;
+
 export function AutorigMarkerWizardDialog({
   open,
   onClose,
   rig,
   onSave,
+  sourceAssetId: sourceAssetIdProp,
+  assets,
 }: {
   open: boolean;
   onClose: () => void;
   rig: PoseableRigAsset;
   onSave: (next: PoseableRigAsset) => void;
+  /** Source mesh asset for preview (original import). Falls back to rig fields. */
+  sourceAssetId?: string;
+  assets?: AssetRegistry;
 }) {
   const height = rig.generationSettings?.approximateHeightMeters ?? 1.75;
+  const sourceAssetId = sourceAssetIdProp
+    ?? rig.originalSourceAssetId
+    ?? rig.sourceMeshAssetId;
   const suggested = useMemo(
     () => suggestAutorigMarkers({
       size: [height * 0.45, height, height * 0.25],
@@ -48,9 +86,29 @@ export function AutorigMarkerWizardDialog({
   const [past, setPast] = useState<HistoryEntry[]>([]);
   const [future, setFuture] = useState<HistoryEntry[]>([]);
   const [showSide, setShowSide] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [meshReady, setMeshReady] = useState(false);
+  const [meshBounds, setMeshBounds] = useState<OrientedMeshBounds | null>(null);
+
+  const markerCanvasRef = useRef<HTMLCanvasElement>(null);
+  const meshCanvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<AutorigMarkerPreviewGl | null>(null);
+  const frameRef = useRef<AutorigOrthoFrame | null>(null);
   const dragRef = useRef<{ jointId: HumanJointId; pointerId: number } | undefined>(undefined);
   const preDragMarkersRef = useRef<AutorigMarker[] | undefined>(undefined);
+
+  const view = showSide ? 'side' as const : 'front' as const;
+
+  const frame = useMemo(
+    () => computeAutorigOrthoFrame({
+      bounds: meshBounds,
+      view,
+      canvasWidth: CANVAS_W,
+      canvasHeight: CANVAS_H,
+      fallbackHeightMeters: height,
+    }),
+    [meshBounds, view, height],
+  );
+  frameRef.current = frame;
 
   useEffect(() => {
     if (!open) return;
@@ -89,69 +147,119 @@ export function AutorigMarkerWizardDialog({
     });
   };
 
-  const worldToCanvas = (
-    position: Vec3,
-    width: number,
-    heightPx: number,
-    view: 'front' | 'side',
-  ): { x: number; y: number } => {
-    const margin = 24;
-    const usableW = width - margin * 2;
-    const usableH = heightPx - margin * 2;
-    const span = Math.max(height * 1.15, 1);
-    const xWorld = view === 'front' ? position[0] : position[2];
-    const yWorld = position[1];
-    return {
-      x: margin + usableW * 0.5 + (xWorld / span) * usableW,
-      y: margin + usableH * (1 - yWorld / span),
-    };
-  };
+  const attachPreviewMesh = useCallback(() => {
+    if (!sourceAssetId || !isAutorigSourceTemplateReady(sourceAssetId)) {
+      setMeshReady(false);
+      setMeshBounds(null);
+      if (glRef.current) setAutorigMarkerPreviewRoot(glRef.current, null);
+      return;
+    }
+    const preview = createAutorigPreviewInstance({
+      sourceAssetId,
+      assets,
+      orientation: rig.orientation,
+      approximateHeightMeters: height,
+    });
+    if (!preview || !glRef.current) {
+      setMeshReady(false);
+      setMeshBounds(null);
+      return;
+    }
+    setAutorigMarkerPreviewRoot(glRef.current, preview.root);
+    setMeshBounds(preview.bounds);
+    setMeshReady(true);
+  }, [assets, height, rig.orientation, sourceAssetId]);
 
-  const canvasToWorld = (
-    x: number,
-    y: number,
-    width: number,
-    heightPx: number,
-    view: 'front' | 'side',
-    current: Vec3,
-  ): Vec3 => {
-    const margin = 24;
-    const usableW = width - margin * 2;
-    const usableH = heightPx - margin * 2;
-    const span = Math.max(height * 1.15, 1);
-    const xWorld = ((x - margin) / usableW - 0.5) * span;
-    const yWorld = (1 - (y - margin) / usableH) * span;
-    if (view === 'front') return [xWorld, yWorld, current[2]];
-    return [current[0], yWorld, xWorld];
-  };
-
+  // WebGL lifecycle: create on open, dispose on close. No continuous rAF.
   useEffect(() => {
-    const canvas = canvasRef.current;
+    if (!open) return;
+    const meshCanvas = meshCanvasRef.current;
+    if (!meshCanvas) return;
+
+    const gl = createAutorigMarkerPreviewGl({
+      width: CANVAS_W,
+      height: CANVAS_H,
+      canvas: meshCanvas,
+    });
+    glRef.current = gl;
+
+    let cancelled = false;
+    const load = async () => {
+      if (!sourceAssetId) return;
+      try {
+        await ensureAutorigSourceTemplate(sourceAssetId, assets);
+        if (cancelled) return;
+        attachPreviewMesh();
+      } catch {
+        if (!cancelled) {
+          setMeshReady(false);
+          setMeshBounds(null);
+        }
+      }
+    };
+    void load();
+
+    const unsub = subscribeAutoriggedCharacterReady(() => {
+      if (!cancelled) attachPreviewMesh();
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+      disposeAutorigMarkerPreviewGl(glRef.current);
+      glRef.current = null;
+      setMeshReady(false);
+      setMeshBounds(null);
+    };
+  }, [open, sourceAssetId, assets, attachPreviewMesh]);
+
+  // Rebuild preview when orientation/height change while open.
+  useEffect(() => {
+    if (!open || !sourceAssetId) return;
+    if (!isAutorigSourceTemplateReady(sourceAssetId)) return;
+    attachPreviewMesh();
+  }, [open, sourceAssetId, rig.orientation, height, attachPreviewMesh]);
+
+  const renderMeshLayer = useCallback(() => {
+    const gl = glRef.current;
+    const activeFrame = frameRef.current;
+    if (!gl || !activeFrame) return;
+    renderAutorigMarkerPreview(gl, activeFrame);
+  }, []);
+
+  // On-demand mesh render: frame / bounds / view / open only — never idle rAF.
+  useEffect(() => {
+    if (!open) return;
+    renderMeshLayer();
+  }, [open, frame, meshReady, renderMeshLayer]);
+
+  // 2D marker overlay (transparent over mesh; keeps pointer interaction).
+  useEffect(() => {
+    const canvas = markerCanvasRef.current;
     if (!canvas || !open) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const width = canvas.width;
     const heightPx = canvas.height;
     ctx.clearRect(0, 0, width, heightPx);
-    ctx.fillStyle = '#0b1220';
-    ctx.fillRect(0, 0, width, heightPx);
 
     // Ground line
-    const ground = worldToCanvas([0, rig.orientation?.groundLevelMeters ?? 0, 0], width, heightPx, showSide ? 'side' : 'front');
-    ctx.strokeStyle = '#334155';
+    const groundY = rig.orientation?.groundLevelMeters ?? 0;
+    const ground = worldToCanvas([0, groundY, 0], frame);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
     ctx.beginPath();
     ctx.moveTo(16, ground.y);
     ctx.lineTo(width - 16, ground.y);
     ctx.stroke();
 
     // Skeleton preview lines from fitted joints
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.85)';
     ctx.lineWidth = 2;
     const positions = fitted.jointPositions;
     const drawBone = (a?: Vec3, b?: Vec3) => {
       if (!a || !b) return;
-      const pa = worldToCanvas(a, width, heightPx, showSide ? 'side' : 'front');
-      const pb = worldToCanvas(b, width, heightPx, showSide ? 'side' : 'front');
+      const pa = worldToCanvas(a, frame);
+      const pb = worldToCanvas(b, frame);
       ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
@@ -177,7 +285,7 @@ export function AutorigMarkerWizardDialog({
     for (const jointId of required) {
       const marker = markers.find((item) => item.jointId === jointId);
       if (!marker) continue;
-      const point = worldToCanvas(marker.position, width, heightPx, showSide ? 'side' : 'front');
+      const point = worldToCanvas(marker.position, frame);
       const selected = selectedJointId === jointId;
       ctx.beginPath();
       ctx.fillStyle = markerColor(jointId);
@@ -190,38 +298,40 @@ export function AutorigMarkerWizardDialog({
       }
     }
 
-    // Magnifier while dragging
+    // Magnifier while dragging — zooms mesh under the marker via shared frame coords.
     if (dragRef.current) {
       const marker = markers.find((item) => item.jointId === dragRef.current?.jointId);
       if (marker) {
-        const point = worldToCanvas(marker.position, width, heightPx, showSide ? 'side' : 'front');
-        const radius = 48;
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(point.x + 56, point.y - 56, radius, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.fillStyle = '#111827';
-        ctx.fillRect(point.x + 56 - radius, point.y - 56 - radius, radius * 2, radius * 2);
-        ctx.beginPath();
-        ctx.fillStyle = markerColor(marker.jointId);
-        ctx.arc(point.x + 56, point.y - 56, 10, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-        ctx.strokeStyle = '#94a3b8';
-        ctx.beginPath();
-        ctx.arc(point.x + 56, point.y - 56, radius, 0, Math.PI * 2);
-        ctx.stroke();
+        const point = worldToCanvas(marker.position, frame);
+        // Ensure mesh layer is current before sampling.
+        renderMeshLayer();
+        drawAutorigMarkerMagnifier({
+          ctx,
+          meshCanvas: meshCanvasRef.current,
+          markerCanvasX: point.x,
+          markerCanvasY: point.y,
+          magnifierCenterX: point.x + 56,
+          magnifierCenterY: point.y - 56,
+          markerFill: markerColor(marker.jointId),
+        });
       }
     }
-  }, [fitted, markers, open, required, selectedJointId, showSide, height, rig.orientation?.groundLevelMeters]);
+  }, [
+    fitted,
+    markers,
+    open,
+    required,
+    selectedJointId,
+    frame,
+    rig.orientation?.groundLevelMeters,
+    renderMeshLayer,
+  ]);
 
   const hitTest = (x: number, y: number): HumanJointId | undefined => {
-    const canvas = canvasRef.current;
-    if (!canvas) return undefined;
     for (const jointId of required) {
       const marker = markers.find((item) => item.jointId === jointId);
       if (!marker) continue;
-      const point = worldToCanvas(marker.position, canvas.width, canvas.height, showSide ? 'side' : 'front');
+      const point = worldToCanvas(marker.position, frame);
       if (Math.hypot(point.x - x, point.y - y) <= 12) return jointId;
     }
     return undefined;
@@ -231,8 +341,8 @@ export function AutorigMarkerWizardDialog({
     <Modal open={open} onClose={onClose} title="Place autorig markers" size="xl">
       <div className="space-y-3" data-autorig-marker-wizard>
         <p className="text-sm text-secondary">
-          Drag markers in the orthographic view. Blue = left, amber = right, green = midline.
-          The fitted skeleton is shown as lines; the mesh is not deformed yet.
+          Drag markers on the orthographic view over the imported mesh. Blue = left, amber = right, green = midline.
+          Skeleton lines are fitted from markers; the mesh is not deformed yet.
         </p>
 
         <div className="flex flex-wrap gap-2">
@@ -256,6 +366,7 @@ export function AutorigMarkerWizardDialog({
             type="button"
             className={`rounded-full px-3 py-1 text-xs font-semibold ${!showSide ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
             onClick={() => setShowSide(false)}
+            data-autorig-view-front
           >
             Front view
           </button>
@@ -263,47 +374,68 @@ export function AutorigMarkerWizardDialog({
             type="button"
             className={`rounded-full px-3 py-1 text-xs font-semibold ${showSide ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
             onClick={() => setShowSide(true)}
+            data-autorig-view-side
           >
             Side view
           </button>
+          {sourceAssetId && (
+            <span className="self-center text-[10px] text-muted" data-autorig-mesh-status>
+              {meshReady ? 'Mesh preview ready' : 'Loading mesh preview…'}
+            </span>
+          )}
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[1fr_14rem]">
-          <canvas
-            ref={canvasRef}
-            width={640}
-            height={480}
-            className="w-full rounded-xl border border-subtle bg-black touch-none"
-            data-autorig-marker-canvas
-            onPointerDown={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
-              const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-              const hit = hitTest(x, y) ?? selectedJointId;
-              setSelectedJointId(hit);
-              preDragMarkersRef.current = markers;
-              dragRef.current = { jointId: hit, pointerId: event.pointerId };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
-              const rect = event.currentTarget.getBoundingClientRect();
-              const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
-              const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-              const current = markers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
-              const nextPos = canvasToWorld(x, y, event.currentTarget.width, event.currentTarget.height, showSide ? 'side' : 'front', current);
-              setMarkers((currentMarkers) => upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos));
-            }}
-            onPointerUp={(event) => {
-              if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
-              if (preDragMarkersRef.current) {
-                setPast((stack) => [...stack, { markers: preDragMarkersRef.current! }]);
-                setFuture([]);
-              }
-              preDragMarkersRef.current = undefined;
-              dragRef.current = undefined;
-            }}
-          />
+          <div
+            className="relative w-full overflow-hidden rounded-xl border border-subtle bg-[#0b1220]"
+            data-autorig-marker-stage
+          >
+            {/* Bottom: on-demand WebGL mesh (non-interactive). */}
+            <canvas
+              ref={meshCanvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              data-autorig-mesh-canvas
+              aria-hidden
+            />
+            {/* Top: 2D markers + skeleton; owns pointer interaction. */}
+            <canvas
+              ref={markerCanvasRef}
+              width={CANVAS_W}
+              height={CANVAS_H}
+              className="relative z-10 w-full touch-none bg-transparent"
+              data-autorig-marker-canvas
+              onPointerDown={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
+                const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
+                const hit = hitTest(x, y) ?? selectedJointId;
+                setSelectedJointId(hit);
+                preDragMarkersRef.current = markers;
+                dragRef.current = { jointId: hit, pointerId: event.pointerId };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+                const rect = event.currentTarget.getBoundingClientRect();
+                const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
+                const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
+                const current = markers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
+                const nextPos = canvasToWorld(x, y, frame, current);
+                setMarkers((currentMarkers) => upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos));
+              }}
+              onPointerUp={(event) => {
+                if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+                if (preDragMarkersRef.current) {
+                  setPast((stack) => [...stack, { markers: preDragMarkersRef.current! }]);
+                  setFuture([]);
+                }
+                preDragMarkersRef.current = undefined;
+                dragRef.current = undefined;
+              }}
+            />
+          </div>
 
           <div className="space-y-2">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Markers</div>
