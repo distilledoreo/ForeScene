@@ -36,6 +36,26 @@ describe('workflow guidance UI', () => {
     expect(app).toMatch(/label="Export Project Backup"[\s\S]*saveProject\(\)/);
   });
 
+  it('surfaces local save status including failed writes for F5 storage failure UX', () => {
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
+    const controller = readFileSync(new URL('../src/engine/projectPersistenceController.ts', import.meta.url), 'utf8');
+    const safety = readFileSync(new URL('../src/engine/projectSafety.ts', import.meta.url), 'utf8');
+
+    // Header chrome exposes the live controller status (including 'failed').
+    expect(app).toContain('data-project-save-status={projectSaveStatus}');
+    expect(app).toContain('ProjectSaveStatusIndicator');
+    expect(app).toContain("role={status === 'failed' ? 'alert' : 'status'}");
+    expect(app).toContain("status === 'failed'");
+    expect(safety).toContain("'failed'");
+    expect(safety).toContain('export type ProjectSaveStatus');
+
+    // Asset-cache and flush failures both route to failed status without inventing UI.
+    expect(controller).toContain('reportAssetPersistenceFailure');
+    expect(controller).toContain("status: 'failed'");
+    expect(lifecycle).toContain('reportAssetPersistenceFailure');
+  });
+
   it('exposes New Project with confirmation and recovery snapshot', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
