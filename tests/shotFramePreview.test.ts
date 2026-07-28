@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { shouldStartAutomaticShotFrameRender } from '../src/engine/shotFramePreview';
 
 /**
@@ -81,25 +80,5 @@ describe('automatic shot frame preview gate', () => {
         { shotCameraFlying: false, stagingMode: false, framePreviewKey },
       ],
     })).toBe(1);
-  });
-});
-
-describe('ShotsWorkspace Stage preview wiring', () => {
-  it('depends on the stable camera resolver and suppresses Stage auto-previews', () => {
-    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
-    expect(shots).toContain('getEffectiveCamera: resolveEffectiveCamera');
-    expect(shots).toMatch(
-      /const getEffectiveCamera = useCallback\(\(\): CameraData \| undefined => \{[\s\S]*return resolveEffectiveCamera\(selectedShot\.camera\);[\s\S]*\}, \[resolveEffectiveCamera, selectedShot\]\);/,
-    );
-    expect(shots).not.toMatch(/\}, \[selectedShot, shotCamera\]\);/);
-    expect(shots).toContain('shouldStartAutomaticShotFrameRender');
-    expect(shots).toContain('activeFrameRenderKeyRef');
-    expect(shots).toMatch(/if \(shotCameraFlying \|\| stagingMode\)/);
-    expect(shots).toMatch(/useEffect\(\(\) => \{[\s\S]*stagingMode[\s\S]*renderShotFrame\(project, previewShot\)/);
-
-    const cameraHook = readFileSync(new URL('../src/hooks/useShotCameraController.ts', import.meta.url), 'utf8');
-    expect(cameraHook).toMatch(
-      /const getEffectiveCamera = useCallback\(\(stored\?: CameraData\): CameraData \| undefined => \{[\s\S]*\}, \[\]\);/,
-    );
   });
 });

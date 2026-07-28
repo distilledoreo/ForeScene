@@ -6,6 +6,7 @@ artifacts/
 *.err.log
 .env
 .env.local
+.tsbuildinfo
 
 test-results/
 playwright-report/

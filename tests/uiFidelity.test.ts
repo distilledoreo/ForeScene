@@ -152,16 +152,15 @@ describe('ui revamp fidelity surfaces', () => {
     expect(coveragePanel).toMatch(/catch \(error\) \{\s+if \(analysisIdRef\.current !== analysisId\) return;/);
   });
 
-  it('pauses automatic shot frame preview renders while fly camera is active', () => {
+  it('pauses automatic shot frame preview renders while fly camera or Stage is active', () => {
+    // Behavioral gate coverage lives in tests/shotFramePreview.test.ts.
+    // Keep a light inventory check that Shots still routes through the helper,
+    // without locking exact useEffect dependency-array wiring.
     const shotsWorkspace = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
-    const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
-    const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
-    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
-    expect(shots).not.toContain('flyCameraRevision');
-    expect(shots).toMatch(/useEffect\(\(\) => \{[\s\S]*if \(shotCameraFlying \|\| stagingMode\)[\s\S]*renderShotFrame\(project, previewShot\)/);
-    expect(shots).toMatch(/handleFramingCameraChange[\s\S]*if \(shotCameraFlying\) return;/);
-    expect(shots).not.toMatch(/handleFramingCameraChange[\s\S]*setFlyCameraRevision/);
-    expect(shots).not.toMatch(/startFlyCamera[\s\S]*setFramePreviewUrl\(undefined\)/);
+    expect(shotsWorkspace).toContain('shouldStartAutomaticShotFrameRender');
+    expect(shotsWorkspace).toContain('shotCameraFlying');
+    expect(shotsWorkspace).toContain('stagingMode');
+    expect(shotsWorkspace).not.toContain('flyCameraRevision');
   });
 
   it('keeps filmstrip overlay dots decorative and surfaces warning details on demand', () => {

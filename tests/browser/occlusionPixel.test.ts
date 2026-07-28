@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import * as esbuild from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.resolve(here, 'fixtures/occlusion-pixel-entry.ts');
-const EVIDENCE_DIR = path.resolve(here, '../test-results/occlusion-pixel');
+const entry = path.resolve(here, '../fixtures/occlusion-pixel-entry.ts');
+const EVIDENCE_DIR = path.resolve(here, '../../test-results/occlusion-pixel');
 
 describe('radial-depth occlusion cubemap (real WebGL pixel readback)', () => {
   it('generates a valid depth cubemap: front hit, opposite no-hit clear, depth packed', async () => {
@@ -42,7 +42,7 @@ describe('radial-depth occlusion cubemap (real WebGL pixel readback)', () => {
       });
       await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
       const result = await page.evaluate(() => (window as unknown as {
-        __OCCLUSION_PIXEL__?: import('./fixtures/occlusion-pixel-entry').OcclusionPixelResult;
+        __OCCLUSION_PIXEL__?: import('../fixtures/occlusion-pixel-entry').OcclusionPixelResult;
       }).__OCCLUSION_PIXEL__);
       writeFileSync(path.join(EVIDENCE_DIR, 'occlusion-pixel.json'), JSON.stringify({ result, pageErrors }, null, 2));
 
