@@ -55,6 +55,69 @@ export function getStageableObjectsForShot<T extends Pick<SceneObject, 'type' | 
   return objects.filter((object) => canStageObjectPerShot(object));
 }
 
+/** Default Stage panel scope: people/props only (set/architecture on request). */
+export type StagingObjectListScope = 'people_props' | 'all';
+
+/** Cap eager DOM rows in the Stage panel; viewport click still selects anything. */
+export const STAGING_OBJECT_LIST_LIMIT = 50;
+
+export function isPrimaryStagingListObject(
+  object: Pick<SceneObject, 'type' | 'stagingRole'>,
+): boolean {
+  return getSceneObjectStagingRole(object) !== 'set';
+}
+
+/**
+ * Filter + cap the Stage panel inventory so large imports cannot mount
+ * thousands of buttons synchronously when Stage is opened.
+ */
+export function filterStagingObjectList<T extends Pick<SceneObject, 'id' | 'name' | 'type' | 'stagingRole' | 'locked'>>(params: {
+  objects: readonly T[];
+  scope?: StagingObjectListScope;
+  query?: string;
+  limit?: number;
+  pinnedObjectId?: string;
+}): {
+  items: T[];
+  totalMatching: number;
+  truncated: boolean;
+  primaryTotal: number;
+  stageableTotal: number;
+} {
+  const scope = params.scope ?? 'people_props';
+  const limit = Math.max(1, params.limit ?? STAGING_OBJECT_LIST_LIMIT);
+  const query = params.query?.trim().toLowerCase() ?? '';
+
+  const stageable = getStageableObjectsForShot(params.objects);
+  const primaryTotal = stageable.filter((object) => isPrimaryStagingListObject(object)).length;
+  const scoped = scope === 'all'
+    ? stageable
+    : stageable.filter((object) => isPrimaryStagingListObject(object));
+  const matching = query
+    ? scoped.filter((object) => object.name.toLowerCase().includes(query))
+    : scoped;
+
+  let items = matching.slice(0, limit);
+  if (
+    params.pinnedObjectId
+    && matching.some((object) => object.id === params.pinnedObjectId)
+    && !items.some((object) => object.id === params.pinnedObjectId)
+  ) {
+    const pinned = matching.find((object) => object.id === params.pinnedObjectId);
+    if (pinned) {
+      items = [pinned, ...items.slice(0, Math.max(0, limit - 1))];
+    }
+  }
+
+  return {
+    items,
+    totalMatching: matching.length,
+    truncated: matching.length > items.length,
+    primaryTotal,
+    stageableTotal: stageable.length,
+  };
+}
+
 export function resolveSceneObjectsForShot(
   project: Pick<LocationProject, 'scene'>,
   shot: Pick<Shot, 'objectOverrides'>,

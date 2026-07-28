@@ -72,20 +72,20 @@ import { canUseProjectedAppearance } from '../../engine/projectedStyle';
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
-  getStageableObjectsForShot,
+  filterStagingObjectList,
   getSceneObjectStagingRole,
   resolveProjectForShot,
+  STAGING_OBJECT_LIST_LIMIT,
   updateShotObjectOverrides,
+  type StagingObjectListScope,
 } from '../../engine/shotSceneState';
-import {
-  snapshotStageableObjectOverrides,
-} from '../../engine/objectKeyframes';
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
 import type { GizmoMode } from '../../engine/transformGizmo';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { normalizeShotDepthSettings, defaultShotDepthSettings } from '../../domain/defaults';
 import { formatDepthRangeLegend } from '../../engine/depthRender';
+import { cameraDataEqual } from '../../engine/shotCameraHistory';
 import { FullBleedLayout } from './WorkspaceShell';
 import {
   getShotPrimaryLabel,
@@ -110,6 +110,9 @@ import {
   VIDEO_DURATION_UI_MIN_SECONDS,
 } from '../shots/useCameraMoveController';
 import { useCameraMovePreviewController } from '../shots/useCameraMovePreviewController';
+
+/** Stable empty selection for SceneViewport — avoid `[]` identity churn → requestRender. */
+const EMPTY_STAGED_OBJECT_IDS: string[] = [];
 
 // Plan-named extractions re-exported for structural tests / composition visibility.
 export {
@@ -215,10 +218,19 @@ export function ShotsWorkspace() {
   const stagedObject = stagedObjectId
     ? shotSceneProject.scene.objects.find((object) => object.id === stagedObjectId)
     : undefined;
-  const stageableObjects = useMemo(
-    () => getStageableObjectsForShot(shotSceneProject.scene.objects),
-    [shotSceneProject.scene.objects],
+  const [stagingListScope, setStagingListScope] = useState<StagingObjectListScope>('people_props');
+  const [stagingListQuery, setStagingListQuery] = useState('');
+  const stagingObjectList = useMemo(
+    () => filterStagingObjectList({
+      objects: shotSceneProject.scene.objects,
+      scope: stagingListScope,
+      query: stagingListQuery,
+      limit: STAGING_OBJECT_LIST_LIMIT,
+      pinnedObjectId: stagedObjectId,
+    }),
+    [shotSceneProject.scene.objects, stagingListQuery, stagingListScope, stagedObjectId],
   );
+  const stageableObjects = stagingObjectList.items;
   const linkedPano = selectedShot ? resolveShotLinkedPano(project, selectedShot) : undefined;
   const linkedAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
   const draftCameraRef = shotCamera.draftCameraRef;
@@ -684,29 +696,33 @@ export function ShotsWorkspace() {
     if (!selectedShot) return;
     stopCameraMovePreview();
     // Keep keyframe object inspection so staging can edit the selected keyframe's pose.
+    // Use a sparse override map — never eagerly snapshot every stageable object
+    // (that O(n) clone freezes large imported scenes on Stage open).
     if (selectedKeyframeId && viewportObjectOverrides === undefined) {
       const keyframe = getSortedCameraKeyframes(selectedShot.cameraKeyframes)
         .find((item) => item.id === selectedKeyframeId);
-      if (keyframe?.objectOverrides !== undefined) {
-        setViewportObjectOverrides(structuredClone(keyframe.objectOverrides));
-      } else {
-        setViewportObjectOverrides(
-          snapshotStageableObjectOverrides(
-            useContinuityStore.getState().project,
-            selectedShot,
-          ),
-        );
-      }
+      setViewportObjectOverrides(
+        keyframe?.objectOverrides !== undefined
+          ? structuredClone(keyframe.objectOverrides)
+          : {},
+      );
     }
-    const camera = getEffectiveCamera();
-    landShotFraming(selectedShot.id, camera);
+    const camera = getEffectiveCamera() ?? selectedShot.camera;
+    // Avoid no-op project writes: landShotFraming stamps updatedAt and can trigger
+    // autosave + SceneViewport invalidation over thousands of imported meshes.
+    if (shotCameraFlying || !cameraDataEqual(selectedShot.camera, camera)) {
+      landShotFraming(selectedShot.id, camera);
+    }
     setStagingMode(true);
     setStagedObjectId(undefined);
+    setStagingListScope('people_props');
+    setStagingListQuery('');
   }, [
     getEffectiveCamera,
     landShotFraming,
     selectedKeyframeId,
     selectedShot,
+    shotCameraFlying,
     stopCameraMovePreview,
     viewportObjectOverrides,
   ]);
@@ -714,6 +730,8 @@ export function ShotsWorkspace() {
   const exitStagingMode = useCallback(() => {
     setStagingMode(false);
     setStagedObjectId(undefined);
+    setStagingListScope('people_props');
+    setStagingListQuery('');
     startFlyCamera({ clearFramingAcceptance: false });
   }, [startFlyCamera]);
 
@@ -806,7 +824,8 @@ export function ShotsWorkspace() {
         camera: framingCamera ?? selectedShot.camera,
         frameAspectRatio: selectedShot.exportSettings.width / selectedShot.exportSettings.height,
         frameResolutionLabel: `${selectedShot.exportSettings.width}×${selectedShot.exportSettings.height}`,
-        flyActive: stagingMode ? false : shotCameraFlying,
+        // Staging uses objectEditingActive for picks; do not recreate framing on Stage toggle.
+        flyActive: shotCameraFlying,
         cameraReseedGeneration,
         focalLengthHudPulse,
         onCameraChange: handleFramingCameraChange,
@@ -834,7 +853,6 @@ export function ShotsWorkspace() {
     selectedShot?.exportSettings.height,
     selectedShot?.exportSettings.width,
     shotCameraFlying,
-    stagingMode,
     videoCaptureState,
   ]);
 
@@ -958,7 +976,7 @@ export function ShotsWorkspace() {
         <div className="absolute inset-0">
           <SceneViewport
             project={shotSceneProject}
-            selectedObjectIds={stagedObjectId ? [stagedObjectId] : []}
+            selectedObjectIds={stagedObjectId ? [stagedObjectId] : EMPTY_STAGED_OBJECT_IDS}
             selectedShotId={selectedShot?.id}
             shotFraming={shotFraming}
             appearance={appearance}
@@ -1084,25 +1102,72 @@ export function ShotsWorkspace() {
             ) : (
               <p className="mt-3 border-t border-white/10 pt-3 text-xs text-white/60">No object selected.</p>
             )}
-            {stageableObjects.length > 0 && (
-              <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-white/10 pt-3" data-shots-staging-object-list>
-                {stageableObjects.map((object) => (
+            {stagingObjectList.stageableTotal > 0 && (
+              <div className="mt-3 space-y-2 border-t border-white/10 pt-3" data-shots-staging-object-list>
+                <div className="flex gap-1">
                   <button
-                    key={object.id}
                     type="button"
-                    onClick={() => selectStagedObject(object.id)}
-                    title={object.visible ? undefined : 'Hidden in this shot'}
-                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition ${
-                      stagedObjectId === object.id ? 'bg-white text-black' : 'bg-white/5 text-white/85 hover:bg-white/10'
-                    } ${object.visible ? '' : 'opacity-55'}`}
+                    data-shots-staging-scope-people-props
+                    onClick={() => setStagingListScope('people_props')}
+                    className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                      stagingListScope === 'people_props' ? 'bg-white text-black' : 'bg-white/10 text-white/80 hover:bg-white/15'
+                    }`}
                   >
-                    <span className="truncate">{object.name}</span>
-                    <span className="ml-2 flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide opacity-60">
-                      {!object.visible && <EyeOff className="h-3 w-3" aria-label="Hidden in this shot" />}
-                      {getSceneObjectStagingRole(object)}
-                    </span>
+                    People & props
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    data-shots-staging-scope-all
+                    onClick={() => setStagingListScope('all')}
+                    className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                      stagingListScope === 'all' ? 'bg-white text-black' : 'bg-white/10 text-white/80 hover:bg-white/15'
+                    }`}
+                  >
+                    All objects
+                  </button>
+                </div>
+                <input
+                  type="search"
+                  value={stagingListQuery}
+                  onChange={(event) => setStagingListQuery(event.target.value)}
+                  placeholder="Search staged objects…"
+                  data-shots-staging-search
+                  className="w-full rounded-lg border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-white placeholder:text-white/40 outline-none focus:border-white/35"
+                />
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {stageableObjects.map((object) => (
+                    <button
+                      key={object.id}
+                      type="button"
+                      onClick={() => selectStagedObject(object.id)}
+                      title={object.visible ? undefined : 'Hidden in this shot'}
+                      className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition ${
+                        stagedObjectId === object.id ? 'bg-white text-black' : 'bg-white/5 text-white/85 hover:bg-white/10'
+                      } ${object.visible ? '' : 'opacity-55'}`}
+                    >
+                      <span className="truncate">{object.name}</span>
+                      <span className="ml-2 flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide opacity-60">
+                        {!object.visible && <EyeOff className="h-3 w-3" aria-label="Hidden in this shot" />}
+                        {getSceneObjectStagingRole(object)}
+                      </span>
+                    </button>
+                  ))}
+                  {stageableObjects.length === 0 && (
+                    <p className="px-1 py-2 text-[11px] text-white/55" data-shots-staging-empty>
+                      {stagingListScope === 'people_props' && stagingObjectList.stageableTotal > 0
+                        ? 'No people or props yet. Switch to All objects, or click set pieces in the viewfinder.'
+                        : 'No objects match this search.'}
+                    </p>
+                  )}
+                </div>
+                <div className="text-[10px] text-white/50" data-shots-staging-list-count>
+                  {stagingObjectList.truncated
+                    ? `${stageableObjects.length} of ${stagingObjectList.totalMatching} objects shown`
+                    : `${stagingObjectList.totalMatching} object${stagingObjectList.totalMatching === 1 ? '' : 's'}`}
+                  {stagingListScope === 'people_props' && stagingObjectList.stageableTotal > stagingObjectList.primaryTotal
+                    ? ` · ${stagingObjectList.stageableTotal - stagingObjectList.primaryTotal} set pieces hidden`
+                    : ''}
+                </div>
               </div>
             )}
           </div>

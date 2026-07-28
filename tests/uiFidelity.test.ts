@@ -219,7 +219,7 @@ describe('ui revamp fidelity surfaces', () => {
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     expect(viewport).toContain('const freeCameraModeRef = useRef(freeCameraActive);');
-    expect(viewport).toContain('if (!modeChanged || shotFraming) return;');
+    expect(viewport).toContain('if (!modeChanged || isShotFraming) return;');
     expect(viewport).toContain("window.addEventListener('keydown', onKeyDown, true);");
     expect(viewport).toContain('event.stopImmediatePropagation();');
     expect(viewport).toMatch(/if \(event\.code === 'Escape'\) \{[\s\S]*\n\s*if \(event\.target && \(event\.target as HTMLElement\)\.closest/);
@@ -637,7 +637,8 @@ describe('ui revamp fidelity surfaces', () => {
     const shotsChrome = readFileSync(new URL('../src/components/shots/ShotsCaptureChrome.tsx', import.meta.url), 'utf8');
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
     const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
-    expect(shots).toContain('getStageableObjectsForShot');
+    expect(shots).toContain('filterStagingObjectList');
+    expect(shots).toContain('data-shots-staging-scope-people-props');
     expect(shots).toContain("title={object.visible ? undefined : 'Hidden in this shot'}");
     expect(shots).toContain('aria-label="Hidden in this shot"');
     expect(shots).toContain("object.visible ? '' : 'opacity-55'");

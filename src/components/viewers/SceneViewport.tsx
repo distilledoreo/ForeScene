@@ -377,6 +377,7 @@ export function SceneViewport({
   appearanceRef.current = appearance;
   depthSettingsRef.current = normalizeShotDepthSettings(depthSettings ?? defaultShotDepthSettings);
   onDepthRangeChangeRef.current = onDepthRangeChange;
+  const isShotFraming = Boolean(shotFraming);
 
   const requestRender = useCallback(() => {
     if (frameRef.current) return;
@@ -1546,7 +1547,7 @@ export function SceneViewport({
   useEffect(() => {
     const modeChanged = freeCameraModeRef.current !== freeCameraActive;
     freeCameraModeRef.current = freeCameraActive;
-    if (!modeChanged || shotFraming) return;
+    if (!modeChanged || isShotFraming) return;
     const camera = cameraRef.current;
     if (!camera) return;
 
@@ -1589,10 +1590,10 @@ export function SceneViewport({
       target: new THREE.Vector3().fromArray(nextOrbit.target),
     };
     requestRender();
-  }, [freeCameraActive, requestRender, shotFraming]);
+  }, [freeCameraActive, requestRender, isShotFraming]);
 
   useEffect(() => {
-    if (shotFraming) return;
+    if (isShotFraming) return;
     const camera = cameraRef.current;
     if (!camera) return;
     const far = clampBuildRenderDistance(renderDistance);
@@ -1604,7 +1605,7 @@ export function SceneViewport({
     }
     camera.updateProjectionMatrix();
     requestRender();
-  }, [renderDistance, requestRender, shotFraming]);
+  }, [renderDistance, requestRender, isShotFraming]);
 
   const hasVisibleHumanMannequin = projectHasVisibleHumanMannequin(project);
 
@@ -1838,7 +1839,7 @@ export function SceneViewport({
     selectedShotId,
     showSceneGuides,
     originPlacementActive,
-    isShotFraming: Boolean(shotFraming),
+    isShotFraming,
   }), [
     landmarkStructureKey,
     objectStructureKey,
@@ -1846,7 +1847,7 @@ export function SceneViewport({
     selectedShotId,
     shotFrustumStructureKey,
     showSceneGuides,
-    shotFraming,
+    isShotFraming,
   ]);
   const projectedAppearanceKey = JSON.stringify({
     projectedActive,
