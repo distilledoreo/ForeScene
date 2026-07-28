@@ -371,11 +371,11 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('disables fog for shot-framing viewfinder scenes while keeping Build fog', () => {
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
-    expect(viewport).toContain('fog: !shotFraming');
-    expect(viewport).toContain('fogDistance: shotFraming ? undefined : renderDistance');
+    expect(viewport).toContain("fog: !shotFraming && appearance !== 'depth'");
+    expect(viewport).toContain("fogDistance: shotFraming || appearance === 'depth' ? undefined : renderDistance");
     // Both must be present in the same buildScene options object.
     expect(viewport).toMatch(
-      /buildScene\(\s*project,\s*\{[\s\S]*?fog:\s*!shotFraming[\s\S]*?fogDistance:\s*shotFraming \? undefined : renderDistance/,
+      /buildScene\(\s*project,\s*\{[\s\S]*?fog:\s*!shotFraming && appearance !== 'depth'[\s\S]*?fogDistance:\s*shotFraming \|\| appearance === 'depth' \? undefined : renderDistance/,
     );
   });
 

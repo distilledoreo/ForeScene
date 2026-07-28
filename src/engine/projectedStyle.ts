@@ -6,7 +6,7 @@ import {
 import { normalizeProjectedStyleSettings } from '../domain/defaults';
 import { length, subtract } from './sync';
 
-export type ViewportAppearanceMode = 'clay' | 'projected';
+export type ViewportAppearanceMode = 'clay' | 'projected' | 'depth';
 export { normalizeProjectedStyleSettings };
 
 /**

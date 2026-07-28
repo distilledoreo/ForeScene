@@ -74,6 +74,15 @@ export interface ImageRenderResult {
   height: number;
 }
 
+export {
+  renderShotDepthFrame,
+  renderViewportDepth,
+} from './depthRender';
+export type {
+  DepthMetadata,
+  DepthRenderResult,
+} from './depthRender';
+
 export interface BlobImageRenderResult {
   blob: Blob;
   width: number;

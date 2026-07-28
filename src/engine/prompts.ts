@@ -59,10 +59,22 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
     shot.exportSettings.includeCameraMoveReferenceFrames
     && shot.cameraKeyframes.length >= 2,
   );
+  const hasDepthStill = Boolean(
+    shot.exportSettings.depth?.enabled
+    && shot.exportSettings.depth.includeViewportStill !== false,
+  );
 
   const referenceInstructions = [
     'Use viewport_clay.png as the strict camera, composition, perspective, scale, and layout reference.',
   ];
+  if (hasDepthStill) {
+    referenceInstructions.push(
+      'Use the depth image only for spatial depth, occlusion, camera movement and relative subject placement.',
+    );
+    referenceInstructions.push(
+      'Do not copy its grayscale appearance into the generated result.',
+    );
+  }
   if (hasGlobalReference) {
     referenceInstructions.push('Use global_reference.png, when available, as the visual identity, lighting, material, and palette reference.');
     referenceInstructions.push('Use inputs/cubemap/ (face PNGs and cubemap_stitched.png), when available, as the undistorted environment / material reference.');

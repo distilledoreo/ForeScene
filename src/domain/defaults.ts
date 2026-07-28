@@ -12,6 +12,7 @@ import {
   ProjectSettings,
   ProjectWorkflow,
   Shot,
+  ShotDepthSettings,
   ShotExportSettings,
   ShotObjectOverrides,
   Transform,
@@ -151,6 +152,33 @@ export function normalizeProjectSettings(settings?: Partial<ProjectSettings>): P
   };
 }
 
+export const defaultShotDepthSettings: ShotDepthSettings = {
+  enabled: false,
+  includeViewportStill: true,
+  includeReferenceFrames: true,
+  includeCameraMoveVideo: true,
+  rangeMode: 'auto',
+  invert: false,
+};
+
+export function normalizeShotDepthSettings(
+  settings?: Partial<ShotDepthSettings> | null,
+): ShotDepthSettings {
+  const nearMeters = Number(settings?.nearMeters);
+  const farMeters = Number(settings?.farMeters);
+  const rangeMode = settings?.rangeMode === 'manual' ? 'manual' : 'auto';
+  return {
+    enabled: settings?.enabled === true,
+    includeViewportStill: settings?.includeViewportStill !== false,
+    includeReferenceFrames: settings?.includeReferenceFrames !== false,
+    includeCameraMoveVideo: settings?.includeCameraMoveVideo !== false,
+    rangeMode,
+    nearMeters: Number.isFinite(nearMeters) && nearMeters > 0 ? nearMeters : undefined,
+    farMeters: Number.isFinite(farMeters) && farMeters > 0 ? farMeters : undefined,
+    invert: settings?.invert === true,
+  };
+}
+
 export const defaultShotExportSettings: ShotExportSettings = {
   width: DEFAULT_SHOT_WIDTH,
   height: DEFAULT_SHOT_HEIGHT,
@@ -168,6 +196,7 @@ export const defaultShotExportSettings: ShotExportSettings = {
   includeCameraMoveReferenceFrames: true,
   includeMetadata: true,
   includePrompt: true,
+  depth: { ...defaultShotDepthSettings },
 };
 
 export function createTransform(position: Vec3 = [0, 0, 0]): Transform {
@@ -272,7 +301,10 @@ export function createShot(params: {
     linkedPanoId: params.linkedPanoId,
     panoCrop: params.panoCrop,
     landmarkIds: [],
-    exportSettings: { ...defaultShotExportSettings },
+    exportSettings: {
+      ...defaultShotExportSettings,
+      depth: { ...defaultShotDepthSettings },
+    },
     promptOverrides: {},
     status: 'planned',
     assets: {},

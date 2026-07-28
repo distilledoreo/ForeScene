@@ -16,6 +16,8 @@ describe('rendered shot output', () => {
     expect(source).not.toMatch(/renderSkinnedShotFrame|composeShotLockedSkinnedFrame|canonical_reference_skinning/i);
     expect(source).toContain('renderViewportClay');
     expect(source).toContain('renderShotFrame');
+    expect(source).toContain('renderViewportDepth');
+    expect(source).toContain('renderShotDepthFrame');
     expect(source).toContain('applyFlyCameraToPerspectiveCamera');
     expect(source).toContain('panoMap');
     expect(source).toContain('yaw: { value: degreesToRadians(crop.yawDegrees - panoRotation[1]) }');
@@ -43,9 +45,11 @@ describe('rendered shot output', () => {
 
   it('disables fog on clay and projected viewport still exports', () => {
     const source = readFileSync(new URL('../src/engine/renderers.ts', import.meta.url), 'utf8');
+    const depth = readFileSync(new URL('../src/engine/depthRender.ts', import.meta.url), 'utf8');
     expect(source).toMatch(/renderViewportClay[\s\S]*createFinalRenderSceneOptions\(\)/);
     expect(source).toMatch(/renderViewportProjected[\s\S]*createFinalRenderSceneOptions\(\)/);
     expect(source).toContain('createFinalRenderSceneOptions');
+    expect(depth).toContain('createFinalRenderSceneOptions');
   });
 
   it('exports projected equirect from the capture origin without writing a graybox pano ref', () => {
