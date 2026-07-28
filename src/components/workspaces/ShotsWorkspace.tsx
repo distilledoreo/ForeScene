@@ -43,10 +43,7 @@ import { clampShotVerticalFov, verticalFovToFocalLength } from '../../engine/foc
 import { buildShotFovWheelBatchCommit, applyLiveShotFovWheelBatchCommit } from '../../engine/shotFovWheelBatch';
 import {
   CAMERA_KEYFRAME_EASING_OPTIONS,
-  getCameraMoveDurationSeconds,
   getSortedCameraKeyframes,
-  hasRenderableCameraMove,
-  interpolateCameraKeyframes,
   MAX_CAMERA_MOVE_DURATION_SECONDS,
   MIN_CAMERA_MOVE_DURATION_SECONDS,
 } from '../../engine/cameraKeyframes';
@@ -81,7 +78,6 @@ import {
   updateShotObjectOverrides,
 } from '../../engine/shotSceneState';
 import {
-  interpolateObjectOverrides,
   snapshotStageableObjectOverrides,
 } from '../../engine/objectKeyframes';
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
@@ -110,6 +106,7 @@ import {
   VIDEO_DURATION_UI_MAX_SECONDS,
   VIDEO_DURATION_UI_MIN_SECONDS,
 } from '../shots/useCameraMoveController';
+import { useCameraMovePreviewController } from '../shots/useCameraMovePreviewController';
 
 // Plan-named extractions re-exported for structural tests / composition visibility.
 export {
@@ -124,6 +121,7 @@ export {
   ShotSettings,
   useStillCaptureController,
   useCameraMoveController,
+  useCameraMovePreviewController,
 };
 
 const statuses: ShotStatus[] = ['planned', 'exported', 'needs_fix', 'approved', 'rejected'];
@@ -271,23 +269,8 @@ export function ShotsWorkspace() {
   const videoCaptureState = videoAuthoring.captureState;
   const timelineOpen = videoAuthoring.timelineOpen;
   const isPreviewingCameraMove = videoAuthoring.isPreviewing;
-  const setTimelineOpen = useCallback((open: boolean | ((prev: boolean) => boolean)) => {
-    const resolved = typeof open === 'function' ? open(videoAuthoring.timelineOpen) : open;
-    videoAuthoring.dispatch({ type: resolved ? 'OPEN_TIMELINE' : 'CLOSE_TIMELINE' });
-  }, [videoAuthoring]);
-  const setIsPreviewingCameraMove = useCallback((
-    value: boolean | ((prev: boolean) => boolean),
-  ) => {
-    const resolved = typeof value === 'function' ? value(videoAuthoring.isPreviewing) : value;
-    const result = videoAuthoring.tryDispatch({ type: resolved ? 'START_PREVIEW' : 'STOP_PREVIEW' });
-    if (!result.ok && resolved) {
-      // Illegal START_PREVIEW — leave machine state unchanged.
-      return;
-    }
-  }, [videoAuthoring]);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [selectedSegmentStartId, setSelectedSegmentStartId] = useState<string | null>(null);
-  const previewAbortRef = useRef<{ cancelled: boolean; frame?: number }>({ cancelled: false });
   const framingCamera = shotCamera.framingCamera;
   const setFramingCamera = shotCamera.setFramingCamera;
   const focalLengthHudPulse = shotCamera.focalLengthHudPulse;
@@ -337,15 +320,6 @@ export function ShotsWorkspace() {
     };
   }, [getEffectiveCamera, selectedShot]);
 
-  const stopCameraMovePreview = useCallback(() => {
-    previewAbortRef.current.cancelled = true;
-    if (previewAbortRef.current.frame != null) {
-      cancelAnimationFrame(previewAbortRef.current.frame);
-      previewAbortRef.current.frame = undefined;
-    }
-    setIsPreviewingCameraMove(false);
-  }, [setIsPreviewingCameraMove]);
-
   const clearViewportObjectInspection = useCallback(() => {
     clearStagingInspection();
     setViewportObjectOverrides(undefined);
@@ -360,6 +334,29 @@ export function ShotsWorkspace() {
     }
     setShotCameraFlying(true, options);
   }, [bumpCameraReseed, selectedShot, setShotCameraFlying, shotCameraFlying]);
+
+  // Preview/timeline controller first so camera-move can inject stopCameraMovePreview.
+  const cameraMovePreview = useCameraMovePreviewController({
+    selectedShot,
+    draftCameraRef,
+    videoAuthoring,
+    startFlyCamera,
+    clearKeyframeSelection,
+    clearViewportObjectInspection,
+    setSelectedKeyframeId,
+    setSelectedSegmentStartId,
+    setFramingCamera,
+    bumpCameraReseed,
+    setViewportObjectOverrides,
+    setShotCameraFlying,
+    shotCameraFlying,
+  });
+  const {
+    setTimelineOpen,
+    stopCameraMovePreview,
+    previewCameraMove,
+    selectKeyframeNode,
+  } = cameraMovePreview;
 
   const cameraMove = useCameraMoveController({
     selectedShot,
@@ -461,13 +458,6 @@ export function ShotsWorkspace() {
     setMediaModalShotId(null);
     setLibraryOpen(false);
   }, [selectShot]);
-
-  useEffect(() => () => {
-    previewAbortRef.current.cancelled = true;
-    if (previewAbortRef.current.frame != null) {
-      cancelAnimationFrame(previewAbortRef.current.frame);
-    }
-  }, []);
 
   useEffect(() => {
     if (!selectedShot) {
@@ -637,100 +627,6 @@ export function ShotsWorkspace() {
   const handleFocalLengthHudPulse = useCallback(() => {
     pulseFocalLengthHud();
   }, [pulseFocalLengthHud]);
-
-  const selectKeyframeNode = useCallback((keyframeId: string | null) => {
-    stopCameraMovePreview();
-    setSelectedSegmentStartId(null);
-    setSelectedKeyframeId(keyframeId);
-    if (!keyframeId || !selectedShot) {
-      clearViewportObjectInspection();
-      return;
-    }
-    const keyframe = getSortedCameraKeyframes(selectedShot.cameraKeyframes)
-      .find((item) => item.id === keyframeId);
-    if (!keyframe) {
-      clearViewportObjectInspection();
-      return;
-    }
-    // One-time jump to the stored pose, then leave the camera free.
-    const pose: CameraData = {
-      ...keyframe.camera,
-      position: [...keyframe.camera.position] as CameraData['position'],
-      target: [...keyframe.camera.target] as CameraData['target'],
-    };
-    draftCameraRef.current = pose;
-    setFramingCamera(pose);
-    bumpCameraReseed();
-    // Restore stored object snapshot for inspection (viewport-only, not committed).
-    if (keyframe.objectOverrides !== undefined) {
-      setViewportObjectOverrides(structuredClone(keyframe.objectOverrides));
-    } else {
-      clearViewportObjectInspection();
-    }
-    if (!shotCameraFlying) {
-      setShotCameraFlying(true);
-    }
-  }, [
-    bumpCameraReseed,
-    clearViewportObjectInspection,
-    selectedShot,
-    setShotCameraFlying,
-    shotCameraFlying,
-    stopCameraMovePreview,
-  ]);
-
-  const previewCameraMove = useCallback(() => {
-    if (!selectedShot || !hasRenderableCameraMove(cameraMoveKeyframes)) return;
-    stopCameraMovePreview();
-    clearKeyframeSelection();
-    const keyframes = getSortedCameraKeyframes(cameraMoveKeyframes);
-    const duration = getCameraMoveDurationSeconds(keyframes, cameraMoveDurationSeconds);
-    const startTime = performance.now();
-    const latestProject = useContinuityStore.getState().project;
-    const latestShot = latestProject.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
-    previewAbortRef.current = { cancelled: false };
-    setIsPreviewingCameraMove(true);
-    startFlyCamera({ clearFramingAcceptance: false });
-
-    const tick = (now: number) => {
-      if (previewAbortRef.current.cancelled) return;
-      const elapsed = (now - startTime) / 1000;
-      const t = Math.min(elapsed, duration);
-      const firstTime = keyframes[0].timeSeconds;
-      const sampleTime = firstTime + t;
-      const camera = interpolateCameraKeyframes(keyframes, sampleTime);
-      const pose: CameraData = {
-        ...camera,
-        position: [...camera.position] as CameraData['position'],
-        target: [...camera.target] as CameraData['target'],
-      };
-      draftCameraRef.current = pose;
-      setFramingCamera(pose);
-      bumpCameraReseed();
-      setViewportObjectOverrides(interpolateObjectOverrides(
-        keyframes,
-        sampleTime,
-        latestShot.objectOverrides,
-        latestProject.scene.objects,
-      ));
-      if (elapsed < duration) {
-        previewAbortRef.current.frame = requestAnimationFrame(tick);
-        return;
-      }
-      setIsPreviewingCameraMove(false);
-      // Leave the end pose; clear transient inspection overrides so live staging returns.
-      setViewportObjectOverrides(undefined);
-    };
-    previewAbortRef.current.frame = requestAnimationFrame(tick);
-  }, [
-    bumpCameraReseed,
-    cameraMoveDurationSeconds,
-    cameraMoveKeyframes,
-    clearKeyframeSelection,
-    selectedShot,
-    startFlyCamera,
-    stopCameraMovePreview,
-  ]);
 
   const enterStillMode = useCallback(() => {
     videoAuthoring.dispatch({ type: 'EXIT_VIDEO' });

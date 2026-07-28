@@ -88,7 +88,7 @@ export type CameraMoveControllerOptions = {
   draftCameraRef: MutableRefObject<CameraData | undefined>;
   getEffectiveCamera: () => CameraData | undefined;
   videoAuthoring: VideoAuthoringApi;
-  /** Live preview stays in the workspace — inject stop only. */
+  /** Live preview lives in useCameraMovePreviewController — inject stop only. */
   stopCameraMovePreview: () => void;
   clearKeyframeSelection: () => void;
   clearViewportObjectInspection: () => void;
@@ -121,7 +121,7 @@ export type CameraMoveControllerOptions = {
 /**
  * Camera-move authoring + MP4 export for Shots.
  * Dispatches into the video authoring machine (SoT); does not reimplement it.
- * Live preview (previewCameraMove / previewAbortRef) stays in the workspace.
+ * Live preview (previewCameraMove / previewAbortRef) lives in useCameraMovePreviewController.
  */
 export function useCameraMoveController(options: CameraMoveControllerOptions) {
   const {

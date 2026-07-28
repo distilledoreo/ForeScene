@@ -512,8 +512,9 @@ describe('ui revamp fidelity surfaces', () => {
     const shotSettings = readFileSync(new URL('../src/components/shots/ShotSettings.tsx', import.meta.url), 'utf8');
     const cameraMoveCtrl = readFileSync(new URL('../src/components/shots/useCameraMoveController.ts', import.meta.url), 'utf8');
     const stillCaptureCtrl = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    const cameraMovePreviewCtrl = readFileSync(new URL('../src/components/shots/useCameraMovePreviewController.ts', import.meta.url), 'utf8');
     // Concat workspace + chrome + settings + controllers for symbol checks; data-attrs stay on workspace JSX.
-    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings + '\n' + cameraMoveCtrl + '\n' + stillCaptureCtrl;
+    const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings + '\n' + cameraMoveCtrl + '\n' + stillCaptureCtrl + '\n' + cameraMovePreviewCtrl;
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     const strip = readFileSync(new URL('../src/components/workspaces/KeyframeStrip.tsx', import.meta.url), 'utf8');
     expect(shots).toContain("VideoCaptureState");
