@@ -259,7 +259,8 @@ export const helpSections: readonly HelpSection[] = [
         notes: [
           'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',
           'The original source asset is retained so autorigging can be retried without re-picking the file.',
-          'Applying the skeleton stores marker positions and bind matrices. Mesh skin weights are generated in a later milestone.',
+          'Applying the skeleton stores marker positions and bind matrices, then generates geometric skin weights for posing.',
+          'Autorigged characters reload with the project. Missing or corrupt skin payloads fall back to an undeformed mesh instead of breaking the scene.',
         ],
       },
       {
