@@ -125,8 +125,8 @@ let activeGet: ContinuityGet | undefined;
 
 /**
  * Full store state factory (legacy composition target for unmigrated slices).
- * Session keys below are still present so pickSlice typing remains complete, but
- * `createSessionSlice` owns the live session state/actions (spread last in useContinuityStore).
+ * Session + workflow keys below are still present so pickSlice typing remains complete, but
+ * `createSessionSlice` / `createWorkflowSlice` own the live state/actions (spread later in useContinuityStore).
  */
 export function createContinuityStoreState(
   set: ContinuitySet,
@@ -137,6 +137,7 @@ export function createContinuityStoreState(
   return {
 
   project: initialProject,
+  // Workflow domain (owned by createWorkflowSlice — values here are factory placeholders).
   workspace: 'build',
   selectedObjectIds: [],
   buildClipboard: undefined,
@@ -166,6 +167,7 @@ export function createContinuityStoreState(
   shotCameraHistoryBatchDepth: 0,
   shotCameraHistoryBatchCaptured: false,
   shotCameraHistoryRestoreGeneration: 0,
+  // Workflow session UI (owned by createWorkflowSlice — factory placeholders).
   dismissedWorkflowAdvanceKeys: [],
   seenObjectiveWorkspaces: [],
   objectiveModalRequest: 0,
