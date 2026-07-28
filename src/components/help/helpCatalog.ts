@@ -253,11 +253,13 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Ground (m)', description: 'Sets the ground contact height after orientation.' },
           { label: 'Approx. height (m)', description: 'Scales the character to an approximate real-world height.' },
           { label: 'Rest pose hint', description: 'Records whether the source is roughly an A-pose or T-pose for later marker suggestions.' },
-          { label: 'Import character', description: 'Writes the unmodified source asset, a poseable_rig shell, and a Person scene object. Skin weights are not generated yet.' },
+          { label: 'Import character', description: 'Writes the unmodified source asset, a poseable_rig shell, and a Person scene object, then opens marker placement.' },
+          { label: 'Place autorig markers', description: 'Guided orthographic Front/Side marker editor with symmetry, validation, undo/redo, and Apply skeleton. Available again from a selected autorigged character.' },
         ],
         notes: [
           'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',
           'The original source asset is retained so autorigging can be retried without re-picking the file.',
+          'Applying the skeleton stores marker positions and bind matrices. Mesh skin weights are generated in a later milestone.',
         ],
       },
       {

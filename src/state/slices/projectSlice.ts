@@ -262,6 +262,28 @@ export const createProjectSlice: StateCreator<
     return object;
   },
 
+  updatePoseableRigAsset: (assetId, rig) => set((state) => {
+    const existing = state.project.assets.assets[assetId];
+    if (!existing || existing.type !== 'poseable_rig') return state;
+    return {
+      project: {
+        ...state.project,
+        assets: {
+          assets: {
+            ...state.project.assets.assets,
+            [assetId]: {
+              ...existing,
+              metadata: {
+                ...existing.metadata,
+                poseableRig: rig,
+              },
+            },
+          },
+        },
+      },
+    };
+  }),
+
   placeObject: (type, point) => {
     const state = get();
     const count = state.project.scene.objects.filter((object) => object.type === type).length + 1;

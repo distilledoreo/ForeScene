@@ -87,6 +87,7 @@ import { ContextualPanel } from '../common/ContextualPanel';
 import { Field, Select, TextInput } from '../common/Field';
 import { ModelImportDialog } from '../common/ModelImportDialog';
 import { PoseableCharacterImportDialog } from '../common/PoseableCharacterImportDialog';
+import { AutorigMarkerWizardDialog } from '../common/AutorigMarkerWizardDialog';
 import { SetGenerationDialog } from '../common/SetGenerationDialog';
 import type { CompiledSetBlueprint } from '../../engine/setBlueprintCompiler';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
@@ -138,6 +139,7 @@ export function BuildWorkspace({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [modelImportOpen, setModelImportOpen] = useState(false);
   const [poseableImportOpen, setPoseableImportOpen] = useState(false);
+  const [autorigMarkerOpen, setAutorigMarkerOpen] = useState(false);
   const [setGenerationOpen, setSetGenerationOpen] = useState(false);
   const [frameRequest, setFrameRequest] = useState(0);
   const [frameObjectIds, setFrameObjectIds] = useState<string[]>([]);
@@ -167,6 +169,7 @@ export function BuildWorkspace({
     clearObjectSelection,
     setBuildClipboard,
     updateObject,
+    updatePoseableRigAsset,
     moveObjectToGroundPoint,
     duplicateSelectedObjects,
     pasteBuildObjects,
@@ -206,6 +209,7 @@ export function BuildWorkspace({
     clearObjectSelection: state.clearObjectSelection,
     setBuildClipboard: state.setBuildClipboard,
     updateObject: state.updateObject,
+    updatePoseableRigAsset: state.updatePoseableRigAsset,
     moveObjectToGroundPoint: state.moveObjectToGroundPoint,
     duplicateSelectedObjects: state.duplicateSelectedObjects,
     pasteBuildObjects: state.pasteBuildObjects,
@@ -926,6 +930,16 @@ useEffect(() => {
                       Pose Character
                     </button>
                   </div>
+                  {selectedObject.poseableCharacter?.kind === 'autorigged' && (
+                    <button
+                      type="button"
+                      className="w-full rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
+                      data-build-autorig-markers
+                      onClick={() => setAutorigMarkerOpen(true)}
+                    >
+                      Place autorig markers
+                    </button>
+                  )}
                   {characterEditMode === 'pose' && (
                     <CharacterPosePanel
                       pose={selectedObject.humanPose}
@@ -1237,8 +1251,28 @@ useEffect(() => {
         onImported={(object) => {
           setBuildMode('select');
           requestFrame([object.id]);
+          if (object.poseableCharacter?.kind === 'autorigged') {
+            setAutorigMarkerOpen(true);
+          }
         }}
       />
+      {(() => {
+        const selected = project.scene.objects.find((object) => object.id === selectedObjectIds[0]);
+        const source = selected?.poseableCharacter;
+        const rigAsset = source?.kind === 'autorigged'
+          ? project.assets.assets[source.assetId]
+          : undefined;
+        const rig = rigAsset?.metadata?.poseableRig;
+        if (!rig || !rigAsset) return null;
+        return (
+          <AutorigMarkerWizardDialog
+            open={autorigMarkerOpen}
+            onClose={() => setAutorigMarkerOpen(false)}
+            rig={rig}
+            onSave={(next) => updatePoseableRigAsset(rigAsset.id, next)}
+          />
+        );
+      })()}
       <SetGenerationDialog
         open={setGenerationOpen}
         onClose={() => setSetGenerationOpen(false)}
