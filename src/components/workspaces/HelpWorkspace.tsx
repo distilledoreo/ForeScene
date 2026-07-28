@@ -51,6 +51,15 @@ const sectionIcons: Record<string, LucideIcon> = {
   troubleshooting: Wrench,
 };
 
+const searchAliases: Record<string, readonly string[]> = {
+  clipboard: ['clipboard', 'copy', 'cut', 'paste'],
+  zoom: ['zoom', 'fov', 'field of view', 'focal length'],
+  save: ['save', 'saving', 'saved', 'backup', 'recovery'],
+  animation: ['animation', 'camera move', 'motion', 'keyframe'],
+  people: ['people', 'person', 'character', 'clean plate'],
+  projection: ['projection', 'projected', 'projector'],
+};
+
 const initialExpanded = new Set(
   helpSections.flatMap((section) => section.topics.filter((topic) => topic.defaultOpen).map((topic) => topic.id)),
 );
@@ -61,7 +70,7 @@ function normalizeSearch(value: string): string {
 
 function matchesTerms(value: string, terms: string[]): boolean {
   const haystack = normalizeSearch(value);
-  return terms.every((term) => haystack.includes(term));
+  return terms.every((term) => (searchAliases[term] ?? [term]).some((candidate) => haystack.includes(candidate)));
 }
 
 function topicSearchText(topic: HelpTopic): string {
