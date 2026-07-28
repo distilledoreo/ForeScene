@@ -122,6 +122,45 @@ export type PoseableCharacterSource =
       rigId: string;
     };
 
+/**
+ * Marker used by Milestone B marker-assisted autorigging.
+ * Stored with the generated rig so regenerate/reset can restore placements.
+ */
+export interface AutorigMarker {
+  id: string;
+  jointId: HumanJointId;
+  /** Character-local position in meters. */
+  position: Vec3;
+}
+
+/**
+ * Serializable poseable-character rig asset (Milestone B fills skin/mesh fields).
+ * The project format anticipates autorigged characters beyond static imported geometry.
+ */
+export interface PoseableRigAsset {
+  version: 1;
+  id: string;
+  /** Optional mesh asset holding positions/indices (or embedded below). */
+  meshAssetId?: string;
+  /** Semantic joint hierarchy + soft limits (never GLB bone names). */
+  skeletonJoints: HumanJointId[];
+  /** Bind matrices keyed by semantic joint id (column-major 16 floats). */
+  bindMatrices?: Partial<Record<HumanJointId, number[]>>;
+  /** Approximate skinning produced by autorig; omitted for builtin characters. */
+  skin?: {
+    influencesPerVertex: number;
+    /** Flattened vertex → joint index table. */
+    indices: number[];
+    /** Flattened weights matching `indices`. */
+    weights: number[];
+  };
+  markers?: AutorigMarker[];
+  /** Bump when weight/fitting algorithms change so assets can be regenerated. */
+  rigGenerationVersion?: number;
+  /** Optional original unrigged source mesh for regenerate/reset. */
+  sourceMeshAssetId?: string;
+}
+
 export interface ShotObjectOverride {
   transform?: Transform;
   visible?: boolean;
@@ -376,7 +415,7 @@ export interface Shot {
 
 export interface ProjectAsset {
   id: string;
-  type: 'image' | 'video' | 'model' | 'json' | 'text' | 'other';
+  type: 'image' | 'video' | 'model' | 'json' | 'text' | 'other' | 'poseable_rig';
   name: string;
   /** Runtime URL (data:, blob:, or a portable panoref-asset: reference). */
   uri: string;
@@ -386,7 +425,13 @@ export interface ProjectAsset {
   width?: number;
   height?: number;
   createdAt: string;
-  metadata?: Record<string, unknown>;
+  /**
+   * For `poseable_rig` assets, prefer embedding {@link PoseableRigAsset} here
+   * (or as JSON behind `uri`) so autorig results round-trip with the project.
+   */
+  metadata?: Record<string, unknown> & {
+    poseableRig?: PoseableRigAsset;
+  };
 }
 
 export interface AssetRegistry {

@@ -10,6 +10,10 @@ import {
   IDENTITY_QUATERNION,
   normalizePoseableCharacterSource,
 } from './humanPose';
+import {
+  createCanonicalHumanoidSkeleton,
+  type HumanoidSkeleton,
+} from './humanoidSkeleton';
 
 export interface PoseableJoint {
   id: HumanJointId;
@@ -22,9 +26,14 @@ export interface PoseableJoint {
 /**
  * Rig-agnostic poseable character contract.
  * Built-in mannequins and future autorigged imports both implement this.
+ *
+ * Conceptual shape (adapters bind instances for Three.js rendering):
+ *   { skeleton: HumanoidSkeleton; applyPose(pose: HumanPose): void }
  */
 export interface PoseableCharacter {
   readonly source: PoseableCharacterSource;
+  /** Canonical semantic hierarchy + joint limits (not GLB-specific). */
+  readonly skeleton: HumanoidSkeleton;
   ensureLoaded(): Promise<void>;
   isReady(): boolean;
   createInstance(

@@ -614,6 +614,9 @@ useEffect(() => {
               || buildMode === 'pano_origin'
             ),
           )}
+          poseEditActive={Boolean(editingChromeVisible && posingCharacter)}
+          selectedPoseJointId={selectedPoseJointId}
+          onSelectPoseJoint={setSelectedPoseJointId}
           gizmoMode={buildMode === 'pano_origin' && gizmoMode === 'scale' ? 'translate' : gizmoMode}
           snapToGrid={gridSnap}
           onSelectObject={selectObject}

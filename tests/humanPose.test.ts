@@ -48,8 +48,13 @@ describe('poseable character foundation', () => {
     expect(BUILTIN_MANNEQUIN_BONE_MAP.leftUpperArm).toBe('LeftArm');
     expect(BUILTIN_MANNEQUIN_BONE_MAP.hips).toBe('Hips');
     expect(HUMAN_JOINT_IDS).toHaveLength(17);
+    const person = createSceneObject('human_dummy', 1);
+    const character = resolvePoseableCharacterForObject(person);
+    expect(character?.skeleton.joints).toHaveLength(17);
+    expect(character?.skeleton.joints[0]?.limitsDegrees).toBeDefined();
     const source = readFileSync(new URL('../src/domain/types.ts', import.meta.url), 'utf8');
     expect(source).toContain('HumanJointId');
+    expect(source).toContain('PoseableRigAsset');
     expect(source).not.toContain('LeftForeArm');
   });
 

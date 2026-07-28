@@ -5,6 +5,7 @@ import {
   HUMAN_JOINT_LABELS,
   cloneHumanPose,
   createEmptyHumanPose,
+  eulerDegreesToQuaternion,
   mirrorHumanPose,
   resetHumanJoint,
 } from '../../engine/humanPose';
@@ -12,6 +13,10 @@ import {
   HUMAN_POSE_PRESETS,
   applyHumanPosePreset,
 } from '../../engine/humanPosePresets';
+import {
+  HUMAN_JOINT_LIMITS_DEGREES,
+  clampHumanJointEulerDegrees,
+} from '../../engine/humanoidSkeleton';
 
 export function CharacterPosePanel({
   pose,
@@ -131,13 +136,16 @@ function JointRotationEditor({
   const rotation = pose.joints[jointId]?.rotation ?? [0, 0, 0, 1];
   // Display approximate Euler XYZ degrees derived from the quaternion for direct edits.
   const euler = quaternionToApproximateEulerDegrees(rotation);
+  const limits = HUMAN_JOINT_LIMITS_DEGREES[jointId];
+  const clampedEuler = clampHumanJointEulerDegrees(jointId, euler);
 
   const patchAxis = (axis: 0 | 1 | 2, degrees: number) => {
-    const nextEuler: [number, number, number] = [...euler];
+    const nextEuler: [number, number, number] = [...clampedEuler];
     nextEuler[axis] = degrees;
+    const clamped = clampHumanJointEulerDegrees(jointId, nextEuler);
     const next = cloneHumanPose(pose) ?? createEmptyHumanPose();
     next.joints[jointId] = {
-      rotation: eulerDegreesToQuaternionLocal(nextEuler[0], nextEuler[1], nextEuler[2]),
+      rotation: eulerDegreesToQuaternion(clamped[0], clamped[1], clamped[2]),
       ...(jointId === 'hips' && pose.joints.hips?.position
         ? { position: pose.joints.hips.position }
         : {}),
@@ -156,41 +164,19 @@ function JointRotationEditor({
           <span className="w-4 font-semibold">{label}</span>
           <input
             type="range"
-            min={-180}
-            max={180}
+            min={limits.min[axis]}
+            max={limits.max[axis]}
             step={1}
-            value={Math.round(euler[axis])}
+            value={Math.round(clampedEuler[axis])}
             onChange={(event) => patchAxis(axis as 0 | 1 | 2, Number(event.target.value))}
             className="min-w-0 flex-1 accent-[var(--accent)]"
             data-pose-joint-axis={label.toLowerCase()}
           />
-          <span className="w-8 tabular-nums text-right">{Math.round(euler[axis])}°</span>
+          <span className="w-8 tabular-nums text-right">{Math.round(clampedEuler[axis])}°</span>
         </label>
       ))}
     </div>
   );
-}
-
-function eulerDegreesToQuaternionLocal(
-  xDegrees: number,
-  yDegrees: number,
-  zDegrees: number,
-): [number, number, number, number] {
-  const x = (xDegrees * Math.PI) / 180;
-  const y = (yDegrees * Math.PI) / 180;
-  const z = (zDegrees * Math.PI) / 180;
-  const cx = Math.cos(x / 2);
-  const sx = Math.sin(x / 2);
-  const cy = Math.cos(y / 2);
-  const sy = Math.sin(y / 2);
-  const cz = Math.cos(z / 2);
-  const sz = Math.sin(z / 2);
-  return [
-    sx * cy * cz + cx * sy * sz,
-    cx * sy * cz - sx * cy * sz,
-    cx * cy * sz + sx * sy * cz,
-    cx * cy * cz - sx * sy * sz,
-  ];
 }
 
 function quaternionToApproximateEulerDegrees(

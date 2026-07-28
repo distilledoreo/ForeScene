@@ -48,8 +48,15 @@ import {
   disposeScene,
   sceneObjectUsesProceduralScale,
 } from '../../engine/sceneObjects';
-import { applyHumanPoseToObject3D } from '../../engine/poseableCharacter';
+import { applyHumanPoseToObject3D, resolvePoseableCharacterForObject } from '../../engine/poseableCharacter';
 import '../../engine/builtinMannequinCharacter';
+import {
+  createPoseJointHandleGroup,
+  disposePoseJointHandleGroup,
+  findPoseJointHandleHit,
+  syncPoseJointHandles,
+} from '../../engine/poseJointHandles';
+import type { HumanJointId } from '../../domain/types';
 import {
   renderDepthGrayscale,
   type DepthRangeMeters,
@@ -228,6 +235,9 @@ export function SceneViewport({
   depthSettings,
   onDepthRangeChange,
   objectEditingActive = false,
+  poseEditActive = false,
+  selectedPoseJointId,
+  onSelectPoseJoint,
   onFreeCameraActiveChange,
   shotFraming,
   onSelectObject,
@@ -269,6 +279,10 @@ export function SceneViewport({
   onDepthRangeChange?: (range: DepthRangeMeters) => void;
   /** Allow object picking/gizmos while a landed shot camera remains active. */
   objectEditingActive?: boolean;
+  /** Pose Character mode: show clickable joint handles on the selected poseable. */
+  poseEditActive?: boolean;
+  selectedPoseJointId?: HumanJointId;
+  onSelectPoseJoint?: (jointId: HumanJointId | undefined) => void;
   onFreeCameraActiveChange?: (active: boolean) => void;
   shotFraming?: {
     shotId: string;
@@ -339,6 +353,7 @@ export function SceneViewport({
     onEditBatchEnd,
     onFreeCameraActiveChange,
     onRequestPanoOriginEdit,
+    onSelectPoseJoint,
   });
   const editBatchActiveRef = useRef(false);
   const previewPointRef = useRef<Vec3 | undefined>(undefined);
@@ -431,6 +446,9 @@ export function SceneViewport({
   const gizmoModeRef = useRef(gizmoMode);
   const originPlacementActiveRef = useRef(originPlacementActive);
   const objectEditingActiveRef = useRef(objectEditingActive);
+  const poseEditActiveRef = useRef(poseEditActive);
+  const selectedPoseJointIdRef = useRef(selectedPoseJointId);
+  const poseJointHandlesRef = useRef<THREE.Group | null>(null);
 
   selectedObjectIdsRef.current = selectedObjectIds;
   projectRef.current = project;
@@ -445,6 +463,8 @@ export function SceneViewport({
   gizmoModeRef.current = gizmoMode;
   originPlacementActiveRef.current = originPlacementActive;
   objectEditingActiveRef.current = objectEditingActive;
+  poseEditActiveRef.current = poseEditActive;
+  selectedPoseJointIdRef.current = selectedPoseJointId;
   callbacksRef.current = {
     onSelectObject,
     onPlaceObject,
@@ -458,6 +478,7 @@ export function SceneViewport({
     onEditBatchEnd,
     onFreeCameraActiveChange,
     onRequestPanoOriginEdit,
+    onSelectPoseJoint,
   };
 
   const clearTransformGizmo = useCallback(() => {
@@ -469,6 +490,61 @@ export function SceneViewport({
     if (nodes.length > 0) disposeGizmoNodes(nodes);
     gizmoRef.current = null;
     selectionOutlineRefs.current = [];
+  }, []);
+
+  const syncPoseJointHandleOverlay = useCallback(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    let group = poseJointHandlesRef.current;
+    if (!group) {
+      group = createPoseJointHandleGroup();
+      poseJointHandlesRef.current = group;
+      scene.add(group);
+    } else if (group.parent !== scene) {
+      scene.add(group);
+    }
+
+    const poseActive = poseEditActiveRef.current;
+    const selectedId = selectedObjectIdsRef.current.at(-1);
+    const object = selectedId
+      ? projectRef.current.scene.objects.find((item) => item.id === selectedId)
+      : undefined;
+    const character = object ? resolvePoseableCharacterForObject(object) : undefined;
+
+    if (!poseActive || !object || !character?.isReady()) {
+      syncPoseJointHandles({
+        group,
+        joints: [],
+        selectedJointId: undefined,
+        visible: false,
+      });
+      return;
+    }
+
+    let instance: THREE.Object3D | undefined;
+    scene.traverse((node) => {
+      if (instance) return;
+      if (node.userData.sceneObjectId === object.id) instance = node;
+    });
+    if (!instance) {
+      syncPoseJointHandles({
+        group,
+        joints: [],
+        selectedJointId: undefined,
+        visible: false,
+      });
+      return;
+    }
+
+    character.bindInstance(instance);
+    applyHumanPoseToObject3D(instance, object);
+    syncPoseJointHandles({
+      group,
+      joints: character.getJoints(instance),
+      selectedJointId: selectedPoseJointIdRef.current,
+      visible: true,
+    });
   }, []);
 
   const syncTransformGizmo = useCallback(() => {
@@ -993,9 +1069,19 @@ export function SceneViewport({
       const hit = getSceneHit(pointer.raycaster, sceneRef.current);
       const activePlacementType = placementTypeRef.current;
       const originPlacement = originPlacementActiveRef.current;
-      const { onMoveObject, onMovePanoOrigin, onSelectObject } = callbacksRef.current;
+      const { onMoveObject, onMovePanoOrigin, onSelectObject, onSelectPoseJoint } = callbacksRef.current;
       const activeProject = projectRef.current;
       const activeSnapToGrid = snapToGridRef.current;
+
+      if (poseEditActiveRef.current) {
+        const jointHit = findPoseJointHandleHit(pointer.raycaster, poseJointHandlesRef.current);
+        if (jointHit) {
+          onSelectPoseJoint?.(jointHit);
+          dragRef.current = { kind: 'idle', x: event.clientX, y: event.clientY, moved: false };
+          requestRender();
+          return;
+        }
+      }
 
       if (activePlacementType) {
         dragRef.current = {
@@ -1523,6 +1609,10 @@ export function SceneViewport({
       resizeObserver.disconnect();
       window.removeEventListener('resize', syncViewportSize);
       clearTransformGizmo();
+      if (poseJointHandlesRef.current) {
+        disposePoseJointHandleGroup(poseJointHandlesRef.current);
+        poseJointHandlesRef.current = null;
+      }
       // Render targets are owned by this WebGL context and must be released
       // while the renderer can still dispose their GPU resources.
       disposeOcclusionMaps();
@@ -1981,6 +2071,10 @@ export function SceneViewport({
     previewMeshRef.current = null;
     if (sceneRef.current) disposeScene(sceneRef.current);
     clearTransformGizmo();
+    if (poseJointHandlesRef.current) {
+      disposePoseJointHandleGroup(poseJointHandlesRef.current);
+      poseJointHandlesRef.current = null;
+    }
     sceneRef.current = buildScene(project, {
       selectedShotId,
       hideShotFrustums: Boolean(shotFraming) || !showSceneGuides,
@@ -2020,6 +2114,7 @@ export function SceneViewport({
       updatePreviewMesh(previewPointRef.current);
     }
     syncTransformGizmo();
+    syncPoseJointHandleOverlay();
     requestRender();
   }, [
     clearTransformGizmo,
@@ -2031,6 +2126,7 @@ export function SceneViewport({
     requestRender,
     sceneStructureKey,
     secondaryOcclusionRef.current?.key,
+    syncPoseJointHandleOverlay,
     syncTransformGizmo,
     theme,
     updatePreviewMesh,
@@ -2099,6 +2195,7 @@ export function SceneViewport({
     }
 
     syncTransformGizmo();
+    syncPoseJointHandleOverlay();
     requestRender();
   }, [
     landmarkPoseKey,
@@ -2107,6 +2204,7 @@ export function SceneViewport({
     requestRender,
     sceneStructureKey,
     shotCameraKey,
+    syncPoseJointHandleOverlay,
     syncTransformGizmo,
   ]);
 
@@ -2114,6 +2212,17 @@ export function SceneViewport({
     syncTransformGizmo();
     requestRender();
   }, [gizmoMode, requestRender, selectedObjectIds, showTransformGizmo, syncTransformGizmo]);
+
+  useEffect(() => {
+    syncPoseJointHandleOverlay();
+    requestRender();
+  }, [
+    poseEditActive,
+    requestRender,
+    selectedObjectIds,
+    selectedPoseJointId,
+    syncPoseJointHandleOverlay,
+  ]);
 
   useEffect(() => {
     if (!frameRequest || shotFraming || !cameraRef.current) return;

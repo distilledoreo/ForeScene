@@ -5,6 +5,7 @@ import type {
   SceneObject,
 } from '../domain/types';
 import { HUMAN_JOINT_LABELS } from './humanPose';
+import { createCanonicalHumanoidSkeleton, HUMAN_JOINT_PARENT } from './humanoidSkeleton';
 import {
   createHumanMannequinObject,
   ensureHumanMannequinModel,
@@ -44,25 +45,6 @@ export const BUILTIN_MANNEQUIN_BONE_MAP: Record<HumanJointId, string> = {
   rightFoot: 'RightFoot',
 };
 
-const JOINT_PARENT: Partial<Record<HumanJointId, HumanJointId>> = {
-  spine: 'hips',
-  chest: 'spine',
-  neck: 'chest',
-  head: 'neck',
-  leftUpperArm: 'chest',
-  leftLowerArm: 'leftUpperArm',
-  leftHand: 'leftLowerArm',
-  rightUpperArm: 'chest',
-  rightLowerArm: 'rightUpperArm',
-  rightHand: 'rightLowerArm',
-  leftUpperLeg: 'hips',
-  leftLowerLeg: 'leftUpperLeg',
-  leftFoot: 'leftLowerLeg',
-  rightUpperLeg: 'hips',
-  rightLowerLeg: 'rightUpperLeg',
-  rightFoot: 'rightLowerLeg',
-};
-
 const REST_USERDATA_KEY = 'panorefPoseRests';
 const BONES_USERDATA_KEY = 'panorefPoseBones';
 
@@ -71,6 +53,7 @@ function createBuiltinMannequinCharacter(
 ): PoseableCharacter {
   return {
     source: { kind: 'builtin', characterId },
+    skeleton: createCanonicalHumanoidSkeleton(),
 
     async ensureLoaded() {
       await ensureHumanMannequinModel();
@@ -106,7 +89,7 @@ function createBuiltinMannequinCharacter(
         joints.push({
           id,
           displayName: HUMAN_JOINT_LABELS[id],
-          parentId: JOINT_PARENT[id],
+          parentId: HUMAN_JOINT_PARENT[id],
           node,
         });
       }
