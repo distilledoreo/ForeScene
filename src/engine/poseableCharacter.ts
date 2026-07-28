@@ -11,7 +11,6 @@ import {
   normalizePoseableCharacterSource,
 } from './humanPose';
 import {
-  createCanonicalHumanoidSkeleton,
   type HumanoidSkeleton,
 } from './humanoidSkeleton';
 
