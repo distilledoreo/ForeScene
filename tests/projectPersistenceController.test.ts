@@ -78,8 +78,38 @@ describe('project persistence controller', () => {
     controller.noteProjectChange(invalid, project);
 
     await expect(controller.flush()).rejects.toThrow('cannot be resolved');
-    expect(states.at(-1)?.status).toBe('failed');
+    const failed = states.at(-1)!;
+    expect(failed.status).toBe('failed');
+    expect(failed.message).toBeTruthy();
+    // Prior verified recovery remains the openable project (F5 storage failure path).
+    // Failed writes must not promote the broken project to the recovery head.
     expect((await recoverLatestProject())?.project.name).toBe('Known good controller save');
+    expect((await recoverLatestProject())?.project.assets.assets.broken).toBeUndefined();
+  });
+
+  it('surfaces injected asset-cache failures as failed status without clearing recovery metadata (F5)', async () => {
+    const states: ProjectPersistenceState[] = [];
+    const controller = new ProjectPersistenceController({
+      debounceMs: 1,
+      onStateChange: (state) => states.push(state),
+    });
+    const project = createDefaultProject();
+    project.name = 'F5 durable before asset fail';
+    controller.start(project);
+    await controller.flushAndLoadActiveRevision('Verified save before asset failure');
+    const saved = states.at(-1)!;
+    expect(saved.status).toBe('saved');
+    expect(saved.lastSavedAt).toBeTruthy();
+    expect(saved.activeRevisionId).toBeTruthy();
+
+    controller.reportAssetPersistenceFailure(new Error('QuotaExceededError: simulated full storage'));
+    const failed = states.at(-1)!;
+    expect(failed.status).toBe('failed');
+    expect(failed.message).toMatch(/could not be written locally/i);
+    expect(failed.message).toMatch(/QuotaExceededError|previous verified save/i);
+    expect(failed.lastSavedAt).toBe(saved.lastSavedAt);
+    expect(failed.activeRevisionId).toBe(saved.activeRevisionId);
+    expect((await recoverLatestProject())?.project.name).toBe('F5 durable before asset fail');
   });
 
   it('commits a destructive snapshot before applying the live mutation', async () => {
