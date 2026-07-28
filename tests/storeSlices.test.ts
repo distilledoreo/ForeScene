@@ -84,6 +84,61 @@ describe('continuity store domain slices', () => {
     expect(sessionSrc).toContain('setShotCameraFlying:');
   });
 
+  it('implements history slice without picking from the monolithic factory', () => {
+    const historySrc = readFileSync(join(root, 'src/state/slices/historySlice.ts'), 'utf8');
+    expect(historySrc).not.toContain('pickSlice');
+    expect(historySrc).not.toContain('getSharedContinuityState');
+    expect(historySrc).toContain('getHistoryRuntime');
+    expect(historySrc).toContain('undoBuild:');
+    expect(historySrc).toContain('undoShotCamera:');
+    expect(historySrc).toContain('beginBuildHistoryBatch:');
+
+    const runtimeSrc = readFileSync(join(root, 'src/state/slices/historyRuntime.ts'), 'utf8');
+    expect(runtimeSrc).toContain('WeakMap');
+    expect(runtimeSrc).toContain('buildHistoryCoalesceTimer');
+    expect(runtimeSrc).toContain('buildHistoryRestoring');
+    expect(runtimeSrc).toContain('shotCameraHistoryRestoring');
+
+    const implSrc = readFileSync(join(root, 'src/state/slices/continuityStoreImpl.ts'), 'utf8');
+    // History ops must not depend on module-global activeSet for coalesce/restore.
+    expect(implSrc).not.toMatch(/let buildHistoryCoalesceTimer/);
+    expect(implSrc).not.toMatch(/let buildHistoryRestoring/);
+    expect(implSrc).not.toMatch(/let shotCameraHistoryRestoring/);
+  });
+
+  it('history actions record build undo and isolate per-store runtime flags', () => {
+    const project = createDefaultProject();
+    useContinuityStore.getState().setProject(project);
+    useContinuityStore.getState().setBuildMode('select');
+
+    const beforeCount = useContinuityStore.getState().project.scene.objects.length;
+    useContinuityStore.getState().addObject('box');
+    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
+    expect(useContinuityStore.getState().canUndoBuild()).toBe(true);
+
+    expect(useContinuityStore.getState().undoBuild()).toBe(true);
+    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount);
+    expect(useContinuityStore.getState().canRedoBuild()).toBe(true);
+    expect(useContinuityStore.getState().redoBuild()).toBe(true);
+    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
+
+    const shotId = useContinuityStore.getState().project.shots[0]?.id;
+    expect(shotId).toBeTruthy();
+    useContinuityStore.getState().selectShot(shotId);
+    const originalFov = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees;
+    useContinuityStore.getState().updateShot(shotId!, {
+      camera: {
+        ...useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera,
+        fovDegrees: originalFov + 12,
+      },
+    });
+    expect(useContinuityStore.getState().canUndoShotCamera()).toBe(true);
+    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
+    expect(
+      useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees,
+    ).toBe(originalFov);
+  });
+
   it('implements selection slice without picking from the monolithic factory', () => {
     const selectionSrc = readFileSync(join(root, 'src/state/slices/selectionSlice.ts'), 'utf8');
     expect(selectionSrc).not.toContain('pickSlice');

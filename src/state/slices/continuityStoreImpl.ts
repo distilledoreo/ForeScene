@@ -48,13 +48,8 @@ import {
 import { pruneUnreferencedProjectAssets } from '../../engine/projectAssets';
 import { storeProjectAssetBlob, storeProjectAssetDataUrl } from '../../engine/projectAssetStore';
 import {
-  BUILD_HISTORY_COALESCE_MS,
   type BuildHistoryMode,
-  type BuildHistorySnapshot,
-  buildSnapshotsEqual,
-  captureBuildSnapshot,
   clearBuildHistory,
-  pushBuildHistoryPast,
   redoBuildHistory,
   undoBuildHistory,
   vec3NearlyEqual,
@@ -68,7 +63,6 @@ import {
   redoShotCameraHistory,
   undoShotCameraHistory,
   withShotCameraHistoryStacks,
-  type ShotCameraHistoryByShotId,
 } from '../../engine/shotCameraHistory';
 
 import { useThemeStore } from '../useThemeStore';
@@ -77,6 +71,7 @@ import type {
   ContinuityStoreSlices,
   ShotCameraHistoryMode,
 } from './types';
+import { getHistoryRuntime } from './historyRuntime';
 import { reorderShots as reorderShotsInSequence, copyStagingToNextShot as copyStagingInSequence } from '../../engine/sequenceStoryboard';
 import { commitKeyframePreviewAsset } from '../../engine/keyframePreviewAssets';
 import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../../engine/sandboxCore';
@@ -87,7 +82,6 @@ import {
   pasteBuildClipboardObjectsWithAssets,
 } from '../../engine/buildClipboard';
 import {
-  normalizeSelectedIds,
   rotateSelectedObjects,
   scaleSelectedObjects,
   selectionPivot,
@@ -97,18 +91,6 @@ import {
 } from '../../engine/buildSelectionMath';
 
 export type { BuildHistoryMode };
-
-/** Only the coalesce timer stays outside the store (cannot serialize Timeout handles cleanly). */
-let buildHistoryCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
-let buildHistoryRestoring = false;
-let shotCameraHistoryRestoring = false;
-
-function clearBuildHistoryCoalesceTimer() {
-  if (buildHistoryCoalesceTimer) {
-    clearTimeout(buildHistoryCoalesceTimer);
-    buildHistoryCoalesceTimer = undefined;
-  }
-}
 
 type ContinuityStore = ContinuityStoreSlices;
 
@@ -123,8 +105,9 @@ let activeGet: ContinuityGet | undefined;
 
 /**
  * Full store state factory (legacy composition target for unmigrated slices).
- * Session + workflow + selection keys below are still present so pickSlice typing remains complete, but
+ * Session + workflow + selection + history keys below are still present so pickSlice typing remains complete, but
  * genuine slices own the live state/actions (spread later in useContinuityStore).
+ * History runtime (coalesce timer / restore flags) is per-set via getHistoryRuntime — not module globals.
  */
 export function createContinuityStoreState(
   set: ContinuitySet,
@@ -132,6 +115,11 @@ export function createContinuityStoreState(
 ): ContinuityStore {
   activeSet = set;
   activeGet = get;
+  const history = getHistoryRuntime(set, get);
+  const applyBuildSceneChange = history.applyBuildSceneChange;
+  const applyBuildSnapshot = history.applyBuildSnapshot;
+  const clearBuildHistoryCoalesceTimer = history.clearBuildHistoryCoalesceTimer;
+  const captureCurrentBuildSnapshot = history.captureCurrentBuildSnapshot;
   return {
 
   project: initialProject,
@@ -165,6 +153,7 @@ export function createContinuityStoreState(
   shotCameraHistoryByShotId: {},
   shotCameraHistoryBatchDepth: 0,
   shotCameraHistoryBatchCaptured: false,
+  // History domain (owned by createHistorySlice — factory placeholders; runtime via getHistoryRuntime).
   shotCameraHistoryRestoreGeneration: 0,
   // Workflow session UI (owned by createWorkflowSlice — factory placeholders).
   dismissedWorkflowAdvanceKeys: [],
@@ -261,12 +250,15 @@ export function createContinuityStoreState(
       cameraKeyframes: shot.cameraKeyframes,
     });
     if (!result) return false;
-    shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, {
-      camera: result.restored.camera,
-      cameraKeyframes: result.restored.cameraKeyframes,
-    }, { cameraHistory: 'silent' });
-    shotCameraHistoryRestoring = false;
+    history.setShotCameraHistoryRestoring(true);
+    try {
+      get().updateShot(shot.id, {
+        camera: result.restored.camera,
+        cameraKeyframes: result.restored.cameraKeyframes,
+      }, { cameraHistory: 'silent' });
+    } finally {
+      history.setShotCameraHistoryRestoring(false);
+    }
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
         state.shotCameraHistoryByShotId,
@@ -287,12 +279,15 @@ export function createContinuityStoreState(
       cameraKeyframes: shot.cameraKeyframes,
     });
     if (!result) return false;
-    shotCameraHistoryRestoring = true;
-    get().updateShot(shot.id, {
-      camera: result.restored.camera,
-      cameraKeyframes: result.restored.cameraKeyframes,
-    }, { cameraHistory: 'silent' });
-    shotCameraHistoryRestoring = false;
+    history.setShotCameraHistoryRestoring(true);
+    try {
+      get().updateShot(shot.id, {
+        camera: result.restored.camera,
+        cameraKeyframes: result.restored.cameraKeyframes,
+      }, { cameraHistory: 'silent' });
+    } finally {
+      history.setShotCameraHistoryRestoring(false);
+    }
     set({
       shotCameraHistoryByShotId: withShotCameraHistoryStacks(
         state.shotCameraHistoryByShotId,
@@ -1129,7 +1124,7 @@ export function createContinuityStoreState(
       'shotCameraHistoryByShotId' | 'shotCameraHistoryBatchCaptured'
     >> = {};
 
-    if ((cameraChanged || keyframesChanged) && !shotCameraHistoryRestoring) {
+    if ((cameraChanged || keyframesChanged) && !history.isShotCameraHistoryRestoring()) {
       const mode = options?.cameraHistory ?? 'step';
       if (mode !== 'silent') {
         const effectiveMode: ShotCameraHistoryMode = state.shotCameraHistoryBatchDepth > 0 ? 'batch' : mode;
@@ -1458,173 +1453,6 @@ export function createContinuityStoreState(
 
 function touchProject(project: LocationProject): LocationProject {
   return { ...project, updatedAt: new Date().toISOString() };
-}
-
-type BuildHistoryStateSlice = {
-  project: LocationProject;
-  selectedObjectIds: string[];
-  buildHistoryPast: BuildHistorySnapshot[];
-  buildHistoryFuture: BuildHistorySnapshot[];
-  buildHistoryBatchDepth: number;
-  buildHistoryBatchCaptured: boolean;
-  buildHistoryCoalesceActive: boolean;
-};
-
-function captureCurrentBuildSnapshot(state: {
-  project: LocationProject;
-  selectedObjectIds: string[];
-}): BuildHistorySnapshot {
-  return captureBuildSnapshot({
-    objects: state.project.scene.objects,
-    panoOrigin: state.project.scene.panoOrigin,
-    panoRotation: state.project.scene.panoRotation,
-    selectedObjectIds: state.selectedObjectIds,
-  });
-}
-
-function scheduleCoalesceRelease() {
-  clearBuildHistoryCoalesceTimer();
-  buildHistoryCoalesceTimer = setTimeout(() => {
-    buildHistoryCoalesceTimer = undefined;
-    activeSet?.({ buildHistoryCoalesceActive: false });
-  }, BUILD_HISTORY_COALESCE_MS);
-}
-
-/**
- * Record pre-mutation Build history according to mode / open drag batch.
- * Call only after confirming the mutation is a real change.
- */
-function historyPatchBeforeMutation(
-  state: BuildHistoryStateSlice,
-  mode: BuildHistoryMode = 'step',
-): Partial<Pick<
-  ContinuityStore,
-  | 'buildHistoryPast'
-  | 'buildHistoryFuture'
-  | 'buildHistoryBatchCaptured'
-  | 'buildHistoryCoalesceActive'
->> {
-  if (buildHistoryRestoring || mode === 'silent') return {};
-
-  // Open drag batch always wins over per-call mode.
-  const effectiveMode: BuildHistoryMode = state.buildHistoryBatchDepth > 0 ? 'batch' : mode;
-
-  if (effectiveMode === 'batch') {
-    if (state.buildHistoryBatchCaptured) return {};
-  } else if (effectiveMode === 'coalesce') {
-    if (state.buildHistoryCoalesceActive) {
-      scheduleCoalesceRelease();
-      return {};
-    }
-  } else {
-    // step: end any open coalesce window so the next field edit starts fresh
-    clearBuildHistoryCoalesceTimer();
-  }
-
-  const stacks = pushBuildHistoryPast(
-    { past: state.buildHistoryPast, future: state.buildHistoryFuture },
-    captureCurrentBuildSnapshot(state),
-  );
-
-  if (effectiveMode === 'batch') {
-    return {
-      buildHistoryPast: stacks.past,
-      buildHistoryFuture: stacks.future,
-      buildHistoryBatchCaptured: true,
-    };
-  }
-
-  if (effectiveMode === 'coalesce') {
-    scheduleCoalesceRelease();
-    return {
-      buildHistoryPast: stacks.past,
-      buildHistoryFuture: stacks.future,
-      buildHistoryCoalesceActive: true,
-    };
-  }
-
-  return {
-    buildHistoryPast: stacks.past,
-    buildHistoryFuture: stacks.future,
-    buildHistoryCoalesceActive: false,
-  };
-}
-
-function applyBuildSceneChange(
-  state: BuildHistoryStateSlice,
-  change: {
-    objects?: SceneObject[];
-    assets?: LocationProject['assets'];
-    panoOrigin?: Vec3;
-    panoRotation?: [number, number, number];
-    selectedObjectIds?: string[];
-    history?: BuildHistoryMode;
-    extra?: Record<string, unknown>;
-  },
-) {
-  const objects = change.objects ?? state.project.scene.objects;
-  const assets = change.assets ?? state.project.assets;
-  const panoOrigin = change.panoOrigin ?? state.project.scene.panoOrigin;
-  const panoRotation = change.panoRotation ?? state.project.scene.panoRotation;
-  const selectedObjectIds = Object.prototype.hasOwnProperty.call(change, 'selectedObjectIds')
-    ? normalizeSelectedIds(change.selectedObjectIds ?? [], objects)
-    : normalizeSelectedIds(state.selectedObjectIds, objects);
-
-  const nextSnap = captureBuildSnapshot({
-    objects,
-    panoOrigin,
-    panoRotation,
-    selectedObjectIds,
-  });
-  const currentSnap = captureCurrentBuildSnapshot(state);
-  if (buildSnapshotsEqual(currentSnap, nextSnap)) {
-    return state;
-  }
-
-  const history = historyPatchBeforeMutation(state, change.history ?? 'step');
-  return {
-    ...history,
-    ...change.extra,
-    selectedObjectIds,
-    project: touchProject({
-      ...state.project,
-      assets,
-      scene: {
-        ...state.project.scene,
-        objects,
-        panoOrigin,
-        panoRotation,
-      },
-    }),
-  };
-}
-
-function applyBuildSnapshot(
-  snapshot: BuildHistorySnapshot,
-  past: BuildHistorySnapshot[],
-  future: BuildHistorySnapshot[],
-) {
-  buildHistoryRestoring = true;
-  clearBuildHistoryCoalesceTimer();
-  try {
-    activeSet!((state) => ({
-      buildHistoryPast: past,
-      buildHistoryFuture: future,
-      buildHistoryCoalesceActive: false,
-      selectedObjectIds: normalizeSelectedIds(snapshot.selectedObjectIds, snapshot.objects),
-      project: touchProject({
-        ...state.project,
-        scene: {
-          ...state.project.scene,
-          objects: snapshot.objects,
-          panoOrigin: snapshot.panoOrigin,
-          panoRotation: snapshot.panoRotation,
-        },
-      }),
-    }));
-  } finally {
-    buildHistoryRestoring = false;
-  }
 }
 
 function ensureProjectHasCamera(project: LocationProject): LocationProject {

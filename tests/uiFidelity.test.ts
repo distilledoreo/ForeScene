@@ -450,6 +450,8 @@ describe('ui revamp fidelity surfaces', () => {
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     const viewport = readFileSync(new URL('../src/components/viewers/SceneViewport.tsx', import.meta.url), 'utf8');
     const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const historySlice = readFileSync(new URL('../src/state/slices/historySlice.ts', import.meta.url), 'utf8');
+    const historyRuntime = readFileSync(new URL('../src/state/slices/historyRuntime.ts', import.meta.url), 'utf8');
     expect(build).toContain('data-build-undo');
     expect(build).toContain('data-build-redo');
     expect(build).toContain('Undo Build edit');
@@ -458,9 +460,10 @@ describe('ui revamp fidelity surfaces', () => {
     expect(build).toContain('onEditBatchStart={beginBuildHistoryBatch}');
     expect(viewport).toContain('onEditBatchStart');
     expect(viewport).toContain('startEditBatch');
-    expect(store).toContain('beginBuildHistoryBatch');
-    expect(store).toContain('undoBuild');
-    expect(store).toContain("history?: BuildHistoryMode");
+    expect(historySlice).toContain('beginBuildHistoryBatch');
+    expect(historySlice).toContain('undoBuild');
+    expect(store).toContain('options?.history');
+    expect(historyRuntime).toContain('history?: BuildHistoryMode');
   });
 
   it('ends the production path at export handoff without a review stage', () => {
