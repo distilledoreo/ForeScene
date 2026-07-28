@@ -231,7 +231,7 @@ export default function App() {
                   <Boxes className="h-7 w-7 md:h-9 md:w-9" strokeWidth={2.2} />
                 </span>
                 <span className="min-w-0 truncate text-base font-semibold tracking-normal text-primary md:text-xl">
-                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : 'PanoRef — Continuity Stage'}
+                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : 'Continuity Stage'}
                 </span>
                 <ChevronDown
                   className={`h-4 w-4 shrink-0 text-secondary transition ${projectMenuOpen ? 'rotate-180 text-accent' : ''}`}
