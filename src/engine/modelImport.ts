@@ -951,18 +951,43 @@ function buildDeterministicPaths(candidates: Array<{ mesh: THREE.Mesh }>): strin
 // Loaders
 // ------------------------------------------------------------------
 
+const STALE_CHUNK_IMPORT_RE = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i;
+
+/** User-facing recovery when a Vite loader chunk 404s after a redeploy. */
+export function staleModelLoaderImportError(error: unknown): Error | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!STALE_CHUNK_IMPORT_RE.test(message)) return undefined;
+  return new Error(
+    'A required model-loader file from an older Continuity Stage deploy is missing. Hard-refresh this page (Ctrl/Cmd+Shift+R), then import the model again.',
+  );
+}
+
+/**
+ * Vite code-splits Three.js loaders into hashed `/assets/*.js` chunks.
+ * After a redeploy, a tab that still holds an old parent module can request a
+ * deleted chunk hash and fail. Surface a hard-refresh action instead of the
+ * raw network error.
+ */
+async function importModelLoader<T>(loaderImport: () => Promise<T>): Promise<T> {
+  try {
+    return await loaderImport();
+  } catch (error) {
+    throw staleModelLoaderImportError(error) ?? error;
+  }
+}
+
 async function loadModel(file: File, format: DirectModelFormat): Promise<LoadedModel> {
   if (format === 'glb' || format === 'gltf') return loadGltf(file, format);
   if (format === 'obj') {
     const [{ OBJLoader }, text] = await Promise.all([
-      import('three/addons/loaders/OBJLoader.js'),
+      importModelLoader(() => import('three/addons/loaders/OBJLoader.js')),
       file.text(),
     ]);
     return describeLoadedRoot(new OBJLoader().parse(text));
   }
   if (format === 'stl') {
     const [{ STLLoader }, buffer] = await Promise.all([
-      import('three/addons/loaders/STLLoader.js'),
+      importModelLoader(() => import('three/addons/loaders/STLLoader.js')),
       file.arrayBuffer(),
     ]);
     const geometry = new STLLoader().parse(buffer);
@@ -970,7 +995,7 @@ async function loadModel(file: File, format: DirectModelFormat): Promise<LoadedM
   }
   if (format === 'ply') {
     const [{ PLYLoader }, buffer] = await Promise.all([
-      import('three/addons/loaders/PLYLoader.js'),
+      importModelLoader(() => import('three/addons/loaders/PLYLoader.js')),
       file.arrayBuffer(),
     ]);
     const geometry = new PLYLoader().parse(buffer);
@@ -978,7 +1003,7 @@ async function loadModel(file: File, format: DirectModelFormat): Promise<LoadedM
   }
 
   const [{ FBXLoader }, buffer] = await Promise.all([
-    import('three/addons/loaders/FBXLoader.js'),
+    importModelLoader(() => import('three/addons/loaders/FBXLoader.js')),
     file.arrayBuffer(),
   ]);
   const manager = textureBlockingManager();
@@ -987,7 +1012,7 @@ async function loadModel(file: File, format: DirectModelFormat): Promise<LoadedM
 }
 
 async function loadGltf(file: File, format: 'glb' | 'gltf'): Promise<LoadedModel> {
-  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const { GLTFLoader } = await importModelLoader(() => import('three/addons/loaders/GLTFLoader.js'));
   const loader = new GLTFLoader(textureBlockingManager());
   let sanitized: string | ArrayBuffer;
   let strippedMaterialCount = 0;

@@ -9,6 +9,7 @@ import {
   MAX_SEPARATE_IMPORT_OBJECTS,
   createModelImportPlan,
   importModelJob,
+  staleModelLoaderImportError,
 } from '../src/engine/modelImport';
 import {
   encodePackedGrayboxMesh,
@@ -34,6 +35,14 @@ beforeAll(() => {
 });
 
 describe('model import planning', () => {
+  it('rewrites stale Vite loader-chunk failures into a hard-refresh hint', () => {
+    const rewritten = staleModelLoaderImportError(
+      new TypeError('Failed to fetch dynamically imported module: https://panoref.netlify.app/assets/FBXLoader-BWvV8Ag4.js'),
+    );
+    expect(rewritten?.message).toMatch(/Hard-refresh/i);
+    expect(staleModelLoaderImportError(new Error('No triangle meshes were found in this file.'))).toBeUndefined();
+  });
+
   it('creates one job per direct file (FBX/GLB) and reports native files as errors', () => {
     const blend = file(['native bytes'], 'courtyard.blend');
     const fbx = file(['fbx bytes'], 'courtyard.fbx');
