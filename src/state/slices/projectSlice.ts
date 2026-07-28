@@ -1,58 +1,1102 @@
 import type { StateCreator } from 'zustand';
-import type { ContinuityStoreSlices, ProjectSliceState } from './types';
-import { getSharedContinuityState, pickSlice } from './sharedStore';
+import {
+  CameraData,
+  Euler,
+  LocationProject,
+  PanoReference,
+  ProjectAsset,
+  SceneObject,
+  Shot,
+  Vec3,
+} from '../../domain/types';
+import { shotStillViewAssetKey } from '../../domain/shotStillViews';
+import {
+  createLandmark,
+  createOriginShot,
+  createPanoAsset,
+  createPanoReference,
+  createSceneObject,
+  createShot,
+  createVideoAsset,
+  DEFAULT_GRAYBOX_PANO_HEIGHT,
+  DEFAULT_GRAYBOX_PANO_WIDTH,
+  normalizeProjectSettings,
+  normalizeProjectedStyleSettings,
+} from '../../domain/defaults';
+import { initialContinuityProject as initialProject } from './initialProject';
+import {
+  isCaptureOriginNearPano,
+  primaryStyledPano,
+  resolveStyledImportMode,
+} from '../../engine/panoProjectionCore';
+import { findGrayboxNearOrigin } from '../../domain/selectors';
+import {
+  getCanonicalPano,
+  getPanoCropSettingsForShot,
+  linkAllShotsToCanonicalPano,
+  panoViewFromCamera,
+  withShotPanoLink,
+  yawPitchToDirection,
+  add,
+  multiplyScalar,
+} from '../../engine/sync';
+import { pruneUnreferencedProjectAssets } from '../../engine/projectAssets';
+import { storeProjectAssetBlob, storeProjectAssetDataUrl } from '../../engine/projectAssetStore';
+import {
+  clearBuildHistory,
+  vec3NearlyEqual,
+} from '../../engine/buildHistory';
+import {
+  cameraDataEqual,
+  cameraKeyframesEqual,
+  clearAllShotCameraHistory,
+  getShotCameraHistoryStacks,
+  pushShotCameraHistoryPast,
+  withShotCameraHistoryStacks,
+} from '../../engine/shotCameraHistory';
+import { useThemeStore } from '../useThemeStore';
+import type {
+  ContinuityStoreSlices,
+  ProjectSliceState,
+  ShotCameraHistoryMode,
+} from './types';
+import { getHistoryRuntime } from './historyRuntime';
+import { reorderShots as reorderShotsInSequence, copyStagingToNextShot as copyStagingInSequence } from '../../engine/sequenceStoryboard';
+import { commitKeyframePreviewAsset } from '../../engine/keyframePreviewAssets';
+import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, snapBuildPoint } from '../../engine/sandboxCore';
+import {
+  BuildClipboardPayload,
+  pasteBuildClipboardObjects,
+  pasteBuildClipboardObjectsWithAssets,
+} from '../../engine/buildClipboard';
+import {
+  rotateSelectedObjects,
+  scaleSelectedObjects,
+  translateSelectedObjects,
+} from '../../engine/buildSelectionMath';
+import { touchProject } from './touchProject';
 
-const PROJECT_PICK = [
-  'project',
-  'setProject',
-  'updateProjectInfo',
-  'updateProjectSettings',
-  'addObject',
-  'addImportedModel',
-  'addImportedModels',
-  'placeObject',
-  'updateObject',
-  'moveObjectToGroundPoint',
-  'moveObjectPosition',
-  'duplicateObject',
-  'duplicateSelectedObjects',
-  'pasteBuildObjects',
-  'removeSelectedObjects',
-  'nudgeSelectedObjects',
-  'translateSelectedObjectsBy',
-  'rotateSelectedObjectsBy',
-  'scaleSelectedObjectsBy',
-  'toggleSelectedVisibility',
-  'toggleSelectedLocked',
-  'showAllObjects',
-  'toggleObjectVisibility',
-  'toggleObjectLocked',
-  'removeObject',
-  'setPanoOrigin',
-  'setPanoRotation',
-  'renderGrayboxPano',
-  'importCanonicalPano',
-  'importStyledPano',
-  'removePanoReference',
-  'updatePanoReference',
-  'addCamera',
-  'updateShot',
-  'removeShot',
-  'reorderShots',
-  'copyStagingToNextShot',
-  'attachCameraMoveVideoToShot',
-  'attachViewportRenderToShot',
-  'attachAiResultFrameToShot',
-  'attachKeyframePreviewToShot',
-  'addLandmark',
-  'updateLandmark',
-  'toggleShotLandmark',
-] as const satisfies readonly (keyof ProjectSliceState)[];
-
-/** Domain slice: persistent project document + mutations. */
+/**
+ * Project domain slice: persistent document + mutations (objects, panos, shots, landmarks, assets).
+ * Owns initial project and actions via Zustand creator closure — not key-picked from a monolith.
+ * Cross-slice session/selection/history/workflow fields are written via set when project ops require it.
+ */
 export const createProjectSlice: StateCreator<
   ContinuityStoreSlices,
   [],
   [],
   ProjectSliceState
-> = (set, get) => pickSlice(getSharedContinuityState(set, get), PROJECT_PICK);
+> = (set, get) => {
+  const history = getHistoryRuntime(set, get);
+  const applyBuildSceneChange = history.applyBuildSceneChange;
+  const clearBuildHistoryCoalesceTimer = history.clearBuildHistoryCoalesceTimer;
+
+  function getActivePano(project: LocationProject, activePanoId?: string): PanoReference | undefined {
+    return project.panoRefs.find((pano) => pano.id === activePanoId)
+      ?? project.panoRefs.find((pano) => pano.isCanonical)
+      ?? project.panoRefs[0];
+  }
+
+  function addShotWithCamera(
+    camera: CameraData,
+    linkedPanoId?: string,
+    name?: string,
+    options?: { navigateToShots?: boolean },
+  ): Shot {
+    const state = get();
+    const sourceShot = state.project.shots.find((item) => item.id === state.selectedShotId);
+    const linkedPano = linkedPanoId
+      ? state.project.panoRefs.find((pano) => pano.id === linkedPanoId)
+      : getCanonicalPano(state.project);
+    const shot = withShotPanoLink(
+      state.project,
+      createShot({
+        index: state.project.shots.length + 1,
+        camera,
+        linkedPanoId: linkedPano?.id,
+      }),
+      linkedPano,
+    );
+    if (name) shot.name = name;
+    shot.objectOverrides = structuredClone(sourceShot?.objectOverrides ?? {});
+
+    const navigateToShots = options?.navigateToShots ?? true;
+    set((current) => ({
+      project: touchProject({
+        ...current.project,
+        shots: [...current.project.shots, shot],
+      }),
+      selectedShotId: shot.id,
+      ...(navigateToShots
+        ? { workspace: 'shots' as const, shotCameraFlying: true }
+        : {}),
+    }));
+
+    return shot;
+  }
+
+  return {
+  project: initialProject,
+
+  setProject: (project) => {
+    const linkedProject = pruneUnreferencedProjectAssets(linkAllShotsToCanonicalPano(project));
+    const canonical = linkedProject.panoRefs.find((pano) => pano.isCanonical) ?? linkedProject.panoRefs[0];
+    const firstShot = linkedProject.shots[0];
+    const cleared = clearBuildHistory();
+    clearBuildHistoryCoalesceTimer();
+    set({
+      project: linkedProject,
+      activePanoId: canonical?.id,
+      selectedObjectIds: project.scene.objects[0] ? [project.scene.objects[0].id] : [],
+      selectedShotId: firstShot?.id,
+      selectedLandmarkId: linkedProject.landmarks[0]?.id,
+      buildMode: 'select',
+      activePrimitive: 'box',
+      gridSnap: true,
+      // Full session reset so import never inherits fly/busy state from the previous project.
+      shotCameraFlying: false,
+      isRenderingGraybox: false,
+      isExportingPackage: false,
+      buildHistoryPast: cleared.past,
+      buildHistoryFuture: cleared.future,
+      buildHistoryBatchDepth: 0,
+      buildHistoryBatchCaptured: false,
+      buildHistoryCoalesceActive: false,
+      buildTransformPivot: undefined,
+      buildClipboardPasteCount: 0,
+      panoView: firstShot
+        ? panoViewFromCamera(firstShot.camera)
+        : { yawDegrees: 0, pitchDegrees: 0, fovDegrees: 65 },
+      dismissedWorkflowAdvanceKeys: [],
+      seenObjectiveWorkspaces: [],
+      objectiveModalRequest: 0,
+      alignmentIntroRequest: 0,
+      alignmentRetryModalRequest: 0,
+      seenAlignmentIntroForPanoId: undefined,
+      pendingSecondCapturePlan: undefined,
+      shotCameraHistoryByShotId: clearAllShotCameraHistory(),
+      shotCameraHistoryBatchDepth: 0,
+      shotCameraHistoryBatchCaptured: false,
+      shotCameraHistoryRestoreGeneration: 0,
+    });
+  },
+
+  updateProjectInfo: (updates) => set((state) => ({
+    project: touchProject({ ...state.project, ...updates }),
+  })),
+
+  updateProjectSettings: (updates) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      settings: normalizeProjectSettings({
+        ...state.project.settings,
+        ...updates,
+        projectedStyle: updates.projectedStyle !== undefined
+          ? updates.projectedStyle
+          : state.project.settings.projectedStyle,
+      }),
+    }),
+  })),
+
+  addObject: (type) => set((state) => {
+    const count = state.project.scene.objects.filter((object) => object.type === type).length + 1;
+    const object = createSceneObject(type, count);
+    const objects = [...state.project.scene.objects, object];
+    return applyBuildSceneChange(state, {
+      objects,
+      selectedObjectIds: [object.id],
+      history: 'step',
+    });
+  }),
+
+  addImportedModel: ({ asset, object }) => {
+    set((state) => applyBuildSceneChange(state, {
+      objects: [...state.project.scene.objects, object],
+      assets: {
+        assets: {
+          ...state.project.assets.assets,
+          [asset.id]: asset,
+        },
+      },
+      selectedObjectIds: [object.id],
+      history: 'step',
+      extra: { buildMode: 'select' },
+    }));
+    return object;
+  },
+
+  addImportedModels: (results) => {
+    if (results.length === 0) return [];
+    set((state) => {
+      const nextAssets: Record<string, ProjectAsset> = { ...state.project.assets.assets };
+      const nextObjects: SceneObject[] = [...state.project.scene.objects];
+      for (const { asset, object } of results) {
+        nextAssets[asset.id] = asset;
+        nextObjects.push(object);
+      }
+      return applyBuildSceneChange(state, {
+        objects: nextObjects,
+        assets: { assets: nextAssets },
+        selectedObjectIds: results.map((r) => r.object.id),
+        history: 'step',
+        extra: { buildMode: 'select' },
+      });
+    });
+    return results.map((r) => r.object);
+  },
+
+  placeObject: (type, point) => {
+    const state = get();
+    const count = state.project.scene.objects.filter((object) => object.type === type).length + 1;
+    const object = createPlacedSceneObject({
+      type,
+      index: count,
+      point,
+      snapToGrid: state.gridSnap,
+    });
+    set((current) => applyBuildSceneChange(current, {
+      objects: [...current.project.scene.objects, object],
+      history: 'step',
+      extra: { buildMode: 'place' },
+    }));
+    return object;
+  },
+
+  updateObject: (id, updates, options) => set((state) => {
+    const existing = state.project.scene.objects.find((object) => object.id === id);
+    if (!existing) return state;
+    const nextObject = { ...existing, ...updates };
+    if (JSON.stringify(existing) === JSON.stringify(nextObject)) return state;
+    const objects = state.project.scene.objects.map((object) => (
+      object.id === id ? nextObject : object
+    ));
+    return applyBuildSceneChange(state, {
+      objects,
+      history: options?.history ?? 'step',
+    });
+  }),
+
+  moveObjectToGroundPoint: (id, point) => set((state) => {
+    const object = state.project.scene.objects.find((item) => item.id === id);
+    if (!object || object.locked) return state;
+    const position = getGroundPlacementPosition(object, point, state.gridSnap);
+    if (vec3NearlyEqual(object.transform.position, position)) return state;
+    const objects = state.project.scene.objects.map((item) => item.id === id
+      ? { ...item, transform: { ...item.transform, position } }
+      : item);
+    return applyBuildSceneChange(state, { objects, history: 'step' });
+  }),
+
+  moveObjectPosition: (id, point) => set((state) => {
+    const object = state.project.scene.objects.find((item) => item.id === id);
+    if (!object || object.locked) return state;
+    const snapped = state.gridSnap
+      ? [snapBuildPoint(point, true)[0], point[1], snapBuildPoint(point, true)[2]] as Vec3
+      : point;
+    if (vec3NearlyEqual(object.transform.position, snapped)) return state;
+    const objects = state.project.scene.objects.map((item) => item.id === id
+      ? { ...item, transform: { ...item.transform, position: snapped } }
+      : item);
+    return applyBuildSceneChange(state, { objects, history: 'step' });
+  }),
+
+  duplicateObject: (id) => {
+    const state = get();
+    const object = state.project.scene.objects.find((item) => item.id === id);
+    if (!object) return undefined;
+    const count = state.project.scene.objects.filter((item) => item.type === object.type).length + 1;
+    const duplicate = duplicateSceneObject(object, count, state.gridSnap);
+    set((current) => applyBuildSceneChange(current, {
+      objects: [...current.project.scene.objects, duplicate],
+      selectedObjectIds: [duplicate.id],
+      history: 'step',
+      extra: { buildMode: 'select' },
+    }));
+    return duplicate;
+  },
+
+  duplicateSelectedObjects: () => {
+    const state = get();
+    const selected = state.project.scene.objects.filter((object) => state.selectedObjectIds.includes(object.id));
+    if (selected.length === 0) return [];
+    const payload: BuildClipboardPayload = {
+      kind: 'panoref/build-objects',
+      version: 2 as any,
+      sourceProjectId: state.project.id,
+      copiedAt: new Date().toISOString(),
+      anchor: [0, 0, 0],
+      objects: selected,
+    };
+    const duplicates = pasteBuildClipboardObjects({
+      payload,
+      existingObjects: state.project.scene.objects,
+      existingAssets: state.project.assets,
+      pasteIndex: 1,
+      snapToGrid: state.gridSnap,
+    });
+    set((current) => applyBuildSceneChange(current, {
+      objects: [...current.project.scene.objects, ...duplicates],
+      selectedObjectIds: duplicates.map((object) => object.id),
+      history: 'step',
+      extra: { buildMode: 'select' },
+    }));
+    return duplicates;
+  },
+
+  pasteBuildObjects: (payload, options) => {
+    const state = get();
+    const samePayload = state.buildClipboard?.copiedAt === payload.copiedAt;
+    const pasteIndex = options?.inPlace ? 0 : (samePayload ? state.buildClipboardPasteCount + 1 : 1);
+    const { objects: pasted, assets: pastedAssets } = pasteBuildClipboardObjectsWithAssets({
+      payload,
+      existingObjects: state.project.scene.objects,
+      existingAssets: state.project.assets,
+      pasteIndex,
+      snapToGrid: state.gridSnap,
+      inPlace: options?.inPlace,
+    });
+    set((current) => applyBuildSceneChange(current, {
+      objects: [...current.project.scene.objects, ...pasted],
+      assets: pastedAssets && Object.keys(pastedAssets).length > 0
+        ? { assets: { ...current.project.assets.assets, ...pastedAssets } }
+        : undefined,
+      selectedObjectIds: pasted.map((object) => object.id),
+      history: 'step',
+      extra: {
+        buildMode: 'select',
+        buildClipboard: payload,
+        buildClipboardPasteCount: options?.inPlace
+          ? (samePayload ? current.buildClipboardPasteCount : 0)
+          : pasteIndex,
+      },
+    }));
+    return pasted;
+  },
+
+  removeSelectedObjects: () => {
+    const state = get();
+    const selected = state.project.scene.objects.filter((object) => state.selectedObjectIds.includes(object.id));
+    if (selected.length === 0 || selected.some((object) => object.locked)) return false;
+    const ids = new Set(state.selectedObjectIds);
+    set((current) => applyBuildSceneChange(current, {
+      objects: current.project.scene.objects.filter((object) => !ids.has(object.id)),
+      selectedObjectIds: [],
+      history: 'step',
+    }));
+    return true;
+  },
+
+  nudgeSelectedObjects: (delta) => get().translateSelectedObjectsBy(delta),
+
+  translateSelectedObjectsBy: (delta, options) => {
+    const state = get();
+    const selected = state.project.scene.objects.filter((object) => state.selectedObjectIds.includes(object.id));
+    if (selected.length === 0 || selected.some((object) => object.locked)) return false;
+    set((current) => applyBuildSceneChange(current, {
+      objects: translateSelectedObjects(current.project.scene.objects, current.selectedObjectIds, delta, current.gridSnap),
+      history: options?.history ?? 'step',
+    }));
+    return true;
+  },
+
+  rotateSelectedObjectsBy: (axis, degrees, options) => {
+    const state = get();
+    const selected = state.project.scene.objects.filter((object) => state.selectedObjectIds.includes(object.id));
+    if (selected.length === 0 || selected.some((object) => object.locked)) return false;
+    set((current) => applyBuildSceneChange(current, {
+      objects: rotateSelectedObjects(
+        current.project.scene.objects,
+        current.selectedObjectIds,
+        axis,
+        degrees,
+        current.buildTransformPivot,
+      ),
+      history: options?.history ?? 'step',
+    }));
+    return true;
+  },
+
+  scaleSelectedObjectsBy: (factors, options) => {
+    const state = get();
+    const selected = state.project.scene.objects.filter((object) => state.selectedObjectIds.includes(object.id));
+    if (selected.length === 0 || selected.some((object) => object.locked)) return false;
+    set((current) => applyBuildSceneChange(current, {
+      objects: scaleSelectedObjects(
+        current.project.scene.objects,
+        current.selectedObjectIds,
+        factors,
+        current.buildTransformPivot,
+      ),
+      history: options?.history ?? 'step',
+    }));
+    return true;
+  },
+
+  toggleSelectedVisibility: () => {
+    const state = get();
+    if (state.selectedObjectIds.length === 0) return false;
+    const ids = new Set(state.selectedObjectIds);
+    const shouldShow = state.project.scene.objects.some((object) => ids.has(object.id) && !object.visible);
+    set((current) => applyBuildSceneChange(current, {
+      objects: current.project.scene.objects.map((object) => ids.has(object.id) ? { ...object, visible: shouldShow } : object),
+      selectedObjectIds: shouldShow ? current.selectedObjectIds : [],
+      history: 'step',
+    }));
+    return true;
+  },
+
+  toggleSelectedLocked: () => {
+    const state = get();
+    if (state.selectedObjectIds.length === 0) return false;
+    const ids = new Set(state.selectedObjectIds);
+    const shouldLock = state.project.scene.objects.some((object) => ids.has(object.id) && !object.locked);
+    set((current) => applyBuildSceneChange(current, {
+      objects: current.project.scene.objects.map((object) => ids.has(object.id) ? { ...object, locked: shouldLock } : object),
+      history: 'step',
+    }));
+    return true;
+  },
+
+  showAllObjects: () => {
+    const state = get();
+    if (!state.project.scene.objects.some((object) => !object.visible)) return false;
+    set((current) => applyBuildSceneChange(current, {
+      objects: current.project.scene.objects.map((object) => ({ ...object, visible: true })),
+      history: 'step',
+    }));
+    return true;
+  },
+
+  toggleObjectVisibility: (id) => set((state) => {
+    const object = state.project.scene.objects.find((item) => item.id === id);
+    if (!object) return state;
+    const objects = state.project.scene.objects.map((item) => item.id === id
+      ? { ...item, visible: !item.visible }
+      : item);
+    return applyBuildSceneChange(state, { objects, history: 'step' });
+  }),
+
+  toggleObjectLocked: (id) => set((state) => {
+    const object = state.project.scene.objects.find((item) => item.id === id);
+    if (!object) return state;
+    const objects = state.project.scene.objects.map((item) => item.id === id
+      ? { ...item, locked: !item.locked }
+      : item);
+    return applyBuildSceneChange(state, { objects, history: 'step' });
+  }),
+
+  removeObject: (id) => set((state) => {
+    if (!state.project.scene.objects.some((object) => object.id === id)) return state;
+    const objects = state.project.scene.objects.filter((object) => object.id !== id);
+    return applyBuildSceneChange(state, {
+      objects,
+      selectedObjectIds: state.selectedObjectIds.filter((selectedId) => selectedId !== id),
+      history: 'step',
+    });
+  }),
+
+  setPanoOrigin: (origin) => set((state) => {
+    if (vec3NearlyEqual(state.project.scene.panoOrigin, origin)) return state;
+    const nextOrigin = [...origin] as Vec3;
+    const plan = state.pendingSecondCapturePlan;
+    const nextPlan = plan?.trackLiveOrigin
+      ? { ...plan, origin: nextOrigin }
+      : plan;
+    // Scene capture origin only ΓÇö never rewrite existing pano projector poses.
+    return applyBuildSceneChange(state, {
+      panoOrigin: nextOrigin,
+      history: 'step',
+      extra: nextPlan !== plan ? { pendingSecondCapturePlan: nextPlan } : undefined,
+    });
+  }),
+
+  setPanoRotation: (rotation) => set((state) => {
+    const current = state.project.scene.panoRotation;
+    if (
+      Math.abs(current[0] - rotation[0]) < 1e-6
+      && Math.abs(current[1] - rotation[1]) < 1e-6
+      && Math.abs(current[2] - rotation[2]) < 1e-6
+    ) {
+      return state;
+    }
+    const nextRotation = [
+      rotation[0],
+      rotation[1],
+      rotation[2],
+    ] as Euler;
+    const plan = state.pendingSecondCapturePlan;
+    const nextPlan = plan?.trackLiveOrigin
+      ? { ...plan, rotation: nextRotation }
+      : plan;
+    return applyBuildSceneChange(state, {
+      panoRotation: nextRotation,
+      history: 'step',
+      extra: nextPlan !== plan ? { pendingSecondCapturePlan: nextPlan } : undefined,
+    });
+  }),
+
+  renderGrayboxPano: async () => {
+    // Guard against stacked clicks while a render is already in flight.
+    if (get().isRenderingGraybox) {
+      throw new Error('A graybox render is already in progress.');
+    }
+    set({ isRenderingGraybox: true });
+    try {
+      // Yield so the CTA can paint "Rendering..." before the heavy WebGL work blocks the main thread.
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+      const state = get();
+      const theme = useThemeStore.getState().theme;
+      const { renderGrayboxEquirectangularPano } = await import('../../engine/renderers');
+      const render = await renderGrayboxEquirectangularPano(state.project, undefined, undefined, theme);
+      const asset = storeProjectAssetBlob(state.project.id, createPanoAsset({
+        name: 'global_graybox.png',
+        uri: '',
+        width: render.width,
+        height: render.height,
+        metadata: { source: 'graybox_scene', theme },
+      }), render.blob);
+      const captureOrigin = [...state.project.scene.panoOrigin] as Vec3;
+      const hadOnlyGrayboxCanonical = state.project.panoRefs.every(
+        (existing) => !existing.isCanonical || existing.type === 'graybox_render',
+      );
+      const pano = createPanoReference({
+        name: 'Graybox 360',
+        assetId: asset.id,
+        type: 'graybox_render',
+        origin: captureOrigin,
+        rotation: state.project.scene.panoRotation,
+        width: render.width,
+        height: render.height,
+        // Stay canonical when replacing a prior graybox-only reference set.
+        isCanonical: state.project.panoRefs.length === 0 || hadOnlyGrayboxCanonical,
+        notes: 'Rendered from the Build workspace graybox set.',
+      });
+
+      set((current) => {
+        // Only replace grayboxes captured near this origin ΓÇö keep other capture grayboxes.
+        const staleGrayboxes = current.project.panoRefs.filter(
+          (existing) => existing.type === 'graybox_render'
+            && isCaptureOriginNearPano(captureOrigin, existing),
+        );
+        const staleAssetIds = new Set(staleGrayboxes.map((existing) => existing.imageAssetId));
+        const nextAssets = { ...current.project.assets.assets };
+        for (const assetId of staleAssetIds) {
+          delete nextAssets[assetId];
+        }
+        nextAssets[asset.id] = asset;
+
+        const remainingPanos = current.project.panoRefs
+          .filter(
+            (existing) => !(existing.type === 'graybox_render'
+              && isCaptureOriginNearPano(captureOrigin, existing)),
+          )
+          .map((existing) => (
+            pano.isCanonical ? { ...existing, isCanonical: false } : existing
+          ));
+
+        return {
+          project: touchProject(linkAllShotsToCanonicalPano({
+            ...current.project,
+            assets: { assets: nextAssets },
+            panoRefs: [...remainingPanos, pano],
+          })),
+          activePanoId: pano.isCanonical ? pano.id : current.activePanoId,
+        };
+      });
+      return pano;
+    } finally {
+      // Always re-enable the CTA so a failed or cancelled render never sticks disabled.
+      set({ isRenderingGraybox: false });
+    }
+  },
+
+  importCanonicalPano: (params) => set((state) => {
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
+      name: params.name,
+      uri: params.dataUrl,
+      width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
+      height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
+      metadata: { source: 'user_import' },
+    }));
+    const graybox = findGrayboxNearOrigin(state.project, state.project.scene.panoOrigin);
+    const pano = createPanoReference({
+      name: params.name.replace(/\.[^.]+$/, '') || 'Styled Reference',
+      assetId: asset.id,
+      type: 'ai_global_reference',
+      origin: [...state.project.scene.panoOrigin] as Vec3,
+      rotation: [...state.project.scene.panoRotation] as Euler,
+      width: asset.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
+      height: asset.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
+      isCanonical: true,
+      sourcePanoId: graybox?.id,
+      notes: params.importNote ?? 'Imported styled reference pano.',
+    });
+    const linkedProject = linkAllShotsToCanonicalPano({
+      ...state.project,
+      assets: { assets: { ...state.project.assets.assets, [asset.id]: asset } },
+      panoRefs: [...state.project.panoRefs.map((existing) => ({ ...existing, isCanonical: false })), pano],
+      workflow: {
+        ...state.project.workflow,
+        referenceAlignmentAcceptedForPanoId: undefined,
+      },
+    });
+    return {
+      project: touchProject(linkedProject),
+      activePanoId: pano.id,
+      alignmentIntroRequest: state.alignmentIntroRequest + 1,
+      seenAlignmentIntroForPanoId: undefined,
+    };
+  }),
+
+  importStyledPano: (params) => {
+    const state = get();
+    const mode = resolveStyledImportMode(state.project, {
+      pendingSecondCapturePlan: state.pendingSecondCapturePlan,
+    });
+    if (mode === 'add_secondary') {
+      set((current) => {
+        const primary = primaryStyledPano(current.project)
+          ?? current.project.panoRefs.find(
+            (pano) => pano.isCanonical && pano.type !== 'graybox_render',
+          )
+          ?? current.project.panoRefs.find((pano) => pano.type !== 'graybox_render');
+        const asset = storeProjectAssetDataUrl(current.project.id, createPanoAsset({
+          name: params.name,
+          uri: params.dataUrl,
+          width: params.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
+          height: params.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
+          metadata: { source: 'user_import' },
+        }));
+        const plan = current.pendingSecondCapturePlan;
+        const frozenOrigin = plan
+          ? [...plan.origin] as Vec3
+          : [...current.project.scene.panoOrigin] as Vec3;
+        const frozenRotation = plan
+          ? [...plan.rotation] as Euler
+          : [...current.project.scene.panoRotation] as Euler;
+        const graybox = findGrayboxNearOrigin(current.project, frozenOrigin);
+        const pano = createPanoReference({
+          name: params.name.replace(/\.[^.]+$/, '') || 'Second Capture',
+          assetId: asset.id,
+          type: 'ai_global_reference',
+          origin: frozenOrigin,
+          rotation: frozenRotation,
+          width: asset.width ?? DEFAULT_GRAYBOX_PANO_WIDTH,
+          height: asset.height ?? DEFAULT_GRAYBOX_PANO_HEIGHT,
+          isCanonical: false,
+          sourcePanoId: graybox?.id,
+          notes: params.importNote ?? 'Imported second capture for multi-origin blend.',
+        });
+        const projectedStyle = normalizeProjectedStyleSettings(current.project.settings.projectedStyle);
+        return {
+          project: touchProject({
+            ...current.project,
+            assets: { assets: { ...current.project.assets.assets, [asset.id]: asset } },
+            panoRefs: [...current.project.panoRefs, pano],
+            settings: {
+              ...current.project.settings,
+              projectedStyle: {
+                ...projectedStyle,
+                panoId: projectedStyle.panoId ?? primary?.id,
+                secondaryPanoId: pano.id,
+                blendMode: projectedStyle.blendMode === 'primary_only'
+                  ? 'primary_dominant'
+                  : projectedStyle.blendMode,
+              },
+            },
+          }),
+          // Keep the viewer on the primary reference so the second capture does not look like a replace.
+          activePanoId: primary?.id ?? current.activePanoId,
+          pendingSecondCapturePlan: undefined,
+        };
+      });
+      return 'add_secondary';
+    }
+    get().importCanonicalPano(params);
+    return mode;
+  },
+
+  removePanoReference: (id) => set((state) => {
+    const target = state.project.panoRefs.find((pano) => pano.id === id);
+    if (!target) return state;
+
+    let remaining = state.project.panoRefs
+      .filter((pano) => pano.id !== id)
+      .map((pano) => (
+        pano.sourcePanoId === id ? { ...pano, sourcePanoId: undefined } : pano
+      ));
+
+    // Keep exactly one canonical when anything remains.
+    if (remaining.length > 0 && !remaining.some((pano) => pano.isCanonical)) {
+      const preferred = [...remaining]
+        .reverse()
+        .find((pano) => pano.type !== 'graybox_render')
+        ?? remaining[remaining.length - 1];
+      remaining = remaining.map((pano) => ({ ...pano, isCanonical: pano.id === preferred.id }));
+    } else if (remaining.length === 0) {
+      remaining = [];
+    }
+
+    const assetStillReferenced = remaining.some((pano) => pano.imageAssetId === target.imageAssetId);
+    const nextAssets = { ...state.project.assets.assets };
+    if (!assetStillReferenced) {
+      delete nextAssets[target.imageAssetId];
+    }
+
+    const workflow = { ...state.project.workflow };
+    if (workflow.referenceAlignmentAcceptedForPanoId === id) {
+      workflow.referenceAlignmentAcceptedForPanoId = undefined;
+    }
+
+    const projectedStyle = normalizeProjectedStyleSettings(state.project.settings.projectedStyle);
+    const nextProjectedStyle = normalizeProjectedStyleSettings({
+      ...projectedStyle,
+      panoId: projectedStyle.panoId === id ? undefined : projectedStyle.panoId,
+      secondaryPanoId: projectedStyle.secondaryPanoId === id ? undefined : projectedStyle.secondaryPanoId,
+    });
+
+    let nextProject: LocationProject = {
+      ...state.project,
+      panoRefs: remaining,
+      assets: { assets: nextAssets },
+      workflow,
+      settings: {
+        ...state.project.settings,
+        projectedStyle: nextProjectedStyle,
+      },
+      shots: state.project.shots.map((shot) => {
+        const linkedToRemoved = shot.linkedPanoId === id || shot.panoCrop?.panoId === id;
+        if (!linkedToRemoved) return shot;
+        return {
+          ...shot,
+          linkedPanoId: undefined,
+          panoCrop: undefined,
+          updatedAt: new Date().toISOString(),
+        };
+      }),
+    };
+
+    nextProject = linkAllShotsToCanonicalPano(nextProject);
+
+    const nextActiveId = state.activePanoId === id
+      ? (remaining.find((pano) => pano.isCanonical)?.id ?? remaining[0]?.id)
+      : state.activePanoId && remaining.some((pano) => pano.id === state.activePanoId)
+        ? state.activePanoId
+        : remaining.find((pano) => pano.isCanonical)?.id ?? remaining[0]?.id;
+
+    return {
+      project: touchProject(nextProject),
+      activePanoId: nextActiveId,
+      seenAlignmentIntroForPanoId: state.seenAlignmentIntroForPanoId === id
+        ? undefined
+        : state.seenAlignmentIntroForPanoId,
+    };
+  }),
+
+  updatePanoReference: (id, updates) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      panoRefs: state.project.panoRefs.map((pano) => pano.id === id ? { ...pano, ...updates } : pano),
+      shots: state.project.shots.map((shot) => {
+        if (shot.linkedPanoId !== id) return shot;
+        const linkedPano = state.project.panoRefs.find((pano) => pano.id === id);
+        if (!linkedPano) return shot;
+        const mergedPano = { ...linkedPano, ...updates };
+        return {
+          ...shot,
+          panoCrop: getPanoCropSettingsForShot(
+            shot.camera,
+            mergedPano,
+            shot.exportSettings.width,
+            shot.exportSettings.height,
+          ),
+          updatedAt: new Date().toISOString(),
+        };
+      }),
+    }),
+  })),
+
+  addCamera: (options) => {
+    const state = get();
+    const originShot = createOriginShot(state.project, state.project.shots.length + 1);
+    const pano = getActivePano(state.project, state.activePanoId);
+    return addShotWithCamera(originShot.camera, pano?.id, originShot.name, {
+      // Shots workspace defaults to navigating into fly mode; Export can opt out.
+      navigateToShots: options?.navigateToShots ?? true,
+    });
+  },
+
+  updateShot: (id, updates, options) => set((state) => {
+    const shot = state.project.shots.find((item) => item.id === id);
+    if (!shot) {
+      return {
+        project: touchProject({
+          ...state.project,
+          shots: state.project.shots.map((current) => {
+            if (current.id !== id) return current;
+            const updated = { ...current, ...updates, updatedAt: new Date().toISOString() };
+            return withShotPanoLink(state.project, updated);
+          }),
+        }),
+      };
+    }
+
+    const nextCamera = updates.camera ?? shot.camera;
+    const nextKeyframes = updates.cameraKeyframes ?? shot.cameraKeyframes;
+    const cameraChanged = updates.camera !== undefined && !cameraDataEqual(shot.camera, nextCamera);
+    const keyframesChanged = updates.cameraKeyframes !== undefined
+      && !cameraKeyframesEqual(shot.cameraKeyframes, nextKeyframes);
+    let historyPatch: Partial<Pick<
+      ContinuityStoreSlices,
+      'shotCameraHistoryByShotId' | 'shotCameraHistoryBatchCaptured'
+    >> = {};
+
+    if ((cameraChanged || keyframesChanged) && !history.isShotCameraHistoryRestoring()) {
+      const mode = options?.cameraHistory ?? 'step';
+      if (mode !== 'silent') {
+        const effectiveMode: ShotCameraHistoryMode = state.shotCameraHistoryBatchDepth > 0 ? 'batch' : mode;
+        if (effectiveMode !== 'batch' || !state.shotCameraHistoryBatchCaptured) {
+          const currentStacks = getShotCameraHistoryStacks(state.shotCameraHistoryByShotId, id);
+          const stacks = pushShotCameraHistoryPast(currentStacks, {
+            camera: shot.camera,
+            cameraKeyframes: shot.cameraKeyframes,
+          });
+          historyPatch = {
+            shotCameraHistoryByShotId: withShotCameraHistoryStacks(
+              state.shotCameraHistoryByShotId,
+              id,
+              stacks,
+            ),
+            shotCameraHistoryBatchCaptured: effectiveMode === 'batch'
+              ? true
+              : state.shotCameraHistoryBatchCaptured,
+          };
+        }
+      }
+    }
+
+    return {
+      ...historyPatch,
+      project: touchProject(pruneUnreferencedProjectAssets({
+        ...state.project,
+        shots: state.project.shots.map((current) => {
+          if (current.id !== id) return current;
+          const updated = { ...current, ...updates, updatedAt: new Date().toISOString() };
+          return withShotPanoLink(state.project, updated);
+        }),
+      })),
+    };
+  }),
+
+  removeShot: (id) => set((state) => {
+    if (state.project.shots.length <= 1) return state;
+    const shots = state.project.shots.filter((shot) => shot.id !== id);
+    const nextSelected = state.selectedShotId === id ? shots[0]?.id : state.selectedShotId;
+    const nextShot = shots.find((shot) => shot.id === nextSelected);
+    return {
+      project: touchProject(pruneUnreferencedProjectAssets({ ...state.project, shots })),
+      selectedShotId: nextSelected,
+      panoView: nextShot ? panoViewFromCamera(nextShot.camera) : state.panoView,
+    };
+  }),
+
+  reorderShots: (shotId, targetIndex) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      shots: reorderShotsInSequence(state.project.shots, shotId, targetIndex),
+    }),
+  })),
+
+  copyStagingToNextShot: (sourceShotId) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      shots: copyStagingInSequence(state.project.shots, sourceShotId),
+    }),
+  })),
+
+  attachKeyframePreviewToShot: (shotId, keyframeId, dataUrl) => {
+    const state = get();
+    const committed = commitKeyframePreviewAsset({
+      project: state.project,
+      shotId,
+      keyframeId,
+      dataUrl,
+    });
+    if (!committed) return undefined;
+    // commitKeyframePreviewAsset reuses/prunes preview assets; touch only.
+    set({ project: touchProject(committed.project) });
+    return committed.project.assets.assets[committed.previewAssetId];
+  },
+
+  attachCameraMoveVideoToShot: (shotId, params) => {
+    const state = get();
+    const shot = state.project.shots.find((item) => item.id === shotId);
+    if (!shot) throw new Error('Select a shot before exporting a camera move MP4.');
+    const asset = storeProjectAssetDataUrl(state.project.id, createVideoAsset({
+      name: params.name || `shot_${shot.shotNumber}_camera_move.mp4`,
+      uri: params.dataUrl,
+      mimeType: params.mimeType,
+      width: params.width,
+      height: params.height,
+      metadata: {
+        source: 'graybox_camera_keyframes',
+        shotId: shot.id,
+        durationSeconds: params.durationSeconds,
+        frameRate: params.frameRate,
+        ...(params.encodeMode ? { encodeMode: params.encodeMode } : {}),
+        ...(params.codecString ? { codecString: params.codecString } : {}),
+        ...(params.frameCount !== undefined ? { frameCount: params.frameCount } : {}),
+        ...(params.resolutionPreset ? { resolutionPreset: params.resolutionPreset } : {}),
+        ...(params.validated !== undefined ? { validated: params.validated } : {}),
+      },
+    }));
+    set((current) => ({
+      project: touchProject(pruneUnreferencedProjectAssets({
+        ...current.project,
+        assets: {
+          assets: {
+            ...current.project.assets.assets,
+            [asset.id]: asset,
+          },
+        },
+        shots: current.project.shots.map((item) => item.id === shot.id
+          ? {
+              ...item,
+              assets: {
+                ...item.assets,
+                cameraMoveVideoAssetId: asset.id,
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : item),
+      })),
+    }));
+    return asset;
+  },
+
+  attachViewportRenderToShot: (shotId, params) => {
+    const state = get();
+    const shot = state.project.shots.find((item) => item.id === shotId);
+    if (!shot) throw new Error('Select a shot before attaching a viewport render.');
+    const stillView = params.stillView ?? { appearance: 'clay' as const, people: 'with_people' as const };
+    const assetKey = shotStillViewAssetKey(stillView);
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
+      name: params.name || `shot_${shot.shotNumber}_viewport.png`,
+      uri: params.dataUrl,
+      width: params.width,
+      height: params.height,
+      metadata: {
+        source: 'viewport_render',
+        shotId: shot.id,
+        stillAppearance: stillView.appearance,
+        stillPeople: stillView.people,
+      },
+    }));
+    set((current) => {
+      const shots = current.project.shots.map((item) => item.id === shot.id
+        ? {
+            ...item,
+            assets: {
+              ...item.assets,
+              [assetKey]: asset.id,
+            },
+            updatedAt: new Date().toISOString(),
+          }
+        : item);
+      const assets = {
+        ...current.project.assets.assets,
+        [asset.id]: asset,
+      };
+      return {
+        project: touchProject(pruneUnreferencedProjectAssets({
+          ...current.project,
+          assets: { assets },
+          shots,
+        })),
+      };
+    });
+    return asset;
+  },
+
+  attachAiResultFrameToShot: (shotId, params) => {
+    const state = get();
+    const shot = state.project.shots.find((item) => item.id === shotId);
+    if (!shot) throw new Error('Select a shot before importing an AI result frame.');
+    const asset = storeProjectAssetDataUrl(state.project.id, createPanoAsset({
+      name: params.name || `shot_${shot.shotNumber}_ai_result_frame.png`,
+      uri: params.dataUrl,
+      width: params.width ?? shot.exportSettings.width,
+      height: params.height ?? shot.exportSettings.height,
+      metadata: {
+        source: 'external_ai_image_generator',
+        shotId: shot.id,
+      },
+    }));
+    set((current) => ({
+      project: touchProject(pruneUnreferencedProjectAssets({
+        ...current.project,
+        assets: {
+          assets: {
+            ...current.project.assets.assets,
+            [asset.id]: asset,
+          },
+        },
+        shots: current.project.shots.map((item) => item.id === shot.id
+          ? {
+              ...item,
+              assets: {
+                ...item.assets,
+                finalBaseFrameAssetId: asset.id,
+                aiResultFrameAssetId: asset.id,
+              },
+              status: 'exported',
+              updatedAt: new Date().toISOString(),
+            }
+          : item),
+      })),
+    }));
+    return asset;
+  },
+
+  addLandmark: () => {
+    const state = get();
+    const forward = yawPitchToDirection(state.panoView.yawDegrees, state.panoView.pitchDegrees);
+    const position = add(state.project.scene.panoOrigin, multiplyScalar(forward, 4));
+    const landmark = createLandmark(state.project.landmarks.length + 1, position);
+    set((current) => ({
+      project: touchProject({
+        ...current.project,
+        landmarks: [...current.project.landmarks, landmark],
+      }),
+      selectedLandmarkId: landmark.id,
+    }));
+    return landmark;
+  },
+
+  updateLandmark: (id, updates) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      landmarks: state.project.landmarks.map((landmark) => landmark.id === id ? { ...landmark, ...updates } : landmark),
+    }),
+  })),
+
+  toggleShotLandmark: (shotId, landmarkId) => set((state) => ({
+    project: touchProject({
+      ...state.project,
+      shots: state.project.shots.map((shot) => {
+        if (shot.id !== shotId) return shot;
+        const hasLandmark = shot.landmarkIds.includes(landmarkId);
+        return {
+          ...shot,
+          landmarkIds: hasLandmark
+            ? shot.landmarkIds.filter((id) => id !== landmarkId)
+            : [...shot.landmarkIds, landmarkId],
+          updatedAt: new Date().toISOString(),
+        };
+      }),
+    }),
+  })),
+  };
+};

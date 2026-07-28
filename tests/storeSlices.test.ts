@@ -98,12 +98,41 @@ describe('continuity store domain slices', () => {
     expect(runtimeSrc).toContain('buildHistoryCoalesceTimer');
     expect(runtimeSrc).toContain('buildHistoryRestoring');
     expect(runtimeSrc).toContain('shotCameraHistoryRestoring');
+  });
 
-    const implSrc = readFileSync(join(root, 'src/state/slices/continuityStoreImpl.ts'), 'utf8');
-    // History ops must not depend on module-global activeSet for coalesce/restore.
-    expect(implSrc).not.toMatch(/let buildHistoryCoalesceTimer/);
-    expect(implSrc).not.toMatch(/let buildHistoryRestoring/);
-    expect(implSrc).not.toMatch(/let shotCameraHistoryRestoring/);
+  it('implements project slice without monolith factory / activeSet globals', () => {
+    const projectSrc = readFileSync(join(root, 'src/state/slices/projectSlice.ts'), 'utf8');
+    expect(projectSrc).not.toContain('pickSlice');
+    expect(projectSrc).not.toContain('getSharedContinuityState');
+    expect(projectSrc).not.toContain('activeSet');
+    expect(projectSrc).not.toContain('activeGet');
+    expect(projectSrc).toContain('setProject:');
+    expect(projectSrc).toContain('addObject:');
+    expect(projectSrc).toContain('importStyledPano:');
+    expect(projectSrc).toContain('updateShot:');
+
+    // Monolith composition path must be gone.
+    expect(() => readFileSync(join(root, 'src/state/slices/continuityStoreImpl.ts'), 'utf8')).toThrow();
+    expect(() => readFileSync(join(root, 'src/state/slices/sharedStore.ts'), 'utf8')).toThrow();
+
+    const allSliceSources = [
+      'projectSlice.ts',
+      'selectionSlice.ts',
+      'historySlice.ts',
+      'historyRuntime.ts',
+      'workflowSlice.ts',
+      'sessionSlice.ts',
+      'useContinuityStore.ts',
+    ].map((name) => {
+      const path = name === 'useContinuityStore.ts'
+        ? join(root, 'src/state', name)
+        : join(root, 'src/state/slices', name);
+      return readFileSync(path, 'utf8');
+    }).join('\n');
+    expect(allSliceSources).not.toMatch(/\bactiveSet\b/);
+    expect(allSliceSources).not.toMatch(/\bactiveGet\b/);
+    expect(allSliceSources).not.toContain('getSharedContinuityState');
+    expect(allSliceSources).not.toContain('pickSlice');
   });
 
   it('history actions record build undo and isolate per-store runtime flags', () => {

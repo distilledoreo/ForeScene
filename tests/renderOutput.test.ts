@@ -78,7 +78,7 @@ describe('rendered shot output', () => {
 
   it('defaults graybox 360 renders to 4K equirectangular resolution', () => {
     const source = readFileSync(new URL('../src/engine/renderers.ts', import.meta.url), 'utf8');
-    const storeSource = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const storeSource = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
 
     expect(source).toContain('DEFAULT_GRAYBOX_PANO_WIDTH');
     expect(source).toContain('DEFAULT_GRAYBOX_PANO_HEIGHT');
@@ -130,7 +130,7 @@ describe('rendered shot output', () => {
 
   it('bakes scene.panoRotation yaw into graybox equirect so stamped projector pose matches projection', () => {
     const source = readFileSync(new URL('../src/engine/renderers.ts', import.meta.url), 'utf8');
-    const storeSource = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
+    const storeSource = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
 
     // Capture path stamps scene rotation on the graybox ref.
     expect(storeSource).toMatch(
