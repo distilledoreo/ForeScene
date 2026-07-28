@@ -89,6 +89,18 @@ Example `panoref-scene.json`:
 
 Imports above the encoded mesh or source-file safety limits stop with a clear error and leave the source unchanged. Heavy imports report their triangle count; no hidden simplification is performed.
 
+## Storage and performance (summary)
+
+Continuity Stage is a local-first browser app. Capacity depends on your device, browser tab limits, and project complexity. Full figures (each labeled **Measured baseline**, **Recommended operating limit**, or **Hard-enforced limit**) live in [`docs/STORAGE_AND_PERFORMANCE.md`](docs/STORAGE_AND_PERFORMANCE.md) and `src/engine/budgets.ts`.
+
+In short:
+
+- Prefer graybox sets around a few hundred thousand triangles for comfortable editing (recommended, not enforced).
+- Large model imports are classified and may require confirmation or be rejected using device memory heuristics (hard-enforced).
+- Projects autosave verified revisions; recovery keeps a bounded number of autosaves/snapshots (hard-enforced prune).
+- Camera-move duration and 1080p/4K@30 presets are clamped/enforced; 4K encode is memory-heavy (measured guidance).
+- Chromium desktop is the primary target for full MP4 render; browser storage quotas vary—failed saves surface errors without false success.
+
 ## Build Shortcuts
 
 Primitive stamps use game-inventory style number slots: `1` Floor, `2` Wall, `3` Box, `4` Arch, `5` Doorway, `6` Column, `7` Stairs, `8` Tree, `9` Terrain, and `0` Person. Backdrop, Sun, Arch, Terrain, and Person are also reachable from the tray's **More** tool when they are not part of the primary visible strip.
