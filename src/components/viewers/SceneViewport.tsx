@@ -449,6 +449,7 @@ export function SceneViewport({
   const poseEditActiveRef = useRef(poseEditActive);
   const selectedPoseJointIdRef = useRef(selectedPoseJointId);
   const poseJointHandlesRef = useRef<THREE.Group | null>(null);
+  const poseJointsRef = useRef<ReturnType<NonNullable<ReturnType<typeof resolvePoseableCharacterForObject>>['getJoints']>>([]);
 
   selectedObjectIdsRef.current = selectedObjectIds;
   projectRef.current = project;
@@ -513,6 +514,7 @@ export function SceneViewport({
     const character = object ? resolvePoseableCharacterForObject(object) : undefined;
 
     if (!poseActive || !object || !character?.isReady()) {
+      poseJointsRef.current = [];
       syncPoseJointHandles({
         group,
         joints: [],
@@ -528,6 +530,7 @@ export function SceneViewport({
       if (node.userData.sceneObjectId === object.id) instance = node;
     });
     if (!instance) {
+      poseJointsRef.current = [];
       syncPoseJointHandles({
         group,
         joints: [],
@@ -539,9 +542,11 @@ export function SceneViewport({
 
     character.bindInstance(instance);
     applyHumanPoseToObject3D(instance, object);
+    const joints = character.getJoints(instance);
+    poseJointsRef.current = joints;
     syncPoseJointHandles({
       group,
-      joints: character.getJoints(instance),
+      joints,
       selectedJointId: selectedPoseJointIdRef.current,
       visible: true,
     });
@@ -1074,7 +1079,11 @@ export function SceneViewport({
       const activeSnapToGrid = snapToGridRef.current;
 
       if (poseEditActiveRef.current) {
-        const jointHit = findPoseJointHandleHit(pointer.raycaster, poseJointHandlesRef.current);
+        const jointHit = findPoseJointHandleHit(
+          pointer.raycaster,
+          poseJointHandlesRef.current,
+          poseJointsRef.current,
+        );
         if (jointHit) {
           onSelectPoseJoint?.(jointHit);
           dragRef.current = { kind: 'idle', x: event.clientX, y: event.clientY, moved: false };

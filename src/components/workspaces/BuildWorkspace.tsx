@@ -898,7 +898,7 @@ useEffect(() => {
               </div>
               {selectedIsPoseable && selectedObject && (
                 <div className="mt-2 space-y-2 border-t border-subtle pt-2" data-build-character-pose>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1" data-character-mode-toggle>
                     <button
                       type="button"
                       data-character-mode-move
@@ -915,6 +915,7 @@ useEffect(() => {
                     <button
                       type="button"
                       data-character-mode-pose
+                      aria-pressed={characterEditMode === 'pose'}
                       className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
                         characterEditMode === 'pose' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
                       }`}
