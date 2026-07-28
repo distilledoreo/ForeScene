@@ -70,8 +70,9 @@ describe('workflow guidance UI', () => {
     expect(shots).toContain('Still');
     expect(shots).toContain('Video');
     const stillCapture = readFileSync(new URL('../src/components/shots/useStillCaptureController.ts', import.meta.url), 'utf8');
+    const cameraMove = readFileSync(new URL('../src/components/shots/useCameraMoveController.ts', import.meta.url), 'utf8');
     expect(stillCapture).toContain("flushProject('Verified save before still render')");
-    expect(shots).toContain("flushProject('Verified save before video render')");
+    expect(cameraMove).toContain("flushProject('Verified save before video render')");
     expect(shots).not.toContain('ShotFilmstrip');
     expect(shots).not.toContain('ShotInfoCard');
     expect(shots).not.toContain('Go to Review');
