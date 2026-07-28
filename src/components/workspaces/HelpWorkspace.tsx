@@ -251,7 +251,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
                 <p className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-accent">Complete product manual</p>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight text-primary sm:text-5xl">Every workspace. Every control. One searchable Help Center.</h1>
                 <p className="mt-5 max-w-3xl text-base leading-7 text-secondary sm:text-lg">
-                  Start with a task, search the exact label you see in the app, or browse the expandable control reference. Advanced settings stay collapsed until you need them.
+                  Start with a task, search the exact label you see in the app, or browse the expandable control reference. Advanced settings stay collapsed until you need them. Search examples include Projected Style, Near Clip, and double-tap W.
                 </p>
               </div>
               <div className="rounded-2xl border border-subtle bg-surface-overlay/80 px-4 py-3 text-sm shadow-card backdrop-blur">
