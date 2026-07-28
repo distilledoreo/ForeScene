@@ -107,6 +107,7 @@ export default function App() {
     openLocalProjectHistory,
     removeLocalProjectHistory,
     applyProjectHealthRepair,
+    createProjectFromBlueprint,
   } = useProjectLifecycle({
     closeProjectOverlays: () => {
       setHelpOpen(false);
@@ -181,7 +182,7 @@ export default function App() {
             <>
               {workspace === 'build' && (
                 <WorkspaceErrorBoundary workspaceName="Build">
-                  <BuildWorkspace />
+                  <BuildWorkspace onCreateProjectFromBlueprint={createProjectFromBlueprint} />
                 </WorkspaceErrorBoundary>
               )}
               {workspace === 'reference' && (

@@ -35,6 +35,21 @@ Open **Help & Documentation** from the Continuity Stage brand menu for the searc
 3. **Shots:** iPhone-style camera chrome — full-bleed viewfinder, **Still / Video** modes, one center **shutter**, and a bottom-left thumbnail that opens the shot library. **Still:** shutter **Capture** saves the current pose (and creates another shot on the next capture) without freezing the viewfinder. **Video (sequential capture):** Capture start → fly → Capture next pose → after two or more poses, **Finish capture** (or keep capturing). The timeline appears after a third pose or **Edit timeline**. When finished, primary action is **Next shot**; Preview plays the path, and optional **Render MP4** encodes a Resolve-safe clip. Undo restores keyframes and capture state together. Shot-to-shot **continuity compare** and a **sequence storyboard** (reorder, duration, animatic, copy staging) live under Shot settings. Companion clay/projected stills store for the gallery and ZIP package. Fly Camera keeps a broad safety volume around the set.
 4. **Export:** multi-select shots and download continuity ZIP handoff packages with **Export Selected Shots**. Packages carry clay control frames, pano/cubemap references, camera metadata, and prompts for external tools. You do **not** need to import AI results back into Continuity Stage. Package include/exclude toggles stay in **Export Settings**.
 
+## Generate set from description
+
+Open **Build > More > Generate set from description**. This creates a graybox set from a spatial description via the **SetBlueprint** format — an AI-facing subset of the native project document.
+
+Manual workflow (default, local-first):
+
+1. Describe the set (optional width/depth, detail level, constraints).
+2. **Copy prompt for external model** and paste it into any frontier model.
+3. Switch to **Paste blueprint JSON**, paste the model output, then **Validate and review**.
+4. **Create generated project** — the current project is saved as a recovery point first.
+
+Optional direct generation: set `VITE_SET_GENERATION_ENDPOINT` to a same-origin or absolute URL. The endpoint receives the system/user prompts and must return SetBlueprint JSON (not a native LocationProject). API keys stay server-side. Failed validation retries once with the error list, then surfaces remaining errors.
+
+See [docs/SET_BLUEPRINT.md](docs/SET_BLUEPRINT.md) for schema, limits, coordinate conventions, and the difference between blueprint import and native project import.
+
 ## 3D Model and Scene Import
 
 Open **Build > More > Import 3D model or scene**. Import is local-only and geometry-only: source materials, textures, cameras, lights, rigs, animation, and morphs are omitted. Exact triangles are retained; the importer does not automatically decimate or otherwise simplify geometry. World-space placement is preserved with hierarchy flattened.
@@ -205,7 +220,7 @@ For Fly Camera specifically, verify sustained movement can travel beyond walls a
 
 ## Limitations
 
-- MVP is local-first; there is no backend, account system, or AI API integration.
+- MVP is local-first; there is no backend, account system, or shared AI API key in the Vite app. Optional set generation uses a configurable HTTP endpoint (`VITE_SET_GENERATION_ENDPOINT`) with credentials kept server-side, or a manual paste workflow with any external model.
 - Geometry editing is primitive-level only. There is no vertex editing, UV editing, shader graph, rigging, or timeline.
 - Native `.blend`, `.ma`, `.mb`, and Unreal asset bytes require a GLB/FBX bridge or `.panoscene` handoff; the browser does not parse those proprietary formats directly.
 - Imported mesh assets are embedded in saved project JSON as base64 data URLs, so large geometry can make project files substantially larger.

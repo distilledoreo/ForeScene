@@ -34,6 +34,7 @@ import {
   Wrench,
   ZoomIn,
   ZoomOut,
+  Sparkles,
 } from 'lucide-react';
 import { Euler, ObjectSurfaceStyle, SceneObject, SceneObjectType, StagingRole, Vec3 } from '../../domain/types';
 import type { GizmoMode } from '../../engine/transformGizmo';
@@ -81,6 +82,8 @@ import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
 import { ContextualPanel } from '../common/ContextualPanel';
 import { Field, Select, TextInput } from '../common/Field';
 import { ModelImportDialog } from '../common/ModelImportDialog';
+import { SetGenerationDialog } from '../common/SetGenerationDialog';
+import type { CompiledSetBlueprint } from '../../engine/setBlueprintCompiler';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
 import { Vec3Input } from '../common/Vec3Input';
@@ -109,7 +112,11 @@ const trayItems: Array<{ type: SceneObjectType; label: string; icon: React.Compo
 const primaryTrayItems = trayItems.slice(0, 8);
 const overflowTrayItems = trayItems.slice(8);
 
-export function BuildWorkspace() {
+export function BuildWorkspace({
+  onCreateProjectFromBlueprint,
+}: {
+  onCreateProjectFromBlueprint?: (compiled: CompiledSetBlueprint) => Promise<void>;
+} = {}) {
   const [precisionOpen, setPrecisionOpen] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
   const [showSceneGuides, setShowSceneGuides] = useState(false);
@@ -123,6 +130,7 @@ export function BuildWorkspace() {
   const [systemClipboardSyncedAt, setSystemClipboardSyncedAt] = useState<string | undefined>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [modelImportOpen, setModelImportOpen] = useState(false);
+  const [setGenerationOpen, setSetGenerationOpen] = useState(false);
   const [frameRequest, setFrameRequest] = useState(0);
   const [frameObjectIds, setFrameObjectIds] = useState<string[]>([]);
   const [freeCameraActive, setFreeCameraActive] = useState(false);
@@ -935,6 +943,7 @@ useEffect(() => {
           onPrimitiveChange={setActivePrimitive}
           onGridSnapChange={setGridSnap}
           onImport={() => setModelImportOpen(true)}
+          onGenerateSet={() => setSetGenerationOpen(true)}
         />
 
         {/* Isolated stacking context so the viewport canvas cannot swallow CTA clicks. */}
@@ -1140,6 +1149,19 @@ useEffect(() => {
           requestFrame(objects.map((object) => object.id));
         }}
       />
+      <SetGenerationDialog
+        open={setGenerationOpen}
+        onClose={() => setSetGenerationOpen(false)}
+        onApply={async (compiled) => {
+          if (!onCreateProjectFromBlueprint) {
+            throw new Error('Project recovery is still starting. Please try again in a moment.');
+          }
+          await onCreateProjectFromBlueprint(compiled);
+          setBuildMode('select');
+          clearObjectSelection();
+          requestFrame(compiled.project.scene.objects.map((object) => object.id));
+        }}
+      />
     </FullBleedLayout>
   );
 }
@@ -1152,6 +1174,7 @@ function BuildObjectTray({
   onPrimitiveChange,
   onGridSnapChange,
   onImport,
+  onGenerateSet,
 }: {
   activePrimitive: SceneObjectType;
   buildMode: BuildMode;
@@ -1160,6 +1183,7 @@ function BuildObjectTray({
   onPrimitiveChange: (type: SceneObjectType) => void;
   onGridSnapChange: (value: boolean) => void;
   onImport: () => void;
+  onGenerateSet: () => void;
 }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -1183,9 +1207,21 @@ function BuildObjectTray({
               type="button"
               onClick={() => {
                 setToolsOpen(false);
-                onImport();
+                onGenerateSet();
               }}
               className="col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-accent/50 bg-accent-soft px-3 py-2 text-xs font-semibold text-accent transition hover:border-accent"
+              data-build-generate-set
+            >
+              <Sparkles className="h-4 w-4" />
+              Generate set from description
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setToolsOpen(false);
+                onImport();
+              }}
+              className="col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-subtle px-3 py-2 text-xs font-semibold text-secondary transition hover:border-accent hover:text-accent"
               data-build-import-model
             >
               <Upload className="h-4 w-4" />
