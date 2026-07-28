@@ -64,7 +64,8 @@ export function resolvePoseableCharacter(
     // Registry populated by builtinMannequinCharacter side-effect import.
     return builtinPoseableCharacters.get(source.characterId);
   }
-  // Milestone B: hydrate from `_assets` when the in-memory registry is cold after reload.
+  // Adapters are registered at import time and re-hydrated on project parse /
+  // ensureAutoriggedCharactersForProject (see autoriggedPoseableCharacter.ts).
   return autoriggedPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
 }
 
