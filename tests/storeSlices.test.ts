@@ -83,6 +83,85 @@ describe('continuity store domain slices', () => {
     expect(sessionSrc).toContain('setShotCameraFlying:');
   });
 
+  it('implements workflow slice without picking from the monolithic factory', () => {
+    const workflowSrc = readFileSync(join(root, 'src/state/slices/workflowSlice.ts'), 'utf8');
+    expect(workflowSrc).not.toContain('pickSlice');
+    expect(workflowSrc).not.toContain('getSharedContinuityState');
+    expect(workflowSrc).toContain('setWorkspace:');
+    expect(workflowSrc).toContain('approveGrayboxForReference:');
+    expect(workflowSrc).toContain('acceptReferenceAlignment:');
+    expect(workflowSrc).toContain('resetWorkflowSession:');
+    expect(workflowSrc).toContain('requestObjectiveModal:');
+  });
+
+  it('workflow actions own workspace, objective/alignment prompts, and progression stamps', () => {
+    const before = useContinuityStore.getState();
+    expect(before.workspace).toBeTruthy();
+
+    before.setWorkspace('build');
+    expect(useContinuityStore.getState().workspace).toBe('build');
+
+    before.setWorkspace('shots');
+    const inShots = useContinuityStore.getState();
+    expect(inShots.workspace).toBe('shots');
+    expect(inShots.shotCameraFlying).toBe(true);
+    expect(inShots.selectedShotId).toBeTruthy();
+
+    const objectiveBefore = inShots.objectiveModalRequest;
+    inShots.requestObjectiveModal();
+    expect(useContinuityStore.getState().objectiveModalRequest).toBe(objectiveBefore + 1);
+
+    const alignmentBefore = useContinuityStore.getState().alignmentIntroRequest;
+    useContinuityStore.getState().requestAlignmentIntro();
+    expect(useContinuityStore.getState().alignmentIntroRequest).toBe(alignmentBefore + 1);
+
+    const retryBefore = useContinuityStore.getState().alignmentRetryModalRequest;
+    useContinuityStore.getState().requestAlignmentRetryModal();
+    expect(useContinuityStore.getState().alignmentRetryModalRequest).toBe(retryBefore + 1);
+
+    useContinuityStore.getState().dismissWorkflowAdvance('test-prompt-key');
+    expect(useContinuityStore.getState().dismissedWorkflowAdvanceKeys).toContain('test-prompt-key');
+
+    useContinuityStore.getState().markObjectiveSeen('build');
+    expect(useContinuityStore.getState().seenObjectiveWorkspaces).toContain('build');
+
+    useContinuityStore.getState().approveGrayboxForReference();
+    expect(useContinuityStore.getState().project.workflow.grayboxApprovedForReferenceAt).toBeTruthy();
+
+    const shotId = useContinuityStore.getState().selectedShotId
+      ?? useContinuityStore.getState().project.shots[0]?.id;
+    expect(shotId).toBeTruthy();
+    useContinuityStore.getState().acceptShotFraming(shotId!);
+    expect(
+      useContinuityStore.getState().project.workflow.shotFramingAcceptedAtByShotId[shotId!],
+    ).toBeTruthy();
+
+    useContinuityStore.getState().markAiBriefSent(shotId!);
+    expect(
+      useContinuityStore.getState().project.workflow.aiBriefSentAtByShotId[shotId!],
+    ).toBeTruthy();
+
+    useContinuityStore.getState().markFinalPackageExported(shotId!);
+    expect(
+      useContinuityStore.getState().project.workflow.finalPackageExportedAtByShotId[shotId!],
+    ).toBeTruthy();
+
+    useContinuityStore.getState().markAlignmentIntroSeen('pano-test');
+    expect(useContinuityStore.getState().seenAlignmentIntroForPanoId).toBe('pano-test');
+
+    useContinuityStore.getState().resetWorkflowSession();
+    const afterReset = useContinuityStore.getState();
+    expect(afterReset.dismissedWorkflowAdvanceKeys).toEqual([]);
+    expect(afterReset.seenObjectiveWorkspaces).toEqual([]);
+    expect(afterReset.objectiveModalRequest).toBe(0);
+    expect(afterReset.alignmentIntroRequest).toBe(0);
+    expect(afterReset.alignmentRetryModalRequest).toBe(0);
+    expect(afterReset.seenAlignmentIntroForPanoId).toBeUndefined();
+
+    // Restore a stable workspace for other tests that share the store.
+    afterReset.setWorkspace('build');
+  });
+
   it('session actions own fly mode, pano view, and land framing acceptance', () => {
     const before = useContinuityStore.getState();
     const shotId = before.selectedShotId ?? before.project.shots[0]?.id;
