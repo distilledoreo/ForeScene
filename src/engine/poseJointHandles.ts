@@ -3,19 +3,35 @@ import type { HumanJointId } from '../domain/types';
 import type { PoseableJoint } from './poseableCharacter';
 
 const HANDLE_USERDATA = 'panorefPoseJointHandle';
+const HANDLES_BY_JOINT_KEY = 'handlesByJoint';
 const HANDLE_RADIUS = 0.07;
+
+type HandleRegistry = Map<HumanJointId, THREE.Mesh>;
 
 /**
  * Direct joint handles for Pose Character mode.
  * Handles are parented to live bones so they track posed skeletons without
  * storing bone refs in persisted pose data.
+ *
+ * Lifecycle uses an explicit registry on the overlay group because active
+ * handles are reparented off `group.children` onto bones.
  */
 export function createPoseJointHandleGroup(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'pose-joint-handles';
   group.renderOrder = 20;
   group.frustumCulled = false;
+  group.userData[HANDLES_BY_JOINT_KEY] = new Map<HumanJointId, THREE.Mesh>();
   return group;
+}
+
+function getHandleRegistry(group: THREE.Group): HandleRegistry {
+  let registry = group.userData[HANDLES_BY_JOINT_KEY] as HandleRegistry | undefined;
+  if (!registry) {
+    registry = new Map<HumanJointId, THREE.Mesh>();
+    group.userData[HANDLES_BY_JOINT_KEY] = registry;
+  }
+  return registry;
 }
 
 export function syncPoseJointHandles(params: {
@@ -26,26 +42,23 @@ export function syncPoseJointHandles(params: {
 }): void {
   const { group, joints, selectedJointId, visible } = params;
   group.visible = visible;
-
-  const existing = new Map<string, THREE.Mesh>();
-  for (const child of [...group.children]) {
-    const jointId = child.userData[HANDLE_USERDATA] as string | undefined;
-    if (jointId) existing.set(jointId, child as THREE.Mesh);
-  }
+  const registry = getHandleRegistry(group);
 
   if (!visible) {
-    for (const mesh of existing.values()) {
-      mesh.removeFromParent();
+    for (const mesh of registry.values()) {
       mesh.visible = false;
-      group.add(mesh);
+      if (mesh.parent !== group) {
+        mesh.removeFromParent();
+        group.add(mesh);
+      }
     }
     return;
   }
 
-  const keep = new Set<string>();
+  const keep = new Set<HumanJointId>();
   for (const joint of joints) {
     keep.add(joint.id);
-    let mesh = existing.get(joint.id);
+    let mesh = registry.get(joint.id);
     if (!mesh) {
       mesh = new THREE.Mesh(
         new THREE.SphereGeometry(HANDLE_RADIUS, 14, 14),
@@ -60,6 +73,7 @@ export function syncPoseJointHandles(params: {
       mesh.userData[HANDLE_USERDATA] = joint.id;
       mesh.renderOrder = 21;
       mesh.frustumCulled = false;
+      registry.set(joint.id, mesh);
     }
 
     // Parent to the bone in local space so posed limbs carry their handles.
@@ -67,7 +81,6 @@ export function syncPoseJointHandles(params: {
       joint.node.add(mesh);
     }
     mesh.position.set(0, 0, 0);
-    mesh.scale.set(1, 1, 1);
     mesh.visible = true;
 
     // Counter-scale so handles stay readable if the character root is scaled.
@@ -83,11 +96,12 @@ export function syncPoseJointHandles(params: {
     material.opacity = joint.id === selectedJointId ? 1 : 0.92;
   }
 
-  for (const [jointId, mesh] of existing) {
+  for (const [jointId, mesh] of [...registry.entries()]) {
     if (keep.has(jointId)) continue;
     mesh.removeFromParent();
     mesh.geometry.dispose();
     (mesh.material as THREE.Material).dispose();
+    registry.delete(jointId);
   }
 }
 
@@ -97,14 +111,17 @@ export function findPoseJointHandleHit(
   joints: readonly PoseableJoint[] = [],
 ): HumanJointId | undefined {
   const targets: THREE.Object3D[] = [];
-  if (group?.visible) {
-    for (const child of group.children) {
-      if (child.userData[HANDLE_USERDATA]) targets.push(child);
+  if (group) {
+    for (const mesh of getHandleRegistry(group).values()) {
+      if (mesh.visible) targets.push(mesh);
     }
   }
+  // Fallback for callers that only have live joints.
   for (const joint of joints) {
     for (const child of joint.node.children) {
-      if (child.userData[HANDLE_USERDATA]) targets.push(child);
+      if (child.userData[HANDLE_USERDATA] && !targets.includes(child)) {
+        targets.push(child);
+      }
     }
   }
   if (targets.length === 0) return undefined;
@@ -115,16 +132,17 @@ export function findPoseJointHandleHit(
 }
 
 export function disposePoseJointHandleGroup(group: THREE.Group): void {
-  // Handles may be parented to bones; gather from group and detach leftovers.
-  const meshes = new Set<THREE.Mesh>();
-  group.traverse((node) => {
-    if (node.userData[HANDLE_USERDATA]) meshes.add(node as THREE.Mesh);
-  });
-  for (const child of [...group.children]) {
-    if (child.userData[HANDLE_USERDATA]) meshes.add(child as THREE.Mesh);
-  }
-  for (const mesh of meshes) {
+  const registry = getHandleRegistry(group);
+  for (const mesh of registry.values()) {
     mesh.removeFromParent();
+    mesh.geometry?.dispose();
+    (mesh.material as THREE.Material | undefined)?.dispose();
+  }
+  registry.clear();
+  for (const child of [...group.children]) {
+    if (!child.userData[HANDLE_USERDATA]) continue;
+    group.remove(child);
+    const mesh = child as THREE.Mesh;
     mesh.geometry?.dispose();
     (mesh.material as THREE.Material | undefined)?.dispose();
   }
