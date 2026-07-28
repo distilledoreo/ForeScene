@@ -18,6 +18,24 @@ function isQualifyingObject(object: SceneObject): boolean {
   return object.visible && !EXCLUDED_BOUND_TYPES.has(object.type);
 }
 
+/**
+ * Revision key for fly bounds. Pose-only edits (humanPose) must not change this key.
+ * Bounds depend on object positions, dimensions, scale, visibility, type, and pano origin.
+ */
+export function sceneFlyBoundsRevisionKey(scene: SceneData): string {
+  return JSON.stringify({
+    panoOrigin: scene.panoOrigin,
+    objects: scene.objects.map((object) => ({
+      id: object.id,
+      type: object.type,
+      visible: object.visible,
+      position: object.transform.position,
+      scale: object.transform.scale,
+      dimensions: object.dimensions,
+    })),
+  });
+}
+
 export function computeSceneFlyBounds(
   scene: SceneData,
   options?: {

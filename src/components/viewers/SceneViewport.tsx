@@ -17,10 +17,17 @@ import {
   subscribeHumanMannequinReady,
 } from '../../engine/humanMannequinModel';
 import {
+  buildAutorigRigInventoryKey,
   ensureAutoriggedCharactersForProject,
   getAutoriggedCharacterRevision,
+  setAutoriggedAssetsContext,
   subscribeAutoriggedCharacterReady,
 } from '../../engine/autoriggedPoseableCharacter';
+import {
+  buildSceneObjectNodeMap,
+  diffAndApplySceneObjectUpdates,
+  type ObjectSyncSnapshot,
+} from '../../engine/sceneObjectNodeSync';
 import {
   resolveProjectedProjectorAssets,
 } from '../../engine/multiOriginProjection';
@@ -45,13 +52,11 @@ import {
   type ProjectorOcclusionSet,
 } from '../../engine/projectorOcclusion';
 import {
-  applySceneObjectTransform,
   buildScene,
   computeBuildFogRange,
   createPreviewMesh,
   disposePreviewMesh,
   disposeScene,
-  sceneObjectUsesProceduralScale,
 } from '../../engine/sceneObjects';
 import { applyHumanPoseToObject3D, resolvePoseableCharacterForObject } from '../../engine/poseableCharacter';
 import '../../engine/builtinMannequinCharacter';
@@ -100,7 +105,7 @@ import {
   applyShotFovWheelDelta,
   SHOT_FOV_WHEEL_BATCH_IDLE_MS,
 } from '../../engine/shotFovWheel';
-import { clampFlyCameraPosition, computeSceneFlyBounds } from '../../engine/flyCameraBounds';
+import { clampFlyCameraPosition, computeSceneFlyBounds, sceneFlyBoundsRevisionKey } from '../../engine/flyCameraBounds';
 import { shotFlySpeedMultiplier } from '../../engine/shotFlyMovement';
 import { sceneEnvelope, selectionBounds } from '../../engine/buildSelection';
 import { DEFAULT_SHOT_NEAR_CLIP_METERS } from '../../engine/cameraClipping';
@@ -376,6 +381,8 @@ export function SceneViewport({
   /** Continuous axes from touch pad: forward/back, strafe, up/down in [-1, 1]. */
   const flyAxesRef = useRef({ forward: 0, strafe: 0, vertical: 0 });
   const flyBoundsRef = useRef(computeSceneFlyBounds(project.scene));
+  const sceneObjectNodesRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  const objectSyncSnapshotsRef = useRef<Map<string, ObjectSyncSnapshot>>(new Map());
   const lastFrameTimeRef = useRef(performance.now());
   const flyDirtyRef = useRef(false);
   /** Requested vs owned URL ownership — prevents A→B→C leaks (see prepareProjectedTextureRequest). */
@@ -459,7 +466,6 @@ export function SceneViewport({
 
   selectedObjectIdsRef.current = selectedObjectIds;
   projectRef.current = project;
-  flyBoundsRef.current = computeSceneFlyBounds(project.scene);
   snapToGridRef.current = snapToGrid;
   freeCameraActiveRef.current = freeCameraActive;
   renderDistanceRef.current = clampBuildRenderDistance(renderDistance);
@@ -1746,10 +1752,21 @@ export function SceneViewport({
     });
   }, [hasVisibleHumanMannequin]);
 
+  // Keep assets context fresh for createInstance without re-hydrating adapters on every pose edit.
+  useEffect(() => {
+    setAutoriggedAssetsContext(project.assets);
+  }, [project.assets]);
+
+  const autorigInventoryKey = useMemo(
+    () => (hasAutoriggedCharacter ? buildAutorigRigInventoryKey(project.assets) : ''),
+    // Inventory key only depends on poseable_rig assets, not the whole project / pose edits.
+    [hasAutoriggedCharacter, project.assets.assets],
+  );
+
   useEffect(() => {
     if (!hasAutoriggedCharacter) return;
     const loadWhenIdle = () => {
-      void ensureAutoriggedCharactersForProject(project).catch(() => undefined);
+      void ensureAutoriggedCharactersForProject(projectRef.current).catch(() => undefined);
     };
     const idleCallback = window.requestIdleCallback?.(loadWhenIdle, { timeout: 2_000 });
     const timeoutId = idleCallback === undefined
@@ -1759,7 +1776,7 @@ export function SceneViewport({
       if (idleCallback !== undefined) window.cancelIdleCallback?.(idleCallback);
       if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
-  }, [hasAutoriggedCharacter, project]);
+  }, [hasAutoriggedCharacter, autorigInventoryKey]);
 
   useEffect(() => {
     if (!hasAutoriggedCharacter) return;
@@ -1957,6 +1974,15 @@ export function SceneViewport({
     () => project.scene.panoOrigin.join(','),
     [project.scene.panoOrigin],
   );
+  const flyBoundsKey = useMemo(
+    () => sceneFlyBoundsRevisionKey(project.scene),
+    [project.scene.objects, project.scene.panoOrigin],
+  );
+  const flyBounds = useMemo(
+    () => computeSceneFlyBounds(project.scene),
+    [flyBoundsKey],
+  );
+  flyBoundsRef.current = flyBounds;
   const occlusionGeometryKey = useMemo(
     () => `${objectStructureKey}:${objectTransformKey}:${panoOriginKey}`,
     [objectTransformKey, objectStructureKey, panoOriginKey],
@@ -2150,6 +2176,9 @@ export function SceneViewport({
         }
         : undefined,
     });
+    // Persistent node registry — rebuilt only when the scene graph is rebuilt.
+    sceneObjectNodesRef.current = buildSceneObjectNodeMap(sceneRef.current);
+    objectSyncSnapshotsRef.current = new Map();
     if (previewPointRef.current && placementTypeRef.current) {
       updatePreviewMesh(previewPointRef.current);
     }
@@ -2180,34 +2209,34 @@ export function SceneViewport({
   // Cameras, object transforms, landmarks, and the capture origin all change frequently
   // while editing. Keep the existing Three.js resources and update their poses in place;
   // geometry/material/guide topology changes above are the only reasons to rebuild.
+  // Object pose/transform updates are local (persistent node map + per-object snapshots).
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    const objectNodes = new Map<string, THREE.Object3D>();
+    // Refresh node map if empty (e.g. first pose effect before structure effect finishes).
+    if (sceneObjectNodesRef.current.size === 0) {
+      sceneObjectNodesRef.current = buildSceneObjectNodeMap(scene);
+    }
+
+    const { nextPrevious } = diffAndApplySceneObjectUpdates({
+      nodes: sceneObjectNodesRef.current,
+      objects: project.scene.objects,
+      previous: objectSyncSnapshotsRef.current,
+    });
+    objectSyncSnapshotsRef.current = nextPrevious;
+
+    // Landmarks / frustums / origin still need a light guide pass (not full object graph).
     const landmarkNodes = new Map<string, THREE.Object3D>();
     const frustumHelpers = new Map<string, THREE.CameraHelper>();
     let panoOriginMarker: THREE.Object3D | undefined;
     scene.traverse((node) => {
-      const objectId = node.userData.sceneObjectId as string | undefined;
-      if (objectId) objectNodes.set(objectId, node);
       const landmarkId = node.userData.landmarkId as string | undefined;
       if (landmarkId) landmarkNodes.set(landmarkId, node);
       const shotId = node.userData.shotId as string | undefined;
       if (shotId && node instanceof THREE.CameraHelper) frustumHelpers.set(shotId, node);
       if (node.userData.panoOriginMarker === true) panoOriginMarker = node;
     });
-
-    for (const object of project.scene.objects) {
-      const node = objectNodes.get(object.id);
-      if (!node) continue;
-      node.name = object.name;
-      applySceneObjectTransform(node, object.transform, {
-        applyScale: !sceneObjectUsesProceduralScale(object.type),
-        visible: object.visible,
-      });
-      applyHumanPoseToObject3D(node, object);
-    }
 
     panoOriginMarker?.position.fromArray(project.scene.panoOrigin);
 

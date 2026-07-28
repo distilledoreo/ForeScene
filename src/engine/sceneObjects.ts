@@ -747,13 +747,20 @@ export function disposeScene(scene: THREE.Scene) {
   const disposedMaterials = new Set<THREE.Material>();
   scene.traverse((object) => {
     const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
     if (
       mesh.geometry
       && !SHARED_GEOMETRIES.has(mesh.geometry)
+      // Autorig skinned prototypes share BufferGeometry across clones.
+      && mesh.geometry.userData?.panorefSharedSkinnedGeometry !== true
       && !releaseImportedGeometry(mesh.geometry)
     ) mesh.geometry.dispose();
     disposeOwnedMaterials(mesh.material, disposedMaterials);
   });
+}
+
+function isSharedSkinnedPrototypeMaterial(material: THREE.Material): boolean {
+  return material.userData?.panorefSharedSkinnedMaterial === true;
 }
 
 function disposeOwnedMaterials(
@@ -764,6 +771,8 @@ function disposeOwnedMaterials(
   const materials = Array.isArray(material) ? material : [material];
   materials.forEach((item) => {
     if (SHARED_MATERIALS.has(item) || disposed.has(item)) return;
+    // SkeletonUtils-shared autorig prototype materials must survive scene rebuilds.
+    if (isSharedSkinnedPrototypeMaterial(item)) return;
     disposed.add(item);
     item.dispose();
   });

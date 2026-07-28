@@ -176,16 +176,23 @@ export interface PoseableRigAsset {
   bindMatrices?: Partial<Record<HumanJointId, number[]>>;
   /**
    * Approximate skinning produced by autorig.
-   * Prefer a compact binary asset (like packed imported meshes) for large meshes;
-   * inline number[] is only suitable for small fixtures / tests.
+   * Production projects store only compact metadata + `skinAssetId` (binary asset).
+   * Inline `indices`/`weights` are legacy / tiny test fixtures and are stripped on
+   * serialize when `skinAssetId` is present.
    */
   skin?: {
     influencesPerVertex: number;
-    /** Flattened vertex → joint index table (or binary via skinAssetId). */
+    /**
+     * @deprecated Prefer `skinAssetId`. Tiny fixtures only; never persist large arrays.
+     * Flattened vertex → joint index table.
+     */
     indices?: number[];
-    /** Flattened weights matching `indices`. */
+    /**
+     * @deprecated Prefer `skinAssetId`. Tiny fixtures only.
+     * Flattened weights matching `indices`.
+     */
     weights?: number[];
-    /** Preferred: binary payload asset id for indices+weights. */
+    /** Binary payload asset id for indices+weights (required for production skins). */
     skinAssetId?: string;
   };
   markers?: AutorigMarker[];

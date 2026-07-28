@@ -9,6 +9,8 @@ import {
 import { normalizeHumanPose, normalizePoseableCharacterSource } from './humanPose';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { hydrateAutoriggedCharactersFromAssets } from './autoriggedPoseableCharacter';
+import { stripInlineSkinArraysFromRig } from './autorigSkinWeights';
+import type { PoseableRigAsset } from '../domain/types';
 import JSZip from 'jszip';
 import { digestFromRecoveryResourceKey, sha256Digest, verifyBinaryDigest } from './binaryIntegrity';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
@@ -47,6 +49,19 @@ function createPortableProject(project: LocationProject): LocationProject {
     // may assign a planned storageKey without having written binary storage yet.
     if (asset.storageKey && !asset.uri.startsWith('data:')) {
       asset.uri = `${PROJECT_ASSET_URI_PREFIX}${asset.storageKey}`;
+    }
+    // Binary skin is the source of truth — never re-embed vertex weight tables.
+    if (asset.type === 'poseable_rig') {
+      const rig = asset.metadata?.poseableRig as PoseableRigAsset | undefined;
+      if (rig) {
+        const compact = stripInlineSkinArraysFromRig(rig);
+        if (compact !== rig) {
+          asset.metadata = {
+            ...asset.metadata,
+            poseableRig: compact,
+          };
+        }
+      }
     }
   }
   return portable;

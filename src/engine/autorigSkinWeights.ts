@@ -219,6 +219,58 @@ export async function writeSkinWeightBinaryAsset(
   };
 }
 
+/**
+ * Tiny inline fixtures only. Production skin always uses `skinAssetId` binary storage.
+ * Values above this budget in project JSON defeat the purpose of poseable-skin-*.bin.
+ */
+export const MAX_INLINE_SKIN_INFLUENCE_ENTRIES = 64;
+
+/** Compact skin metadata stored in project JSON when a binary asset exists. */
+export function compactPoseableSkinMetadata(skin: NonNullable<PoseableRigAsset['skin']>): NonNullable<PoseableRigAsset['skin']> {
+  if (skin.skinAssetId) {
+    return {
+      influencesPerVertex: skin.influencesPerVertex || 4,
+      skinAssetId: skin.skinAssetId,
+    };
+  }
+  return {
+    influencesPerVertex: skin.influencesPerVertex || 4,
+    ...(skin.indices ? { indices: skin.indices } : {}),
+    ...(skin.weights ? { weights: skin.weights } : {}),
+  };
+}
+
+/** True when poseable_rig metadata embeds large weight tables (should be binary-only). */
+export function poseableSkinExceedsInlineBudget(skin: PoseableRigAsset['skin'] | undefined): boolean {
+  if (!skin) return false;
+  if (skin.skinAssetId && (skin.indices || skin.weights)) return true;
+  const indexLen = skin.indices?.length ?? 0;
+  const weightLen = skin.weights?.length ?? 0;
+  return indexLen > MAX_INLINE_SKIN_INFLUENCE_ENTRIES || weightLen > MAX_INLINE_SKIN_INFLUENCE_ENTRIES;
+}
+
+export function assertCompactPoseableSkin(skin: PoseableRigAsset['skin'] | undefined): void {
+  if (!skin) return;
+  if (skin.skinAssetId && (skin.indices || skin.weights)) {
+    throw new Error('poseable_rig skin must not embed indices/weights when skinAssetId is set');
+  }
+  if (poseableSkinExceedsInlineBudget(skin)) {
+    throw new Error(
+      `poseable_rig skin inline arrays exceed fixture budget (${MAX_INLINE_SKIN_INFLUENCE_ENTRIES}); use skinAssetId binary storage`,
+    );
+  }
+}
+
+/** Strip inline indices/weights from a rig when a binary skin asset id is present. */
+export function stripInlineSkinArraysFromRig(rig: PoseableRigAsset): PoseableRigAsset {
+  if (!rig.skin?.skinAssetId) return rig;
+  if (!rig.skin.indices && !rig.skin.weights) return rig;
+  return {
+    ...rig,
+    skin: compactPoseableSkinMetadata(rig.skin),
+  };
+}
+
 export function applySkinBuffersToRig(
   rig: PoseableRigAsset,
   buffers: SkinWeightBuffers,
@@ -226,15 +278,17 @@ export function applySkinBuffersToRig(
 ): PoseableRigAsset {
   return {
     ...rig,
-    skin: {
-      influencesPerVertex: buffers.influencesPerVertex,
-      ...(skinAssetId
-        ? { skinAssetId }
-        : {
-          indices: Array.from(buffers.indices),
-          weights: Array.from(buffers.weights),
-        }),
-    },
+    skin: skinAssetId
+      ? {
+        influencesPerVertex: buffers.influencesPerVertex,
+        skinAssetId,
+      }
+      : {
+        influencesPerVertex: buffers.influencesPerVertex,
+        // Tiny fixtures / tests only — production always passes skinAssetId.
+        indices: Array.from(buffers.indices),
+        weights: Array.from(buffers.weights),
+      },
     rigGenerationVersion: Math.max(1, (rig.rigGenerationVersion ?? 0) + 1),
   };
 }

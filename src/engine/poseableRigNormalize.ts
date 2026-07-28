@@ -75,6 +75,36 @@ export function normalizePoseableRigGenerationSettings(value: unknown): Poseable
   };
 }
 
+/** Compact skin on load when binary id is present (legacy dual-storage projects). */
+export function normalizePoseableSkin(value: unknown): PoseableRigAsset['skin'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as NonNullable<PoseableRigAsset['skin']>;
+  const influences = typeof raw.influencesPerVertex === 'number' && Number.isFinite(raw.influencesPerVertex)
+    ? Math.max(1, Math.floor(raw.influencesPerVertex))
+    : 4;
+  if (typeof raw.skinAssetId === 'string' && raw.skinAssetId) {
+    // Binary is authoritative — drop any legacy inline copies immediately.
+    return {
+      influencesPerVertex: influences,
+      skinAssetId: raw.skinAssetId,
+    };
+  }
+  const indices = Array.isArray(raw.indices)
+    ? raw.indices.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+    : undefined;
+  const weights = Array.isArray(raw.weights)
+    ? raw.weights.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+    : undefined;
+  if (!indices && !weights) {
+    return { influencesPerVertex: influences };
+  }
+  return {
+    influencesPerVertex: influences,
+    ...(indices ? { indices } : {}),
+    ...(weights ? { weights } : {}),
+  };
+}
+
 export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = value as Partial<PoseableRigAsset>;
@@ -93,7 +123,7 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(typeof raw.originalSourceAssetId === 'string' ? { originalSourceAssetId: raw.originalSourceAssetId } : {}),
     ...(typeof raw.rigGenerationVersion === 'number' ? { rigGenerationVersion: raw.rigGenerationVersion } : {}),
     ...(raw.bindMatrices && typeof raw.bindMatrices === 'object' ? { bindMatrices: raw.bindMatrices } : {}),
-    ...(raw.skin && typeof raw.skin === 'object' ? { skin: raw.skin } : {}),
+    ...(raw.skin && typeof raw.skin === 'object' ? { skin: normalizePoseableSkin(raw.skin) } : {}),
     ...(Array.isArray(raw.markers) ? { markers: raw.markers } : {}),
     ...(normalizePoseableCharacterOrientation(raw.orientation)
       ? { orientation: normalizePoseableCharacterOrientation(raw.orientation) }

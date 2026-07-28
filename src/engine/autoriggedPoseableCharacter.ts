@@ -26,11 +26,19 @@ import {
   writeSkinWeightBinaryAsset,
 } from './autorigSkinWeights';
 import {
-  buildSkinnedCharacterFromTemplate,
+  cloneSkinnedPrototypeInstance,
+  ensureSkeletonCloneReady,
+  ensureSkinBuffersForRig,
   extractWorldPositionsFromObject,
+  getCachedSkinBuffers,
+  getCachedSkinnedPrototype,
+  getOrBuildSkinnedPrototype,
+  isSkeletonCloneReady,
   jointPositionsFromRig,
-  loadSkinWeightBuffers,
-  loadSkinWeightBuffersFromUri,
+  POSE_BONES_USERDATA_KEY,
+  setCachedSkinBuffers,
+  skinBufferCacheKey,
+  skinnedPrototypeCacheKey,
 } from './autorigSkinnedMesh';
 
 function axisToVector(axis: NonNullable<PoseableCharacterOrientation['frontAxis']>): THREE.Vector3 {
@@ -70,6 +78,13 @@ const loadPromises = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 let revision = 0;
 
+/** Latest assets registry for createInstance skin/rig resolution (avoids re-registering on every pose). */
+let assetsContext: AssetRegistry | undefined;
+/** Last hydration inventory key — skip full re-register when unchanged. */
+let lastHydrationInventoryKey = '';
+/** assetId:rigId → inventory fragment used at registration. */
+const registeredInventoryFragments = new Map<string, string>();
+
 export function getAutoriggedCharacterRevision(): number {
   return revision;
 }
@@ -84,8 +99,48 @@ function notifyReady(): void {
   for (const listener of listeners) listener();
 }
 
+export function setAutoriggedAssetsContext(assets: AssetRegistry | undefined): void {
+  assetsContext = assets;
+}
+
+export function getAutoriggedAssetsContext(): AssetRegistry | undefined {
+  return assetsContext;
+}
+
+/**
+ * Stable inventory key for poseable rigs. Pose-slider project mutations that do not
+ * change rig identity / generation / skin asset leave this key unchanged.
+ */
+export function buildAutorigRigInventoryKey(assets: AssetRegistry): string {
+  const parts: string[] = [];
+  for (const asset of Object.values(assets.assets)) {
+    if (asset.type !== 'poseable_rig') continue;
+    const rig = asset.metadata?.poseableRig as PoseableRigAsset | undefined;
+    if (!rig?.id) continue;
+    parts.push([
+      asset.id,
+      String(rig.rigGenerationVersion ?? 0),
+      rig.originalSourceAssetId ?? '',
+      rig.sourceMeshAssetId ?? '',
+      rig.skin?.skinAssetId ?? '',
+    ].join('\u001f'));
+  }
+  parts.sort();
+  return parts.join('\u001e');
+}
+
+function registrationFragment(assetId: string, rig: PoseableRigAsset, sourceAssetId: string): string {
+  return [
+    assetId,
+    String(rig.rigGenerationVersion ?? 0),
+    sourceAssetId,
+    rig.skin?.skinAssetId ?? '',
+  ].join('\u001f');
+}
+
 async function resolveSourceBytes(sourceAssetId: string, assets?: AssetRegistry): Promise<ArrayBuffer> {
-  const asset = assets?.assets[sourceAssetId];
+  const registry = assets ?? assetsContext;
+  const asset = registry?.assets[sourceAssetId];
   if (!asset) {
     throw new Error(`Poseable source asset ${sourceAssetId} is missing.`);
   }
@@ -111,7 +166,10 @@ async function ensureTemplateLoaded(sourceAssetId: string, assets?: AssetRegistr
   }
   const promise = (async () => {
     const bytes = await resolveSourceBytes(sourceAssetId, assets);
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const [{ GLTFLoader }] = await Promise.all([
+      import('three/addons/loaders/GLTFLoader.js'),
+      ensureSkeletonCloneReady(),
+    ]);
     const gltf = await new GLTFLoader().parseAsync(bytes, '');
     templates.set(sourceAssetId, gltf.scene);
     notifyReady();
@@ -136,6 +194,41 @@ function createFallbackBox(
   return mesh;
 }
 
+function orientAndFitTemplate(
+  template: THREE.Object3D,
+  orientation: PoseableCharacterOrientation,
+  targetHeight: number,
+): { oriented: THREE.Group; fittedHeight: number } {
+  const clone = template.clone(true);
+  const oriented = new THREE.Group();
+  oriented.quaternion.copy(orientationQuaternion(orientation));
+  oriented.add(clone);
+  oriented.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(oriented);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const sourceHeight = size.y > 1e-6 ? size.y : Math.max(size.x, size.z, 1);
+  const scale = targetHeight / sourceHeight;
+  oriented.scale.setScalar(scale);
+  oriented.updateMatrixWorld(true);
+
+  const scaledBox = new THREE.Box3().setFromObject(oriented);
+  oriented.position.y += -scaledBox.min.y;
+  oriented.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
+  oriented.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
+  return { oriented, fittedHeight: targetHeight };
+}
+
+function resolveRigForShell(params: {
+  assetId: string;
+  rig?: PoseableRigAsset;
+}): PoseableRigAsset | undefined {
+  const assets = assetsContext;
+  return params.rig
+    ?? (assets?.assets[params.assetId]?.metadata?.poseableRig as PoseableRigAsset | undefined);
+}
+
 export function createAutoriggedPoseableCharacterShell(params: {
   assetId: string;
   rigId: string;
@@ -148,18 +241,33 @@ export function createAutoriggedPoseableCharacterShell(params: {
   const height = params.approximateHeightMeters ?? 1.75;
   const orientation = params.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 };
   const REST_USERDATA_KEY = 'panorefPoseRests';
-  const BONES_USERDATA_KEY = 'panorefPoseBones';
+  const BONES_USERDATA_KEY = POSE_BONES_USERDATA_KEY;
 
   return {
     source: { kind: 'autorigged', assetId: params.assetId, rigId: params.rigId },
     skeleton: createCanonicalHumanoidSkeleton(),
 
     async ensureLoaded() {
-      await ensureTemplateLoaded(params.sourceAssetId, params.assets);
+      await Promise.all([
+        ensureTemplateLoaded(params.sourceAssetId, assetsContext ?? params.assets),
+        ensureSkeletonCloneReady(),
+      ]);
+      const rig = resolveRigForShell(params);
+      if (rig?.skin) {
+        await ensureSkinBuffersForRig(rig, assetsContext ?? params.assets);
+      }
     },
 
     isReady() {
-      return templates.has(params.sourceAssetId);
+      if (!templates.has(params.sourceAssetId)) return false;
+      const rig = resolveRigForShell(params);
+      if (!rig?.bindMatrices || !rig.skin) return true;
+      const key = skinBufferCacheKey({
+        skinAssetId: rig.skin.skinAssetId,
+        rigId: rig.id,
+        rigGenerationVersion: rig.rigGenerationVersion,
+      });
+      return getCachedSkinBuffers(key) !== undefined || Boolean(rig.skin.indices && rig.skin.weights);
     },
 
     createInstance(object: SceneObject, material: THREE.MeshStandardMaterial) {
@@ -171,76 +279,90 @@ export function createAutoriggedPoseableCharacterShell(params: {
       const root = new THREE.Group();
       root.name = object.name;
 
-      const rig = params.rig
-        ?? (params.assets?.assets[params.assetId]?.metadata?.poseableRig as PoseableRigAsset | undefined);
-      const clone = template.clone(true);
-      const oriented = new THREE.Group();
-      oriented.quaternion.copy(orientationQuaternion(orientation));
-      oriented.add(clone);
-      oriented.updateMatrixWorld(true);
+      const rig = resolveRigForShell(params);
+      const referenceHeight = object.dimensions[1] || height;
 
-      const box = new THREE.Box3().setFromObject(oriented);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const sourceHeight = size.y > 1e-6 ? size.y : Math.max(size.x, size.z, 1);
-      const targetHeight = object.dimensions[1] || height;
-      const scale = targetHeight / sourceHeight;
-      oriented.scale.setScalar(scale);
-      oriented.updateMatrixWorld(true);
-
-      const scaledBox = new THREE.Box3().setFromObject(oriented);
-      oriented.position.y += -scaledBox.min.y;
-      oriented.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
-      oriented.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
-
-      // Prefer skinned display when bind matrices + skin weights exist.
+      // Prefer cached skinned prototype (shared geometry) when buffers + SkeletonUtils are ready.
       if (rig?.bindMatrices && rig.skin) {
-        const syncBuffers = loadSkinWeightBuffers(rig);
-        // Async skin URI load is handled by ensure path; sync path uses inline weights.
-        void syncBuffers.then(async (inline) => {
-          let buffers = inline;
-          if (!buffers && rig.skin?.skinAssetId && params.assets) {
-            const skinAsset = params.assets.assets[rig.skin.skinAssetId];
-            if (skinAsset?.uri) {
-              buffers = await loadSkinWeightBuffersFromUri(
-                skinAsset.uri,
-                (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
-              ).catch(() => undefined);
-            }
-          }
-          if (!buffers) return;
+        const bufferKey = skinBufferCacheKey({
+          skinAssetId: rig.skin.skinAssetId,
+          rigId: rig.id,
+          rigGenerationVersion: rig.rigGenerationVersion,
         });
-        // For createInstance (sync), use inline skin arrays when present.
-        if (rig.skin.indices && rig.skin.weights) {
+        let buffers = getCachedSkinBuffers(bufferKey);
+        if (!buffers && rig.skin.indices && rig.skin.weights) {
+          buffers = {
+            influencesPerVertex: rig.skin.influencesPerVertex || 4,
+            indices: Uint16Array.from(rig.skin.indices),
+            weights: Float32Array.from(rig.skin.weights),
+            jointOrder: (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as HumanJointId[],
+          };
+          setCachedSkinBuffers(bufferKey, buffers);
+        }
+
+        if (buffers && isSkeletonCloneReady()) {
           try {
-            const buffers = {
-              influencesPerVertex: rig.skin.influencesPerVertex || 4,
-              indices: Uint16Array.from(rig.skin.indices),
-              weights: Float32Array.from(rig.skin.weights),
-              jointOrder: (rig.skeletonJoints?.length ? rig.skeletonJoints : []) as never,
-            };
-            const skinned = buildSkinnedCharacterFromTemplate({
-              template: oriented,
-              rig,
-              buffers,
-              materialFallback: material,
+            const protoKey = skinnedPrototypeCacheKey({
+              assetId: params.assetId,
+              rigId: params.rigId,
+              rigGenerationVersion: rig.rigGenerationVersion,
             });
+            let prototype = getCachedSkinnedPrototype(protoKey);
+            if (!prototype) {
+              const { oriented } = orientAndFitTemplate(template, orientation, height);
+              prototype = getOrBuildSkinnedPrototype({
+                cacheKey: protoKey,
+                template: oriented,
+                rig,
+                buffers,
+                materialFallback: material,
+                referenceHeight: height,
+              });
+            }
+
+            const skinned = cloneSkinnedPrototypeInstance(prototype.root);
+            // Scale from prototype reference height to this instance's dimensions.
+            const scale = referenceHeight / Math.max(prototype.referenceHeight, 1e-6);
+            skinned.scale.multiplyScalar(scale);
             root.add(skinned);
+            root.position.fromArray(object.transform.position);
+            root.rotation.set(
+              degreesToRadians(object.transform.rotation[0]),
+              degreesToRadians(object.transform.rotation[1]),
+              degreesToRadians(object.transform.rotation[2]),
+            );
+            return root;
           } catch {
             // Corrupt/mismatched skin payloads must not break the scene — show rigid mesh.
+            const { oriented } = orientAndFitTemplate(template, orientation, referenceHeight);
             root.add(oriented);
             root.userData.poseableSkinFallback = 'corrupt-or-mismatched-skin';
-          }
-        } else {
-          root.add(oriented);
-          if (rig.skin?.skinAssetId && !rig.skin.indices) {
-            root.userData.poseableSkinFallback = 'missing-inline-skin';
+            root.position.fromArray(object.transform.position);
+            root.rotation.set(
+              degreesToRadians(object.transform.rotation[0]),
+              degreesToRadians(object.transform.rotation[1]),
+              degreesToRadians(object.transform.rotation[2]),
+            );
+            return root;
           }
         }
-      } else {
+
+        // Buffers or SkeletonUtils not ready — rigid mesh; viewport rebuilds when cache fills.
+        const { oriented } = orientAndFitTemplate(template, orientation, referenceHeight);
         root.add(oriented);
+        root.userData.poseableSkinFallback = buffers ? 'skeleton-clone-pending' : 'skin-buffers-pending';
+        root.position.fromArray(object.transform.position);
+        root.rotation.set(
+          degreesToRadians(object.transform.rotation[0]),
+          degreesToRadians(object.transform.rotation[1]),
+          degreesToRadians(object.transform.rotation[2]),
+        );
+        return root;
       }
 
+      // No skin yet — oriented rigid source mesh.
+      const { oriented } = orientAndFitTemplate(template, orientation, referenceHeight);
+      root.add(oriented);
       root.position.fromArray(object.transform.position);
       root.rotation.set(
         degreesToRadians(object.transform.rotation[0]),
@@ -252,11 +374,6 @@ export function createAutoriggedPoseableCharacterShell(params: {
 
     bindInstance(instance: THREE.Object3D) {
       if (instance.userData[BONES_USERDATA_KEY]) return;
-      const existing = instance.userData[BONES_USERDATA_KEY] as Map<HumanJointId, THREE.Bone> | undefined;
-      if (existing) {
-        instance.userData[REST_USERDATA_KEY] = captureBoneRests(existing);
-        return;
-      }
       const bones = new Map<HumanJointId, THREE.Bone>();
       instance.traverse((node) => {
         const bone = node as THREE.Bone;
@@ -291,10 +408,7 @@ export function createAutoriggedPoseableCharacterShell(params: {
       const rests = instance.userData[REST_USERDATA_KEY] as Map<HumanJointId, BoneRestPose> | undefined;
       if (!bones || !rests) return;
       applySemanticPoseToBones({ bones, rests, pose });
-      instance.traverse((node) => {
-        const skinned = node as THREE.SkinnedMesh;
-        if (skinned.isSkinnedMesh) skinned.skeleton.update();
-      });
+      // Skeleton matrix update is owned by applyHumanPoseToObject3D (generic wrapper).
     },
   };
 }
@@ -306,6 +420,7 @@ export async function generateSkinWeightsForRigAsset(params: {
   assets?: AssetRegistry;
 }): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset }> {
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
+  await ensureSkeletonCloneReady();
   const template = templates.get(params.sourceAssetId);
   if (!template) throw new Error('Poseable source mesh is not loaded.');
 
@@ -327,20 +442,23 @@ export async function generateSkinWeightsForRigAsset(params: {
     createdAt: new Date().toISOString(),
     metadata: { poseableSkin: true, byteLength: written.byteLength },
   };
-  // Keep compact inline copy for small fixtures / immediate use; binary ref for persistence.
+  // Compact metadata only — weights live in the binary asset + runtime cache.
   const rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
-  // Also keep inline for sync createInstance until cold-load URI hydration is universal.
-  rig.skin = {
-    influencesPerVertex: buffers.influencesPerVertex,
-    indices: Array.from(buffers.indices),
-    weights: Array.from(buffers.weights),
+  const cacheKey = skinBufferCacheKey({
     skinAssetId: skinAsset.id,
-  };
+    rigId: rig.id,
+    rigGenerationVersion: rig.rigGenerationVersion,
+  });
+  setCachedSkinBuffers(cacheKey, buffers);
   return { rig, skinAsset };
 }
 
-/** Hydrate in-memory adapters from poseable_rig assets after project load. */
+/**
+ * Hydrate in-memory adapters from poseable_rig assets.
+ * Skips re-registration when the same asset/rig generation/skin is already registered.
+ */
 export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): number {
+  setAutoriggedAssetsContext(assets);
   let registered = 0;
   for (const asset of Object.values(assets.assets)) {
     if (asset.type !== 'poseable_rig') continue;
@@ -348,6 +466,11 @@ export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): nu
     if (!rig?.id) continue;
     const sourceAssetId = rig.originalSourceAssetId ?? rig.sourceMeshAssetId;
     if (!sourceAssetId) continue;
+    const mapKey = `${asset.id}:${rig.id}`;
+    const fragment = registrationFragment(asset.id, rig, sourceAssetId);
+    if (registeredInventoryFragments.get(mapKey) === fragment) {
+      continue;
+    }
     registerAutoriggedPoseableCharacter(
       asset.id,
       rig.id,
@@ -358,26 +481,87 @@ export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): nu
         orientation: rig.orientation,
         approximateHeightMeters: rig.generationSettings?.approximateHeightMeters,
         assets,
+        rig,
       }),
     );
+    registeredInventoryFragments.set(mapKey, fragment);
     registered += 1;
   }
+  lastHydrationInventoryKey = buildAutorigRigInventoryKey(assets);
   return registered;
+}
+
+/**
+ * True when ensure/hydrate would skip adapter re-registration because the
+ * rig inventory key is unchanged from the last successful hydrate.
+ */
+export function isAutorigHydrationCurrent(assets: AssetRegistry): boolean {
+  return lastHydrationInventoryKey !== ''
+    && lastHydrationInventoryKey === buildAutorigRigInventoryKey(assets);
 }
 
 export async function ensureAutoriggedCharactersForProject(
   project: { scene: { objects: SceneObject[] }; assets: AssetRegistry },
 ): Promise<void> {
-  hydrateAutoriggedCharactersFromAssets(project.assets);
+  setAutoriggedAssetsContext(project.assets);
+  const inventoryKey = buildAutorigRigInventoryKey(project.assets);
+  if (inventoryKey !== lastHydrationInventoryKey) {
+    hydrateAutoriggedCharactersFromAssets(project.assets);
+  }
+
+  await ensureSkeletonCloneReady();
+
   const jobs: Promise<void>[] = [];
+  const seenSources = new Set<string>();
+  const seenSkins = new Set<string>();
+
   for (const object of project.scene.objects) {
     const source = object.poseableCharacter;
     if (!source || source.kind !== 'autorigged') continue;
     const rigAsset = project.assets.assets[source.assetId];
     const rig = rigAsset?.metadata?.poseableRig as PoseableRigAsset | undefined;
     const sourceAssetId = rig?.originalSourceAssetId ?? rig?.sourceMeshAssetId;
-    if (!sourceAssetId) continue;
-    jobs.push(ensureTemplateLoaded(sourceAssetId, project.assets).catch(() => undefined));
+    if (sourceAssetId && !seenSources.has(sourceAssetId)) {
+      seenSources.add(sourceAssetId);
+      jobs.push(ensureTemplateLoaded(sourceAssetId, project.assets).catch(() => undefined));
+    }
+    if (rig?.skin) {
+      const skinKey = skinBufferCacheKey({
+        skinAssetId: rig.skin.skinAssetId,
+        rigId: rig.id,
+        rigGenerationVersion: rig.rigGenerationVersion,
+      });
+      if (!seenSkins.has(skinKey)) {
+        seenSkins.add(skinKey);
+        jobs.push(
+          ensureSkinBuffersForRig(rig, project.assets)
+            .then(() => {
+              // Warm skinned prototype once buffers are ready.
+              if (!templates.has(sourceAssetId ?? '') || !rig.bindMatrices) return;
+              const template = templates.get(sourceAssetId!);
+              if (!template) return;
+              const buffers = getCachedSkinBuffers(skinKey);
+              if (!buffers) return;
+              const orientation = rig.orientation ?? { frontAxis: '+z' as const, upAxis: '+y' as const, groundLevelMeters: 0 };
+              const refHeight = rig.generationSettings?.approximateHeightMeters ?? 1.75;
+              const { oriented } = orientAndFitTemplate(template, orientation, refHeight);
+              getOrBuildSkinnedPrototype({
+                cacheKey: skinnedPrototypeCacheKey({
+                  assetId: source.assetId,
+                  rigId: source.rigId,
+                  rigGenerationVersion: rig.rigGenerationVersion,
+                }),
+                template: oriented,
+                rig,
+                buffers,
+                referenceHeight: refHeight,
+              });
+              notifyReady();
+            })
+            .catch(() => undefined),
+        );
+      }
+    }
   }
   await Promise.all(jobs);
 }
@@ -387,4 +571,12 @@ export function resetAutoriggedCharacterTemplatesForTests(): void {
   loadPromises.clear();
   revision = 0;
   listeners.clear();
+  assetsContext = undefined;
+  lastHydrationInventoryKey = '';
+  registeredInventoryFragments.clear();
+}
+
+/** @internal test helper — count of adapter registrations performed (not skips). */
+export function getRegisteredAutorigFragmentCountForTests(): number {
+  return registeredInventoryFragments.size;
 }

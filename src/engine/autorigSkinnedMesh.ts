@@ -1,31 +1,147 @@
 import * as THREE from 'three';
-import type { HumanJointId, PoseableRigAsset, Vec3 } from '../domain/types';
+import type { AssetRegistry, HumanJointId, PoseableRigAsset, Vec3 } from '../domain/types';
 import { HUMAN_JOINT_IDS, HUMAN_JOINT_LABELS } from './humanPose';
 import { HUMAN_JOINT_PARENT } from './humanoidSkeleton';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import { getModelAsset } from './modelAssetStore';
 import type { SkinWeightBuffers } from './autorigSkinWeights';
 
+/** disposeScene skips geometries tagged with this userData key. */
+export const SHARED_SKINNED_GEOMETRY_USERDATA = 'panorefSharedSkinnedGeometry';
+/** disposeScene skips materials tagged with this userData key (SkeletonUtils clones share them). */
+export const SHARED_SKINNED_MATERIAL_USERDATA = 'panorefSharedSkinnedMaterial';
+
+const skinBufferCache = new Map<string, SkinWeightBuffers>();
+const skinLoadPromises = new Map<string, Promise<SkinWeightBuffers | undefined>>();
+const prototypeCache = new Map<string, SkinnedPrototypeEntry>();
+let skinBinaryReadCount = 0;
+let prototypeBuildCount = 0;
+let skeletonCloneFn: ((source: THREE.Object3D) => THREE.Object3D) | null = null;
+
+export const SKINNED_MESHES_USERDATA_KEY = 'panorefSkinnedMeshes';
+export const POSE_BONES_USERDATA_KEY = 'panorefPoseBones';
+
+export interface SkinnedPrototypeEntry {
+  root: THREE.Object3D;
+  referenceHeight: number;
+  cacheKey: string;
+}
+
+export function skinBufferCacheKey(params: {
+  skinAssetId?: string;
+  rigId?: string;
+  rigGenerationVersion?: number;
+}): string {
+  if (params.skinAssetId) return `skin:${params.skinAssetId}`;
+  return `rig:${params.rigId ?? 'unknown'}:v${params.rigGenerationVersion ?? 0}`;
+}
+
+export function skinnedPrototypeCacheKey(params: {
+  assetId: string;
+  rigId: string;
+  rigGenerationVersion?: number;
+}): string {
+  return `${params.assetId}:${params.rigId}:v${params.rigGenerationVersion ?? 0}`;
+}
+
+export function getCachedSkinBuffers(key: string): SkinWeightBuffers | undefined {
+  return skinBufferCache.get(key);
+}
+
+export function setCachedSkinBuffers(key: string, buffers: SkinWeightBuffers): void {
+  skinBufferCache.set(key, buffers);
+}
+
+export function getSkinBinaryReadCount(): number {
+  return skinBinaryReadCount;
+}
+
+export function getPrototypeBuildCount(): number {
+  return prototypeBuildCount;
+}
+
+export function getCachedSkinnedPrototype(key: string): SkinnedPrototypeEntry | undefined {
+  return prototypeCache.get(key);
+}
+
+export function invalidateSkinnedPrototype(key: string): void {
+  prototypeCache.delete(key);
+}
+
+export function resetAutorigRuntimeCachesForTests(): void {
+  for (const key of [...prototypeCache.keys()]) {
+    invalidateSkinnedPrototype(key);
+  }
+  skinBufferCache.clear();
+  skinLoadPromises.clear();
+  prototypeCache.clear();
+  skinBinaryReadCount = 0;
+  prototypeBuildCount = 0;
+  skeletonCloneFn = null;
+}
+
+/** Prefer binary skin asset; fall back to legacy inline arrays once, then cache. */
+export async function ensureSkinBuffersForRig(
+  rig: PoseableRigAsset,
+  assets?: AssetRegistry,
+): Promise<SkinWeightBuffers | undefined> {
+  if (!rig.skin) return undefined;
+  const key = skinBufferCacheKey({
+    skinAssetId: rig.skin.skinAssetId,
+    rigId: rig.id,
+    rigGenerationVersion: rig.rigGenerationVersion,
+  });
+  const cached = skinBufferCache.get(key);
+  if (cached) return cached;
+
+  const existing = skinLoadPromises.get(key);
+  if (existing) return existing;
+
+  const promise = (async (): Promise<SkinWeightBuffers | undefined> => {
+    const jointOrder = (
+      rig.skeletonJoints?.length ? rig.skeletonJoints : [...HUMAN_JOINT_IDS]
+    ) as HumanJointId[];
+
+    if (rig.skin?.skinAssetId && assets) {
+      const skinAsset = assets.assets[rig.skin.skinAssetId];
+      if (skinAsset?.uri) {
+        skinBinaryReadCount += 1;
+        const buffers = await loadSkinWeightBuffersFromUri(skinAsset.uri, jointOrder);
+        skinBufferCache.set(key, buffers);
+        return buffers;
+      }
+    }
+
+    if (rig.skin?.indices && rig.skin.weights) {
+      const buffers: SkinWeightBuffers = {
+        influencesPerVertex: rig.skin.influencesPerVertex || 4,
+        indices: Uint16Array.from(rig.skin.indices),
+        weights: Float32Array.from(rig.skin.weights),
+        jointOrder,
+      };
+      skinBufferCache.set(key, buffers);
+      return buffers;
+    }
+
+    return undefined;
+  })();
+
+  skinLoadPromises.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    skinLoadPromises.delete(key);
+  }
+}
+
+/**
+ * @deprecated Prefer ensureSkinBuffersForRig + runtime cache.
+ * Sync helper for legacy inline-only fixtures.
+ */
 export async function loadSkinWeightBuffers(
   rig: PoseableRigAsset,
 ): Promise<SkinWeightBuffers | undefined> {
-  const skin = rig.skin;
-  if (!skin) return undefined;
-  const jointOrder = (rig.skeletonJoints?.length ? rig.skeletonJoints : [...HUMAN_JOINT_IDS]) as HumanJointId[];
-
-  if (skin.skinAssetId) {
-    // Resolve via assets map is caller's job; here we only support direct IDB keys encoded in metadata later.
-    return undefined;
-  }
-  if (skin.indices && skin.weights) {
-    return {
-      influencesPerVertex: skin.influencesPerVertex || 4,
-      indices: Uint16Array.from(skin.indices),
-      weights: Float32Array.from(skin.weights),
-      jointOrder,
-    };
-  }
-  return undefined;
+  return ensureSkinBuffersForRig(rig);
 }
 
 export async function loadSkinWeightBuffersFromUri(uri: string, jointOrder: HumanJointId[]): Promise<SkinWeightBuffers> {
@@ -51,6 +167,114 @@ export async function loadSkinWeightBuffersFromUri(uri: string, jointOrder: Huma
     weights: new Float32Array(weights),
     jointOrder,
   };
+}
+
+export async function ensureSkeletonCloneReady(): Promise<void> {
+  if (skeletonCloneFn) return;
+  const skeletonUtils = await import('three/addons/utils/SkeletonUtils.js');
+  skeletonCloneFn = skeletonUtils.clone;
+}
+
+export function isSkeletonCloneReady(): boolean {
+  return skeletonCloneFn !== null;
+}
+
+/**
+ * Build (or return cached) skinned prototype for a rig generation.
+ * Geometry/materials are shared across SkeletonUtils clones; bones are per-instance.
+ */
+export function getOrBuildSkinnedPrototype(params: {
+  cacheKey: string;
+  template: THREE.Object3D;
+  rig: PoseableRigAsset;
+  buffers: SkinWeightBuffers;
+  materialFallback?: THREE.Material;
+  referenceHeight: number;
+}): SkinnedPrototypeEntry {
+  const existing = prototypeCache.get(params.cacheKey);
+  if (existing) return existing;
+
+  const built = buildSkinnedCharacterFromTemplate({
+    template: params.template,
+    rig: params.rig,
+    buffers: params.buffers,
+    materialFallback: params.materialFallback,
+  });
+  cacheSkinnedMeshesOnInstance(built);
+  // Shared across SkeletonUtils clones — must not be disposed with any one scene instance.
+  markSharedSkinnedPrototypeResources(built);
+  const entry: SkinnedPrototypeEntry = {
+    root: built,
+    referenceHeight: params.referenceHeight,
+    cacheKey: params.cacheKey,
+  };
+  prototypeCache.set(params.cacheKey, entry);
+  prototypeBuildCount += 1;
+  return entry;
+}
+
+/** Tag geometry + materials so disposeScene cannot poison the prototype cache. */
+export function markSharedSkinnedPrototypeResources(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if (mesh.geometry) {
+      mesh.geometry.userData[SHARED_SKINNED_GEOMETRY_USERDATA] = true;
+    }
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (material) material.userData[SHARED_SKINNED_MATERIAL_USERDATA] = true;
+    }
+  });
+}
+
+/** Clone a prepared skinned prototype; shares BufferGeometry with the prototype. */
+export function cloneSkinnedPrototypeInstance(prototype: THREE.Object3D): THREE.Object3D {
+  if (!skeletonCloneFn) {
+    throw new Error('SkeletonUtils clone is not ready; call ensureSkeletonCloneReady first.');
+  }
+  const instance = skeletonCloneFn(prototype);
+  clearPoseRuntimeUserData(instance);
+  cacheSkinnedMeshesOnInstance(instance);
+  // Clones share materials/geometry with the prototype — re-assert tags after clone.
+  markSharedSkinnedPrototypeResources(instance);
+  return instance;
+}
+
+/** Whether two Object3D trees share any BufferGeometry identity (prototype reuse proof). */
+export function shareAnyBufferGeometry(a: THREE.Object3D, b: THREE.Object3D): boolean {
+  const geos = new Set<THREE.BufferGeometry>();
+  a.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh && mesh.geometry) geos.add(mesh.geometry);
+  });
+  let shared = false;
+  b.traverse((node) => {
+    if (shared) return;
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh && mesh.geometry && geos.has(mesh.geometry)) shared = true;
+  });
+  return shared;
+}
+
+export function cacheSkinnedMeshesOnInstance(root: THREE.Object3D): void {
+  const meshes: THREE.SkinnedMesh[] = [];
+  root.traverse((node) => {
+    const mesh = node as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) meshes.push(mesh);
+  });
+  root.userData[SKINNED_MESHES_USERDATA_KEY] = meshes;
+}
+
+export function clearPoseRuntimeUserData(root: THREE.Object3D): void {
+  delete root.userData[POSE_BONES_USERDATA_KEY];
+  delete root.userData.panorefPoseRests;
+  delete root.userData[SKINNED_MESHES_USERDATA_KEY];
+  root.traverse((node) => {
+    if (node === root) return;
+    delete node.userData[POSE_BONES_USERDATA_KEY];
+    delete node.userData.panorefPoseRests;
+  });
 }
 
 function matrixFromColumnMajor(values: number[]): THREE.Matrix4 {
@@ -164,7 +388,8 @@ export function buildSkinnedCharacterFromTemplate(params: {
     const bone = boneById.get(jointId);
     if (bone) bone.userData.displayName = HUMAN_JOINT_LABELS[jointId];
   }
-  root.userData.panorefPoseBones = boneById;
+  root.userData[POSE_BONES_USERDATA_KEY] = boneById;
+  cacheSkinnedMeshesOnInstance(root);
   return root;
 }
 

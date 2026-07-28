@@ -96,6 +96,8 @@ export function registerAutoriggedPoseableCharacter(
   autoriggedPoseableCharacters.set(`${assetId}:${rigId}`, character);
 }
 
+export const SKINNED_MESHES_USERDATA_KEY = 'panorefSkinnedMeshes';
+
 export function applyHumanPoseToObject3D(
   instance: THREE.Object3D,
   object: Pick<SceneObject, 'type' | 'poseableCharacter' | 'humanPose'>,
@@ -105,17 +107,43 @@ export function applyHumanPoseToObject3D(
   if (!character.isReady()) return;
   character.bindInstance(instance);
   character.applyPose(instance, object.humanPose);
-  // Demand-rendered viewports may not tick; force skinned bone matrices now.
+  // Demand-rendered viewports may not tick; force skinned bone matrices once here.
+  // Adapters must not also traverse/update skeletons (single owner).
   updateSkinnedMeshes(instance);
 }
 
-function updateSkinnedMeshes(root: THREE.Object3D): void {
+/** Single owner of skeleton matrix updates after pose apply. Prefer cached mesh list. */
+export function updateSkinnedMeshes(root: THREE.Object3D): void {
   root.updateMatrixWorld(true);
+  const cached = root.userData[SKINNED_MESHES_USERDATA_KEY] as THREE.SkinnedMesh[] | undefined;
+  if (cached && cached.length > 0) {
+    for (const mesh of cached) {
+      if (mesh.isSkinnedMesh) mesh.skeleton.update();
+    }
+    return;
+  }
+  const meshes: THREE.SkinnedMesh[] = [];
   root.traverse((node) => {
     const mesh = node as THREE.SkinnedMesh;
     if (!mesh.isSkinnedMesh) return;
     mesh.skeleton.update();
+    meshes.push(mesh);
   });
+  if (meshes.length > 0) {
+    root.userData[SKINNED_MESHES_USERDATA_KEY] = meshes;
+  }
+}
+
+/** Test helper: count skeleton.update calls would traverse; uses cached list when present. */
+export function collectSkinnedMeshesForUpdate(root: THREE.Object3D): THREE.SkinnedMesh[] {
+  const cached = root.userData[SKINNED_MESHES_USERDATA_KEY] as THREE.SkinnedMesh[] | undefined;
+  if (cached && cached.length > 0) return cached;
+  const meshes: THREE.SkinnedMesh[] = [];
+  root.traverse((node) => {
+    const mesh = node as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) meshes.push(mesh);
+  });
+  return meshes;
 }
 
 export type BoneRestPose = {
