@@ -88,7 +88,10 @@ function filterHelpSections(query: string): FilteredSection[] {
       const topicMatches = sectionMatches || matchesTerms(topicSearchText(topic), terms);
       if (!topicMatches) return [];
 
-      const headingMatches = sectionMatches || matchesTerms(`${topic.title} ${topic.summary} ${(topic.notes ?? []).join(' ')}`, terms);
+      const headingMatches = sectionMatches || matchesTerms(
+        `${topic.title} ${topic.summary} ${(topic.notes ?? []).join(' ')}`,
+        terms,
+      );
       const controls = headingMatches
         ? topic.controls
         : topic.controls.filter((control) => matchesTerms([
@@ -259,11 +262,35 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
                 <div className="mt-1 text-secondary">{helpSections.length} sections · {helpSections.reduce((sum, section) => sum + section.topics.length, 0)} feature groups</div>
               </div>
             </div>
+
             <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <QuickLink icon={Boxes} title="Block the set" subtitle="Build tools and imports" onClick={() => jumpTo('build')} />
               <QuickLink icon={Camera} title="Align references" subtitle="Panos and projection" onClick={() => jumpTo('reference')} />
               <QuickLink icon={Clapperboard} title="Author shots" subtitle="Stills, motion, staging" onClick={() => jumpTo('shots')} />
               <QuickLink icon={PackageOpen} title="Build a package" subtitle="Export every deliverable" onClick={() => jumpTo('export')} />
+            </div>
+
+            <div className="mt-6 grid gap-4 lg:grid-cols-2" data-help-visual-overview>
+              <figure className="overflow-hidden rounded-2xl border border-subtle bg-surface-overlay/80 shadow-card">
+                <img
+                  src="/docs/workflow-overview.png"
+                  alt="Continuity Stage workflow overview from Build through Export"
+                  className="aspect-video w-full object-cover"
+                />
+                <figcaption className="px-4 py-3 text-sm text-secondary">
+                  The four-stage production path and the information handed from one workspace to the next.
+                </figcaption>
+              </figure>
+              <figure className="overflow-hidden rounded-2xl border border-subtle bg-surface-overlay/80 shadow-card">
+                <img
+                  src="/docs/build-workspace.png"
+                  alt="Annotated Build workspace orientation"
+                  className="aspect-video w-full object-cover"
+                />
+                <figcaption className="px-4 py-3 text-sm text-secondary">
+                  Build workspace orientation before opening the complete control-by-control reference below.
+                </figcaption>
+              </figure>
             </div>
           </section>
 
