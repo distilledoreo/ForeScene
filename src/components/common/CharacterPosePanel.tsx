@@ -23,12 +23,17 @@ export function CharacterPosePanel({
   selectedJointId,
   onSelectJoint,
   onChangePose,
+  onPoseEditBatchStart,
+  onPoseEditBatchEnd,
   className = '',
 }: {
   pose: HumanPose | undefined;
   selectedJointId?: HumanJointId;
   onSelectJoint: (jointId: HumanJointId | undefined) => void;
-  onChangePose: (pose: HumanPose) => void;
+  onChangePose: (pose: HumanPose, options?: { history?: 'step' | 'batch' }) => void;
+  /** Match transform-gizmo batching so slider drags make one undo step. */
+  onPoseEditBatchStart?: () => void;
+  onPoseEditBatchEnd?: () => void;
   className?: string;
 }) {
   const current = pose ?? createEmptyHumanPose();
@@ -40,7 +45,7 @@ export function CharacterPosePanel({
           type="button"
           className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary hover:bg-surface-raised"
           data-pose-reset-all
-          onClick={() => onChangePose(createEmptyHumanPose())}
+          onClick={() => onChangePose(createEmptyHumanPose(), { history: 'step' })}
         >
           Reset pose
         </button>
@@ -48,7 +53,7 @@ export function CharacterPosePanel({
           type="button"
           className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary hover:bg-surface-raised"
           data-pose-mirror
-          onClick={() => onChangePose(mirrorHumanPose(current))}
+          onClick={() => onChangePose(mirrorHumanPose(current), { history: 'step' })}
         >
           Mirror pose
         </button>
@@ -57,7 +62,7 @@ export function CharacterPosePanel({
             type="button"
             className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary hover:bg-surface-raised"
             data-pose-reset-joint
-            onClick={() => onChangePose(resetHumanJoint(current, selectedJointId))}
+            onClick={() => onChangePose(resetHumanJoint(current, selectedJointId), { history: 'step' })}
           >
             Reset joint
           </button>
@@ -77,7 +82,7 @@ export function CharacterPosePanel({
                   ? 'bg-accent text-white'
                   : 'bg-surface-muted text-secondary hover:bg-surface-raised'
               }`}
-              onClick={() => onChangePose(applyHumanPosePreset(preset.id))}
+              onClick={() => onChangePose(applyHumanPosePreset(preset.id), { history: 'step' })}
             >
               {preset.label}
             </button>
@@ -97,11 +102,11 @@ export function CharacterPosePanel({
                 type="button"
                 data-pose-joint={jointId}
                 aria-pressed={active}
-                className={`rounded-lg px-2 py-1.5 text-left text-[11px] transition ${
+                className={`rounded-lg px-2 py-1 text-left text-[10px] font-semibold transition ${
                   active
                     ? 'bg-accent text-white'
                     : posed
-                      ? 'bg-surface-raised text-primary'
+                      ? 'bg-surface-raised text-primary hover:bg-surface-muted'
                       : 'bg-surface-muted text-secondary hover:bg-surface-raised'
                 }`}
                 onClick={() => onSelectJoint(active ? undefined : jointId)}
@@ -118,6 +123,8 @@ export function CharacterPosePanel({
           jointId={selectedJointId}
           pose={current}
           onChangePose={onChangePose}
+          onPoseEditBatchStart={onPoseEditBatchStart}
+          onPoseEditBatchEnd={onPoseEditBatchEnd}
         />
       )}
     </div>
@@ -128,20 +135,25 @@ function JointRotationEditor({
   jointId,
   pose,
   onChangePose,
+  onPoseEditBatchStart,
+  onPoseEditBatchEnd,
 }: {
   jointId: HumanJointId;
   pose: HumanPose;
-  onChangePose: (pose: HumanPose) => void;
+  onChangePose: (pose: HumanPose, options?: { history?: 'step' | 'batch' }) => void;
+  onPoseEditBatchStart?: () => void;
+  onPoseEditBatchEnd?: () => void;
 }) {
   const rotation = pose.joints[jointId]?.rotation ?? [0, 0, 0, 1];
-  // Display approximate Euler XYZ degrees derived from the quaternion for direct edits.
+  // Keep the true Euler from the stored quaternion. Do not clamp all axes up front —
+  // that would rewrite preset values the moment another axis is touched.
   const euler = quaternionToApproximateEulerDegrees(rotation);
   const limits = HUMAN_JOINT_LIMITS_DEGREES[jointId];
-  const clampedEuler = clampHumanJointEulerDegrees(jointId, euler);
 
   const patchAxis = (axis: 0 | 1 | 2, degrees: number) => {
-    const nextEuler: [number, number, number] = [...clampedEuler];
+    const nextEuler: [number, number, number] = [...euler];
     nextEuler[axis] = degrees;
+    // Clamp only after the edit, and keep sibling axes as stored.
     const clamped = clampHumanJointEulerDegrees(jointId, nextEuler);
     const next = cloneHumanPose(pose) ?? createEmptyHumanPose();
     next.joints[jointId] = {
@@ -151,30 +163,43 @@ function JointRotationEditor({
         : {}),
     };
     delete next.presetId;
-    onChangePose(next);
+    onChangePose(next, { history: 'batch' });
   };
+
+  const beginBatch = () => onPoseEditBatchStart?.();
+  const endBatch = () => onPoseEditBatchEnd?.();
 
   return (
     <div className="space-y-2 rounded-xl border border-subtle p-2" data-pose-joint-editor>
       <div className="text-[11px] font-semibold text-primary">
         {HUMAN_JOINT_LABELS[jointId]} rotation
       </div>
-      {(['X', 'Y', 'Z'] as const).map((label, axis) => (
-        <label key={label} className="flex items-center gap-2 text-[11px] text-secondary">
-          <span className="w-4 font-semibold">{label}</span>
-          <input
-            type="range"
-            min={limits.min[axis]}
-            max={limits.max[axis]}
-            step={1}
-            value={Math.round(clampedEuler[axis])}
-            onChange={(event) => patchAxis(axis as 0 | 1 | 2, Number(event.target.value))}
-            className="min-w-0 flex-1 accent-[var(--accent)]"
-            data-pose-joint-axis={label.toLowerCase()}
-          />
-          <span className="w-8 tabular-nums text-right">{Math.round(clampedEuler[axis])}°</span>
-        </label>
-      ))}
+      {(['X', 'Y', 'Z'] as const).map((label, axis) => {
+        const raw = euler[axis];
+        const display = Math.round(
+          Math.min(limits.max[axis], Math.max(limits.min[axis], raw)),
+        );
+        return (
+          <label key={label} className="flex items-center gap-2 text-[11px] text-secondary">
+            <span className="w-4 font-semibold">{label}</span>
+            <input
+              type="range"
+              min={limits.min[axis]}
+              max={limits.max[axis]}
+              step={1}
+              value={display}
+              onPointerDown={beginBatch}
+              onPointerUp={endBatch}
+              onPointerCancel={endBatch}
+              onBlur={endBatch}
+              onChange={(event) => patchAxis(axis as 0 | 1 | 2, Number(event.target.value))}
+              className="min-w-0 flex-1 accent-[var(--accent)]"
+              data-pose-joint-axis={label.toLowerCase()}
+            />
+            <span className="w-8 tabular-nums text-right">{Math.round(raw)}°</span>
+          </label>
+        );
+      })}
     </div>
   );
 }

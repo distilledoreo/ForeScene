@@ -11,6 +11,10 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    // Module workers (coverageClient) need ES output; IIFE cannot code-split.
+    worker: {
+      format: 'es' as const,
+    },
     build: {
       rollupOptions: {
         input: {

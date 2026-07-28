@@ -141,7 +141,7 @@ function quatNearlyEqual(a: QuaternionTuple, b: QuaternionTuple, epsilon = 1e-5)
 
 export function normalizeHumanPose(value: unknown): HumanPose | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const raw = value as Partial<HumanPose> & { joints?: Record<string, unknown> };
+  const raw = value as Partial<HumanPose> & { joints?: Record<string, unknown>; version?: unknown };
   const joints: HumanPose['joints'] = {};
   if (raw.joints && typeof raw.joints === 'object') {
     for (const jointId of HUMAN_JOINT_IDS) {
@@ -152,7 +152,9 @@ export function normalizeHumanPose(value: unknown): HumanPose | undefined {
   const presetId = typeof raw.presetId === 'string' && raw.presetId.length > 0
     ? raw.presetId
     : undefined;
-  if (Object.keys(joints).length === 0 && !presetId) return undefined;
+  const hasVersion = raw.version === 1;
+  // Explicit empty `{ version: 1, joints: {} }` is a neutral pose — keep it.
+  if (Object.keys(joints).length === 0 && !presetId && !hasVersion) return undefined;
   return {
     version: 1,
     joints,
@@ -227,7 +229,11 @@ export function isPoseableSceneObject(
 
 /**
  * Interpolate two poses for keyframe animation.
- * Missing joints inherit from the character base pose (or identity).
+ *
+ * `undefined` on a side means "inherit the character base pose".
+ * An explicit empty pose (`{ version: 1, joints: {} }`) means neutral identity
+ * deltas and must NOT fall back to the live base pose per joint — that would
+ * break neutral→posed keyframe pairs after the base character is edited.
  */
 export function interpolateHumanPose(
   basePose: HumanPose | undefined,
@@ -235,34 +241,30 @@ export function interpolateHumanPose(
   endPose: HumanPose | undefined,
   t: number,
 ): HumanPose | undefined {
-  const start = startPose ?? basePose;
-  const end = endPose ?? basePose;
-  if (!start && !end) return undefined;
-  if (!start) return cloneHumanPose(end);
-  if (!end) return cloneHumanPose(start);
-  if (t <= 0) return cloneHumanPose(start);
-  if (t >= 1) return cloneHumanPose(end);
+  if (startPose === undefined && endPose === undefined && !basePose) return undefined;
+  if (t <= 0) return cloneHumanPose(startPose ?? basePose);
+  if (t >= 1) return cloneHumanPose(endPose ?? basePose);
 
   const joints: HumanPose['joints'] = {};
   const ids = new Set([
-    ...Object.keys(start.joints),
-    ...Object.keys(end.joints),
+    ...Object.keys(startPose?.joints ?? {}),
+    ...Object.keys(endPose?.joints ?? {}),
     ...Object.keys(basePose?.joints ?? {}),
   ] as HumanJointId[]);
 
   for (const id of ids) {
-    const from = start.joints[id] ?? basePose?.joints[id];
-    const to = end.joints[id] ?? basePose?.joints[id];
-    if (!from && !to) continue;
-    const a = from ?? { rotation: IDENTITY_QUATERNION };
-    const b = to ?? { rotation: IDENTITY_QUATERNION };
+    const a = resolveJointForInterpolation(startPose, basePose, id);
+    const b = resolveJointForInterpolation(endPose, basePose, id);
+    if (!a && !b) continue;
+    const from = a ?? { rotation: IDENTITY_QUATERNION };
+    const to = b ?? { rotation: IDENTITY_QUATERNION };
     joints[id] = {
-      rotation: slerpQuaternion(a.rotation, b.rotation, t),
-      ...((a.position || b.position)
+      rotation: slerpQuaternion(from.rotation, to.rotation, t),
+      ...((from.position || to.position)
         ? {
           position: lerpVec3(
-            a.position ?? [0, 0, 0],
-            b.position ?? a.position ?? [0, 0, 0],
+            from.position ?? [0, 0, 0],
+            to.position ?? from.position ?? [0, 0, 0],
             t,
           ),
         }
@@ -273,20 +275,38 @@ export function interpolateHumanPose(
   return { version: 1, joints };
 }
 
+function resolveJointForInterpolation(
+  pose: HumanPose | undefined,
+  basePose: HumanPose | undefined,
+  id: HumanJointId,
+): HumanJointPose | undefined {
+  if (pose !== undefined) {
+    // Explicit pose (including empty): missing joint → identity, never live base.
+    return pose.joints[id] ?? { rotation: IDENTITY_QUATERNION };
+  }
+  return basePose?.joints[id];
+}
+
 export function mirrorHumanPose(pose: HumanPose): HumanPose {
   const joints: HumanPose['joints'] = {};
   for (const [jointId, jointPose] of Object.entries(pose.joints) as Array<[HumanJointId, HumanJointPose]>) {
     const mirroredId = HUMAN_JOINT_MIRROR[jointId] ?? jointId;
-    // Mirror local yaw/roll around character forward by conjugating X (side) axis.
+    // Reflect local rotation across the character sagittal (YZ) plane.
+    // For Y-up humanoids with conventional Mixamo-style local axes, conjugating
+    // by the X-reflection maps as (x, y, z, w) → (x, -y, -z, w).
     const [x, y, z, w] = jointPose.rotation;
     joints[mirroredId] = {
-      rotation: [-x, y, -z, w],
+      rotation: [x, -y, -z, w],
       ...(jointPose.position
         ? { position: [-jointPose.position[0], jointPose.position[1], jointPose.position[2]] as Vec3 }
         : {}),
     };
   }
-  return { version: 1, joints };
+  return {
+    version: 1,
+    joints,
+    ...(pose.presetId ? { presetId: pose.presetId } : {}),
+  };
 }
 
 export function resetHumanJoint(

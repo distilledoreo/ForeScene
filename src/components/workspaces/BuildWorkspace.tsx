@@ -928,7 +928,13 @@ useEffect(() => {
                       pose={selectedObject.humanPose}
                       selectedJointId={selectedPoseJointId}
                       onSelectJoint={setSelectedPoseJointId}
-                      onChangePose={(next) => updateObject(selectedObject.id, { humanPose: next }, { history: 'step' })}
+                      onChangePose={(next, options) => updateObject(
+                        selectedObject.id,
+                        { humanPose: next },
+                        { history: options?.history ?? 'step' },
+                      )}
+                      onPoseEditBatchStart={beginBuildHistoryBatch}
+                      onPoseEditBatchEnd={endBuildHistoryBatch}
                     />
                   )}
                 </div>

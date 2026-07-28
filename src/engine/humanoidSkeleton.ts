@@ -42,25 +42,29 @@ export const HUMAN_JOINT_PARENT: Partial<Record<HumanJointId, HumanJointId>> = {
   rightFoot: 'rightLowerLeg',
 };
 
-/** Soft per-joint Euler limits used by the pose editor and future IK. */
+/**
+ * Soft per-joint Euler limits used by the pose editor and future IK.
+ * Calibrated to the builtin mannequin preset Euler convention (local XYZ degrees
+ * relative to rest): knees flex on +X, hips sit/crouch on −X upper-leg pitch.
+ */
 export const HUMAN_JOINT_LIMITS_DEGREES: Record<HumanJointId, HumanJointEulerLimits> = {
   hips: { min: [-45, -180, -45], max: [45, 180, 45] },
-  spine: { min: [-35, -40, -30], max: [45, 40, 30] },
-  chest: { min: [-30, -45, -35], max: [40, 45, 35] },
-  neck: { min: [-40, -60, -40], max: [40, 60, 40] },
-  head: { min: [-45, -70, -45], max: [35, 70, 45] },
-  leftUpperArm: { min: [-90, -90, -110], max: [90, 90, 90] },
-  leftLowerArm: { min: [0, -20, -10], max: [150, 20, 10] },
-  leftHand: { min: [-40, -40, -50], max: [40, 40, 50] },
-  rightUpperArm: { min: [-90, -90, -90], max: [90, 90, 110] },
-  rightLowerArm: { min: [0, -20, -10], max: [150, 20, 10] },
-  rightHand: { min: [-40, -40, -50], max: [40, 40, 50] },
-  leftUpperLeg: { min: [-30, -45, -80], max: [120, 45, 40] },
-  leftLowerLeg: { min: [-140, -15, -15], max: [5, 15, 15] },
-  leftFoot: { min: [-40, -30, -25], max: [40, 30, 45] },
-  rightUpperLeg: { min: [-30, -45, -40], max: [120, 45, 80] },
-  rightLowerLeg: { min: [-140, -15, -15], max: [5, 15, 15] },
-  rightFoot: { min: [-40, -30, -45], max: [40, 30, 25] },
+  spine: { min: [-35, -45, -35], max: [45, 45, 35] },
+  chest: { min: [-35, -50, -40], max: [45, 50, 40] },
+  neck: { min: [-45, -70, -45], max: [45, 70, 45] },
+  head: { min: [-50, -80, -50], max: [45, 80, 50] },
+  leftUpperArm: { min: [-120, -90, -120], max: [90, 90, 100] },
+  leftLowerArm: { min: [-5, -25, -20], max: [155, 25, 20] },
+  leftHand: { min: [-50, -50, -60], max: [50, 50, 60] },
+  rightUpperArm: { min: [-120, -90, -100], max: [90, 90, 120] },
+  rightLowerArm: { min: [-5, -25, -20], max: [155, 25, 20] },
+  rightHand: { min: [-50, -50, -60], max: [50, 50, 60] },
+  leftUpperLeg: { min: [-120, -55, -90], max: [45, 55, 45] },
+  leftLowerLeg: { min: [-5, -25, -25], max: [145, 25, 25] },
+  leftFoot: { min: [-50, -40, -35], max: [50, 40, 50] },
+  rightUpperLeg: { min: [-120, -55, -45], max: [45, 55, 90] },
+  rightLowerLeg: { min: [-5, -25, -25], max: [145, 25, 25] },
+  rightFoot: { min: [-50, -40, -50], max: [50, 40, 35] },
 };
 
 export function createCanonicalHumanoidSkeleton(): HumanoidSkeleton {

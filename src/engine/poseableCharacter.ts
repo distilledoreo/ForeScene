@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type {
+  AssetRegistry,
   HumanJointId,
   HumanPose,
   PoseableCharacterSource,
@@ -56,20 +57,22 @@ export function getPoseableCharacterSource(
 
 export function resolvePoseableCharacter(
   source: PoseableCharacterSource | undefined,
+  _assets?: AssetRegistry,
 ): PoseableCharacter | undefined {
   if (!source) return undefined;
   if (source.kind === 'builtin') {
-    // Lazy import avoided; registry populated by builtinMannequinCharacter.
+    // Registry populated by builtinMannequinCharacter side-effect import.
     return builtinPoseableCharacters.get(source.characterId);
   }
-  // Autorigged characters are Milestone B.
+  // Milestone B: hydrate from `_assets` when the in-memory registry is cold after reload.
   return autoriggedPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
 }
 
 export function resolvePoseableCharacterForObject(
   object: Pick<SceneObject, 'type' | 'poseableCharacter'>,
+  assets?: AssetRegistry,
 ): PoseableCharacter | undefined {
-  return resolvePoseableCharacter(getPoseableCharacterSource(object));
+  return resolvePoseableCharacter(getPoseableCharacterSource(object), assets);
 }
 
 const builtinPoseableCharacters = new Map<string, PoseableCharacter>();
@@ -101,6 +104,17 @@ export function applyHumanPoseToObject3D(
   if (!character.isReady()) return;
   character.bindInstance(instance);
   character.applyPose(instance, object.humanPose);
+  // Demand-rendered viewports may not tick; force skinned bone matrices now.
+  updateSkinnedMeshes(instance);
+}
+
+function updateSkinnedMeshes(root: THREE.Object3D): void {
+  root.updateMatrixWorld(true);
+  root.traverse((node) => {
+    const mesh = node as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    mesh.skeleton.update();
+  });
 }
 
 export type BoneRestPose = {

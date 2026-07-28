@@ -13,7 +13,10 @@ import {
 } from '../domain/types';
 import { createHumanMannequinObject } from './humanMannequinModel';
 import './builtinMannequinCharacter';
-import { applyHumanPoseToObject3D } from './poseableCharacter';
+import {
+  applyHumanPoseToObject3D,
+  resolvePoseableCharacterForObject,
+} from './poseableCharacter';
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians } from './sync';
@@ -506,12 +509,14 @@ export function createObject3D(
         material,
       );
       break;
-    case 'human_dummy':
-      node = createHumanMannequinObject(
-        object,
-        style === 'default' ? mannequinMaterialByTheme[theme] : material,
-      );
+    case 'human_dummy': {
+      const poseMaterial = style === 'default' ? mannequinMaterialByTheme[theme] : material;
+      const character = resolvePoseableCharacterForObject(object, assets);
+      node = character
+        ? character.createInstance(object, poseMaterial)
+        : createHumanMannequinObject(object, poseMaterial);
       break;
+    }
     case 'sun_marker':
       node = createSunMarker(object, theme, style === 'default' ? undefined : material);
       break;
