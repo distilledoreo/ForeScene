@@ -14,21 +14,22 @@ describe('workflow guidance UI', () => {
 
   it('keeps project import discoverable and retryable after the full-bleed revamp', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
     expect(app).toContain('openProjectPicker');
     expect(app).toContain('title="Import project backup"');
     expect(app).toContain('title="Export verified project backup"');
     expect(app).toContain('data-project-import-input');
     expect(app).toContain('data-project-export-button');
     expect(app).toContain('data-project-name-input');
-    expect(app).toContain('const saveProject');
-    expect(app).toContain('loadProjectIo');
-    expect(app).toContain('downloadProject(verified.project)');
+    expect(lifecycle).toContain('const saveProject');
+    expect(lifecycle).toContain('loadProjectIo');
+    expect(lifecycle).toContain('downloadProject(verified.project)');
     expect(app).toContain('accept=".json,.zip,.panoref-project,application/json,application/zip"');
-    expect(app).toContain('Project opened:');
-    expect(app).toContain('Could not open project:');
+    expect(lifecycle).toContain('Project opened:');
+    expect(lifecycle).toContain('Could not open project:');
     expect(app).toContain('data-project-import-status');
-    expect(app).toContain('IMPORT_STATUS_DISMISS_MS');
-    expect(app).toContain("fileRef.current.value = ''");
+    expect(lifecycle).toContain('IMPORT_STATUS_DISMISS_MS');
+    expect(lifecycle).toContain("fileRef.current.value = ''");
     expect(app).toContain('setProjectMenuOpen(false)');
     expect(app).toContain("event.key === 'Escape'");
     expect(app).toMatch(/label="Import Project Backup"[\s\S]*openProjectPicker\(\)/);
@@ -37,11 +38,12 @@ describe('workflow guidance UI', () => {
 
   it('exposes New Project with confirmation and recovery snapshot', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
     expect(app).toContain('startNewProject');
     expect(app).toContain('data-project-new-button');
     expect(app).toContain('data-project-new-confirm');
-    expect(app).toContain('createDefaultProject');
-    expect(app).toContain('Before starting a new project');
+    expect(lifecycle).toContain('createDefaultProject');
+    expect(lifecycle).toContain('Before starting a new project');
     expect(app).toMatch(/label="New Project"/);
     expect(app).toContain('Start a new project?');
   });
