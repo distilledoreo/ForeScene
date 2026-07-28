@@ -329,8 +329,16 @@ describe('continuity store domain slices', () => {
     afterLand.lockShotCamera();
     expect(useContinuityStore.getState().shotCameraFlying).toBe(false);
 
-    afterLand.setProjectedOcclusionStatus('ready');
+    const landed = useContinuityStore.getState();
+    const projectBeforeNoop = landed.project;
+    const updatedAtBefore = projectBeforeNoop.updatedAt;
+    landed.landShotFraming(shotId!, camera);
+    const afterNoop = useContinuityStore.getState();
+    expect(afterNoop.project).toBe(projectBeforeNoop);
+    expect(afterNoop.project.updatedAt).toBe(updatedAtBefore);
+
+    afterNoop.setProjectedOcclusionStatus('ready');
     expect(useContinuityStore.getState().projectedOcclusionStatus).toBe('ready');
-    afterLand.setProjectedOcclusionStatus('disabled');
+    afterNoop.setProjectedOcclusionStatus('disabled');
   });
 });
