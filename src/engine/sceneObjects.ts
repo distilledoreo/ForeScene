@@ -12,6 +12,11 @@ import {
   Vec3,
 } from '../domain/types';
 import { createHumanMannequinObject } from './humanMannequinModel';
+import './builtinMannequinCharacter';
+import {
+  applyHumanPoseToObject3D,
+  resolvePoseableCharacterForObject,
+} from './poseableCharacter';
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians } from './sync';
@@ -504,12 +509,14 @@ export function createObject3D(
         material,
       );
       break;
-    case 'human_dummy':
-      node = createHumanMannequinObject(
-        object,
-        style === 'default' ? mannequinMaterialByTheme[theme] : material,
-      );
+    case 'human_dummy': {
+      const poseMaterial = style === 'default' ? mannequinMaterialByTheme[theme] : material;
+      const character = resolvePoseableCharacterForObject(object, assets);
+      node = character
+        ? character.createInstance(object, poseMaterial)
+        : createHumanMannequinObject(object, poseMaterial);
       break;
+    }
     case 'sun_marker':
       node = createSunMarker(object, theme, style === 'default' ? undefined : material);
       break;
@@ -524,14 +531,15 @@ export function createObject3D(
   }
 
   node.name = object.name;
-  applySceneObjectPose(node, object.transform, {
+  applySceneObjectTransform(node, object.transform, {
     applyScale: !sceneObjectUsesProceduralScale(object.type),
   });
+  applyHumanPoseToObject3D(node, object);
   return node;
 }
 
-/** Apply a staged/interpolated pose onto a built scene object node. */
-export function applySceneObjectPose(
+/** Apply a staged/interpolated object transform onto a built scene object node. */
+export function applySceneObjectTransform(
   node: THREE.Object3D,
   transform: Transform,
   options: { applyScale?: boolean; visible?: boolean } = {},

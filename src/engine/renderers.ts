@@ -24,13 +24,15 @@ import {
   releaseProjectedStyleTexture,
 } from './projectedStyleMaterials';
 import {
-  applySceneObjectPose,
+  applySceneObjectTransform,
   buildScene,
   disposeScene,
   sceneObjectUsesProceduralScale,
   type ProjectedSceneOptions,
   type SceneVisualTheme,
 } from './sceneObjects';
+import { applyHumanPoseToObject3D } from './poseableCharacter';
+import './builtinMannequinCharacter';
 import {
   DEFAULT_OCCLUSION_FACE_SIZE,
   DEFAULT_OCCLUSION_NEAR,
@@ -1022,13 +1024,18 @@ function applyAnimatedObjectOverridesToScene(
     const base = baseById.get(objectId);
     if (!base) continue;
     const transform = override.transform ?? base.transform;
-    applySceneObjectPose(node, transform, {
+    applySceneObjectTransform(node, transform, {
       applyScale: !sceneObjectUsesProceduralScale(base.type),
       // Keyframe snapshots retain source visibility, so they must never
       // reverse the clean-plate rule after the scene has been resolved.
       visible: peopleVariant === 'clean_plate' && getSceneObjectStagingRole(base) === 'person'
         ? false
         : (override.visible ?? base.visible),
+    });
+    applyHumanPoseToObject3D(node, {
+      type: base.type,
+      poseableCharacter: base.poseableCharacter,
+      humanPose: override.humanPose ?? base.humanPose,
     });
   }
 }

@@ -6,6 +6,7 @@ import {
   normalizeProjectWorkflow,
   normalizeShotDepthSettings,
 } from '../domain/defaults';
+import { normalizeHumanPose, normalizePoseableCharacterSource } from './humanPose';
 import JSZip from 'jszip';
 import { digestFromRecoveryResourceKey, sha256Digest, verifyBinaryDigest } from './binaryIntegrity';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
@@ -184,6 +185,8 @@ function normalizeSceneObject(object: SceneObject & { projectionStamp?: unknown 
     surfaceStyle,
     color: normalizeHexColor(normalized.color),
     secondaryColor: normalizeHexColor(normalized.secondaryColor),
+    poseableCharacter: normalizePoseableCharacterSource(normalized.poseableCharacter, normalized.type),
+    humanPose: normalizeHumanPose(normalized.humanPose),
   };
 }
 
@@ -225,13 +228,15 @@ function normalizeShotObjectOverrides(value: unknown): NonNullable<Shot['objectO
   const result: NonNullable<Shot['objectOverrides']> = {};
   for (const [objectId, rawOverride] of Object.entries(value as Record<string, unknown>)) {
     if (!rawOverride || typeof rawOverride !== 'object' || Array.isArray(rawOverride)) continue;
-    const candidate = rawOverride as { transform?: unknown; visible?: unknown };
+    const candidate = rawOverride as { transform?: unknown; visible?: unknown; humanPose?: unknown };
     const transform = normalizeTransform(candidate.transform);
     const visible = typeof candidate.visible === 'boolean' ? candidate.visible : undefined;
-    if (!transform && visible === undefined) continue;
+    const humanPose = normalizeHumanPose(candidate.humanPose);
+    if (!transform && visible === undefined && !humanPose) continue;
     result[objectId] = {
       ...(transform ? { transform } : {}),
       ...(visible !== undefined ? { visible } : {}),
+      ...(humanPose ? { humanPose } : {}),
     };
   }
   return result;

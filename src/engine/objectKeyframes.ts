@@ -1,5 +1,6 @@
 import type {
   CameraKeyframe,
+  HumanPose,
   LocationProject,
   SceneObject,
   Shot,
@@ -13,6 +14,12 @@ import {
   resolveSceneObjectsForShot,
 } from './shotSceneState';
 import { applyCameraKeyframeEasing, getSortedCameraKeyframes } from './cameraKeyframes';
+import {
+  cloneHumanPose,
+  createEmptyHumanPose,
+  interpolateHumanPose,
+  isPoseableSceneObject,
+} from './humanPose';
 
 export function cloneShotObjectOverrides(
   overrides: ShotObjectOverrides | undefined,
@@ -29,13 +36,20 @@ export function cloneShotObjectOverride(override: ShotObjectOverride): ShotObjec
   return {
     ...(override.transform ? { transform: cloneTransform(override.transform) } : {}),
     ...(override.visible !== undefined ? { visible: override.visible } : {}),
+    ...('humanPose' in override
+      ? { humanPose: cloneHumanPose(override.humanPose) ?? createEmptyHumanPose() }
+      : {}),
   };
 }
 
 /**
- * Freeze absolute stageable-object poses for a camera keyframe.
+ * Freeze absolute stageable-object transforms and poses for a camera keyframe.
  * Always returns a defined map (possibly empty) so export can tell "base poses"
  * apart from "legacy keyframe with no snapshot".
+ *
+ * Poseable characters always receive an explicit `humanPose`, including empty
+ * neutral `{ version: 1, joints: {} }`, so later base edits cannot rewrite the
+ * captured keyframe through interpolation fallback.
  */
 export function snapshotStageableObjectOverrides(
   project: Pick<LocationProject, 'scene'>,
@@ -48,6 +62,9 @@ export function snapshotStageableObjectOverrides(
     snapshot[object.id] = {
       transform: cloneTransform(object.transform),
       visible: object.visible,
+      ...(isPoseableSceneObject(object)
+        ? { humanPose: cloneHumanPose(object.humanPose) ?? createEmptyHumanPose() }
+        : {}),
     };
   }
   return snapshot;
@@ -73,7 +90,7 @@ export function interpolateObjectOverrides(
   keyframes: readonly CameraKeyframe[],
   timeSeconds: number,
   fallbackOverrides: ShotObjectOverrides | undefined = {},
-  baseObjects: readonly Pick<SceneObject, 'id' | 'transform' | 'visible'>[] = [],
+  baseObjects: readonly Pick<SceneObject, 'id' | 'transform' | 'visible' | 'humanPose' | 'type' | 'poseableCharacter'>[] = [],
 ): ShotObjectOverrides {
   const sorted = getSortedCameraKeyframes(keyframes);
   const fallback = fallbackOverrides ?? {};
@@ -118,6 +135,8 @@ export function interpolateObjectOverrides(
     const endTransform = endOverride?.transform ?? base?.transform;
     const startVisible = startOverride?.visible ?? base?.visible;
     const endVisible = endOverride?.visible ?? base?.visible;
+    const startPose = resolveKeyframeHumanPose(startOverride, base);
+    const endPose = resolveKeyframeHumanPose(endOverride, base);
 
     const override: ShotObjectOverride = {};
     if (startTransform && endTransform) {
@@ -135,11 +154,39 @@ export function interpolateObjectOverrides(
       override.visible = t < 0.5 ? from : to;
     }
 
-    if (override.transform || override.visible !== undefined) {
+    const interpolatedPose = interpolateHumanPose(
+      base?.humanPose,
+      startPose,
+      endPose,
+      t,
+    );
+    if (interpolatedPose) override.humanPose = interpolatedPose;
+
+    if (override.transform || override.visible !== undefined || override.humanPose) {
       result[id] = override;
     }
   }
   return result;
+}
+
+/**
+ * Resolve the pose recorded on a keyframe override.
+ * - Missing override → undefined (interpolate from live base).
+ * - Explicit `humanPose` key (including empty neutral) → that pose.
+ * - Legacy poseable snapshot without a pose field → freeze empty neutral.
+ */
+function resolveKeyframeHumanPose(
+  override: ShotObjectOverride | undefined,
+  base: Pick<SceneObject, 'id' | 'transform' | 'visible' | 'humanPose' | 'type' | 'poseableCharacter'> | undefined,
+): HumanPose | undefined {
+  if (!override) return undefined;
+  if ('humanPose' in override) {
+    return override.humanPose ?? createEmptyHumanPose();
+  }
+  if (base && isPoseableSceneObject(base)) {
+    return createEmptyHumanPose();
+  }
+  return undefined;
 }
 
 function resolveKeyframeOverrides(
@@ -155,11 +202,15 @@ function resolveKeyframeOverrides(
 
 function materializeOverrides(
   overrides: ShotObjectOverrides,
-  baseById: Map<string, Pick<SceneObject, 'id' | 'transform' | 'visible'>>,
+  baseById: Map<string, Pick<SceneObject, 'id' | 'transform' | 'visible' | 'humanPose' | 'type' | 'poseableCharacter'>>,
 ): ShotObjectOverrides {
   const result: ShotObjectOverrides = {};
   for (const [id, override] of Object.entries(overrides)) {
     const base = baseById.get(id);
+    const humanPose = resolveKeyframeHumanPose(override, base)
+      ?? (base && isPoseableSceneObject(base)
+        ? (cloneHumanPose(base.humanPose) ?? createEmptyHumanPose())
+        : undefined);
     result[id] = {
       transform: cloneTransform(override.transform ?? base?.transform ?? {
         position: [0, 0, 0],
@@ -167,6 +218,7 @@ function materializeOverrides(
         scale: [1, 1, 1],
       }),
       visible: override.visible ?? base?.visible ?? true,
+      ...(humanPose ? { humanPose } : {}),
     };
   }
   return result;

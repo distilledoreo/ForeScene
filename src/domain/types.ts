@@ -69,9 +69,109 @@ export interface Transform {
 
 export type StagingRole = 'set' | 'prop' | 'person';
 
+export type QuaternionTuple = [number, number, number, number];
+
+/**
+ * Stable semantic joints for poseable humanoids.
+ * Persisted poses use these IDs — never GLB-specific bone names.
+ */
+export type HumanJointId =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'neck'
+  | 'head'
+  | 'leftUpperArm'
+  | 'leftLowerArm'
+  | 'leftHand'
+  | 'rightUpperArm'
+  | 'rightLowerArm'
+  | 'rightHand'
+  | 'leftUpperLeg'
+  | 'leftLowerLeg'
+  | 'leftFoot'
+  | 'rightUpperLeg'
+  | 'rightLowerLeg'
+  | 'rightFoot';
+
+export interface HumanJointPose {
+  /** Local rotation relative to the character rest/bind pose. */
+  rotation: QuaternionTuple;
+  /** Optional hips/root positional adjustment in character-local meters. */
+  position?: Vec3;
+}
+
+export interface HumanPose {
+  version: 1;
+  joints: Partial<Record<HumanJointId, HumanJointPose>>;
+  presetId?: string;
+}
+
+/**
+ * Where a poseable character came from.
+ * Autorigged imports will use `{ kind: 'autorigged', assetId, rigId }` later.
+ */
+export type PoseableCharacterSource =
+  | {
+      kind: 'builtin';
+      characterId: 'adult-male' | 'adult-female';
+    }
+  | {
+      kind: 'autorigged';
+      assetId: string;
+      rigId: string;
+    };
+
+/**
+ * Marker used by Milestone B marker-assisted autorigging.
+ * Stored with the generated rig so regenerate/reset can restore placements.
+ */
+export interface AutorigMarker {
+  id: string;
+  jointId: HumanJointId;
+  /** Character-local position in meters. */
+  position: Vec3;
+}
+
+/**
+ * Serializable poseable-character rig asset (Milestone B fills skin/mesh fields).
+ * The project format anticipates autorigged characters beyond static imported geometry.
+ */
+export interface PoseableRigAsset {
+  version: 1;
+  id: string;
+  /** Optional mesh asset holding positions/indices (or embedded below). */
+  meshAssetId?: string;
+  /** Semantic joint hierarchy + soft limits (never GLB bone names). */
+  skeletonJoints: HumanJointId[];
+  /** Bind matrices keyed by semantic joint id (column-major 16 floats). */
+  bindMatrices?: Partial<Record<HumanJointId, number[]>>;
+  /**
+   * Approximate skinning produced by autorig.
+   * Prefer a compact binary asset (like packed imported meshes) for large meshes;
+   * inline number[] is only suitable for small fixtures / tests.
+   */
+  skin?: {
+    influencesPerVertex: number;
+    /** Flattened vertex → joint index table (or binary via skinAssetId). */
+    indices?: number[];
+    /** Flattened weights matching `indices`. */
+    weights?: number[];
+    /** Preferred: binary payload asset id for indices+weights. */
+    skinAssetId?: string;
+  };
+  markers?: AutorigMarker[];
+  /** Bump when weight/fitting algorithms change so assets can be regenerated. */
+  rigGenerationVersion?: number;
+  /** Optional original unrigged source mesh for regenerate/reset. */
+  sourceMeshAssetId?: string;
+}
+
 export interface ShotObjectOverride {
   transform?: Transform;
   visible?: boolean;
+  /** Skeletal pose override; only applies to poseable characters. */
+  humanPose?: HumanPose;
 }
 
 export type ShotObjectOverrides = Record<string, ShotObjectOverride>;
@@ -101,6 +201,13 @@ export interface SceneObject {
   /** Canonical texture-free mesh asset used by imported graybox geometry. */
   modelAssetId?: string;
   importedModel?: ImportedModelInfo;
+  /**
+   * Poseable-character identity. Distinct from `transform` (set placement)
+   * and `humanPose` (limb articulation).
+   */
+  poseableCharacter?: PoseableCharacterSource;
+  /** Skeletal articulation; only has effect when the object is poseable. */
+  humanPose?: HumanPose;
   metadata?: Record<string, unknown>;
 }
 
@@ -314,7 +421,7 @@ export interface Shot {
 
 export interface ProjectAsset {
   id: string;
-  type: 'image' | 'video' | 'model' | 'json' | 'text' | 'other';
+  type: 'image' | 'video' | 'model' | 'json' | 'text' | 'other' | 'poseable_rig';
   name: string;
   /** Runtime URL (data:, blob:, or a portable panoref-asset: reference). */
   uri: string;
@@ -324,7 +431,13 @@ export interface ProjectAsset {
   width?: number;
   height?: number;
   createdAt: string;
-  metadata?: Record<string, unknown>;
+  /**
+   * For `poseable_rig` assets, prefer embedding {@link PoseableRigAsset} here
+   * (or as JSON behind `uri`) so autorig results round-trip with the project.
+   */
+  metadata?: Record<string, unknown> & {
+    poseableRig?: PoseableRigAsset;
+  };
 }
 
 export interface AssetRegistry {

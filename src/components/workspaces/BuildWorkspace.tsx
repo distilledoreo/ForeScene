@@ -36,10 +36,12 @@ import {
   ZoomOut,
   Sparkles,
 } from 'lucide-react';
-import { Euler, ObjectSurfaceStyle, SceneObject, SceneObjectType, StagingRole, Vec3 } from '../../domain/types';
+import { Euler, ObjectSurfaceStyle, SceneObject, SceneObjectType, StagingRole, Vec3, type HumanJointId } from '../../domain/types';
 import type { GizmoMode } from '../../engine/transformGizmo';
 import { defaultShotDepthSettings } from '../../domain/defaults';
+import { isPoseableSceneObject } from '../../engine/humanPose';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
+import { CharacterPosePanel } from '../common/CharacterPosePanel';
 import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { objectDisplayName } from '../../domain/defaults';
 import { getLatestGrayboxPano, getPanoAsset, listGrayboxPanos } from '../../domain/selectors';
@@ -123,6 +125,8 @@ export function BuildWorkspace({
   const [layersOpen, setLayersOpen] = useState(false);
   const [showSceneGuides, setShowSceneGuides] = useState(false);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
+  const [characterEditMode, setCharacterEditMode] = useState<'move' | 'pose'>('move');
+  const [selectedPoseJointId, setSelectedPoseJointId] = useState<HumanJointId | undefined>();
   const [grayboxRenderError, setGrayboxRenderError] = useState<string | undefined>();
   const [isRenderingProjected, setIsRenderingProjected] = useState(false);
   const [projectedRenderError, setProjectedRenderError] = useState<string | undefined>();
@@ -310,6 +314,12 @@ export function BuildWorkspace({
   }, [setPanoRotation]);
   const selectedObjects = project.scene.objects.filter((object) => selectedObjectIds.includes(object.id));
   const selectedObject = project.scene.objects.find((object) => object.id === selectedObjectIds.at(-1));
+  const selectedIsPoseable = Boolean(
+    selectedObject
+    && selectedObjects.length === 1
+    && isPoseableSceneObject(selectedObject),
+  );
+  const posingCharacter = selectedIsPoseable && characterEditMode === 'pose';
   const selectionHasLocked = selectedObjects.some((object) => object.locked);
   const selectionAllLocked = selectedObjects.length > 0 && selectedObjects.every((object) => object.locked);
   const selectionAllHidden = selectedObjects.length > 0 && selectedObjects.every((object) => !object.visible);
@@ -599,11 +609,14 @@ useEffect(() => {
           onFreeCameraActiveChange={setFreeCameraActive}
           showSceneGuides={showSceneGuides}
           showTransformGizmo={Boolean(
-            editingChromeVisible && (
+            editingChromeVisible && !posingCharacter && (
               (selectedObject && buildMode === 'select' && !selectionHasLocked)
               || buildMode === 'pano_origin'
             ),
           )}
+          poseEditActive={Boolean(editingChromeVisible && posingCharacter)}
+          selectedPoseJointId={selectedPoseJointId}
+          onSelectPoseJoint={setSelectedPoseJointId}
           gizmoMode={buildMode === 'pano_origin' && gizmoMode === 'scale' ? 'translate' : gizmoMode}
           snapToGrid={gridSnap}
           onSelectObject={selectObject}
@@ -883,6 +896,50 @@ useEffect(() => {
                   <ZoomIn className="h-3.5 w-3.5" />
                 </GizmoModeButton>
               </div>
+              {selectedIsPoseable && selectedObject && (
+                <div className="mt-2 space-y-2 border-t border-subtle pt-2" data-build-character-pose>
+                  <div className="flex items-center gap-1" data-character-mode-toggle>
+                    <button
+                      type="button"
+                      data-character-mode-move
+                      className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                        characterEditMode === 'move' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
+                      }`}
+                      onClick={() => {
+                        setCharacterEditMode('move');
+                        setSelectedPoseJointId(undefined);
+                      }}
+                    >
+                      Move Character
+                    </button>
+                    <button
+                      type="button"
+                      data-character-mode-pose
+                      aria-pressed={characterEditMode === 'pose'}
+                      className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                        characterEditMode === 'pose' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
+                      }`}
+                      onClick={() => setCharacterEditMode('pose')}
+                    >
+                      Pose Character
+                    </button>
+                  </div>
+                  {characterEditMode === 'pose' && (
+                    <CharacterPosePanel
+                      pose={selectedObject.humanPose}
+                      selectedJointId={selectedPoseJointId}
+                      onSelectJoint={setSelectedPoseJointId}
+                      onChangePose={(next, options) => updateObject(
+                        selectedObject.id,
+                        { humanPose: next },
+                        { history: options?.history ?? 'step' },
+                      )}
+                      onPoseEditBatchStart={beginBuildHistoryBatch}
+                      onPoseEditBatchEnd={endBuildHistoryBatch}
+                    />
+                  )}
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap gap-1">
                 <QuickAction title="Rotate left (Shift+R)" onClick={() => rotateSelected(-15)}><RotateCcw className="h-3.5 w-3.5" /></QuickAction>
                 <QuickAction title="Rotate right (R)" onClick={() => rotateSelected(15)}><RotateCw className="h-3.5 w-3.5" /></QuickAction>

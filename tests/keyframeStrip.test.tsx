@@ -153,7 +153,7 @@ describe('KeyframeStrip', () => {
       keyframes,
     });
     expect(mid).toContain('data-camera-keyframe-update-pose');
-    expect(mid).toContain('Update pose');
+    expect(mid).toContain('Recapture keyframe');
     expect(mid).toContain('data-camera-keyframe-time');
     expect(mid).toContain('data-camera-keyframe-delete');
 
@@ -162,7 +162,7 @@ describe('KeyframeStrip', () => {
       selectedKeyframeId: 's',
       keyframes,
     });
-    expect(start).toContain('Update pose');
+    expect(start).toContain('Recapture keyframe');
     expect(start).not.toContain('data-camera-keyframe-time');
     expect(start).not.toContain('data-camera-keyframe-delete');
   });

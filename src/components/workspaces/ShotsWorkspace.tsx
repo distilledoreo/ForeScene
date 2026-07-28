@@ -748,7 +748,7 @@ export function ShotsWorkspace() {
     if (!selectedShot) return;
     const baseObject = project.scene.objects.find((object) => object.id === objectId);
     if (!baseObject || !canStageObjectPerShot(baseObject)) return;
-    // When a keyframe is selected, stage into the transient inspection map so Update pose can commit it.
+    // When a keyframe is selected, stage into the transient inspection map so Recapture keyframe can commit it.
     if (selectedKeyframeId) {
       setViewportObjectOverrides((previous) => {
         const base = previous !== undefined

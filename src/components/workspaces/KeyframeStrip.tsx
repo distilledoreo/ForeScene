@@ -282,7 +282,7 @@ export function KeyframeStrip({
                   className="rounded-lg bg-white/15 px-2.5 py-1.5 text-[11px] font-semibold transition hover:bg-white/25"
                   onClick={() => onUpdatePose(selectedKeyframe.id)}
                 >
-                  Update pose
+                  Recapture keyframe
                 </button>
                 {!selectedIsEndpoint && (
                   <>
