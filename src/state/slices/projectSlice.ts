@@ -245,6 +245,23 @@ export const createProjectSlice: StateCreator<
     return results.map((r) => r.object);
   },
 
+  addPoseableCharacterImport: ({ sourceAsset, rigAsset, object }) => {
+    set((state) => applyBuildSceneChange(state, {
+      objects: [...state.project.scene.objects, object],
+      assets: {
+        assets: {
+          ...state.project.assets.assets,
+          [sourceAsset.id]: sourceAsset,
+          [rigAsset.id]: rigAsset,
+        },
+      },
+      selectedObjectIds: [object.id],
+      history: 'step',
+      extra: { buildMode: 'select' },
+    }));
+    return object;
+  },
+
   placeObject: (type, point) => {
     const state = get();
     const count = state.project.scene.objects.filter((object) => object.type === type).length + 1;

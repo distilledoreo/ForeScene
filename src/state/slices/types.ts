@@ -36,6 +36,11 @@ export interface ProjectSliceState {
   addObject: (type: SceneObjectType) => void;
   addImportedModel: (result: { asset: ProjectAsset; object: SceneObject }) => SceneObject;
   addImportedModels: (results: Array<{ asset: ProjectAsset; object: SceneObject }>) => SceneObject[];
+  addPoseableCharacterImport: (result: {
+    sourceAsset: ProjectAsset;
+    rigAsset: ProjectAsset;
+    object: SceneObject;
+  }) => SceneObject;
   placeObject: (type: SceneObjectType, point: Vec3) => SceneObject;
   updateObject: (id: string, updates: Partial<SceneObject>, options?: { history?: BuildHistoryMode }) => void;
   moveObjectToGroundPoint: (id: string, point: Vec3) => void;

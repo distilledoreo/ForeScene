@@ -147,6 +147,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'More', description: 'Reveals less-frequent primitive types, Generate set from description, and the 3D scene importer.' },
           { label: 'Generate set from description', description: 'Opens the SetBlueprint workflow: describe a set, paste validated JSON from an external model, review spatial blocking, and replace the project safely.' },
           { label: 'Import 3D model or scene', description: 'Opens the geometry-only import workflow described below.' },
+          { label: 'Import poseable character', description: 'Opens the separate poseable-character wizard for upright humanoid GLB/glTF. Preserves materials/textures and original source bytes; marker-assisted autorigging follows later.' },
         ],
       },
       {
@@ -239,7 +240,24 @@ export const helpSections: readonly HelpSection[] = [
         notes: [
           'Materials, textures, cameras, lights, animation, rigs, and morph targets are intentionally removed.',
           'External .bin sidecars are not loaded; use an embedded glTF or a single GLB.',
-          'Ordinary Import 3D model or scene is for static graybox geometry only. Poseable characters use a separate import path so rig data is not forced into the static model format.',
+          'Ordinary Import 3D model or scene is for static graybox geometry only. Use Import poseable character for humanoids that will be posed.',
+        ],
+      },
+      {
+        id: 'build-poseable-import',
+        title: 'Import poseable character',
+        summary: 'A separate import path from graybox geometry. Establishes the poseable_rig asset lifecycle before marker-assisted autorigging.',
+        controls: [
+          { label: 'Choose GLB / glTF', description: 'Loads one primary upright humanoid and previews the original mesh with materials and textures preserved when possible.' },
+          { label: 'Front / Up', description: 'Declares which source axes should face the camera (+Z) and world up (+Y).' },
+          { label: 'Ground (m)', description: 'Sets the ground contact height after orientation.' },
+          { label: 'Approx. height (m)', description: 'Scales the character to an approximate real-world height.' },
+          { label: 'Rest pose hint', description: 'Records whether the source is roughly an A-pose or T-pose for later marker suggestions.' },
+          { label: 'Import character', description: 'Writes the unmodified source asset, a poseable_rig shell, and a Person scene object. Skin weights are not generated yet.' },
+        ],
+        notes: [
+          'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',
+          'The original source asset is retained so autorigging can be retried without re-picking the file.',
         ],
       },
       {
@@ -819,7 +837,7 @@ export const helpSections: readonly HelpSection[] = [
         controls: [
           { label: 'Built-in Person', description: 'Uses the bundled adult mannequin. Posing is semantic (joints, presets, mirror) rather than full animation or IK targeting.' },
           { label: 'Ordinary model import', description: 'Import 3D model or scene strips materials, textures, animation, and rigs. It cannot produce a poseable character.' },
-          { label: 'Autorigged import (upcoming)', description: 'A separate Import → Poseable character path will accept upright A/T-pose humanoids with guided markers. Extra limbs, tails, wings, and complex attached props are out of scope for the first version.' },
+          { label: 'Autorigged import (upcoming)', description: 'Import → Poseable character accepts upright A/T-pose humanoids and stores a poseable_rig shell. Marker placement and skin weights follow in later milestones. Extra limbs, tails, wings, and complex attached props remain out of scope for the first version.' },
           { label: 'Skinning fidelity', description: 'Autorig weights will be geometric approximations for blocking and continuity, not production character animation quality.' },
         ],
       },

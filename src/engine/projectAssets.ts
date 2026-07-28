@@ -11,6 +11,16 @@ export function getReferencedProjectAssetIds(project: LocationProject): Set<stri
 
   for (const object of project.scene.objects) {
     if (object.modelAssetId) referenced.add(object.modelAssetId);
+    const poseable = object.poseableCharacter;
+    if (poseable?.kind === 'autorigged') {
+      referenced.add(poseable.assetId);
+      const rigAsset = project.assets.assets[poseable.assetId];
+      const rig = rigAsset?.metadata?.poseableRig;
+      if (rig?.originalSourceAssetId) referenced.add(rig.originalSourceAssetId);
+      if (rig?.sourceMeshAssetId) referenced.add(rig.sourceMeshAssetId);
+      if (rig?.meshAssetId) referenced.add(rig.meshAssetId);
+      if (rig?.skin?.skinAssetId) referenced.add(rig.skin.skinAssetId);
+    }
   }
   for (const pano of project.panoRefs) {
     referenced.add(pano.imageAssetId);

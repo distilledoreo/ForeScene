@@ -86,6 +86,7 @@ import { useThemeStore } from '../../state/useThemeStore';
 import { ContextualPanel } from '../common/ContextualPanel';
 import { Field, Select, TextInput } from '../common/Field';
 import { ModelImportDialog } from '../common/ModelImportDialog';
+import { PoseableCharacterImportDialog } from '../common/PoseableCharacterImportDialog';
 import { SetGenerationDialog } from '../common/SetGenerationDialog';
 import type { CompiledSetBlueprint } from '../../engine/setBlueprintCompiler';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
@@ -136,6 +137,7 @@ export function BuildWorkspace({
   const [systemClipboardSyncedAt, setSystemClipboardSyncedAt] = useState<string | undefined>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [modelImportOpen, setModelImportOpen] = useState(false);
+  const [poseableImportOpen, setPoseableImportOpen] = useState(false);
   const [setGenerationOpen, setSetGenerationOpen] = useState(false);
   const [frameRequest, setFrameRequest] = useState(0);
   const [frameObjectIds, setFrameObjectIds] = useState<string[]>([]);
@@ -1022,6 +1024,7 @@ useEffect(() => {
           onPrimitiveChange={setActivePrimitive}
           onGridSnapChange={setGridSnap}
           onImport={() => setModelImportOpen(true)}
+          onImportPoseable={() => setPoseableImportOpen(true)}
           onGenerateSet={() => setSetGenerationOpen(true)}
         />
 
@@ -1228,6 +1231,14 @@ useEffect(() => {
           requestFrame(objects.map((object) => object.id));
         }}
       />
+      <PoseableCharacterImportDialog
+        open={poseableImportOpen}
+        onClose={() => setPoseableImportOpen(false)}
+        onImported={(object) => {
+          setBuildMode('select');
+          requestFrame([object.id]);
+        }}
+      />
       <SetGenerationDialog
         open={setGenerationOpen}
         onClose={() => setSetGenerationOpen(false)}
@@ -1253,6 +1264,7 @@ function BuildObjectTray({
   onPrimitiveChange,
   onGridSnapChange,
   onImport,
+  onImportPoseable,
   onGenerateSet,
 }: {
   activePrimitive: SceneObjectType;
@@ -1262,6 +1274,7 @@ function BuildObjectTray({
   onPrimitiveChange: (type: SceneObjectType) => void;
   onGridSnapChange: (value: boolean) => void;
   onImport: () => void;
+  onImportPoseable: () => void;
   onGenerateSet: () => void;
 }) {
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -1305,6 +1318,18 @@ function BuildObjectTray({
             >
               <Upload className="h-4 w-4" />
               Import 3D model or scene
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setToolsOpen(false);
+                onImportPoseable();
+              }}
+              className="col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-subtle px-3 py-2 text-xs font-semibold text-secondary transition hover:border-accent hover:text-accent"
+              data-build-import-poseable-character
+            >
+              <User className="h-4 w-4" />
+              Import poseable character
             </button>
             {overflowTrayItems.map(({ type, label, icon: Icon }) => (
               <div key={type}>

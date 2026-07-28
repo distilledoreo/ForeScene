@@ -133,9 +133,37 @@ export interface AutorigMarker {
   position: Vec3;
 }
 
+/** Axis choices for aligning an imported poseable character to Continuity Stage space. */
+export type PoseableAxisHint = '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
+
+export interface PoseableCharacterOrientation {
+  /** Axis of the source mesh that should face the camera / +Z after import. */
+  frontAxis: PoseableAxisHint;
+  /** Axis of the source mesh that should point world-up (+Y). */
+  upAxis: PoseableAxisHint;
+  /** World Y of the soles / ground contact after rest placement, in meters. */
+  groundLevelMeters: number;
+}
+
+export interface PoseableRestTransform {
+  position: Vec3;
+  rotation: Euler;
+  scale: Vec3;
+}
+
+export interface PoseableRigGenerationSettings {
+  /** Approximate character height in meters (head-to-ground). */
+  approximateHeightMeters: number;
+  /** Author-declared rest pose hint for later marker suggestions. */
+  poseHint?: 'a-pose' | 't-pose';
+  /** Soft validation notes recorded at import time. */
+  notes?: string[];
+}
+
 /**
- * Serializable poseable-character rig asset (Milestone B fills skin/mesh fields).
- * The project format anticipates autorigged characters beyond static imported geometry.
+ * Serializable poseable-character rig asset.
+ * 2A establishes the lifecycle shell; 2B/2C fill markers, bind matrices, and skin.
+ * Large vertex/skin arrays stay in binary assets — not ordinary project JSON.
  */
 export interface PoseableRigAsset {
   version: 1;
@@ -163,8 +191,21 @@ export interface PoseableRigAsset {
   markers?: AutorigMarker[];
   /** Bump when weight/fitting algorithms change so assets can be regenerated. */
   rigGenerationVersion?: number;
-  /** Optional original unrigged source mesh for regenerate/reset. */
+  /**
+   * Unmodified original import (GLB/glTF bytes) so autorigging can be retried
+   * without re-picking the file.
+   */
+  originalSourceAssetId?: string;
+  /** Optional derived mesh used for display/skinning (may equal original for 2A). */
   sourceMeshAssetId?: string;
+  /** How the author oriented the character relative to Continuity Stage axes. */
+  orientation?: PoseableCharacterOrientation;
+  /** Rest placement applied when the character is first created in the scene. */
+  restTransform?: PoseableRestTransform;
+  /** Wizard / generation inputs used to produce this rig. */
+  generationSettings?: PoseableRigGenerationSettings;
+  /** Optional correction metadata from later marker/weight passes. */
+  correctionMetadata?: Record<string, unknown>;
 }
 
 export interface ShotObjectOverride {

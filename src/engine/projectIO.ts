@@ -7,6 +7,8 @@ import {
   normalizeShotDepthSettings,
 } from '../domain/defaults';
 import { normalizeHumanPose, normalizePoseableCharacterSource } from './humanPose';
+import { normalizePoseableRigAsset } from './poseableRigNormalize';
+import { hydrateAutoriggedCharactersFromAssets } from './autoriggedPoseableCharacter';
 import JSZip from 'jszip';
 import { digestFromRecoveryResourceKey, sha256Digest, verifyBinaryDigest } from './binaryIntegrity';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
@@ -148,8 +150,14 @@ export function parseProject(json: string): LocationProject {
       landmarks: Array.isArray(parsed.landmarks) ? parsed.landmarks : [],
       settings: normalizeProjectSettings(parsed.settings),
       workflow: normalizeProjectWorkflow(parsed.workflow),
+      assets: {
+        ...parsed.assets,
+        assets: normalizeProjectAssets(parsed.assets.assets),
+      },
     };
-    return migrateProjectToCurrent(normalized);
+    const migrated = migrateProjectToCurrent(normalized);
+    hydrateAutoriggedCharactersFromAssets(migrated.assets);
+    return migrated;
   } catch (error) {
     throw new Error(
       error instanceof Error
@@ -188,6 +196,27 @@ function normalizeSceneObject(object: SceneObject & { projectionStamp?: unknown 
     poseableCharacter: normalizePoseableCharacterSource(normalized.poseableCharacter, normalized.type),
     humanPose: normalizeHumanPose(normalized.humanPose),
   };
+}
+
+function normalizeProjectAssets(
+  assets: Record<string, ProjectAsset>,
+): Record<string, ProjectAsset> {
+  const next: Record<string, ProjectAsset> = {};
+  for (const [id, asset] of Object.entries(assets)) {
+    if (asset.type === 'poseable_rig') {
+      const poseableRig = normalizePoseableRigAsset(asset.metadata?.poseableRig);
+      next[id] = {
+        ...asset,
+        metadata: {
+          ...asset.metadata,
+          ...(poseableRig ? { poseableRig } : {}),
+        },
+      };
+      continue;
+    }
+    next[id] = asset;
+  }
+  return next;
 }
 
 function normalizeStagingRole(

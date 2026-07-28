@@ -17,6 +17,11 @@ import {
   subscribeHumanMannequinReady,
 } from '../../engine/humanMannequinModel';
 import {
+  ensureAutoriggedCharactersForProject,
+  getAutoriggedCharacterRevision,
+  subscribeAutoriggedCharacterReady,
+} from '../../engine/autoriggedPoseableCharacter';
+import {
   resolveProjectedProjectorAssets,
 } from '../../engine/multiOriginProjection';
 import {
@@ -1711,6 +1716,9 @@ export function SceneViewport({
   }, [renderDistance, requestRender, isShotFraming]);
 
   const hasVisibleHumanMannequin = projectHasVisibleHumanMannequin(project);
+  const hasAutoriggedCharacter = project.scene.objects.some((object) => (
+    object.visible && object.poseableCharacter?.kind === 'autorigged'
+  ));
 
   useEffect(() => {
     if (!hasVisibleHumanMannequin) return;
@@ -1737,6 +1745,28 @@ export function SceneViewport({
       setMannequinRevision(getHumanMannequinRevision());
     });
   }, [hasVisibleHumanMannequin]);
+
+  useEffect(() => {
+    if (!hasAutoriggedCharacter) return;
+    const loadWhenIdle = () => {
+      void ensureAutoriggedCharactersForProject(project).catch(() => undefined);
+    };
+    const idleCallback = window.requestIdleCallback?.(loadWhenIdle, { timeout: 2_000 });
+    const timeoutId = idleCallback === undefined
+      ? window.setTimeout(loadWhenIdle, 0)
+      : undefined;
+    return () => {
+      if (idleCallback !== undefined) window.cancelIdleCallback?.(idleCallback);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [hasAutoriggedCharacter, project]);
+
+  useEffect(() => {
+    if (!hasAutoriggedCharacter) return;
+    return subscribeAutoriggedCharacterReady(() => {
+      setMannequinRevision(getAutoriggedCharacterRevision());
+    });
+  }, [hasAutoriggedCharacter]);
 
   useEffect(() => {
     if (!shotFraming?.flyActive && !freeCameraActive) {
