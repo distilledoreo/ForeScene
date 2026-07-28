@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 describe('startup loading boundaries', () => {
   it('does not mount Continuity Stage rendering work before a mode is selected', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
     const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
     const store = readFileSync(new URL('../src/state/slices/continuityStoreImpl.ts', import.meta.url), 'utf8');
     const secondCapture = readFileSync(
@@ -27,8 +28,9 @@ describe('startup loading boundaries', () => {
     expect(app).toContain('<Suspense fallback={null}>');
     expect(app).toContain('<WorkflowGuidance />');
     expect(app).toContain('WorkspaceErrorBoundary');
-    expect(app).toContain("import('./engine/projectIO')");
     expect(app).not.toContain("from './engine/projectIO'");
+    expect(lifecycle).toContain("import('../engine/projectIO')");
+    expect(lifecycle).not.toContain("from '../engine/projectIO'");
     expect(main).not.toContain('ensureHumanMannequinModel');
     expect(store).toContain("await import('../../engine/renderers')");
     expect(store).not.toContain("from '../../engine/renderers'");
