@@ -40,12 +40,45 @@ export interface DepthMetadata {
   backgroundColor: 'black';
   invert: boolean;
   rangeMode: ShotDepthSettings['rangeMode'];
+  /** Present when a depth camera-move video is included. */
+  frameRate?: number;
 }
+
+/** Shared render-pass identity for clay / projected / depth camera-move loops. */
+export type SceneRenderPass = 'clay' | 'projected' | 'depth';
 
 /** True when depth stills should be written into the shot package. */
 export function shouldExportViewportDepth(settings?: ShotDepthSettings | null): boolean {
   const depth = normalizeShotDepthSettings(settings);
   return depth.enabled && depth.includeViewportStill;
+}
+
+/** True when depth camera-move reference stills should be packaged. */
+export function shouldExportDepthReferenceFrames(
+  settings: ShotDepthSettings | null | undefined,
+  hasReferenceFrames: boolean,
+): boolean {
+  const depth = normalizeShotDepthSettings(settings);
+  return depth.enabled && depth.includeReferenceFrames && hasReferenceFrames;
+}
+
+/** True when a depth camera-move MP4 should be packaged. */
+export function shouldExportCameraMoveDepth(
+  settings: ShotDepthSettings | null | undefined,
+  hasRenderableMove: boolean,
+): boolean {
+  const depth = normalizeShotDepthSettings(settings);
+  return depth.enabled && depth.includeCameraMoveVideo && hasRenderableMove;
+}
+
+/** True when any depth package artifact is requested. */
+export function shouldExportAnyDepth(
+  settings: ShotDepthSettings | null | undefined,
+  options: { hasReferenceFrames?: boolean; hasRenderableMove?: boolean } = {},
+): boolean {
+  return shouldExportViewportDepth(settings)
+    || shouldExportDepthReferenceFrames(settings, options.hasReferenceFrames === true)
+    || shouldExportCameraMoveDepth(settings, options.hasRenderableMove === true);
 }
 
 export function resolveShotDepthSettings(shot: Pick<Shot, 'exportSettings'>): ShotDepthSettings {
@@ -99,6 +132,7 @@ export function resolveDepthCameraClipping(params: {
 export function buildDepthMetadata(
   depth: ShotDepthSettings,
   range: DepthRangeMeters,
+  extras: { frameRate?: number } = {},
 ): DepthMetadata {
   const invert = depth.invert === true;
   return {
@@ -110,6 +144,7 @@ export function buildDepthMetadata(
     backgroundColor: 'black',
     invert,
     rangeMode: depth.rangeMode,
+    ...(extras.frameRate != null ? { frameRate: extras.frameRate } : {}),
   };
 }
 
@@ -250,23 +285,23 @@ export interface DepthPassOptions {
   cameraFar: number;
 }
 
-/**
- * Two-pass depth visualization into the renderer's current drawing buffer:
- * 1) MeshDepthMaterial → packed depth RT
- * 2) Fullscreen unpack + linear metric remap → grayscale RGB
- */
-export function renderDepthGrayscale(
-  renderer: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.PerspectiveCamera,
-  options: DepthPassOptions,
-): void {
-  const size = new THREE.Vector2();
-  renderer.getSize(size);
-  const width = Math.max(1, Math.round(size.x));
-  const height = Math.max(1, Math.round(size.y));
+/** Reusable GPU resources for multi-frame depth video / preview. */
+export interface DepthPassResources {
+  width: number;
+  height: number;
+  depthTarget: THREE.WebGLRenderTarget;
+  depthMaterial: THREE.MeshDepthMaterial;
+  blitScene: THREE.Scene;
+  blitCamera: THREE.OrthographicCamera;
+  blitMaterial: THREE.ShaderMaterial;
+  blitMesh: THREE.Mesh;
+  dispose(): void;
+}
 
-  const depthTarget = new THREE.WebGLRenderTarget(width, height, {
+export function createDepthPassResources(width: number, height: number): DepthPassResources {
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+  const depthTarget = new THREE.WebGLRenderTarget(w, h, {
     depthBuffer: true,
     stencilBuffer: false,
     generateMipmaps: false,
@@ -281,6 +316,106 @@ export function renderDepthGrayscale(
     depthPacking: THREE.RGBADepthPacking,
     side: THREE.DoubleSide,
   });
+
+  const blitMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      tDepth: { value: depthTarget.texture },
+      cameraNear: { value: 0.1 },
+      cameraFar: { value: 100 },
+      nearMeters: { value: 0.1 },
+      farMeters: { value: 100 },
+      invert: { value: 0 },
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }
+    `,
+    fragmentShader: DEPTH_LINEARIZE_FRAGMENT,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const blitCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const blitMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMaterial);
+  const blitScene = new THREE.Scene();
+  blitScene.add(blitMesh);
+
+  return {
+    width: w,
+    height: h,
+    depthTarget,
+    depthMaterial,
+    blitScene,
+    blitCamera,
+    blitMaterial,
+    blitMesh,
+    dispose() {
+      depthTarget.dispose();
+      depthMaterial.dispose();
+      blitMesh.geometry.dispose();
+      blitMaterial.dispose();
+    },
+  };
+}
+
+const DEPTH_LINEARIZE_FRAGMENT = /* glsl */`
+  #include <packing>
+
+  uniform sampler2D tDepth;
+  uniform float cameraNear;
+  uniform float cameraFar;
+  uniform float nearMeters;
+  uniform float farMeters;
+  uniform float invert;
+  varying vec2 vUv;
+
+  void main() {
+    float fragCoordZ = unpackRGBAToDepth(texture2D(tDepth, vUv));
+    // No geometry leaves the packed clear value at 1.0 → black.
+    if (fragCoordZ >= 0.99999) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+      return;
+    }
+
+    float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
+    float linearDepth = -viewZ;
+    float normalized = clamp(
+      (linearDepth - nearMeters) / max(farMeters - nearMeters, 0.0001),
+      0.0,
+      1.0
+    );
+    // Default: white = nearest, black = farthest.
+    float gray = invert > 0.5 ? normalized : (1.0 - normalized);
+    gl_FragColor = vec4(gray, gray, gray, 1.0);
+  }
+`;
+
+/**
+ * Two-pass depth visualization into the renderer's current drawing buffer:
+ * 1) MeshDepthMaterial → packed depth RT
+ * 2) Fullscreen unpack + linear metric remap → grayscale RGB
+ *
+ * Pass `resources` for multi-frame encodes to avoid per-frame allocations.
+ */
+export function renderDepthGrayscale(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  options: DepthPassOptions,
+  resources?: DepthPassResources,
+): void {
+  const size = new THREE.Vector2();
+  renderer.getSize(size);
+  const width = Math.max(1, Math.round(size.x));
+  const height = Math.max(1, Math.round(size.y));
+
+  const ownsResources = !resources
+    || resources.width !== width
+    || resources.height !== height;
+  const pass = ownsResources ? createDepthPassResources(width, height) : resources;
 
   const previousOverride = scene.overrideMaterial;
   const previousBackground = scene.background;
@@ -301,19 +436,25 @@ export function renderDepthGrayscale(
     renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     renderer.autoClear = true;
     renderer.setClearColor(clearPacked, 1);
-    scene.overrideMaterial = depthMaterial;
+    scene.overrideMaterial = pass.depthMaterial;
     scene.background = null;
     scene.fog = null;
 
-    renderer.setRenderTarget(depthTarget);
+    renderer.setRenderTarget(pass.depthTarget);
     renderer.clear();
     renderer.render(scene, camera);
 
-    blitLinearDepth(renderer, depthTarget.texture, {
-      ...options,
-      width,
-      height,
-    });
+    const uniforms = pass.blitMaterial.uniforms;
+    uniforms.tDepth.value = pass.depthTarget.texture;
+    uniforms.cameraNear.value = options.cameraNear;
+    uniforms.cameraFar.value = options.cameraFar;
+    uniforms.nearMeters.value = options.nearMeters;
+    uniforms.farMeters.value = options.farMeters;
+    uniforms.invert.value = options.invert ? 1 : 0;
+
+    renderer.setRenderTarget(null);
+    renderer.clear();
+    renderer.render(pass.blitScene, pass.blitCamera);
   } finally {
     scene.overrideMaterial = previousOverride;
     scene.background = previousBackground;
@@ -323,86 +464,7 @@ export function renderDepthGrayscale(
     renderer.autoClear = previousAutoClear;
     renderer.toneMapping = previousToneMapping;
     renderer.outputColorSpace = previousOutputColorSpace;
-    depthMaterial.dispose();
-    depthTarget.dispose();
-  }
-}
-
-function blitLinearDepth(
-  renderer: THREE.WebGLRenderer,
-  depthTexture: THREE.Texture,
-  options: DepthPassOptions & { width: number; height: number },
-): void {
-  const scene = new THREE.Scene();
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      tDepth: { value: depthTexture },
-      cameraNear: { value: options.cameraNear },
-      cameraFar: { value: options.cameraFar },
-      nearMeters: { value: options.nearMeters },
-      farMeters: { value: options.farMeters },
-      invert: { value: options.invert ? 1 : 0 },
-    },
-    vertexShader: /* glsl */`
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = vec4(position.xy, 0.0, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */`
-      #include <packing>
-
-      uniform sampler2D tDepth;
-      uniform float cameraNear;
-      uniform float cameraFar;
-      uniform float nearMeters;
-      uniform float farMeters;
-      uniform float invert;
-      varying vec2 vUv;
-
-      void main() {
-        float fragCoordZ = unpackRGBAToDepth(texture2D(tDepth, vUv));
-        // No geometry leaves the packed clear value at 1.0 → black.
-        if (fragCoordZ >= 0.99999) {
-          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-          return;
-        }
-
-        float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
-        float linearDepth = -viewZ;
-        float normalized = clamp(
-          (linearDepth - nearMeters) / max(farMeters - nearMeters, 0.0001),
-          0.0,
-          1.0
-        );
-        // Default: white = nearest, black = farthest.
-        float gray = invert > 0.5 ? normalized : (1.0 - normalized);
-        gl_FragColor = vec4(gray, gray, gray, 1.0);
-      }
-    `,
-    depthTest: false,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
-  scene.add(mesh);
-
-  const previousToneMapping = renderer.toneMapping;
-  const previousOutputColorSpace = renderer.outputColorSpace;
-  try {
-    renderer.toneMapping = THREE.NoToneMapping;
-    // Keep linear values so PNG grayscale matches the shader output.
-    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    renderer.setRenderTarget(null);
-    renderer.clear();
-    renderer.render(scene, camera);
-  } finally {
-    renderer.toneMapping = previousToneMapping;
-    renderer.outputColorSpace = previousOutputColorSpace;
-    mesh.geometry.dispose();
-    material.dispose();
+    if (ownsResources) pass.dispose();
   }
 }
 

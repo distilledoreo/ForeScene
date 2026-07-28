@@ -23,16 +23,20 @@ import {
   renderViewportClay,
   renderViewportProjected,
 } from './renderers';
+import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
+import { resolveProjectForShot } from './shotSceneState';
+import { interpolateObjectOverrides } from './objectKeyframes';
 import {
   buildDepthMetadata,
   renderShotDepthFrame,
+  renderViewportDepth,
   resolveShotDepthRangeForExport,
+  resolveShotDepthSettings,
+  shouldExportAnyDepth,
+  shouldExportCameraMoveDepth,
+  shouldExportDepthReferenceFrames,
   shouldExportViewportDepth,
 } from './depthRender';
-import { resolveProjectForShot } from './shotSceneState';
-import { interpolateObjectOverrides } from './objectKeyframes';
-import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
-import { normalizeShotDepthSettings } from '../domain/defaults';
 
 export { downloadBlob };
 
@@ -175,6 +179,12 @@ export function countShotPackageUnits(project: LocationProject, shot: Shot): num
   )
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
+  const depthMoveFrames = shouldExportDepthReferenceFrames(
+    shot.exportSettings.depth,
+    true,
+  )
+    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
+    : [];
   const hasCubemap = Boolean(
     shot.exportSettings.includeFullPano
     && ((canonicalPano && canonicalAsset) || (linkedPano && linkedPanoAsset)),
@@ -183,6 +193,13 @@ export function countShotPackageUnits(project: LocationProject, shot: Shot): num
   if (shot.exportSettings.includeViewport) units += peopleVariants.length;
   if (shot.exportSettings.includeProjectedViewport && canProject) units += peopleVariants.length;
   if (shouldExportViewportDepth(shot.exportSettings.depth)) units += peopleVariants.length;
+  if (shouldExportCameraMoveDepth(
+    shot.exportSettings.depth,
+    hasRenderableCameraMove(shot.cameraKeyframes),
+  )) {
+    units += peopleVariants.length;
+  }
+  units += depthMoveFrames.length * peopleVariants.length;
   if (shot.exportSettings.includeAiResultFrame && aiResultAssetId) units += 1;
   if (shot.exportSettings.includeCameraMoveVideo) {
     if (shot.assets.cameraMoveVideoAssetId || hasRenderableCameraMove(shot.cameraKeyframes)) {
@@ -474,7 +491,6 @@ async function appendShotPackageToZip(
   }
 
   if (shouldExportViewportDepth(shot.exportSettings.depth)) {
-    const depthSettings = normalizeShotDepthSettings(shot.exportSettings.depth);
     const sharedRange = await resolveShotDepthRangeForExport(project, shot);
     for (const variant of peopleVariants) {
       throwIfAborted(signal);
@@ -489,12 +505,6 @@ async function appendShotPackageToZip(
         depthFrame.dataUrl,
       );
       finishUnit('rendering', `Depth viewport (${peopleVariantLabel(variant)}) ready`);
-    }
-    if (shot.exportSettings.includeMetadata) {
-      zip.file(
-        `${resolvedRootFolder}/metadata/depth.json`,
-        JSON.stringify(buildDepthMetadata(depthSettings, sharedRange), null, 2),
-      );
     }
   }
 
@@ -626,6 +636,49 @@ async function appendShotPackageToZip(
     }
   }
 
+  if (shouldExportCameraMoveDepth(
+    shot.exportSettings.depth,
+    hasRenderableCameraMove(shot.cameraKeyframes),
+  )) {
+    const depthSettings = resolveShotDepthSettings(shot);
+    const sharedRange = await resolveShotDepthRangeForExport(project, shot);
+    for (const variant of peopleVariants) {
+      throwIfAborted(signal);
+      emit('encoding', `Encoding depth camera move (${peopleVariantLabel(variant)})…`, { indeterminate: true });
+      try {
+        const video = await renderShotCameraMoveMp4(project, shot, {
+          mode: 'render',
+          resolutionPreset: '1080p',
+          frameRate: 30,
+          appearance: 'depth',
+          peopleVariant: variant,
+          depthRange: sharedRange,
+          depthInvert: depthSettings.invert === true,
+          includeDataUrl: false,
+          signal,
+          onProgress: (progress) => {
+            const info = normalizeCameraMoveProgress(progress);
+            emit('encoding', info.message || `Encoding depth camera move (${peopleVariantLabel(variant)})…`, {
+              unitFraction: info.progress,
+            });
+          },
+        });
+        zip.file(
+          getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_depth_motion.mp4`, variant, peopleMode),
+          await video.blob.arrayBuffer(),
+        );
+        finishUnit('encoding', `Depth camera move (${peopleVariantLabel(variant)}) ready`);
+      } catch (error) {
+        if (isPackageExportCancelled(error)) throw error;
+        throw new ShotPackageError(
+          error instanceof Error
+            ? error.message
+            : 'Depth camera-move MP4 failed. Disable depth motion or try Chrome/Edge.',
+        );
+      }
+    }
+  }
+
   const cameraMoveReferenceFrames = shot.exportSettings.includeCameraMoveReferenceFrames
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
@@ -697,6 +750,56 @@ async function appendShotPackageToZip(
               : 'Projected camera-move frames failed. Disable projected move frames or import a styled panorama.',
           );
         }
+      }
+    }
+  }
+
+  const depthMoveFrames = shouldExportDepthReferenceFrames(
+    shot.exportSettings.depth,
+    true,
+  )
+    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
+    : [];
+  if (depthMoveFrames.length > 0) {
+    const depthSettings = resolveShotDepthSettings(shot);
+    const sharedRange = await resolveShotDepthRangeForExport(project, shot);
+    const rangeCameras = [
+      shot.camera,
+      ...shot.cameraKeyframes.map((keyframe) => keyframe.camera),
+    ];
+    for (let index = 0; index < depthMoveFrames.length; index += 1) {
+      const frame = depthMoveFrames[index];
+      for (const variant of peopleVariants) {
+        throwIfAborted(signal);
+        emit(
+          'rendering',
+          `Rendering depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)})…`,
+          { indeterminate: true },
+        );
+        const depthFrame = await renderViewportDepth(
+          projectForVariantAtTime(variant, frame.timeSeconds),
+          frame.camera,
+          shot.exportSettings.width,
+          shot.exportSettings.height,
+          {
+            depth: {
+              ...depthSettings,
+              rangeMode: 'manual',
+              nearMeters: sharedRange.nearMeters,
+              farMeters: sharedRange.farMeters,
+            },
+            rangeCameras,
+          },
+        );
+        addDataUrl(
+          zip,
+          getPeopleVariantPath(`${resolvedRootFolder}/inputs/camera_move/depth_${frame.id}.png`, variant, peopleMode),
+          depthFrame.dataUrl,
+        );
+        finishUnit(
+          'rendering',
+          `Depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)}) ready`,
+        );
       }
     }
   }
@@ -790,8 +893,38 @@ async function appendShotPackageToZip(
     if (shot.cameraKeyframes.length > 0) {
       zip.file(`${resolvedRootFolder}/metadata/camera_keyframes.json`, JSON.stringify(shot.cameraKeyframes, null, 2));
     }
-    if (cameraMoveReferenceFrames.length > 0) {
-      zip.file(`${resolvedRootFolder}/metadata/camera_move_reference_frames.json`, JSON.stringify(cameraMoveReferenceFrames, null, 2));
+    const referenceFrameMeta = cameraMoveReferenceFrames.length > 0
+      ? cameraMoveReferenceFrames
+      : depthMoveFrames.length > 0
+        ? depthMoveFrames
+        : projectedMoveFrames;
+    if (referenceFrameMeta.length > 0) {
+      zip.file(
+        `${resolvedRootFolder}/metadata/camera_move_reference_frames.json`,
+        JSON.stringify(referenceFrameMeta, null, 2),
+      );
+    }
+    if (shouldExportAnyDepth(shot.exportSettings.depth, {
+      hasReferenceFrames: depthMoveFrames.length > 0,
+      hasRenderableMove: hasRenderableCameraMove(shot.cameraKeyframes),
+    })) {
+      const depthSettings = resolveShotDepthSettings(shot);
+      const sharedRange = await resolveShotDepthRangeForExport(project, shot);
+      zip.file(
+        `${resolvedRootFolder}/metadata/depth.json`,
+        JSON.stringify(
+          buildDepthMetadata(
+            depthSettings,
+            sharedRange,
+            shouldExportCameraMoveDepth(
+              depthSettings,
+              hasRenderableCameraMove(shot.cameraKeyframes),
+            ) ? { frameRate: 30 } : {},
+          ),
+          null,
+          2,
+        ),
+      );
     }
     zip.file(`${resolvedRootFolder}/metadata/landmarks.json`, JSON.stringify(metadata.landmarks, null, 2));
     zip.file(`${resolvedRootFolder}/metadata/location.json`, JSON.stringify(metadata.project, null, 2));

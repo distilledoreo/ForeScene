@@ -2,7 +2,12 @@ import { LocationProject, PanoReference, Shot } from '../domain/types';
 import { getShotPackageBaseName } from './exportNaming';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES } from './cameraMoveCubemap';
-import { shouldExportViewportDepth } from './depthRender';
+import {
+  shouldExportAnyDepth,
+  shouldExportCameraMoveDepth,
+  shouldExportDepthReferenceFrames,
+  shouldExportViewportDepth,
+} from './depthRender';
 import { canUseProjectedAppearance } from './projectedStyle';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
@@ -127,6 +132,18 @@ export function createShotPackageManifest(
       });
     }
   }
+  if (shouldExportCameraMoveDepth(
+    shot.exportSettings.depth,
+    hasRenderableCameraMove(shot.cameraKeyframes),
+  )) {
+    for (const variant of peopleVariants) {
+      files.push({
+        path: getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth_motion.mp4`, variant, peopleMode),
+        kind: 'video',
+        required: false,
+      });
+    }
+  }
   for (const frame of cameraMoveReferenceFrames) {
     for (const variant of peopleVariants) {
       files.push({
@@ -151,16 +168,35 @@ export function createShotPackageManifest(
       });
     }
   }
+  const depthMoveFrames = shouldExportDepthReferenceFrames(shot.exportSettings.depth, true)
+    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
+    : [];
+  for (const frame of depthMoveFrames) {
+    for (const variant of peopleVariants) {
+      files.push({
+        path: getPeopleVariantPath(`${rootFolder}/inputs/camera_move/depth_${frame.id}.png`, variant, peopleMode),
+        kind: 'image',
+        required: false,
+      });
+    }
+  }
   if (shot.exportSettings.includeMetadata) {
     files.push({ path: `${rootFolder}/metadata/shot.json`, kind: 'json', required: true });
     files.push({ path: `${rootFolder}/metadata/camera.json`, kind: 'json', required: true });
     if (shot.cameraKeyframes.length > 0) {
       files.push({ path: `${rootFolder}/metadata/camera_keyframes.json`, kind: 'json', required: false });
     }
-    if (cameraMoveReferenceFrames.length > 0) {
+    if (
+      cameraMoveReferenceFrames.length > 0
+      || depthMoveFrames.length > 0
+      || projectedMoveFrames.length > 0
+    ) {
       files.push({ path: `${rootFolder}/metadata/camera_move_reference_frames.json`, kind: 'json', required: false });
     }
-    if (shouldExportViewportDepth(shot.exportSettings.depth)) {
+    if (shouldExportAnyDepth(shot.exportSettings.depth, {
+      hasReferenceFrames: depthMoveFrames.length > 0,
+      hasRenderableMove: hasRenderableCameraMove(shot.cameraKeyframes),
+    })) {
       files.push({ path: `${rootFolder}/metadata/depth.json`, kind: 'json', required: false });
     }
     files.push({ path: `${rootFolder}/metadata/landmarks.json`, kind: 'json', required: true });

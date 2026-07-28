@@ -582,6 +582,32 @@ export function ExportWorkspace() {
                         />
                         Viewport depth still
                       </label>
+                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={depth.includeReferenceFrames}
+                          onChange={(event) => patchDepth({
+                            ...depth,
+                            includeReferenceFrames: event.target.checked,
+                          })}
+                          className="accent-[var(--accent)]"
+                          data-export-depth-reference-frames
+                        />
+                        Camera move depth frames
+                      </label>
+                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={depth.includeCameraMoveVideo}
+                          onChange={(event) => patchDepth({
+                            ...depth,
+                            includeCameraMoveVideo: event.target.checked,
+                          })}
+                          className="accent-[var(--accent)]"
+                          data-export-depth-camera-move-video
+                        />
+                        Camera move depth MP4
+                      </label>
                       <DepthSettingsPanel
                         depth={depth}
                         resolvedRange={{
@@ -592,7 +618,7 @@ export function ExportWorkspace() {
                         compact
                       />
                       <p className="text-[11px] leading-snug text-muted">
-                        Camera-move depth frames and video land in a follow-up. Still range is shared across the shot.
+                        Depth range is shared across stills, reference frames, and motion for the whole shot.
                       </p>
                     </>
                   )}
