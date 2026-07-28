@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDefaultProject } from '../src/domain/defaults';
 import {
   HISTORY_SLICE_KEYS,
   PROJECT_SLICE_KEYS,
@@ -81,6 +82,62 @@ describe('continuity store domain slices', () => {
     expect(sessionSrc).toContain('setPanoView:');
     expect(sessionSrc).toContain('landShotFraming:');
     expect(sessionSrc).toContain('setShotCameraFlying:');
+  });
+
+  it('implements selection slice without picking from the monolithic factory', () => {
+    const selectionSrc = readFileSync(join(root, 'src/state/slices/selectionSlice.ts'), 'utf8');
+    expect(selectionSrc).not.toContain('pickSlice');
+    expect(selectionSrc).not.toContain('getSharedContinuityState');
+    expect(selectionSrc).toContain('selectObject:');
+    expect(selectionSrc).toContain('selectShot:');
+    expect(selectionSrc).toContain('setBuildMode:');
+    expect(selectionSrc).toContain('setBuildClipboard:');
+  });
+
+  it('selection actions own object/shot selection, build mode, and clipboard', () => {
+    const project = createDefaultProject();
+    useContinuityStore.getState().setProject(project);
+
+    const store = useContinuityStore.getState();
+    const objectIds = store.project.scene.objects.map((object) => object.id);
+    expect(objectIds.length).toBeGreaterThan(0);
+
+    // setProject aligns selectedShotId with the loaded document.
+    expect(store.selectedShotId).toBe(store.project.shots[0]?.id);
+
+    store.selectObject(objectIds[0]);
+    expect(useContinuityStore.getState().selectedObjectIds).toEqual([objectIds[0]]);
+    useContinuityStore.getState().selectObject(objectIds[1], 'toggle');
+    expect(useContinuityStore.getState().selectedObjectIds).toEqual([objectIds[0], objectIds[1]]);
+
+    useContinuityStore.getState().clearObjectSelection();
+    expect(useContinuityStore.getState().selectedObjectIds).toEqual([]);
+
+    useContinuityStore.getState().selectAllObjects();
+    expect(useContinuityStore.getState().selectedObjectIds.length).toBeGreaterThan(0);
+
+    useContinuityStore.getState().setBuildMode('place');
+    expect(useContinuityStore.getState().buildMode).toBe('place');
+    useContinuityStore.getState().setActivePrimitive('wall');
+    expect(useContinuityStore.getState().activePrimitive).toBe('wall');
+    expect(useContinuityStore.getState().buildMode).toBe('place');
+    expect(useContinuityStore.getState().selectedObjectIds).toEqual([]);
+
+    useContinuityStore.getState().setGridSnap(false);
+    expect(useContinuityStore.getState().gridSnap).toBe(false);
+    useContinuityStore.getState().setGridSnap(true);
+
+    const shotId = useContinuityStore.getState().project.shots[0]?.id;
+    expect(shotId).toBeTruthy();
+    useContinuityStore.getState().selectShot(shotId);
+    const afterShot = useContinuityStore.getState();
+    expect(afterShot.selectedShotId).toBe(shotId);
+    expect(afterShot.shotCameraFlying).toBe(true);
+
+    useContinuityStore.getState().setActivePano(undefined);
+    expect(useContinuityStore.getState().activePanoId).toBeUndefined();
+
+    useContinuityStore.getState().setBuildMode('select');
   });
 
   it('implements workflow slice without picking from the monolithic factory', () => {
