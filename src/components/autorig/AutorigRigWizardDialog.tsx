@@ -83,8 +83,19 @@ import {
 import { autoLabelBodyRegions } from '../../engine/autorig/regions';
 import { extractCanonicalTopology, extractCanonicalVertexPositions } from '../../engine/autorigCanonicalMesh';
 import { buildSkinnedCharacterFromTemplate } from '../../engine/autorigSkinnedMesh';
-import { generateDeterministicSkinWeights } from '../../engine/autorigSkinWeights';
-import { generateRegionConstrainedSkinWeights } from '../../engine/autorig/regionConstrainedWeights';
+import {
+  generatePartialRegionConstrainedSkinWeights,
+  generateRegionConstrainedSkinWeights,
+} from '../../engine/autorig/regionConstrainedWeights';
+import {
+  applyPartialSkinUpdateToPreviewSession,
+  createAutorigPreviewSession,
+  type AutorigPreviewSession,
+} from '../../engine/autorig/previewSession';
+import {
+  buildDirtyVertexSet,
+  createRegionEditFromLabels,
+} from '../../engine/autorig/dirtyRegionSet';
 import {
   analyzeDiagnosticPose,
   validateNeutralDeformation,
@@ -105,7 +116,6 @@ import { AutorigPoseFixStep } from './AutorigPoseFixStep';
 import { AutorigLassoOverlay } from './AutorigLassoOverlay';
 import { AutorigBrushOverlay } from './AutorigBrushOverlay';
 import { useAutorigPaintSession } from './hooks/useAutorigPaintSession';
-import { collectPreviewMeshBindings } from './hooks/useAutorigPreviewSession';
 import type { AutorigFixTool } from './AutorigFixToolbar';
 
 interface MarkerHistoryEntry {
@@ -254,6 +264,20 @@ export function AutorigRigWizardDialog({
   const activePoseRef = useRef<HumanPose | undefined>(undefined);
   const activePoseIdRef = useRef('neutral');
   const pendingPoseRestoreRef = useRef(false);
+  const previewSessionRef = useRef<AutorigPreviewSession | null>(null);
+  const previousResolvedRef = useRef<Uint8Array | null>(null);
+  const [sessionVersion, setSessionVersion] = useState(0);
+
+  const disposePreviewSession = useCallback(() => {
+    const session = previewSessionRef.current;
+    if (!session) return;
+    session.root.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose();
+    });
+    previewSessionRef.current = null;
+  }, []);
+
   suggestedRef.current = suggested;
   assetsRef.current = assets;
   activePoseIdRef.current = activeTestPose;
@@ -307,6 +331,9 @@ export function AutorigRigWizardDialog({
     setPreparing(false);
     setUpdatingDeformation(false);
     depthCenteredRef.current = false;
+    previewSessionRef.current = null;
+    previousResolvedRef.current = null;
+    setSessionVersion(0);
 
     void loadAutorigWizardDraft(rig.id).then((draft) => {
       if (cancelled || !draft) return;
@@ -396,8 +423,10 @@ export function AutorigRigWizardDialog({
     });
   };
 
+  const rebindAfterEditRef = useRef<(nextResolved: Uint8Array) => void>(() => {});
+
   const commitRegionOverrides = (next: Uint8Array, options?: { skipHistory?: boolean }) => {
-    if (!regionOverrides) {
+    if (!regionOverrides || !suggestedRegions) {
       setRegionOverrides(next);
       setDirty(true);
       return;
@@ -410,12 +439,12 @@ export function AutorigRigWizardDialog({
     }
     setRegionOverrides(next);
     setDirty(true);
-    setUpdatingDeformation(true);
-    pendingPoseRestoreRef.current = true;
+    const nextResolved = resolveRegionLabels({ suggested: suggestedRegions, overrides: next });
+    rebindAfterEditRef.current(nextResolved);
   };
 
   const undoRegions = () => {
-    if (!regionOverrides || regionPast.length === 0) return;
+    if (!regionOverrides || !suggestedRegions || regionPast.length === 0) return;
     const entry = regionPast[regionPast.length - 1]!;
     const next = new Uint8Array(regionOverrides);
     applyRegionEditDelta(next, entry, 'undo');
@@ -423,13 +452,13 @@ export function AutorigRigWizardDialog({
     setRegionFuture((ahead) => [entry, ...ahead]);
     setRegionOverrides(next);
     setDirty(true);
-    setUpdatingDeformation(true);
-    pendingPoseRestoreRef.current = true;
     setCorrectionResult(null);
+    const nextResolved = resolveRegionLabels({ suggested: suggestedRegions, overrides: next });
+    rebindAfterEditRef.current(nextResolved);
   };
 
   const redoRegions = () => {
-    if (!regionOverrides || regionFuture.length === 0) return;
+    if (!regionOverrides || !suggestedRegions || regionFuture.length === 0) return;
     const entry = regionFuture[0]!;
     const next = new Uint8Array(regionOverrides);
     applyRegionEditDelta(next, entry, 'redo');
@@ -437,9 +466,9 @@ export function AutorigRigWizardDialog({
     setRegionPast((behind) => [...behind, entry]);
     setRegionOverrides(next);
     setDirty(true);
-    setUpdatingDeformation(true);
-    pendingPoseRestoreRef.current = true;
     setCorrectionResult(null);
+    const nextResolved = resolveRegionLabels({ suggested: suggestedRegions, overrides: next });
+    rebindAfterEditRef.current(nextResolved);
   };
 
   const attachPreviewMesh = useCallback(() => {
@@ -535,6 +564,7 @@ export function AutorigRigWizardDialog({
       selectionPassRef.current = null;
       regionColorDisposerRef.current?.();
       regionColorDisposerRef.current = null;
+      disposePreviewSession();
       disposeAutorigMarkerPreviewGl(glRef.current);
       glRef.current = null;
       setPreviewGlReady(false);
@@ -545,7 +575,7 @@ export function AutorigRigWizardDialog({
       setMeshSource(null);
       setMeshReady(false);
     };
-  }, [open, sourceAssetId]);
+  }, [open, sourceAssetId, disposePreviewSession]);
 
   useEffect(() => {
     if (open) return;
@@ -616,7 +646,7 @@ export function AutorigRigWizardDialog({
     if (!ok) setCorrectionResult({ status: 'failed', message: 'Could not prepare pose preview.' });
   }, [open, step, meshSource, suggestedRegions, topology, ensureRegionsReady]);
 
-  // ---- Deformation preview (Binder V2 when regions are ready) ----
+  // ---- Persistent deformation preview session ----
   const meshData = useMemo(() => {
     if (step !== 'pose-fix' || !meshSource) return null;
     return {
@@ -627,39 +657,172 @@ export function AutorigRigWizardDialog({
 
   const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
 
-  const previewBuffers = useMemo(() => {
-    if (!meshData || !meshBounds || step !== 'pose-fix') return undefined;
-    if (resolvedRegions && topology) {
-      return generateRegionConstrainedSkinWeights({
-        positions: meshData.positions,
-        regionLabels: resolvedRegions,
-        jointPositions: previewFitted.jointPositions,
-        topology,
-        heightMeters: height,
-        meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
-      });
-    }
-    return generateDeterministicSkinWeights({
+  // Build (or rebuild) the skinned preview only when joints / topology / mesh change —
+  // not after every paint stroke.
+  useEffect(() => {
+    if (!open || step !== 'pose-fix' || !meshSource || !meshData || !meshBounds) return;
+    if (!topology || !resolvedRegions) return;
+
+    disposePreviewSession();
+
+    const buffers = generateRegionConstrainedSkinWeights({
       positions: meshData.positions,
+      regionLabels: resolvedRegions,
       jointPositions: previewFitted.jointPositions,
+      topology,
       heightMeters: height,
       meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
-      topologyIndices: meshData.topology,
     });
-  }, [meshData, meshBounds, previewFitted, height, step, resolvedRegions, topology]);
 
-  const deformationPreview = useMemo(() => {
-    if (!previewBuffers || !meshSource || step !== 'pose-fix') return null;
-    const root = buildSkinnedCharacterFromTemplate({ template: meshSource, rig: previewRig, buffers: previewBuffers });
+    const root = buildSkinnedCharacterFromTemplate({
+      template: meshSource,
+      rig: previewRig,
+      buffers,
+    });
     const bones = new Map<HumanJointId, THREE.Bone>();
     root.traverse((node) => {
       const bone = node as THREE.Bone;
       const jointId = bone.userData.humanJointId as HumanJointId | undefined;
       if (bone.isBone && jointId) bones.set(jointId, bone);
     });
-    const meshBindings = collectPreviewMeshBindings(root);
-    return { root, bones, rests: captureBoneRests(bones), meshBindings, buffers: previewBuffers };
-  }, [meshSource, previewRig, previewBuffers, step]);
+
+    const session = createAutorigPreviewSession({
+      root,
+      bones,
+      rests: captureBoneRests(bones),
+      topology,
+      buffers,
+      activePoseId: activePoseIdRef.current,
+      activePose: activePoseRef.current,
+    });
+    previewSessionRef.current = session;
+    previousResolvedRef.current = new Uint8Array(resolvedRegions);
+    setSessionVersion((value) => value + 1);
+
+    return () => {
+      disposePreviewSession();
+    };
+  // Paint corrections update in place — only rebuild when structural inputs change.
+  // `Boolean(resolvedRegions)` gates first readiness without tracking label edits.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    open,
+    step,
+    meshSource,
+    meshData,
+    meshBounds,
+    topology?.topologyHash,
+    Boolean(resolvedRegions),
+    previewFitted,
+    previewRig,
+    height,
+    disposePreviewSession,
+  ]);
+
+  const deformationPreview = previewSessionRef.current && sessionVersion > 0
+    ? previewSessionRef.current
+    : null;
+
+  const previewBuffers = deformationPreview?.buffers;
+
+  const rebindPreviewAfterRegionEdit = useCallback((nextResolved: Uint8Array) => {
+    const session = previewSessionRef.current;
+    if (!session || !meshData || !meshBounds) {
+      setUpdatingDeformation(false);
+      return;
+    }
+    const previous = previousResolvedRef.current ?? nextResolved;
+    session.editRevision += 1;
+    const revision = session.editRevision;
+    setUpdatingDeformation(true);
+
+    try {
+      const edit = createRegionEditFromLabels({
+        previousLabels: previous,
+        nextLabels: nextResolved,
+      });
+      const dirtyVertices = edit
+        ? buildDirtyVertexSet({ topology: session.topology, edit })
+        : new Uint32Array(0);
+
+      const partial = generatePartialRegionConstrainedSkinWeights({
+        positions: meshData.positions,
+        regionLabels: nextResolved,
+        previousRegionLabels: previous,
+        jointPositions: previewFitted.jointPositions,
+        topology: session.topology,
+        heightMeters: height,
+        meshSize: [
+          meshBounds.max[0] - meshBounds.min[0],
+          height,
+          meshBounds.max[2] - meshBounds.min[2],
+        ],
+        revision,
+        dirtyVertices,
+      });
+
+      if (revision !== session.editRevision) {
+        // A newer correction superseded this one.
+        return;
+      }
+
+      if (partial.vertexIndices.length > 0) {
+        const applied = applyPartialSkinUpdateToPreviewSession(session, partial);
+        if (!applied.ok) {
+          setCorrectionResult({
+            status: 'failed',
+            message: applied.message || 'The correction could not be applied. Your previous rig has been kept.',
+          });
+          setUpdatingDeformation(false);
+          return;
+        }
+      }
+
+      previousResolvedRef.current = new Uint8Array(nextResolved);
+      applySemanticPoseToBones({
+        bones: session.bones,
+        rests: session.rests,
+        pose: activePoseRef.current,
+        canonicalPoseBases: previewRig.canonicalPoseBases,
+      });
+      updateSkinnedMeshes(session.root);
+      if (previewView === 'perspective') {
+        session.root.rotation.y = perspectiveYaw;
+      } else {
+        session.root.rotation.y = 0;
+      }
+      session.root.updateMatrixWorld(true);
+      try {
+        const pass = selectionPassRef.current;
+        if (pass) {
+          updateRegionSelectionPassFromSkinnedRoot(pass, session.root, session.meshBindings);
+        }
+      } catch {
+        invalidateRegionSelectionPick(selectionPassRef.current);
+      }
+      renderMeshLayer();
+      setUpdatingDeformation(false);
+      pendingPoseRestoreRef.current = false;
+    } catch (error) {
+      setCorrectionResult({
+        status: 'failed',
+        message: error instanceof Error
+          ? error.message
+          : 'The correction could not be applied. Your previous rig has been kept.',
+      });
+      setUpdatingDeformation(false);
+    }
+  }, [
+    meshData,
+    meshBounds,
+    previewFitted.jointPositions,
+    height,
+    previewRig.canonicalPoseBases,
+    previewView,
+    perspectiveYaw,
+    renderMeshLayer,
+  ]);
+  rebindAfterEditRef.current = rebindPreviewAfterRegionEdit;
 
   const applyActivePoseToPreview = useCallback((preview = deformationPreview) => {
     if (!preview) return;
@@ -730,17 +893,8 @@ export function AutorigRigWizardDialog({
     resolvedRegions,
     regionConfidence,
     refreshSelectionPassFromPose,
+    sessionVersion,
   ]);
-
-  useEffect(() => {
-    if (!deformationPreview) return;
-    return () => {
-      deformationPreview.root.traverse((node) => {
-        const mesh = node as THREE.Mesh;
-        if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose();
-      });
-    };
-  }, [deformationPreview]);
 
   // Selection pass lifecycle for Pose & Fix (posed picking).
   useEffect(() => {

@@ -9,6 +9,9 @@ export * from './regionDraftStore';
 export * from './regionSelectionPass';
 export * from './regionPreviewColors';
 export * from './regionConstrainedWeights';
+export * from './dirtyRegionSet';
+export * from './partialSkinUpdate';
+export * from './previewSession';
 export * from './deformationValidation';
 export * from './workerProtocol';
 export {
