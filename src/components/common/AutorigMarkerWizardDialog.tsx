@@ -34,6 +34,7 @@ import {
   createAutorigMarkerPreviewGl,
   disposeAutorigMarkerPreviewGl,
   renderAutorigMarkerPreview,
+  replaceAutorigMarkerPreviewCanvas,
   setAutorigMarkerPreviewRoot,
   type AutorigMarkerPreviewGl,
 } from '../../engine/autorigMarkerPreviewRenderer';
@@ -109,6 +110,7 @@ export function AutorigMarkerWizardDialog({
   const [meshReady, setMeshReady] = useState(false);
   const [meshBounds, setMeshBounds] = useState<OrientedMeshBounds | null>(null);
   const [meshSource, setMeshSource] = useState<THREE.Object3D | null>(null);
+  const [previewGlReady, setPreviewGlReady] = useState(false);
   const [showTestPose, setShowTestPose] = useState(false);
   const [activeTestPose, setActiveTestPose] = useState('neutral');
 
@@ -244,23 +246,37 @@ export function AutorigMarkerWizardDialog({
 
   // WebGL lifecycle: create on open, dispose on close. No continuous rAF.
   // Preview GL is optional — a failed secondary context must never unmount Build.
+  // Do not force-lose the context on cleanup: React Strict Mode remounts on the
+  // same canvas, and loseContext paints Chrome's permanent sad-face glyph.
   useEffect(() => {
     if (!open) return;
-    const meshCanvas = meshCanvasRef.current;
+    let meshCanvas = meshCanvasRef.current;
     if (!meshCanvas) return;
 
     let cancelled = false;
     let gl: AutorigMarkerPreviewGl | null = null;
-    try {
-      gl = createAutorigMarkerPreviewGl({
-        width: CANVAS_W,
-        height: CANVAS_H,
-        canvas: meshCanvas,
-      });
-      glRef.current = gl;
-    } catch {
-      glRef.current = null;
+
+    const tryCreate = (canvas: HTMLCanvasElement): AutorigMarkerPreviewGl | null => {
+      try {
+        return createAutorigMarkerPreviewGl({
+          width: CANVAS_W,
+          height: CANVAS_H,
+          canvas,
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    gl = tryCreate(meshCanvas);
+    if (!gl) {
+      // Context-lost or attribute mismatch on the existing node — swap fresh.
+      meshCanvas = replaceAutorigMarkerPreviewCanvas(meshCanvas, CANVAS_W, CANVAS_H);
+      meshCanvasRef.current = meshCanvas;
+      gl = tryCreate(meshCanvas);
     }
+    glRef.current = gl;
+    setPreviewGlReady(Boolean(gl));
 
     const load = async () => {
       if (!sourceAssetId) return;
@@ -286,6 +302,7 @@ export function AutorigMarkerWizardDialog({
       unsub();
       disposeAutorigMarkerPreviewGl(glRef.current);
       glRef.current = null;
+      setPreviewGlReady(false);
       disposePreviewMaterials(previewRootRef.current);
       previewRootRef.current = null;
       setMeshSource(null);
@@ -515,7 +532,11 @@ export function AutorigMarkerWizardDialog({
           </button>
           {sourceAssetId && (
             <span className="self-center text-[10px] text-muted" data-autorig-mesh-status>
-              {meshReady ? 'Mesh preview ready' : 'Loading mesh preview…'}
+              {!meshReady
+                ? 'Loading mesh preview…'
+                : previewGlReady
+                  ? 'Mesh preview ready'
+                  : 'Markers ready (mesh preview unavailable)'}
             </span>
           )}
         </div>
@@ -527,13 +548,13 @@ export function AutorigMarkerWizardDialog({
               width={CANVAS_W}
               height={CANVAS_H}
               data-autorig-mesh-canvas
-              className="pointer-events-none absolute inset-0 h-full w-full rounded-xl border border-subtle bg-surface"
+              className="pointer-events-none absolute inset-0 h-full w-full rounded-xl border border-subtle bg-[#1c1f26]"
             />
             <canvas
               ref={markerCanvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
-              className="relative h-full w-full cursor-crosshair rounded-xl"
+              className="relative h-full w-full cursor-crosshair rounded-xl bg-transparent"
               data-autorig-marker-canvas
               onPointerDown={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();

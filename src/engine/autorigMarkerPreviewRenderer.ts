@@ -17,6 +17,10 @@ export interface AutorigMarkerPreviewGl {
 /**
  * Create a demand-only WebGL preview stack for the marker wizard.
  * Does **not** start a continuous animation loop; call `renderAutorigMarkerPreview` explicitly.
+ *
+ * Important: callers may remount this on the same canvas (React Strict Mode). Do not
+ * force-lose the context on dispose — that permanently paints Chrome's "sad face"
+ * on the element and blocks a replacement WebGLRenderer.
  */
 export function createAutorigMarkerPreviewGl(params: {
   width: number;
@@ -24,6 +28,11 @@ export function createAutorigMarkerPreviewGl(params: {
   canvas?: HTMLCanvasElement;
 }): AutorigMarkerPreviewGl {
   const canvas = params.canvas ?? document.createElement('canvas');
+  // A previously lost context leaves the canvas unusable; swap to a fresh node.
+  if (typeof (canvas as HTMLCanvasElement & { isContextLost?: () => boolean }).isContextLost === 'function'
+    && (canvas as HTMLCanvasElement & { isContextLost: () => boolean }).isContextLost()) {
+    throw new Error('Autorig marker preview canvas context was lost; provide a fresh canvas.');
+  }
   canvas.width = params.width;
   canvas.height = params.height;
   let renderer: THREE.WebGLRenderer;
@@ -31,14 +40,12 @@ export function createAutorigMarkerPreviewGl(params: {
     renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
-      antialias: false,
+      antialias: true,
       preserveDrawingBuffer: true,
-      powerPreference: 'low-power',
-      failIfMajorPerformanceCaveat: false,
     });
-    // Abort early if the browser handed back a dead context (common under
-    // multi-context CI limits) so callers can skip mesh preview safely.
-    if (!renderer.getContext()) {
+    const context = renderer.getContext();
+    if (!context || (typeof (context as WebGLRenderingContext).isContextLost === 'function'
+      && (context as WebGLRenderingContext).isContextLost())) {
       renderer.dispose();
       throw new Error('Autorig marker preview WebGL context is unavailable.');
     }
@@ -49,7 +56,9 @@ export function createAutorigMarkerPreviewGl(params: {
   }
   renderer.setPixelRatio(1);
   renderer.setSize(params.width, params.height, false);
-  renderer.setClearColor(0x000000, 0);
+  // Opaque charcoal clear — transparent clear showed a blank white surface panel
+  // when the mesh had not drawn yet or the context flickered.
+  renderer.setClearColor(0x1c1f26, 1);
 
   const scene = new THREE.Scene();
   const ambient = new THREE.AmbientLight(0xffffff, 0.72);
@@ -107,7 +116,11 @@ export function renderAutorigMarkerPreview(
 }
 
 /**
- * Dispose renderer + release WebGL context. Safe to call multiple times.
+ * Dispose renderer resources. Safe to call multiple times.
+ * Does **not** call WEBGL_lose_context — forcing loss permanently marks the
+ * canvas with Chrome's context-lost glyph and blocks Strict Mode remounts on
+ * the same element. GPU memory is released by dispose() alone for this
+ * short-lived wizard preview.
  * Does not dispose shared template geometries (preview uses cloned meshes with own materials).
  */
 export function disposeAutorigMarkerPreviewGl(gl: AutorigMarkerPreviewGl | null | undefined): void {
@@ -128,7 +141,24 @@ export function disposeAutorigMarkerPreviewGl(gl: AutorigMarkerPreviewGl | null 
     gl.root = null;
   }
   gl.renderer.dispose();
-  const lose = gl.renderer.getContext()?.getExtension?.('WEBGL_lose_context');
-  lose?.loseContext();
   gl.renderCount = 0;
+}
+
+/** Replace a poisoned (context-lost) canvas with a fresh one in the same parent. */
+export function replaceAutorigMarkerPreviewCanvas(
+  oldCanvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const next = document.createElement('canvas');
+  next.width = width;
+  next.height = height;
+  next.className = oldCanvas.className;
+  for (const attr of oldCanvas.getAttributeNames()) {
+    if (attr === 'width' || attr === 'height') continue;
+    const value = oldCanvas.getAttribute(attr);
+    if (value !== null) next.setAttribute(attr, value);
+  }
+  oldCanvas.parentElement?.replaceChild(next, oldCanvas);
+  return next;
 }
