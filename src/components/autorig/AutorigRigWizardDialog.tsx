@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { CheckCircle2 } from 'lucide-react';
 import type {
   AssetRegistry,
@@ -78,6 +78,11 @@ import { extractCanonicalTopology, extractCanonicalVertexPositions } from '../..
 import { buildSkinnedCharacterFromTemplate } from '../../engine/autorigSkinnedMesh';
 import { generateDeterministicSkinWeights } from '../../engine/autorigSkinWeights';
 import { generateRegionConstrainedSkinWeights } from '../../engine/autorig/regionConstrainedWeights';
+import {
+  analyzeDiagnosticPose,
+  validateNeutralDeformation,
+  type AutorigDeformationIssue,
+} from '../../engine/autorig/deformationValidation';
 import {
   createAutorigPreviewInstance,
   ensureAutorigSourceTemplate,
@@ -187,6 +192,7 @@ export function AutorigRigWizardDialog({
   const [lassoPoints, setLassoPoints] = useState<LassoPoint[]>([]);
   const [lassoDrawing, setLassoDrawing] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [poseIssues, setPoseIssues] = useState<AutorigDeformationIssue[]>([]);
 
   const suggested = useMemo(
     () => suggestAutorigMarkers({
@@ -660,7 +666,7 @@ export function AutorigRigWizardDialog({
   }, [deformationPreview]);
 
   const previewTestPose = (poseId: string, pose: HumanPose | undefined) => {
-    if (!deformationPreview) return;
+    if (!deformationPreview || !meshData) return;
     applySemanticPoseToBones({
       bones: deformationPreview.bones,
       rests: deformationPreview.rests,
@@ -670,6 +676,35 @@ export function AutorigRigWizardDialog({
     updateSkinnedMeshes(deformationPreview.root);
     renderMeshLayer();
     setActiveTestPose(poseId);
+
+    // Collect posed vertex positions for plain-language diagnostics.
+    const posed: number[] = [];
+    deformationPreview.root.traverse((node) => {
+      const mesh = node as THREE.SkinnedMesh;
+      if (!mesh.isSkinnedMesh) return;
+      const position = mesh.geometry.getAttribute('position');
+      const point = new THREE.Vector3();
+      for (let i = 0; i < position.count; i += 1) {
+        mesh.getVertexPosition(i, point);
+        point.applyMatrix4(mesh.matrixWorld);
+        posed.push(point.x, point.y, point.z);
+      }
+    });
+    const issues = poseId === 'neutral' || !pose
+      ? validateNeutralDeformation({
+        restPositions: meshData.positions,
+        posedPositions: posed,
+      })
+      : analyzeDiagnosticPose({
+        restPositions: meshData.positions,
+        posedPositions: posed,
+        regionLabels: resolvedRegions,
+        topology,
+        jointPositions: previewFitted.jointPositions,
+        heightMeters: height,
+        buffers: previewBuffers,
+      });
+    setPoseIssues(issues);
   };
 
   // 2D marker overlay (joints step only).
@@ -851,6 +886,7 @@ export function AutorigRigWizardDialog({
 
   const canContinueJoints = !issues.some((issue) => issue.code === 'missing');
   const canContinueRegions = Boolean(resolvedRegions) && !labeling;
+  const hasBlockingPoseIssues = poseIssues.some((issue) => issue.severity === 'blocking');
   const uncertainHint = regionConfidence && suggestedRegions
     ? (() => {
       let uncertain = 0;
@@ -1031,6 +1067,11 @@ export function AutorigRigWizardDialog({
                 onSelectPose={previewTestPose}
                 warnings={previewBuffers?.warnings}
                 fallbackCount={previewBuffers?.fallbackVertexCount}
+                issues={poseIssues}
+                onFixBodyParts={() => {
+                  setPoseIssues([]);
+                  setStep('regions');
+                }}
               />
             )}
           </div>
@@ -1053,7 +1094,10 @@ export function AutorigRigWizardDialog({
                 type="button"
                 className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary"
                 data-autorig-adjust-joints
-                onClick={() => setStep('joints')}
+                onClick={() => {
+                  setPoseIssues([]);
+                  setStep('joints');
+                }}
               >
                 Adjust joints
               </button>
@@ -1085,7 +1129,10 @@ export function AutorigRigWizardDialog({
                 className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 data-autorig-continue-regions
                 disabled={!canContinueRegions}
-                onClick={() => setStep('preview')}
+                onClick={() => {
+                  setPoseIssues([]);
+                  setStep('preview');
+                }}
               >
                 Continue
               </button>
@@ -1095,7 +1142,7 @@ export function AutorigRigWizardDialog({
                 type="button"
                 className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 data-autorig-apply-skeleton
-                disabled={!canContinueJoints || !previewBuffers}
+                disabled={!canContinueJoints || !previewBuffers || hasBlockingPoseIssues}
                 onClick={handleApply}
               >
                 <CheckCircle2 className="h-4 w-4" />
