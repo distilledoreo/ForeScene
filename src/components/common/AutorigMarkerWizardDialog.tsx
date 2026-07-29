@@ -1,24 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FlipHorizontal2, RotateCcw, Sparkles } from 'lucide-react';
+import type * as THREE from 'three';
+import { CheckCircle2, FlipHorizontal2, RotateCcw } from 'lucide-react';
 import type {
   AssetRegistry,
   AutorigMarker,
   HumanJointId,
+  HumanPose,
   PoseableRigAsset,
   Vec3,
 } from '../../domain/types';
 import {
-  AUTORIG_MARKER_MIRROR,
   applyFittedSkeletonToRig,
+  centerAutorigMarkersDepth,
+  clampAutorigMarkersToMeshBounds,
   fitSkeletonFromMarkers,
   markerColor,
   markerJointsForMode,
   mirrorAllMarkers,
-  mirrorMarkerAcrossSagittal,
+  sanitizeAutorigMarkers,
   suggestAutorigMarkers,
   upsertMarker,
   validateAutorigMarkers,
-  type AutorigMarkerMode,
 } from '../../engine/autorigMarkers';
 import {
   canvasToWorld,
@@ -32,9 +34,13 @@ import {
   createAutorigMarkerPreviewGl,
   disposeAutorigMarkerPreviewGl,
   renderAutorigMarkerPreview,
+  replaceAutorigMarkerPreviewCanvas,
   setAutorigMarkerPreviewRoot,
   type AutorigMarkerPreviewGl,
 } from '../../engine/autorigMarkerPreviewRenderer';
+import { extractCanonicalTopology, extractCanonicalVertexPositions } from '../../engine/autorigCanonicalMesh';
+import { buildSkinnedCharacterFromTemplate } from '../../engine/autorigSkinnedMesh';
+import { generateDeterministicSkinWeights } from '../../engine/autorigSkinWeights';
 import {
   createAutorigPreviewInstance,
   ensureAutorigSourceTemplate,
@@ -42,6 +48,8 @@ import {
   subscribeAutoriggedCharacterReady,
 } from '../../engine/autoriggedPoseableCharacter';
 import { HUMAN_JOINT_LABELS } from '../../engine/humanPose';
+import { HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
+import { applySemanticPoseToBones, captureBoneRests, updateSkinnedMeshes } from '../../engine/poseableCharacter';
 import { Modal } from './Modal';
 
 interface HistoryEntry {
@@ -50,6 +58,19 @@ interface HistoryEntry {
 
 const CANVAS_W = 640;
 const CANVAS_H = 480;
+
+const REQUIRED_JOINTS = markerJointsForMode('full');
+const PREVIEW_POSE_IDS = ['neutral', 'arms-raised', 'elbows-bent', 'sitting', 'walking', 'crouching'];
+
+/** Preview instances own their material but share template geometry — dispose materials only. */
+function disposePreviewMaterials(root: THREE.Object3D | null): void {
+  root?.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) material?.dispose();
+  });
+}
 
 export function AutorigMarkerWizardDialog({
   open,
@@ -68,26 +89,47 @@ export function AutorigMarkerWizardDialog({
   assets?: AssetRegistry;
 }) {
   const height = rig.generationSettings?.approximateHeightMeters ?? 1.75;
+  const poseHint = rig.generationSettings?.poseHint;
   const sourceAssetId = sourceAssetIdProp
     ?? rig.originalSourceAssetId
     ?? rig.sourceMeshAssetId;
-  const suggested = useMemo(
-    () => suggestAutorigMarkers({
-      size: [height * 0.45, height, height * 0.25],
+  const [markers, setMarkers] = useState<AutorigMarker[]>(() => {
+    const fromRig = sanitizeAutorigMarkers(rig.markers);
+    if (fromRig.length > 0) return fromRig;
+    return suggestAutorigMarkers({
+      size: [height * 0.4, height, height * 0.22],
       heightMeters: height,
       groundLevelMeters: rig.orientation?.groundLevelMeters ?? 0,
-    }),
-    [height, rig.orientation?.groundLevelMeters],
-  );
-
-  const [mode, setMode] = useState<AutorigMarkerMode>('full');
-  const [markers, setMarkers] = useState<AutorigMarker[]>(rig.markers?.length ? rig.markers : suggested);
+      poseHint,
+    });
+  });
   const [selectedJointId, setSelectedJointId] = useState<HumanJointId>('hips');
   const [past, setPast] = useState<HistoryEntry[]>([]);
   const [future, setFuture] = useState<HistoryEntry[]>([]);
   const [showSide, setShowSide] = useState(false);
   const [meshReady, setMeshReady] = useState(false);
   const [meshBounds, setMeshBounds] = useState<OrientedMeshBounds | null>(null);
+  const [meshSource, setMeshSource] = useState<THREE.Object3D | null>(null);
+  const [previewGlReady, setPreviewGlReady] = useState(false);
+  const [showTestPose, setShowTestPose] = useState(false);
+  const [activeTestPose, setActiveTestPose] = useState('neutral');
+
+  const suggested = useMemo(
+    () => suggestAutorigMarkers({
+      // Prefer actual mesh bounds once known; otherwise use height-scaled defaults (not a fixed mannequin).
+      size: meshBounds
+        ? [
+          Math.max(meshBounds.max[0] - meshBounds.min[0], height * 0.2),
+          Math.max(meshBounds.max[1] - meshBounds.min[1], height * 0.5),
+          Math.max(meshBounds.max[2] - meshBounds.min[2], height * 0.12),
+        ]
+        : [height * 0.4, height, height * 0.22],
+      heightMeters: height,
+      groundLevelMeters: rig.orientation?.groundLevelMeters ?? 0,
+      poseHint,
+    }),
+    [height, meshBounds, poseHint, rig.orientation?.groundLevelMeters],
+  );
 
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
   const meshCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,6 +137,13 @@ export function AutorigMarkerWizardDialog({
   const frameRef = useRef<AutorigOrthoFrame | null>(null);
   const dragRef = useRef<{ jointId: HumanJointId; pointerId: number } | undefined>(undefined);
   const preDragMarkersRef = useRef<AutorigMarker[] | undefined>(undefined);
+  const depthCenteredRef = useRef(false);
+  const previewRootRef = useRef<THREE.Object3D | null>(null);
+  const suggestedRef = useRef(suggested);
+  const attachPreviewMeshRef = useRef<() => void>(() => {});
+  const assetsRef = useRef(assets);
+  suggestedRef.current = suggested;
+  assetsRef.current = assets;
 
   const view = showSide ? 'side' as const : 'front' as const;
 
@@ -110,29 +159,58 @@ export function AutorigMarkerWizardDialog({
   );
   frameRef.current = frame;
 
+  // Seed markers once per open / rig identity — not whenever mesh bounds update
+  // `suggested` (that would wipe in-progress drags and retrigger GL setup).
   useEffect(() => {
     if (!open) return;
-    setMarkers(rig.markers?.length ? rig.markers : suggested);
+    const fromRig = sanitizeAutorigMarkers(rig.markers);
+    setMarkers(fromRig.length > 0 ? fromRig : suggestedRef.current);
     setPast([]);
     setFuture([]);
-  }, [open, rig, suggested]);
+    depthCenteredRef.current = false;
+    setShowTestPose(false);
+    setActiveTestPose('neutral');
+  }, [open, rig]);
 
-  const required = markerJointsForMode(mode);
-  const issues = validateAutorigMarkers(markers, mode);
-  const fitted = fitSkeletonFromMarkers(markers, mode);
+  // Always sanitize: selected autorig characters mount this dialog even when closed.
+  const safeMarkers = useMemo(() => sanitizeAutorigMarkers(markers), [markers]);
+  const issues = validateAutorigMarkers(safeMarkers, 'full');
+
+  // Heavy preview inputs (skin weights) track the fitted skeleton only between
+  // drags — never once per pointermove.
+  const [isDragging, setIsDragging] = useState(false);
+  // Skip full 32-joint fit during drag; keep last fitted skeleton for bone lines
+  // and only move the active marker dot from live marker state.
+  const fitted = useMemo(() => {
+    if (isDragging) return null;
+    return fitSkeletonFromMarkers(safeMarkers, 'full');
+  }, [safeMarkers, isDragging]);
+  const [previewFitted, setPreviewFitted] = useState(() => fitSkeletonFromMarkers(safeMarkers, 'full'));
+  useEffect(() => {
+    if (!isDragging && fitted) setPreviewFitted(fitted);
+  }, [fitted, isDragging]);
+  const displayFitted = fitted ?? previewFitted;
+  // Apply / validation always need a live fit (cheap enough once per idle frame).
+  const applyFitted = fitted ?? previewFitted;
 
   const commit = (next: AutorigMarker[]) => {
-    setPast((stack) => [...stack, { markers }]);
+    setPast((stack) => [...stack, { markers: safeMarkers }]);
     setFuture([]);
-    setMarkers(next);
+    setMarkers(sanitizeAutorigMarkers(next));
+  };
+
+  const centerDepth = () => {
+    if (!meshSource) return;
+    const result = centerAutorigMarkersDepth(safeMarkers, meshSource, view);
+    commit(result.markers);
   };
 
   const undo = () => {
     setPast((stack) => {
       if (stack.length === 0) return stack;
       const previous = stack[stack.length - 1]!;
-      setFuture((ahead) => [{ markers }, ...ahead]);
-      setMarkers(previous.markers);
+      setFuture((ahead) => [{ markers: safeMarkers }, ...ahead]);
+      setMarkers(sanitizeAutorigMarkers(previous.markers));
       return stack.slice(0, -1);
     });
   };
@@ -141,55 +219,86 @@ export function AutorigMarkerWizardDialog({
     setFuture((stack) => {
       if (stack.length === 0) return stack;
       const next = stack[0]!;
-      setPast((behind) => [...behind, { markers }]);
-      setMarkers(next.markers);
+      setPast((behind) => [...behind, { markers: safeMarkers }]);
+      setMarkers(sanitizeAutorigMarkers(next.markers));
       return stack.slice(1);
     });
   };
 
   const attachPreviewMesh = useCallback(() => {
+    const replacePreviewRoot = (root: THREE.Object3D | null) => {
+      disposePreviewMaterials(previewRootRef.current);
+      previewRootRef.current = root;
+      setMeshSource(root);
+    };
     if (!sourceAssetId || !isAutorigSourceTemplateReady(sourceAssetId)) {
       setMeshReady(false);
       setMeshBounds(null);
-      if (glRef.current) setAutorigMarkerPreviewRoot(glRef.current, null);
+      replacePreviewRoot(null);
       return;
     }
     const preview = createAutorigPreviewInstance({
       sourceAssetId,
-      assets,
+      assets: assetsRef.current,
       orientation: rig.orientation,
       approximateHeightMeters: height,
     });
-    if (!preview || !glRef.current) {
+    if (!preview) {
       setMeshReady(false);
       setMeshBounds(null);
+      replacePreviewRoot(null);
       return;
     }
-    setAutorigMarkerPreviewRoot(glRef.current, preview.root);
+    replacePreviewRoot(preview.root);
     setMeshBounds(preview.bounds);
     setMeshReady(true);
-  }, [assets, height, rig.orientation, sourceAssetId]);
+    if (!rig.markers?.length && !depthCenteredRef.current) {
+      const centered = centerAutorigMarkersDepth(suggestedRef.current, preview.root);
+      setMarkers(clampAutorigMarkersToMeshBounds(centered.markers, preview.bounds));
+      depthCenteredRef.current = true;
+    }
+  }, [height, rig.markers, rig.orientation, sourceAssetId]);
+  attachPreviewMeshRef.current = attachPreviewMesh;
 
   // WebGL lifecycle: create on open, dispose on close. No continuous rAF.
+  // Keep this effect independent of attachPreviewMesh / suggested identity so
+  // mesh-bounds updates cannot dispose+recreate GL (that froze marker drags).
   useEffect(() => {
     if (!open) return;
-    const meshCanvas = meshCanvasRef.current;
+    let meshCanvas = meshCanvasRef.current;
     if (!meshCanvas) return;
 
-    const gl = createAutorigMarkerPreviewGl({
-      width: CANVAS_W,
-      height: CANVAS_H,
-      canvas: meshCanvas,
-    });
-    glRef.current = gl;
-
     let cancelled = false;
+    let gl: AutorigMarkerPreviewGl | null = null;
+
+    const tryCreate = (canvas: HTMLCanvasElement): AutorigMarkerPreviewGl | null => {
+      try {
+        return createAutorigMarkerPreviewGl({
+          width: CANVAS_W,
+          height: CANVAS_H,
+          canvas,
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    gl = tryCreate(meshCanvas);
+    if (!gl) {
+      // Context-lost or attribute mismatch on the existing node — swap fresh.
+      meshCanvas = replaceAutorigMarkerPreviewCanvas(meshCanvas, CANVAS_W, CANVAS_H);
+      meshCanvasRef.current = meshCanvas;
+      gl = tryCreate(meshCanvas);
+    }
+    glRef.current = gl;
+    setPreviewGlReady(Boolean(gl));
+
     const load = async () => {
       if (!sourceAssetId) return;
       try {
-        await ensureAutorigSourceTemplate(sourceAssetId, assets);
+        await ensureAutorigSourceTemplate(sourceAssetId, assetsRef.current);
         if (cancelled) return;
-        attachPreviewMesh();
+        attachPreviewMeshRef.current();
       } catch {
         if (!cancelled) {
           setMeshReady(false);
@@ -200,7 +309,7 @@ export function AutorigMarkerWizardDialog({
     void load();
 
     const unsub = subscribeAutoriggedCharacterReady(() => {
-      if (!cancelled) attachPreviewMesh();
+      if (!cancelled) attachPreviewMeshRef.current();
     });
 
     return () => {
@@ -208,10 +317,24 @@ export function AutorigMarkerWizardDialog({
       unsub();
       disposeAutorigMarkerPreviewGl(glRef.current);
       glRef.current = null;
+      setPreviewGlReady(false);
+      disposePreviewMaterials(previewRootRef.current);
+      previewRootRef.current = null;
+      // Do not clear meshBounds here — that recomputes `suggested` and used to
+      // retrigger this effect via attachPreviewMesh, freezing the dialog.
+      setMeshSource(null);
       setMeshReady(false);
-      setMeshBounds(null);
     };
-  }, [open, sourceAssetId, assets, attachPreviewMesh]);
+  }, [open, sourceAssetId]);
+
+  // Clear mesh bounds only when the dialog fully closes.
+  useEffect(() => {
+    if (open) return;
+    setMeshBounds(null);
+    setMeshSource(null);
+    setMeshReady(false);
+    setPreviewGlReady(false);
+  }, [open]);
 
   // Rebuild preview when orientation/height change while open.
   useEffect(() => {
@@ -232,6 +355,75 @@ export function AutorigMarkerWizardDialog({
     if (!open) return;
     renderMeshLayer();
   }, [open, frame, meshReady, renderMeshLayer]);
+
+
+  // ---- Deformation preview (built once per marker set; pose chips re-pose for free) ----
+  const meshData = useMemo(() => {
+    if (!showTestPose || !meshSource) return null;
+    return {
+      positions: extractCanonicalVertexPositions(meshSource),
+      topology: extractCanonicalTopology(meshSource),
+    };
+  }, [showTestPose, meshSource]);
+
+  const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
+
+  const previewBuffers = useMemo(() => {
+    if (!meshData || !meshBounds) return undefined;
+    return generateDeterministicSkinWeights({
+      positions: meshData.positions,
+      jointPositions: previewFitted.jointPositions,
+      heightMeters: height,
+      meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
+      topologyIndices: meshData.topology,
+    });
+  }, [meshData, meshBounds, previewFitted, height]);
+
+  const deformationPreview = useMemo(() => {
+    if (!previewBuffers || !meshSource) return null;
+    const root = buildSkinnedCharacterFromTemplate({ template: meshSource, rig: previewRig, buffers: previewBuffers });
+    const bones = new Map<HumanJointId, THREE.Bone>();
+    root.traverse((node) => {
+      const bone = node as THREE.Bone;
+      const jointId = bone.userData.humanJointId as HumanJointId | undefined;
+      if (bone.isBone && jointId) bones.set(jointId, bone);
+    });
+    return { root, bones, rests: captureBoneRests(bones) };
+  }, [meshSource, previewRig, previewBuffers]);
+
+  // Swap the GL layer between the static clay mesh and the deformation preview.
+  useEffect(() => {
+    const gl = glRef.current;
+    if (!gl || !open) return;
+    setAutorigMarkerPreviewRoot(gl, deformationPreview ? deformationPreview.root : meshSource);
+    renderMeshLayer();
+  }, [open, deformationPreview, meshSource, renderMeshLayer]);
+
+  // Deformation previews own cloned geometries (materials are shared with the clay
+  // preview) — dispose geometries when a preview is replaced or the dialog unmounts.
+  useEffect(() => {
+    if (!deformationPreview) return;
+    return () => {
+      deformationPreview.root.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose();
+      });
+    };
+  }, [deformationPreview]);
+
+  const previewTestPose = (poseId: string, pose: HumanPose | undefined) => {
+    if (!deformationPreview) return;
+    applySemanticPoseToBones({
+      bones: deformationPreview.bones,
+      rests: deformationPreview.rests,
+      pose,
+      canonicalPoseBases: previewRig.canonicalPoseBases,
+    });
+    updateSkinnedMeshes(deformationPreview.root);
+    renderMeshLayer();
+    setActiveTestPose(poseId);
+  };
+
 
   // 2D marker overlay (transparent over mesh; keeps pointer interaction).
   useEffect(() => {
@@ -255,7 +447,7 @@ export function AutorigMarkerWizardDialog({
     // Skeleton preview lines from fitted joints
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.85)';
     ctx.lineWidth = 2;
-    const positions = fitted.jointPositions;
+    const positions = displayFitted.jointPositions;
     const drawBone = (a?: Vec3, b?: Vec3) => {
       if (!a || !b) return;
       const pa = worldToCanvas(a, frame);
@@ -267,12 +459,15 @@ export function AutorigMarkerWizardDialog({
     };
     drawBone(positions.hips, positions.spine);
     drawBone(positions.spine, positions.chest);
-    drawBone(positions.chest, positions.neck);
+    drawBone(positions.chest, positions.upperSpine);
+    drawBone(positions.upperSpine, positions.neck);
     drawBone(positions.neck, positions.head);
-    drawBone(positions.chest, positions.leftUpperArm);
+    drawBone(positions.upperSpine, positions.leftClavicle);
+    drawBone(positions.leftClavicle, positions.leftUpperArm);
     drawBone(positions.leftUpperArm, positions.leftLowerArm);
     drawBone(positions.leftLowerArm, positions.leftHand);
-    drawBone(positions.chest, positions.rightUpperArm);
+    drawBone(positions.upperSpine, positions.rightClavicle);
+    drawBone(positions.rightClavicle, positions.rightUpperArm);
     drawBone(positions.rightUpperArm, positions.rightLowerArm);
     drawBone(positions.rightLowerArm, positions.rightHand);
     drawBone(positions.hips, positions.leftUpperLeg);
@@ -282,8 +477,8 @@ export function AutorigMarkerWizardDialog({
     drawBone(positions.rightUpperLeg, positions.rightLowerLeg);
     drawBone(positions.rightLowerLeg, positions.rightFoot);
 
-    for (const jointId of required) {
-      const marker = markers.find((item) => item.jointId === jointId);
+    for (const jointId of REQUIRED_JOINTS) {
+      const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
       const selected = selectedJointId === jointId;
@@ -298,13 +493,11 @@ export function AutorigMarkerWizardDialog({
       }
     }
 
-    // Magnifier while dragging — zooms mesh under the marker via shared frame coords.
+    // Magnifier while dragging — samples the already-rendered mesh canvas (no re-render).
     if (dragRef.current) {
-      const marker = markers.find((item) => item.jointId === dragRef.current?.jointId);
+      const marker = safeMarkers.find((item) => item.jointId === dragRef.current?.jointId);
       if (marker) {
         const point = worldToCanvas(marker.position, frame);
-        // Ensure mesh layer is current before sampling.
-        renderMeshLayer();
         drawAutorigMarkerMagnifier({
           ctx,
           meshCanvas: meshCanvasRef.current,
@@ -317,19 +510,18 @@ export function AutorigMarkerWizardDialog({
       }
     }
   }, [
-    fitted,
-    markers,
+    displayFitted,
+    safeMarkers,
     open,
-    required,
     selectedJointId,
     frame,
+    isDragging,
     rig.orientation?.groundLevelMeters,
-    renderMeshLayer,
   ]);
 
   const hitTest = (x: number, y: number): HumanJointId | undefined => {
-    for (const jointId of required) {
-      const marker = markers.find((item) => item.jointId === jointId);
+    for (const jointId of REQUIRED_JOINTS) {
+      const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
       if (Math.hypot(point.x - x, point.y - y) <= 12) return jointId;
@@ -337,31 +529,17 @@ export function AutorigMarkerWizardDialog({
     return undefined;
   };
 
+
   return (
-    <Modal open={open} onClose={onClose} title="Place autorig markers" size="xl">
+    <Modal open={open} onClose={onClose} title="Rig character" size="xl">
       <div className="space-y-3" data-autorig-marker-wizard>
         <p className="text-sm text-secondary">
-          Drag markers on the orthographic view over the imported mesh. Blue = left, amber = right, green = midline.
-          Skeleton lines are fitted from markers; the mesh is not deformed yet.
+          Markers are placed for you — drag any that are off onto the matching joint
+          (blue = left, amber = right, green = midline), then click Rig character.
+          {' '}Front adjusts left/right and height; Side adjusts depth only so the two views do not fight.
         </p>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${mode === 'full' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
-            onClick={() => setMode('full')}
-            data-autorig-mode-full
-          >
-            Full (13)
-          </button>
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${mode === 'simple' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
-            onClick={() => setMode('simple')}
-            data-autorig-mode-simple
-          >
-            Simple (9)
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className={`rounded-full px-3 py-1 text-xs font-semibold ${!showSide ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
@@ -380,40 +558,40 @@ export function AutorigMarkerWizardDialog({
           </button>
           {sourceAssetId && (
             <span className="self-center text-[10px] text-muted" data-autorig-mesh-status>
-              {meshReady ? 'Mesh preview ready' : 'Loading mesh preview…'}
+              {!meshReady
+                ? 'Loading mesh preview…'
+                : previewGlReady
+                  ? 'Mesh preview ready'
+                  : 'Markers ready (mesh preview unavailable)'}
             </span>
           )}
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[1fr_14rem]">
-          <div
-            className="relative w-full overflow-hidden rounded-xl border border-subtle bg-[#0b1220]"
-            data-autorig-marker-stage
-          >
-            {/* Bottom: on-demand WebGL mesh (non-interactive). */}
+          <div className="relative" style={{ width: CANVAS_W, maxWidth: '100%' }}>
             <canvas
               ref={meshCanvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
-              className="pointer-events-none absolute inset-0 h-full w-full"
               data-autorig-mesh-canvas
-              aria-hidden
+              className="pointer-events-none absolute inset-0 h-full w-full rounded-xl border border-subtle bg-[#1c1f26]"
             />
-            {/* Top: 2D markers + skeleton; owns pointer interaction. */}
             <canvas
               ref={markerCanvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
-              className="relative z-10 w-full touch-none bg-transparent"
+              className="relative h-full w-full cursor-crosshair rounded-xl bg-transparent"
               data-autorig-marker-canvas
               onPointerDown={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-                const hit = hitTest(x, y) ?? selectedJointId;
+                const hit = hitTest(x, y);
+                if (!hit) return;
                 setSelectedJointId(hit);
-                preDragMarkersRef.current = markers;
+                preDragMarkersRef.current = safeMarkers;
                 dragRef.current = { jointId: hit, pointerId: event.pointerId };
+                setIsDragging(true);
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
               onPointerMove={(event) => {
@@ -421,18 +599,37 @@ export function AutorigMarkerWizardDialog({
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-                const current = markers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
+                const jointId = dragRef.current.jointId;
+                const current = safeMarkers.find((item) => item.jointId === jointId)?.position ?? [0, 0, 0];
                 const nextPos = canvasToWorld(x, y, frame, current);
-                setMarkers((currentMarkers) => upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos));
+                // Functional update only — no skeleton refit while the pointer is down.
+                setMarkers((currentMarkers) => upsertMarker(currentMarkers, jointId, nextPos));
               }}
               onPointerUp={(event) => {
                 if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+                const draggedJointId = dragRef.current.jointId;
                 if (preDragMarkersRef.current) {
                   setPast((stack) => [...stack, { markers: preDragMarkersRef.current! }]);
                   setFuture([]);
                 }
                 preDragMarkersRef.current = undefined;
                 dragRef.current = undefined;
+                setIsDragging(false);
+                // Front: snap Z through mesh thickness so markers sit mid-body after X/Y placement.
+                // Side is depth-only — do not re-center X here or it undoes Front lateral work.
+                if (meshSource && view === 'front') {
+                  setMarkers((currentMarkers) => centerAutorigMarkersDepth(
+                    currentMarkers,
+                    meshSource,
+                    'front',
+                    draggedJointId,
+                  ).markers);
+                }
+              }}
+              onPointerCancel={() => {
+                preDragMarkersRef.current = undefined;
+                dragRef.current = undefined;
+                setIsDragging(false);
               }}
             />
           </div>
@@ -440,8 +637,8 @@ export function AutorigMarkerWizardDialog({
           <div className="space-y-2">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Markers</div>
             <div className="max-h-64 space-y-1 overflow-y-auto">
-              {required.map((jointId) => {
-                const present = markers.some((marker) => marker.jointId === jointId);
+              {REQUIRED_JOINTS.map((jointId) => {
+                const present = safeMarkers.some((marker) => marker.jointId === jointId);
                 return (
                   <button
                     key={jointId}
@@ -461,44 +658,85 @@ export function AutorigMarkerWizardDialog({
           </div>
         </div>
 
+
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary" onClick={undo} disabled={past.length === 0}>Undo</button>
-          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary" onClick={redo} disabled={future.length === 0}>Redo</button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
-            data-autorig-mirror-marker
-            onClick={() => commit(mirrorMarkerAcrossSagittal(markers, selectedJointId))}
-            disabled={!AUTORIG_MARKER_MIRROR[selectedJointId]}
-          >
-            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror marker
-          </button>
+          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50" onClick={undo} disabled={past.length === 0}>Undo</button>
+          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50" onClick={redo} disabled={future.length === 0}>Redo</button>
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             onClick={() => commit(mirrorAllMarkers(markers))}
           >
-            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror all L→R
+            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror L→R
           </button>
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             data-autorig-restore-suggested
-            onClick={() => {
-              const suggestion = suggested.find((marker) => marker.jointId === selectedJointId);
-              if (!suggestion) return;
-              commit(upsertMarker(markers, selectedJointId, suggestion.position));
-            }}
+            onClick={() => commit(suggested)}
           >
-            <RotateCcw className="h-3.5 w-3.5" /> Restore suggested
+            <RotateCcw className="h-3.5 w-3.5" /> Reset markers
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
-            onClick={() => commit(suggested)}
+            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50"
+            data-autorig-center-depth
+            onClick={centerDepth}
+            disabled={!meshReady}
           >
-            <Sparkles className="h-3.5 w-3.5" /> Reset all suggested
+            Center depth
           </button>
+        </div>
+
+        <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-autorig-test-poses>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold text-primary">Deformation preview (optional)</div>
+              <div className="text-[11px] text-muted">
+                {showTestPose ? 'Pick a pose to check how the rig deforms.' : 'Check how the rig bends before applying it.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`rounded-full px-3 py-1 text-xs font-semibold disabled:opacity-50 ${showTestPose ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
+              onClick={() => setShowTestPose((current) => !current)}
+              disabled={!meshReady}
+              data-autorig-toggle-preview
+            >
+              {showTestPose ? 'Hide preview' : 'Preview deformation'}
+            </button>
+          </div>
+          {showTestPose && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {HUMAN_POSE_PRESETS
+                  .filter((preset) => PREVIEW_POSE_IDS.includes(preset.id))
+                  .map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={`rounded-lg border px-2 py-1.5 text-xs font-semibold ${
+                        activeTestPose === preset.id
+                          ? 'border-accent text-accent'
+                          : 'border-subtle text-secondary'
+                      }`}
+                      data-autorig-test-pose={preset.id}
+                      onClick={() => previewTestPose(preset.id, preset.id === 'neutral' ? undefined : preset.pose)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+              </div>
+              {previewBuffers && (
+                <p className="text-[11px] text-muted" data-autorig-fallback-count>
+                  Weight quality: {(previewBuffers.fallbackVertexCount ?? 0) === 0
+                    ? 'all vertices assigned to bones'
+                    : `${previewBuffers.fallbackVertexCount} vertices use hips fallback (unmatched)`}
+                  {previewBuffers.warnings?.length ? ` · ${previewBuffers.warnings[0]}` : ''}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {issues.length > 0 && (
@@ -517,16 +755,17 @@ export function AutorigMarkerWizardDialog({
             data-autorig-apply-skeleton
             disabled={issues.some((issue) => issue.code === 'missing')}
             onClick={() => {
-              const nextRig = applyFittedSkeletonToRig(rig, fitted);
+              const nextRig = applyFittedSkeletonToRig(rig, applyFitted);
               onSave(nextRig);
               onClose();
             }}
           >
             <CheckCircle2 className="h-4 w-4" />
-            Apply skeleton
+            Rig character
           </button>
         </div>
       </div>
     </Modal>
   );
 }
+

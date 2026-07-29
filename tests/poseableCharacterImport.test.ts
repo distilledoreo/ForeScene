@@ -8,6 +8,7 @@ import {
   orientationQuaternion,
 } from '../src/engine/poseableCharacterImport';
 import { HUMAN_JOINT_IDS } from '../src/engine/humanPose';
+import { CURRENT_AUTORIG_RIG_GENERATION_VERSION } from '../src/engine/poseableRigNormalize';
 import { registerModelAssetBytes } from '../src/engine/modelAssetStore';
 import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
 import { hydrateAutoriggedCharactersFromAssets } from '../src/engine/autoriggedPoseableCharacter';
@@ -41,6 +42,23 @@ describe('poseable character import shell', () => {
     });
     expect(rig?.skeletonJoints).toEqual(['hips', 'head']);
     expect(rig?.restTransform?.rotation).toEqual([0, 90, 0]);
+  });
+
+  it('marks current-generation rigs as reusable and legacy rigs as requiring rerigging', () => {
+    const current = normalizePoseableRigAsset({
+      version: 1,
+      id: 'current',
+      skeletonJoints: ['hips'],
+      rigGenerationVersion: CURRENT_AUTORIG_RIG_GENERATION_VERSION,
+    });
+    const legacy = normalizePoseableRigAsset({
+      version: 1,
+      id: 'legacy',
+      skeletonJoints: ['hips'],
+      rigGenerationVersion: 1,
+    });
+    expect(current?.requiresRerigging).toBeUndefined();
+    expect(legacy?.requiresRerigging).toBe(true);
   });
 
   it('builds a non-identity orientation quaternion for swapped front axes', () => {
@@ -124,7 +142,7 @@ describe('poseable character import shell', () => {
     expect(hydrated).toBeGreaterThan(0);
     const character = resolvePoseableCharacter(parsedObject?.poseableCharacter, parsed.assets);
     expect(character?.source).toEqual({ kind: 'autorigged', assetId: rigAsset.id, rigId: rig.id });
-    expect(character?.skeleton.joints).toHaveLength(17);
+    expect(character?.skeleton.joints).toHaveLength(32);
   });
 
   it('exposes the Build tray command for poseable import', async () => {

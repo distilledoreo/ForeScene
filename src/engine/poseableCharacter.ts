@@ -8,6 +8,7 @@ import type {
 } from '../domain/types';
 import {
   HUMAN_JOINT_IDS,
+  HUMAN_TWIST_FOLLOWER,
   IDENTITY_QUATERNION,
   normalizePoseableCharacterSource,
 } from './humanPose';
@@ -176,26 +177,82 @@ export function captureBoneRests(
   return rests;
 }
 
+/** Terminal tip joints exist for bone axes/skin segments; they must not share a parent bone's pose slot. */
+const TERMINAL_TIP_JOINTS: ReadonlySet<HumanJointId> = new Set([
+  'leftHandEnd',
+  'rightHandEnd',
+  'leftToeBase',
+  'rightToeBase',
+]);
+
 export function applySemanticPoseToBones(params: {
   bones: Map<HumanJointId, THREE.Bone>;
   rests: Map<HumanJointId, BoneRestPose>;
   pose: HumanPose | undefined;
+  /** Canonical joint-frame quaternions, keyed by semantic joint. */
+  canonicalPoseBases?: Partial<Record<HumanJointId, number[]>>;
 }): void {
   const delta = new THREE.Quaternion();
+  const canonicalToLocal = new THREE.Quaternion();
+  const localSemanticDelta = new THREE.Quaternion();
+
+  // Reset each unique bone once. Tip aliases that share a parent bone must not
+  // re-reset after the hand/foot pose is applied (would wipe the pose to identity).
+  const resetBones = new Set<THREE.Bone>();
   for (const jointId of HUMAN_JOINT_IDS) {
     const bone = params.bones.get(jointId);
     const rest = params.rests.get(jointId);
-    if (!bone || !rest) continue;
+    if (!bone || !rest || resetBones.has(bone)) continue;
+    resetBones.add(bone);
     bone.position.copy(rest.position);
     bone.quaternion.copy(rest.quaternion);
+  }
+
+  for (const jointId of HUMAN_JOINT_IDS) {
+    // Tips are bind endpoints, not independent pose channels (unless explicitly posed).
+    if (TERMINAL_TIP_JOINTS.has(jointId) && !params.pose?.joints[jointId]) continue;
+
+    const bone = params.bones.get(jointId);
+    const rest = params.rests.get(jointId);
+    if (!bone || !rest) continue;
 
     const jointPose = params.pose?.joints[jointId];
     if (!jointPose) continue;
 
     const [x, y, z, w] = jointPose.rotation ?? IDENTITY_QUATERNION;
     delta.set(x, y, z, w).normalize();
-    // Rest local * pose delta → posed local.
-    bone.quaternion.copy(rest.quaternion).multiply(delta);
+    const basis = params.canonicalPoseBases?.[jointId];
+    if (basis && basis.length === 4 && basis.every(Number.isFinite)) {
+      // Convert the semantic rotation from the canonical anatomical frame
+      // into this bone's local frame before applying it to the rest pose.
+      canonicalToLocal.set(basis[0]!, basis[1]!, basis[2]!, basis[3]!).normalize();
+      localSemanticDelta.copy(canonicalToLocal).invert().multiply(delta).multiply(canonicalToLocal);
+      bone.quaternion.copy(rest.quaternion).multiply(localSemanticDelta);
+    } else {
+      // Built-in rigs retain their established local semantic convention.
+      bone.quaternion.copy(rest.quaternion).multiply(delta);
+    }
+
+    // Distribute part of the primary limb rotation onto its twist helper so the
+    // twist bones are live deformation channels, not empty hierarchy stubs.
+    const twistId = HUMAN_TWIST_FOLLOWER[jointId];
+    if (twistId && !params.pose?.joints[twistId]) {
+      const twistBone = params.bones.get(twistId);
+      const twistRest = params.rests.get(twistId);
+      if (twistBone && twistRest) {
+        const appliedDelta = (
+          basis && basis.length === 4 && basis.every(Number.isFinite)
+        )
+          ? localSemanticDelta
+          : delta;
+        const half = new THREE.Quaternion().slerpQuaternions(
+          new THREE.Quaternion(0, 0, 0, 1),
+          appliedDelta,
+          0.5,
+        );
+        twistBone.quaternion.copy(twistRest.quaternion).multiply(half);
+      }
+    }
 
     if (jointId === 'hips' && jointPose.position) {
       bone.position.set(

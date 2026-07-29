@@ -59,6 +59,7 @@ import {
   disposeScene,
 } from '../../engine/sceneObjects';
 import { applyHumanPoseToObject3D, resolvePoseableCharacterForObject } from '../../engine/poseableCharacter';
+import { HUMAN_POSE_EDITABLE_JOINT_IDS } from '../../engine/humanPose';
 import '../../engine/builtinMannequinCharacter';
 import {
   createPoseJointHandleGroup,
@@ -554,7 +555,9 @@ export function SceneViewport({
 
     character.bindInstance(instance);
     applyHumanPoseToObject3D(instance, object);
-    const joints = character.getJoints(instance);
+    const joints = character.getJoints(instance).filter((joint) => (
+      (HUMAN_POSE_EDITABLE_JOINT_IDS as readonly string[]).includes(joint.id)
+    ));
     poseJointsRef.current = joints;
     syncPoseJointHandles({
       group,
@@ -723,6 +726,21 @@ export function SceneViewport({
     rendererRef.current = renderer;
     rendererRevisionRef.current += 1;
 
+    // Secondary WebGL contexts (autorig wizard preview) can steal the primary
+    // context under browser limits. Keep Build mounted and skip frames until
+    // the context is restored instead of throwing into the error boundary.
+    let contextLost = false;
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      contextLost = true;
+    };
+    const onContextRestored = () => {
+      contextLost = false;
+      requestRender();
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost, false);
+    renderer.domElement.addEventListener('webglcontextrestored', onContextRestored, false);
+
     const camera = new THREE.PerspectiveCamera(framingFovRef.current, 1, 0.1, renderDistanceRef.current);
     cameraRef.current = camera;
 
@@ -793,7 +811,8 @@ export function SceneViewport({
       const activeCamera = cameraRef.current;
       const activeRenderer = rendererRef.current;
       const activeScene = sceneRef.current;
-      if (!activeCamera || !activeRenderer || !activeScene) return;
+      if (!activeCamera || !activeRenderer || !activeScene || contextLost) return;
+      if (!activeRenderer.getContext()) return;
 
       const now = performance.now();
       const deltaSeconds = Math.min((now - lastFrameTimeRef.current) / 1000, 0.05);
@@ -804,51 +823,55 @@ export function SceneViewport({
       const cssWidth = Math.max(1, container?.clientWidth ?? 1);
       const cssHeight = Math.max(1, container?.clientHeight ?? 1);
 
-      const shouldAnimateFly = (framing?.flyActive || freeCameraActiveRef.current) && hasActiveFlyInput();
-      if (framing || freeCameraActiveRef.current) {
-        if (shouldAnimateFly) processFlyMovement(deltaSeconds);
-        if (framing && flyDirtyRef.current) emitFramingCamera();
-        applyFlyCameraToPerspectiveCamera(
-          activeCamera,
-          flyRef.current,
-          framingFovRef.current,
-          framing?.frameAspectRatio ?? cssWidth / cssHeight,
-          framing?.camera.near ?? DEFAULT_SHOT_NEAR_CLIP_METERS,
-          framing?.camera.far ?? renderDistanceRef.current,
-        );
+      try {
+        const shouldAnimateFly = (framing?.flyActive || freeCameraActiveRef.current) && hasActiveFlyInput();
+        if (framing || freeCameraActiveRef.current) {
+          if (shouldAnimateFly) processFlyMovement(deltaSeconds);
+          if (framing && flyDirtyRef.current) emitFramingCamera();
+          applyFlyCameraToPerspectiveCamera(
+            activeCamera,
+            flyRef.current,
+            framingFovRef.current,
+            framing?.frameAspectRatio ?? cssWidth / cssHeight,
+            framing?.camera.near ?? DEFAULT_SHOT_NEAR_CLIP_METERS,
+            framing?.camera.far ?? renderDistanceRef.current,
+          );
 
-        const viewport = computeFullCssRendererRect(cssWidth, cssHeight);
-        setRendererRect(activeRenderer, 'viewport', viewport);
-        setRendererRect(activeRenderer, 'scissor', viewport);
-        activeRenderer.setScissorTest(false);
-        if (appearanceRef.current === 'depth') {
-          renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
-            depth: depthSettingsRef.current,
-            cameraNear: framing?.camera.near ?? DEFAULT_SHOT_NEAR_CLIP_METERS,
-            cameraFar: framing?.camera.far ?? renderDistanceRef.current,
-            onRange: onDepthRangeChangeRef.current,
-          });
+          const viewport = computeFullCssRendererRect(cssWidth, cssHeight);
+          setRendererRect(activeRenderer, 'viewport', viewport);
+          setRendererRect(activeRenderer, 'scissor', viewport);
+          activeRenderer.setScissorTest(false);
+          if (appearanceRef.current === 'depth') {
+            renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
+              depth: depthSettingsRef.current,
+              cameraNear: framing?.camera.near ?? DEFAULT_SHOT_NEAR_CLIP_METERS,
+              cameraFar: framing?.camera.far ?? renderDistanceRef.current,
+              onRange: onDepthRangeChangeRef.current,
+            });
+          } else {
+            activeRenderer.render(activeScene, activeCamera);
+          }
         } else {
-          activeRenderer.render(activeScene, activeCamera);
+          const viewport = computeFullCssRendererRect(cssWidth, cssHeight);
+          setRendererRect(activeRenderer, 'viewport', viewport);
+          setRendererRect(activeRenderer, 'scissor', viewport);
+          activeRenderer.setScissorTest(false);
+          updateCamera(activeCamera, orbitRef.current);
+          if (appearanceRef.current === 'depth') {
+            renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
+              depth: depthSettingsRef.current,
+              cameraNear: DEFAULT_SHOT_NEAR_CLIP_METERS,
+              cameraFar: renderDistanceRef.current,
+              onRange: onDepthRangeChangeRef.current,
+            });
+          } else {
+            activeRenderer.render(activeScene, activeCamera);
+          }
         }
-      } else {
-        const viewport = computeFullCssRendererRect(cssWidth, cssHeight);
-        setRendererRect(activeRenderer, 'viewport', viewport);
-        setRendererRect(activeRenderer, 'scissor', viewport);
-        activeRenderer.setScissorTest(false);
-        updateCamera(activeCamera, orbitRef.current);
-        if (appearanceRef.current === 'depth') {
-          renderViewportDepthPreview(activeRenderer, activeScene, activeCamera, {
-            depth: depthSettingsRef.current,
-            cameraNear: DEFAULT_SHOT_NEAR_CLIP_METERS,
-            cameraFar: renderDistanceRef.current,
-            onRange: onDepthRangeChangeRef.current,
-          });
-        } else {
-          activeRenderer.render(activeScene, activeCamera);
-        }
+        if (shouldAnimateFly) requestRender();
+      } catch {
+        // Swallow WebGL context-loss races so the workspace error boundary stays quiet.
       }
-      if (shouldAnimateFly) requestRender();
     };
     requestRender();
 
@@ -1646,6 +1669,8 @@ export function SceneViewport({
 
       // Match offline renderers: explicitly release the WebGL context so WebKit
       // does not retain GPU resources when Build → Shots remounts the viewport.
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost, false);
+      renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored, false);
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.width = 1;

@@ -25,7 +25,12 @@ import {
  * Quaternius Animated Human Mixamo-style bone names → semantic joints.
  * Project files never persist these strings.
  */
-export const BUILTIN_MANNEQUIN_BONE_MAP: Record<HumanJointId, string> = {
+/**
+ * Semantic joint → GLB bone name. Tip joints (handEnd / toeBase) are omitted:
+ * they are autorig bind endpoints and must not alias the hand/foot bones (that
+ * would wipe hand poses when applySemanticPoseToBones resets every joint id).
+ */
+export const BUILTIN_MANNEQUIN_BONE_MAP: Partial<Record<HumanJointId, string>> = {
   hips: 'Hips',
   spine: 'Spine',
   chest: 'Spine2',
@@ -40,9 +45,11 @@ export const BUILTIN_MANNEQUIN_BONE_MAP: Record<HumanJointId, string> = {
   leftUpperLeg: 'LeftUpLeg',
   leftLowerLeg: 'LeftLeg',
   leftFoot: 'LeftFoot',
+  leftToeBase: 'LeftToeBase',
   rightUpperLeg: 'RightUpLeg',
   rightLowerLeg: 'RightLeg',
   rightFoot: 'RightFoot',
+  rightToeBase: 'RightToeBase',
 };
 
 const REST_USERDATA_KEY = 'panorefPoseRests';
@@ -71,7 +78,8 @@ function createBuiltinMannequinCharacter(
       if (instance.userData[BONES_USERDATA_KEY]) return;
       const byName = collectBonesByName(instance);
       const bones = new Map<HumanJointId, THREE.Bone>();
-      for (const [jointId, boneName] of Object.entries(BUILTIN_MANNEQUIN_BONE_MAP) as Array<[HumanJointId, string]>) {
+      for (const [jointId, boneName] of Object.entries(BUILTIN_MANNEQUIN_BONE_MAP) as Array<[HumanJointId, string | undefined]>) {
+        if (!boneName) continue;
         const bone = byName.get(boneName);
         if (bone) bones.set(jointId, bone);
       }

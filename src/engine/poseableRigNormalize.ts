@@ -11,6 +11,8 @@ import { HUMAN_JOINT_IDS } from './humanPose';
 export const DEFAULT_POSEABLE_HEIGHT_METERS = 1.75;
 export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
 export const MAX_POSEABLE_HEIGHT_METERS = 3.5;
+/** Bumped whenever canonical fitting/weighting changes invalidate baked rigs. */
+export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 6;
 
 export function defaultPoseableOrientation(): PoseableCharacterOrientation {
   return {
@@ -105,6 +107,31 @@ export function normalizePoseableSkin(value: unknown): PoseableRigAsset['skin'] 
   };
 }
 
+/**
+ * Strip null/undefined/malformed marker rows from project JSON so Build never
+ * crashes on `marker.jointId` when an autorigged character is selected.
+ */
+export function normalizePoseableMarkers(value: unknown): NonNullable<PoseableRigAsset['markers']> {
+  if (!Array.isArray(value)) return [];
+  const markers: NonNullable<PoseableRigAsset['markers']> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const raw = entry as { id?: unknown; jointId?: unknown; position?: unknown };
+    if (typeof raw.jointId !== 'string' || !(HUMAN_JOINT_IDS as readonly string[]).includes(raw.jointId)) continue;
+    if (!Array.isArray(raw.position) || raw.position.length < 3) continue;
+    const x = Number(raw.position[0]);
+    const y = Number(raw.position[1]);
+    const z = Number(raw.position[2]);
+    if (![x, y, z].every(Number.isFinite)) continue;
+    markers.push({
+      id: typeof raw.id === 'string' && raw.id ? raw.id : `marker_${raw.jointId}`,
+      jointId: raw.jointId as typeof HUMAN_JOINT_IDS[number],
+      position: [x, y, z],
+    });
+  }
+  return markers;
+}
+
 export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = value as Partial<PoseableRigAsset>;
@@ -122,9 +149,16 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(typeof raw.sourceMeshAssetId === 'string' ? { sourceMeshAssetId: raw.sourceMeshAssetId } : {}),
     ...(typeof raw.originalSourceAssetId === 'string' ? { originalSourceAssetId: raw.originalSourceAssetId } : {}),
     ...(typeof raw.rigGenerationVersion === 'number' ? { rigGenerationVersion: raw.rigGenerationVersion } : {}),
+    ...(raw.requiresRerigging === true || (typeof raw.rigGenerationVersion === 'number'
+      && raw.rigGenerationVersion < CURRENT_AUTORIG_RIG_GENERATION_VERSION)
+      ? { requiresRerigging: true }
+      : {}),
     ...(raw.bindMatrices && typeof raw.bindMatrices === 'object' ? { bindMatrices: raw.bindMatrices } : {}),
+    ...(raw.canonicalPoseBases && typeof raw.canonicalPoseBases === 'object'
+      ? { canonicalPoseBases: raw.canonicalPoseBases }
+      : {}),
     ...(raw.skin && typeof raw.skin === 'object' ? { skin: normalizePoseableSkin(raw.skin) } : {}),
-    ...(Array.isArray(raw.markers) ? { markers: raw.markers } : {}),
+    ...(Array.isArray(raw.markers) ? { markers: normalizePoseableMarkers(raw.markers) } : {}),
     ...(normalizePoseableCharacterOrientation(raw.orientation)
       ? { orientation: normalizePoseableCharacterOrientation(raw.orientation) }
       : {}),

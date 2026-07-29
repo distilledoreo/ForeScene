@@ -79,20 +79,35 @@ export type HumanJointId =
   | 'hips'
   | 'spine'
   | 'chest'
+  | 'upperSpine'
   | 'neck'
   | 'head'
+  | 'leftClavicle'
   | 'leftUpperArm'
+  | 'leftUpperArmTwist'
   | 'leftLowerArm'
+  | 'leftLowerArmTwist'
   | 'leftHand'
+  | 'leftHandEnd'
+  | 'rightClavicle'
   | 'rightUpperArm'
+  | 'rightUpperArmTwist'
   | 'rightLowerArm'
+  | 'rightLowerArmTwist'
   | 'rightHand'
+  | 'rightHandEnd'
   | 'leftUpperLeg'
+  | 'leftUpperLegTwist'
   | 'leftLowerLeg'
+  | 'leftLowerLegTwist'
   | 'leftFoot'
+  | 'leftToeBase'
   | 'rightUpperLeg'
+  | 'rightUpperLegTwist'
   | 'rightLowerLeg'
-  | 'rightFoot';
+  | 'rightLowerLegTwist'
+  | 'rightFoot'
+  | 'rightToeBase';
 
 export interface HumanJointPose {
   /** Local rotation relative to the character rest/bind pose. */
@@ -174,6 +189,8 @@ export interface PoseableRigAsset {
   skeletonJoints: HumanJointId[];
   /** Bind matrices keyed by semantic joint id (column-major 16 floats). */
   bindMatrices?: Partial<Record<HumanJointId, number[]>>;
+  /** Canonical anatomical rest frames used to retarget semantic pose deltas. */
+  canonicalPoseBases?: Partial<Record<HumanJointId, number[]>>;
   /**
    * Approximate skinning produced by autorig.
    * Production projects store only compact metadata + `skinAssetId` (binary asset).
@@ -198,6 +215,8 @@ export interface PoseableRigAsset {
   markers?: AutorigMarker[];
   /** Bump when weight/fitting algorithms change so assets can be regenerated. */
   rigGenerationVersion?: number;
+  /** Legacy baked weights/binds must be regenerated before this rig is usable. */
+  requiresRerigging?: boolean;
   /**
    * Unmodified original import (GLB/glTF bytes) so autorigging can be retried
    * without re-picking the file.
