@@ -89,6 +89,7 @@ import {
 } from '../../engine/autorig/regionConstrainedWeights';
 import {
   applyPartialSkinUpdateToPreviewSession,
+  applySkinBuffersToPreviewSession,
   createAutorigPreviewSession,
   extractCanonicalPosedPositions,
   type AutorigPreviewSession,
@@ -276,6 +277,8 @@ export function AutorigRigWizardDialog({
   const previewSessionRef = useRef<AutorigPreviewSession | null>(null);
   const previousResolvedRef = useRef<Uint8Array | null>(null);
   const [sessionVersion, setSessionVersion] = useState(0);
+  const autoRepairTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRepairGenerationRef = useRef(0);
 
   const disposePreviewSession = useCallback(() => {
     const session = previewSessionRef.current;
@@ -667,14 +670,19 @@ export function AutorigRigWizardDialog({
   const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
 
   // Build (or rebuild) the skinned preview only when joints / topology / mesh change —
-  // not after every paint stroke. Runs silent diagnostic poses and high-confidence
-  // spike auto-repair before the user reaches the brush.
+  // not after every paint stroke. Spike auto-repair runs deferred so Continue stays responsive.
   useEffect(() => {
     if (!open || step !== 'pose-fix' || !meshSource || !meshData || !meshBounds) return;
     if (!topology || !resolvedRegions) return;
 
     disposePreviewSession();
     setPrepareNotice(null);
+    if (autoRepairTimerRef.current) {
+      clearTimeout(autoRepairTimerRef.current);
+      autoRepairTimerRef.current = null;
+    }
+    const repairGeneration = autoRepairGenerationRef.current + 1;
+    autoRepairGenerationRef.current = repairGeneration;
 
     const meshSize: [number, number, number] = [
       meshBounds.max[0] - meshBounds.min[0],
@@ -682,7 +690,7 @@ export function AutorigRigWizardDialog({
       meshBounds.max[2] - meshBounds.min[2],
     ];
 
-    let buffers = generateRegionConstrainedSkinWeights({
+    const buffers = generateRegionConstrainedSkinWeights({
       positions: meshData.positions,
       regionLabels: resolvedRegions,
       jointPositions: previewFitted.jointPositions,
@@ -702,101 +710,114 @@ export function AutorigRigWizardDialog({
       const jointId = bone.userData.humanJointId as HumanJointId | undefined;
       if (bone.isBone && jointId) bones.set(jointId, bone);
     });
-    const rests = captureBoneRests(bones);
 
-    let finalLabels = new Uint8Array(resolvedRegions);
+    const session = createAutorigPreviewSession({
+      root,
+      bones,
+      rests: captureBoneRests(bones),
+      topology,
+      buffers,
+      activePoseId: activePoseIdRef.current,
+      activePose: activePoseRef.current,
+    });
+    previewSessionRef.current = session;
+    previousResolvedRef.current = new Uint8Array(resolvedRegions);
+    setSessionVersion((value) => value + 1);
 
-    const poseRoot = (
-      pose: HumanPose | undefined,
-      candidateBuffers?: SkinWeightBuffers,
-    ) => {
-      if (candidateBuffers) {
-        // Push candidate weights onto the temporary root before posing.
-        const ipv = candidateBuffers.influencesPerVertex;
-        let vertexOffset = 0;
-        root.traverse((node) => {
-          const mesh = node as THREE.SkinnedMesh;
-          if (!mesh.isSkinnedMesh || !mesh.geometry) return;
-          const position = mesh.geometry.getAttribute('position');
-          const vertexCount = position?.count ?? 0;
-          const indexAttr = mesh.geometry.getAttribute('skinIndex') as THREE.BufferAttribute | undefined;
-          const weightAttr = mesh.geometry.getAttribute('skinWeight') as THREE.BufferAttribute | undefined;
-          if (!indexAttr || !weightAttr) {
-            vertexOffset += vertexCount;
-            return;
-          }
-          const srcStart = vertexOffset * ipv;
-          for (let i = 0; i < vertexCount * ipv; i += 1) {
-            (indexAttr.array as Uint16Array)[i] = candidateBuffers.indices[srcStart + i]!;
-            (weightAttr.array as Float32Array)[i] = candidateBuffers.weights[srcStart + i]!;
-          }
-          indexAttr.needsUpdate = true;
-          weightAttr.needsUpdate = true;
-          vertexOffset += vertexCount;
+    // Defer spike cleanup until after the first paint so Continue never freezes.
+    const restPositions = meshData.positions;
+    const jointPositions = previewFitted.jointPositions;
+    const canonicalPoseBases = previewRig.canonicalPoseBases;
+    const suggestedAtStart = suggestedRegions;
+    const overridesAtStart = regionOverrides;
+    const labelsAtStart = new Uint8Array(resolvedRegions);
+    const vertexCount = Math.floor(restPositions.length / 3);
+    // Large meshes: one diagnostic pose only. Skinning every vertex is expensive.
+    const repairPoseIds = vertexCount > 80_000
+      ? (['elbows-bent'] as const)
+      : DEFORMATION_AUTO_REPAIR_POSE_IDS;
+
+    const scheduleRepair = (fn: () => void) => {
+      // Double-yield: timeout → rAF → timeout so React can commit the preview first.
+      autoRepairTimerRef.current = setTimeout(() => {
+        autoRepairTimerRef.current = null;
+        requestAnimationFrame(() => {
+          autoRepairTimerRef.current = setTimeout(() => {
+            autoRepairTimerRef.current = null;
+            fn();
+          }, 0);
         });
-      }
-      applySemanticPoseToBones({
-        bones,
-        rests,
-        pose,
-        canonicalPoseBases: previewRig.canonicalPoseBases,
-      });
-      updateSkinnedMeshes(root);
-      root.rotation.y = 0;
-      root.updateMatrixWorld(true);
+      }, 0);
     };
 
-    try {
-      const frames = [];
-      for (const poseId of DEFORMATION_AUTO_REPAIR_POSE_IDS) {
-        const preset = getHumanPosePreset(poseId);
-        if (!preset) continue;
-        poseRoot(preset.pose, buffers);
-        frames.push({
-          poseId,
-          positions: extractCanonicalPosedPositions(root),
-        });
-      }
-      poseRoot(undefined, buffers);
+    scheduleRepair(() => {
+      const live = previewSessionRef.current;
+      if (!live || autoRepairGenerationRef.current !== repairGeneration) return;
 
-      if (frames.length > 0) {
+      const poseSession = (pose: HumanPose | undefined, candidateBuffers?: SkinWeightBuffers) => {
+        if (candidateBuffers) applySkinBuffersToPreviewSession(live, candidateBuffers);
+        applySemanticPoseToBones({
+          bones: live.bones,
+          rests: live.rests,
+          pose,
+          canonicalPoseBases,
+        });
+        updateSkinnedMeshes(live.root);
+        live.root.rotation.y = 0;
+        live.root.updateMatrixWorld(true);
+      };
+
+      try {
+        const frames = [];
+        for (const poseId of repairPoseIds) {
+          const preset = getHumanPosePreset(poseId);
+          if (!preset) continue;
+          poseSession(preset.pose, live.buffers);
+          frames.push({
+            poseId,
+            positions: extractCanonicalPosedPositions(live.root, live.meshBindings),
+          });
+        }
+        // Restore whatever pose the user currently has selected.
+        poseSession(activePoseRef.current, live.buffers);
+        if (frames.length === 0) return;
+
         const repair = runHighConfidenceDeformationAutoRepair({
-          restPositions: meshData.positions,
-          topology,
-          regionLabels: finalLabels,
-          buffers,
+          restPositions,
+          topology: live.topology,
+          regionLabels: labelsAtStart,
+          buffers: live.buffers,
           frames,
-          jointPositions: previewFitted.jointPositions,
+          jointPositions,
           regenerateWeights: (labels) => generateRegionConstrainedSkinWeights({
-            positions: meshData.positions,
+            positions: restPositions,
             regionLabels: labels,
-            jointPositions: previewFitted.jointPositions,
-            topology,
+            jointPositions,
+            topology: live.topology,
             heightMeters: height,
             meshSize,
           }),
           evaluatePoseFrames: (candidateBuffers) => {
             const nextFrames = [];
-            for (const poseId of DEFORMATION_AUTO_REPAIR_POSE_IDS) {
+            for (const poseId of repairPoseIds) {
               const preset = getHumanPosePreset(poseId);
               if (!preset) continue;
-              poseRoot(preset.pose, candidateBuffers);
+              poseSession(preset.pose, candidateBuffers);
               nextFrames.push({
                 poseId,
-                positions: extractCanonicalPosedPositions(root),
+                positions: extractCanonicalPosedPositions(live.root, live.meshBindings),
               });
             }
-            poseRoot(undefined, candidateBuffers);
-            const neutralPosed = extractCanonicalPosedPositions(root);
+            poseSession(undefined, candidateBuffers);
+            const neutralPosed = extractCanonicalPosedPositions(live.root, live.meshBindings);
             let neutralMaxDrift = 0;
-            const rest = meshData.positions;
-            const n = Math.floor(Math.min(rest.length, neutralPosed.length) / 3);
+            const n = Math.floor(Math.min(restPositions.length, neutralPosed.length) / 3);
             for (let v = 0; v < n; v += 1) {
               const i = v * 3;
               const dist = Math.hypot(
-                neutralPosed[i]! - rest[i]!,
-                neutralPosed[i + 1]! - rest[i + 1]!,
-                neutralPosed[i + 2]! - rest[i + 2]!,
+                neutralPosed[i]! - restPositions[i]!,
+                neutralPosed[i + 1]! - restPositions[i + 1]!,
+                neutralPosed[i + 2]! - restPositions[i + 2]!,
               );
               if (dist > neutralMaxDrift) neutralMaxDrift = dist;
             }
@@ -804,49 +825,55 @@ export function AutorigRigWizardDialog({
           },
         });
 
-        buffers = repair.buffers;
-        finalLabels = repair.regionLabels;
-        poseRoot(undefined, buffers);
+        if (autoRepairGenerationRef.current !== repairGeneration) return;
+        if (previewSessionRef.current !== live) return;
+
+        applySkinBuffersToPreviewSession(live, repair.buffers);
+        previousResolvedRef.current = repair.regionLabels;
+        poseSession(activePoseRef.current, repair.buffers);
+        try {
+          const pass = selectionPassRef.current;
+          if (pass) {
+            updateRegionSelectionPassFromSkinnedRoot(pass, live.root, live.meshBindings);
+          }
+        } catch {
+          invalidateRegionSelectionPick(selectionPassRef.current);
+        }
+        renderMeshLayer();
 
         if (repair.repairedVertexCount > 0) {
           setPrepareNotice(formatDeformationAutoRepairMessage(repair));
-          if (suggestedRegions) {
+          if (suggestedAtStart) {
             let labelsChanged = false;
-            for (let v = 0; v < finalLabels.length; v += 1) {
-              if (finalLabels[v] !== resolvedRegions[v]) {
+            for (let v = 0; v < repair.regionLabels.length; v += 1) {
+              if (repair.regionLabels[v] !== labelsAtStart[v]) {
                 labelsChanged = true;
                 break;
               }
             }
             if (labelsChanged) {
               setRegionOverrides(overridesFromRepairedLabels({
-                suggested: suggestedRegions,
-                previousOverrides: regionOverrides,
+                suggested: suggestedAtStart,
+                previousOverrides: overridesAtStart,
                 repairedLabels: repair.regionLabels,
               }));
             }
           }
         }
+      } catch {
+        // Keep the initial Binder V2 preview if deferred diagnostics fail.
+        if (previewSessionRef.current === live) {
+          poseSession(activePoseRef.current, live.buffers);
+        }
       }
-    } catch {
-      // Keep the initial Binder V2 result if silent diagnostics fail.
-      poseRoot(undefined, buffers);
-    }
-
-    const session = createAutorigPreviewSession({
-      root,
-      bones,
-      rests,
-      topology,
-      buffers,
-      activePoseId: activePoseIdRef.current,
-      activePose: activePoseRef.current,
     });
-    previewSessionRef.current = session;
-    previousResolvedRef.current = finalLabels;
-    setSessionVersion((value) => value + 1);
 
     return () => {
+      if (autoRepairTimerRef.current) {
+        clearTimeout(autoRepairTimerRef.current);
+        autoRepairTimerRef.current = null;
+      }
+      autoRepairGenerationRef.current += 1;
       disposePreviewSession();
     };
   // Paint corrections update in place — only rebuild when structural inputs change.

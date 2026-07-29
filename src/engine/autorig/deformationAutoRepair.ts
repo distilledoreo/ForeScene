@@ -90,7 +90,10 @@ export const DEFORMATION_AUTO_REPAIR_DEFAULTS = {
   weightDisagreementThreshold: 0.55,
   /** Movement disagreement relative to local median displacement. */
   movementOutlierRatio: 2.5,
-  maxIterations: 3,
+  /** Prepare path: one detect→batch-repair→retest cycle. */
+  maxIterations: 1,
+  /** Cap automatic patches applied in one batch. */
+  maxAutomaticPatches: 16,
 } as const;
 
 const LEFT_REGIONS = new Set<AutorigBodyRegionId>(['leftArm', 'leftLeg']);
@@ -192,8 +195,8 @@ function weightL1(a: Float32Array, b: Float32Array): number {
 
 /**
  * Aggregate anomaly score across diagnostic frames (max over poses).
- * Normalized relative to the mesh: edge stretch vs local median, movement vs
- * local neighbor median displacement.
+ * O(poses × edges): precomputes rest edge lengths and per-vertex max stretch,
+ * then scores each vertex against its neighbors' stretch without nested walks.
  */
 export function detectLocalDeformationOutliers(params: {
   restPositions: ArrayLike<number>;
@@ -209,6 +212,16 @@ export function detectLocalDeformationOutliers(params: {
   if (vertexCount === 0 || params.frames.length === 0) return [];
   if (topology.adjacencyOffsets.length !== vertexCount + 1) return [];
 
+  const adjCount = topology.adjacencyVertices.length;
+  const restEdgeLen = new Float32Array(adjCount);
+  for (let v = 0; v < vertexCount; v += 1) {
+    const start = topology.adjacencyOffsets[v]!;
+    const end = topology.adjacencyOffsets[v + 1]!;
+    for (let ai = start; ai < end; ai += 1) {
+      restEdgeLen[ai] = Math.max(dist3(params.restPositions, v, topology.adjacencyVertices[ai]!), 1e-8);
+    }
+  }
+
   const jointCount = buffers?.jointOrder.length ?? 0;
   const ownWeights = jointCount > 0 ? new Float32Array(jointCount) : null;
   const nbrWeights = jointCount > 0 ? new Float32Array(jointCount) : null;
@@ -220,38 +233,50 @@ export function detectLocalDeformationOutliers(params: {
   const bestWeightDisagree = new Float32Array(vertexCount);
   const bestRegionDisagree = new Float32Array(vertexCount);
 
+  const maxStretch = new Float32Array(vertexCount);
+  const medianStretch = new Float32Array(vertexCount);
+  const badEdgeFraction = new Float32Array(vertexCount);
+  const moveDisagree = new Float32Array(vertexCount);
+  const regionDisagree = new Float32Array(vertexCount);
+  const weightDisagreeArr = new Float32Array(vertexCount);
+  const stretchScratch: number[] = [];
+
   for (const frame of params.frames) {
     if (frame.poseId === 'neutral') continue;
     const posed = frame.positions;
     if (Math.floor(posed.length / 3) < vertexCount) continue;
+
+    maxStretch.fill(0);
+    medianStretch.fill(0);
+    badEdgeFraction.fill(0);
+    moveDisagree.fill(0);
+    regionDisagree.fill(0);
+    weightDisagreeArr.fill(0);
 
     for (let v = 0; v < vertexCount; v += 1) {
       const start = topology.adjacencyOffsets[v]!;
       const end = topology.adjacencyOffsets[v + 1]!;
       if (start === end) continue;
 
-      const edgeStretches: number[] = [];
+      stretchScratch.length = 0;
       let moveDx = 0;
       let moveDy = 0;
       let moveDz = 0;
       let moveCount = 0;
       let regionMismatch = 0;
       let regionCount = 0;
-      let weightSum = 0;
-      let weightCount = 0;
+      let badEdges = 0;
+      let localMax = 0;
 
       const [vx, vy, vz] = displacement(params.restPositions, posed, v);
-      const vDisp = Math.hypot(vx, vy, vz);
       const vRegion = regionLabels[v]!;
-
-      if (ownWeights && buffers) vertexWeightMap(buffers, v, ownWeights);
 
       for (let ai = start; ai < end; ai += 1) {
         const u = topology.adjacencyVertices[ai]!;
-        const restLen = Math.max(dist3(params.restPositions, v, u), 1e-8);
-        const poseLen = dist3(posed, v, u);
-        const stretch = poseLen / restLen;
-        edgeStretches.push(stretch);
+        const stretch = dist3(posed, v, u) / restEdgeLen[ai]!;
+        stretchScratch.push(stretch);
+        if (stretch > localMax) localMax = stretch;
+        if (stretch >= 1.75) badEdges += 1;
 
         const [ux, uy, uz] = displacement(params.restPositions, posed, u);
         moveDx += ux;
@@ -261,61 +286,61 @@ export function detectLocalDeformationOutliers(params: {
 
         regionCount += 1;
         if (regionLabels[u] !== vRegion) regionMismatch += 1;
-
-        if (ownWeights && nbrWeights && buffers) {
-          vertexWeightMap(buffers, u, nbrWeights);
-          weightSum += weightL1(ownWeights, nbrWeights);
-          weightCount += 1;
-        }
       }
 
-      const maxStretch = edgeStretches.reduce((a, b) => Math.max(a, b), 0);
-      const medianStretch = medianOf(edgeStretches);
-      // Fraction of incident edges that are badly stretched. True spikes tend to
-      // stretch most of their edges; victims of a neighboring spike usually have
-      // only one bad edge (to the spike) so this fraction stays low.
-      const badEdgeFraction = edgeStretches.filter((s) => s >= 1.75).length
-        / Math.max(edgeStretches.length, 1);
-
-      // Neighbors' edge stretches that do NOT involve v — calm neighborhood.
-      const neighborInteriorStretches: number[] = [];
-      for (let ai = start; ai < end; ai += 1) {
-        const u = topology.adjacencyVertices[ai]!;
-        const uStart = topology.adjacencyOffsets[u]!;
-        const uEnd = topology.adjacencyOffsets[u + 1]!;
-        for (let uj = uStart; uj < uEnd; uj += 1) {
-          const w = topology.adjacencyVertices[uj]!;
-          if (w === v) continue;
-          const restLen = Math.max(dist3(params.restPositions, u, w), 1e-8);
-          const poseLen = dist3(posed, u, w);
-          neighborInteriorStretches.push(poseLen / restLen);
-        }
-      }
-      const neighborMedianInterior = medianOf(neighborInteriorStretches);
-      const stretchOutlier = neighborMedianInterior > 1e-6
-        ? maxStretch / Math.max(neighborMedianInterior, 1)
-        : maxStretch;
+      maxStretch[v] = localMax;
+      medianStretch[v] = medianOf(stretchScratch);
+      badEdgeFraction[v] = badEdges / Math.max(stretchScratch.length, 1);
 
       const meanNbrDx = moveCount > 0 ? moveDx / moveCount : 0;
       const meanNbrDy = moveCount > 0 ? moveDy / moveCount : 0;
       const meanNbrDz = moveCount > 0 ? moveDz / moveCount : 0;
-      const moveDisagree = Math.hypot(vx - meanNbrDx, vy - meanNbrDy, vz - meanNbrDz);
+      const vDisp = Math.hypot(vx, vy, vz);
+      moveDisagree[v] = Math.hypot(vx - meanNbrDx, vy - meanNbrDy, vz - meanNbrDz);
       const nbrDisp = Math.hypot(meanNbrDx, meanNbrDy, meanNbrDz);
+      // Store move ratio numerator; divide later with local scale.
       const localMoveScale = Math.max(nbrDisp, vDisp * 0.25, 1e-5);
-      const moveRatio = moveDisagree / localMoveScale;
+      moveDisagree[v] = moveDisagree[v]! / localMoveScale;
+      regionDisagree[v] = regionCount > 0 ? regionMismatch / regionCount : 0;
 
-      const weightDisagree = weightCount > 0 ? weightSum / weightCount : 0;
-      const regionDisagree = regionCount > 0 ? regionMismatch / regionCount : 0;
+      // Weight L1 only for stretch candidates — avoids dense work on calm verts.
+      if (localMax >= 1.5 && ownWeights && nbrWeights && buffers) {
+        vertexWeightMap(buffers, v, ownWeights);
+        let weightSum = 0;
+        let weightCount = 0;
+        for (let ai = start; ai < end; ai += 1) {
+          const u = topology.adjacencyVertices[ai]!;
+          vertexWeightMap(buffers, u, nbrWeights);
+          weightSum += weightL1(ownWeights, nbrWeights);
+          weightCount += 1;
+        }
+        weightDisagreeArr[v] = weightCount > 0 ? weightSum / weightCount : 0;
+      }
+    }
 
-      // Soft scores in ~[0, 1+] then combine. Median stretch + bad-edge fraction
-      // distinguish the flying vertex from its one-edge-stretched neighbors.
+    // Neighbor stretch context from precomputed maxStretch (O(E)).
+    for (let v = 0; v < vertexCount; v += 1) {
+      if (maxStretch[v]! < 1.6 && bestScore[v]! < opts.anomalyThreshold) continue;
+      const start = topology.adjacencyOffsets[v]!;
+      const end = topology.adjacencyOffsets[v + 1]!;
+      if (start === end) continue;
+
+      stretchScratch.length = 0;
+      for (let ai = start; ai < end; ai += 1) {
+        stretchScratch.push(maxStretch[topology.adjacencyVertices[ai]!]!);
+      }
+      const neighborMedianMax = medianOf(stretchScratch);
+      const stretchOutlier = neighborMedianMax > 1e-6
+        ? maxStretch[v]! / Math.max(neighborMedianMax, 1)
+        : maxStretch[v]!;
+
       const maxScore = Math.max(
         0,
-        (maxStretch - 1.35) / Math.max(opts.extremeStretch - 1.35, 1e-3),
+        (maxStretch[v]! - 1.35) / Math.max(opts.extremeStretch - 1.35, 1e-3),
       );
       const medianScore = Math.max(
         0,
-        (medianStretch - 1.2) / Math.max(opts.extremeStretch * 0.75 - 1.2, 1e-3),
+        (medianStretch[v]! - 1.2) / Math.max(opts.extremeStretch * 0.75 - 1.2, 1e-3),
       );
       const outlierRatioScore = Math.max(
         0,
@@ -324,10 +349,13 @@ export function detectLocalDeformationOutliers(params: {
       const stretchScore = maxScore * 0.25
         + medianScore * 0.35
         + outlierRatioScore * 0.2
-        + badEdgeFraction * 0.2;
-      const moveScore = Math.max(0, (moveRatio - 1) / Math.max(opts.movementOutlierRatio - 1, 1e-3));
-      const weightScore = weightDisagree / 2; // L1 in [0, 2]
-      const regionScore = regionDisagree;
+        + badEdgeFraction[v]! * 0.2;
+      const moveScore = Math.max(
+        0,
+        (moveDisagree[v]! - 1) / Math.max(opts.movementOutlierRatio - 1, 1e-3),
+      );
+      const weightScore = weightDisagreeArr[v]! / 2;
+      const regionScore = regionDisagree[v]!;
 
       const anomaly = stretchScore * 0.4
         + moveScore * 0.3
@@ -336,11 +364,11 @@ export function detectLocalDeformationOutliers(params: {
 
       if (anomaly > bestScore[v]!) {
         bestScore[v] = anomaly;
-        bestMaxStretch[v] = maxStretch;
-        bestMedianStretch[v] = medianStretch;
-        bestMoveDisagree[v] = moveDisagree;
-        bestWeightDisagree[v] = weightDisagree;
-        bestRegionDisagree[v] = regionDisagree;
+        bestMaxStretch[v] = maxStretch[v]!;
+        bestMedianStretch[v] = medianStretch[v]!;
+        bestMoveDisagree[v] = moveDisagree[v]!;
+        bestWeightDisagree[v] = weightDisagreeArr[v]!;
+        bestRegionDisagree[v] = regionDisagree[v]!;
       }
     }
   }
@@ -348,11 +376,7 @@ export function detectLocalDeformationOutliers(params: {
   const outliers: DeformationOutlierVertex[] = [];
   for (let v = 0; v < vertexCount; v += 1) {
     if (bestScore[v]! < opts.anomalyThreshold) continue;
-    // Require a real stretch signal — pure label disagreements without strain
-    // are not auto-repair targets.
     if (bestMaxStretch[v]! < 1.6) continue;
-    // Victims of a neighboring spike: one long edge, calm median, coherent motion.
-    // Keep them out unless region/weight disagreement is also strong.
     if (
       bestMedianStretch[v]! < 1.45
       && bestRegionDisagree[v]! < 0.5
@@ -1034,7 +1058,8 @@ export function validateAndApplyRepairs(params: {
 
 /**
  * Full detect → propose → validate loop for high-confidence spikes.
- * The caller supplies pose evaluation (typically silent diagnostic poses).
+ * Applies automatic repairs in one batch (single weight regen + single retest)
+ * so prepare stays responsive on real character meshes.
  */
 export function runHighConfidenceDeformationAutoRepair(params: {
   restPositions: ArrayLike<number>;
@@ -1044,7 +1069,7 @@ export function runHighConfidenceDeformationAutoRepair(params: {
   frames: DiagnosticPoseFrame[];
   jointPositions?: Partial<Record<HumanJointId, Vec3>> | null;
   /**
-   * After a region label change, regenerate Binder V2 weights (full or partial).
+   * After region label changes, regenerate Binder V2 weights (full or partial).
    * Weight-only proposals skip this.
    */
   regenerateWeights: (regionLabels: Uint8Array) => SkinWeightBuffers;
@@ -1059,158 +1084,172 @@ export function runHighConfidenceDeformationAutoRepair(params: {
   options?: Partial<typeof DEFORMATION_AUTO_REPAIR_DEFAULTS>;
 }): DeformationAutoRepairResult {
   const opts = { ...DEFORMATION_AUTO_REPAIR_DEFAULTS, ...params.options };
-  let labels = new Uint8Array(params.regionLabels);
+  const labels = new Uint8Array(params.regionLabels);
   let buffers = cloneSkinBuffers(params.buffers);
-  let frames = params.frames;
-  const allApplied: DeformationRepairProposal[] = [];
-  const allRejected: DeformationRepairProposal[] = [];
+  const frames = params.frames;
   const allSkipped: DeformationRepairProposal[] = [];
   const repaired = new Set<number>();
 
-  for (let iteration = 0; iteration < opts.maxIterations; iteration += 1) {
-    const scored = scoreDeformationAnomalies({
-      restPositions: params.restPositions,
-      topology: params.topology,
+  const scored = scoreDeformationAnomalies({
+    restPositions: params.restPositions,
+    topology: params.topology,
+    regionLabels: labels,
+    buffers,
+    frames,
+    options: opts,
+  });
+  if (scored.outlierCount === 0) {
+    return {
+      applied: [],
+      rejected: [],
+      skipped: [],
+      repairedVertexCount: 0,
       regionLabels: labels,
       buffers,
-      frames,
-      options: opts,
-    });
-    if (scored.outlierCount === 0) {
-      return {
-        applied: allApplied,
-        rejected: allRejected,
-        skipped: allSkipped,
-        repairedVertexCount: repaired.size,
-        regionLabels: labels,
-        buffers,
-        iterations: iteration,
-      };
-    }
+      iterations: 0,
+    };
+  }
 
-    const patches = groupOutlierPatches(scored.outliers, params.topology, opts);
-    const proposals = proposeDeformationRepairs({
-      patches,
-      outliers: scored.outliers,
-      topology: params.topology,
-      positions: params.restPositions,
-      regionLabels: labels,
-      buffers,
-      jointPositions: params.jointPositions,
-      options: opts,
-    });
+  const patches = groupOutlierPatches(scored.outliers, params.topology, opts);
+  const proposals = proposeDeformationRepairs({
+    patches,
+    outliers: scored.outliers,
+    topology: params.topology,
+    positions: params.restPositions,
+    regionLabels: labels,
+    buffers,
+    jointPositions: params.jointPositions,
+    options: opts,
+  });
 
-    const automatic = proposals.filter((p) => p.confidence === 'automatic');
-    if (automatic.length === 0) {
-      allSkipped.push(...proposals);
-      return {
-        applied: allApplied,
-        rejected: allRejected,
-        skipped: allSkipped,
-        repairedVertexCount: repaired.size,
-        regionLabels: labels,
-        buffers,
-        iterations: iteration + 1,
-      };
-    }
-
-    let changed = false;
-    // Apply one patch at a time, smallest first.
-    automatic.sort((a, b) => {
+  const automatic = proposals
+    .filter((p) => p.confidence === 'automatic')
+    .sort((a, b) => {
       if (a.patch.vertexIndices.length !== b.patch.vertexIndices.length) {
         return a.patch.vertexIndices.length - b.patch.vertexIndices.length;
       }
       return b.patch.meanAnomalyScore - a.patch.meanAnomalyScore;
-    });
+    })
+    .slice(0, opts.maxAutomaticPatches);
 
-    for (const proposal of automatic) {
-      const snapshotLabels = new Uint8Array(labels);
-      const snapshotBuffers = cloneSkinBuffers(buffers);
-      const trial = applyRepairProposal(proposal, labels, buffers);
-      let candidateBuffers = trial.buffers;
-      if (proposal.kind === 'region') {
-        candidateBuffers = params.regenerateWeights(trial.regionLabels);
-        // Neighborhood cleanup after relabel.
-        const blended = blendNeighborhoodWeights({
-          vertexIndices: proposal.patch.vertexIndices,
-          topology: params.topology,
-          positions: params.restPositions,
-          regionLabels: trial.regionLabels,
-          buffers: candidateBuffers,
-          smoothRings: 1,
-        });
-        const ipv = candidateBuffers.influencesPerVertex;
-        for (let i = 0; i < blended.vertexIndices.length; i += 1) {
-          const v = blended.vertexIndices[i]!;
-          const src = i * ipv;
-          const dst = v * ipv;
-          for (let slot = 0; slot < ipv; slot += 1) {
-            candidateBuffers.indices[dst + slot] = blended.indices[src + slot]!;
-            candidateBuffers.weights[dst + slot] = blended.weights[src + slot]!;
-          }
+  for (const p of proposals) {
+    if (p.confidence !== 'automatic') allSkipped.push(p);
+  }
+  if (automatic.length === 0) {
+    return {
+      applied: [],
+      rejected: [],
+      skipped: allSkipped,
+      repairedVertexCount: 0,
+      regionLabels: labels,
+      buffers,
+      iterations: 1,
+    };
+  }
+
+  const snapshotLabels = new Uint8Array(labels);
+  const snapshotBuffers = cloneSkinBuffers(buffers);
+  let trialLabels = new Uint8Array(labels);
+  let trialBuffers = cloneSkinBuffers(buffers);
+  let hasRegionRepair = false;
+  const regionVerts: number[] = [];
+  const weightProposals: DeformationRepairProposal[] = [];
+
+  for (const proposal of automatic) {
+    if (proposal.kind === 'region' && proposal.newRegionCode != null) {
+      hasRegionRepair = true;
+      for (const v of proposal.patch.vertexIndices) {
+        trialLabels[v] = proposal.newRegionCode;
+        regionVerts.push(v);
+      }
+    } else if (proposal.kind === 'weights' && proposal.weightPatch) {
+      weightProposals.push(proposal);
+    }
+  }
+
+  if (hasRegionRepair) {
+    trialBuffers = params.regenerateWeights(trialLabels);
+    if (regionVerts.length > 0) {
+      const blended = blendNeighborhoodWeights({
+        vertexIndices: regionVerts,
+        topology: params.topology,
+        positions: params.restPositions,
+        regionLabels: trialLabels,
+        buffers: trialBuffers,
+        smoothRings: 1,
+      });
+      const ipv = trialBuffers.influencesPerVertex;
+      for (let i = 0; i < blended.vertexIndices.length; i += 1) {
+        const v = blended.vertexIndices[i]!;
+        const src = i * ipv;
+        const dst = v * ipv;
+        for (let slot = 0; slot < ipv; slot += 1) {
+          trialBuffers.indices[dst + slot] = blended.indices[src + slot]!;
+          trialBuffers.weights[dst + slot] = blended.weights[src + slot]!;
         }
       }
-
-      const evaluation = params.evaluatePoseFrames(candidateBuffers);
-      const nextScore = scoreDeformationAnomalies({
-        restPositions: params.restPositions,
-        topology: params.topology,
-        regionLabels: trial.regionLabels,
-        buffers: candidateBuffers,
-        frames: evaluation.frames,
-        options: opts,
-      });
-      const neutralOk = evaluation.neutralMaxDrift == null
-        || evaluation.neutralMaxDrift <= 1e-3;
-      const improved = nextScore.total < scored.total * 0.98
-        || (
-          nextScore.total <= scored.total
-          && nextScore.outlierCount < scored.outlierCount
-        );
-
-      if (!neutralOk || !improved) {
-        allRejected.push(proposal);
-        labels = snapshotLabels;
-        buffers = snapshotBuffers;
-        continue;
-      }
-
-      labels = trial.regionLabels;
-      buffers = candidateBuffers;
-      frames = evaluation.frames;
-      allApplied.push(proposal);
-      for (const v of proposal.patch.vertexIndices) repaired.add(v);
-      changed = true;
-      // Refresh baseline score for subsequent patches in this iteration.
-      scored.total = nextScore.total;
-      scored.outlierCount = nextScore.outlierCount;
     }
+  }
 
-    for (const p of proposals) {
-      if (p.confidence !== 'automatic') allSkipped.push(p);
-    }
+  for (const proposal of weightProposals) {
+    // Skip weight patches already covered by a region relabel in this batch.
+    const regionSet = regionVerts.length > 0 ? new Set(regionVerts) : null;
+    if (regionSet && proposal.patch.vertexIndices.some((v) => regionSet.has(v))) continue;
+    const applied = applyRepairProposal(proposal, trialLabels, trialBuffers);
+    trialBuffers = applied.buffers;
+  }
 
-    if (!changed) break;
+  const evaluation = params.evaluatePoseFrames(trialBuffers);
+  const nextScore = scoreDeformationAnomalies({
+    restPositions: params.restPositions,
+    topology: params.topology,
+    regionLabels: trialLabels,
+    buffers: trialBuffers,
+    frames: evaluation.frames,
+    options: opts,
+  });
+  const neutralOk = evaluation.neutralMaxDrift == null
+    || evaluation.neutralMaxDrift <= 1e-3;
+  const improved = nextScore.total < scored.total * 0.98
+    || (
+      nextScore.total <= scored.total
+      && nextScore.outlierCount < scored.outlierCount
+    );
+
+  if (!neutralOk || !improved) {
+    return {
+      applied: [],
+      rejected: automatic,
+      skipped: allSkipped,
+      repairedVertexCount: 0,
+      regionLabels: snapshotLabels,
+      buffers: snapshotBuffers,
+      iterations: 1,
+    };
+  }
+
+  for (const proposal of automatic) {
+    for (const v of proposal.patch.vertexIndices) repaired.add(v);
   }
 
   return {
-    applied: allApplied,
-    rejected: allRejected,
+    applied: automatic,
+    rejected: [],
     skipped: allSkipped,
     repairedVertexCount: repaired.size,
-    regionLabels: labels,
-    buffers,
-    iterations: opts.maxIterations,
+    regionLabels: trialLabels,
+    buffers: trialBuffers,
+    iterations: 1,
   };
 }
 
-/** Pose IDs used for silent deformation auto-repair diagnostics. */
+/**
+ * Poses used for silent deformation auto-repair during prepare.
+ * Keep this short — each pose skins every vertex on the main thread.
+ */
 export const DEFORMATION_AUTO_REPAIR_POSE_IDS = [
-  'arms-raised',
   'elbows-bent',
-  'walking',
-  'sitting',
-  'crouching',
+  'arms-raised',
 ] as const;
 
 /** User-facing prepare banner after automatic spike cleanup. */
