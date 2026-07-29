@@ -246,6 +246,10 @@ describe('autorig preview instance reuses template cache', () => {
     expect(dialog).toMatch(/pointer-events-none/);
     // No continuous animation loop in wizard.
     expect(dialog).not.toMatch(/requestAnimationFrame/);
+    // Mesh-bounds updates must not dispose+recreate the preview GL (freezes drags).
+    expect(dialog).toMatch(/attachPreviewMeshRef/);
+    expect(dialog).toMatch(/if \(isDragging\) return null;/);
+    expect(dialog).toMatch(/Do not clear meshBounds here/);
   });
 });
 
