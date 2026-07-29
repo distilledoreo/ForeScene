@@ -1,6 +1,7 @@
 import type {
   PoseableAxisHint,
   PoseableCharacterOrientation,
+  PoseableRegionMapReference,
   PoseableRestTransform,
   PoseableRigAsset,
   PoseableRigGenerationSettings,
@@ -13,6 +14,11 @@ export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
 export const MAX_POSEABLE_HEIGHT_METERS = 3.5;
 /** Bumped whenever canonical fitting/weighting changes invalidate baked rigs. */
 export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 6;
+/**
+ * Binder algorithm version. V1 = capsule skinning without region constraints.
+ * V2 (later) = region-constrained weights. Independent of rigGenerationVersion.
+ */
+export const CURRENT_AUTORIG_BINDER_VERSION = 1;
 
 export function defaultPoseableOrientation(): PoseableCharacterOrientation {
   return {
@@ -74,6 +80,25 @@ export function normalizePoseableRigGenerationSettings(value: unknown): Poseable
     approximateHeightMeters: height,
     ...(poseHint ? { poseHint } : {}),
     ...(notes && notes.length > 0 ? { notes } : {}),
+  };
+}
+
+/** Compact region-map reference (labels live in a binary asset). */
+export function normalizePoseableRegionMap(value: unknown): PoseableRegionMapReference | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Partial<PoseableRegionMapReference>;
+  if (typeof raw.regionAssetId !== 'string' || !raw.regionAssetId) return undefined;
+  if (typeof raw.topologyHash !== 'string' || !raw.topologyHash) return undefined;
+  if (typeof raw.sourceAssetId !== 'string' || !raw.sourceAssetId) return undefined;
+  const vertexCount = typeof raw.vertexCount === 'number' && Number.isFinite(raw.vertexCount)
+    ? Math.max(0, Math.floor(raw.vertexCount))
+    : 0;
+  return {
+    version: 1,
+    regionAssetId: raw.regionAssetId,
+    vertexCount,
+    topologyHash: raw.topologyHash,
+    sourceAssetId: raw.sourceAssetId,
   };
 }
 
@@ -149,6 +174,9 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(typeof raw.sourceMeshAssetId === 'string' ? { sourceMeshAssetId: raw.sourceMeshAssetId } : {}),
     ...(typeof raw.originalSourceAssetId === 'string' ? { originalSourceAssetId: raw.originalSourceAssetId } : {}),
     ...(typeof raw.rigGenerationVersion === 'number' ? { rigGenerationVersion: raw.rigGenerationVersion } : {}),
+    ...(typeof raw.binderVersion === 'number' && Number.isFinite(raw.binderVersion)
+      ? { binderVersion: Math.max(0, Math.floor(raw.binderVersion)) }
+      : {}),
     ...(raw.requiresRerigging === true || (typeof raw.rigGenerationVersion === 'number'
       && raw.rigGenerationVersion < CURRENT_AUTORIG_RIG_GENERATION_VERSION)
       ? { requiresRerigging: true }
@@ -158,6 +186,9 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
       ? { canonicalPoseBases: raw.canonicalPoseBases }
       : {}),
     ...(raw.skin && typeof raw.skin === 'object' ? { skin: normalizePoseableSkin(raw.skin) } : {}),
+    ...(normalizePoseableRegionMap(raw.regionMap)
+      ? { regionMap: normalizePoseableRegionMap(raw.regionMap) }
+      : {}),
     ...(Array.isArray(raw.markers) ? { markers: normalizePoseableMarkers(raw.markers) } : {}),
     ...(normalizePoseableCharacterOrientation(raw.orientation)
       ? { orientation: normalizePoseableCharacterOrientation(raw.orientation) }

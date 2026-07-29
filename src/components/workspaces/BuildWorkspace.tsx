@@ -1283,10 +1283,10 @@ useEffect(() => {
                 rig: next,
                 sourceAssetId: sourceId,
                 assets: useContinuityStore.getState().project.assets,
-              }).then(({ rig: skinnedRig, skinAsset }) => {
+              }).then(({ rig: skinnedRig, skinAsset, regionAsset }) => {
                 const state = useContinuityStore.getState();
                 state.updatePoseableRigAsset(rigAsset.id, skinnedRig);
-                // Register skin binary asset without a separate history step API.
+                // Register skin (+ optional region-map) binary assets without a separate history step API.
                 useContinuityStore.setState((current) => ({
                   project: {
                     ...current.project,
@@ -1294,6 +1294,7 @@ useEffect(() => {
                       assets: {
                         ...current.project.assets.assets,
                         [skinAsset.id]: skinAsset,
+                        ...(regionAsset ? { [regionAsset.id]: regionAsset } : {}),
                       },
                     },
                   },
