@@ -292,7 +292,9 @@ describe('autorig marker preview WebGL lifecycle', () => {
 
     disposeAutorigMarkerPreviewGl(gl);
     expect(dispose).toHaveBeenCalledTimes(1);
-    expect(loseContext).toHaveBeenCalledTimes(1);
+    // Must NOT force-lose: React Strict Mode remounts on the same canvas, and
+    // loseContext permanently paints Chrome's sad-face glyph on the element.
+    expect(loseContext).not.toHaveBeenCalled();
     expect(gl.root).toBeNull();
 
     // Factory + wizard must not start a continuous rAF loop.
@@ -304,8 +306,10 @@ describe('autorig marker preview WebGL lifecycle', () => {
     // No continuous loop scheduling API in the shipped factory.
     expect(factorySrc).not.toMatch(/requestAnimationFrame\s*\(/);
     expect(factorySrc).toMatch(/disposeAutorigMarkerPreviewGl/);
+    expect(factorySrc).not.toMatch(/loseContext/);
     // renderAutorigMarkerPreview is a single-shot call (no scheduling).
     expect(factorySrc).toMatch(/Single on-demand frame/);
+    expect(factorySrc).toMatch(/setClearColor\(0x1c1f26/);
   });
 });
 
