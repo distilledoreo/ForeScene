@@ -84,29 +84,150 @@ function isLimbRegion(region: AutorigBodyRegion): boolean {
   return region === 'leftArm' || region === 'rightArm' || region === 'leftLeg' || region === 'rightLeg';
 }
 
-function capsuleRadius(
-  segment: SkinBoneSegment,
-  height: number,
-  meshThickness: number,
-  /** Half-width of the torso from fitted shoulders; keeps midline bones spanning the chest. */
-  torsoHalfWidth: number,
-): number {
-  const length = Math.hypot(
+function isArmRegion(region: AutorigBodyRegion): boolean {
+  return region === 'leftArm' || region === 'rightArm';
+}
+
+function segmentLength(segment: SkinBoneSegment): number {
+  return Math.hypot(
     segment.end[0] - segment.start[0],
     segment.end[1] - segment.start[1],
     segment.end[2] - segment.start[2],
   );
-  // Limbs: length-scaled radius with a small height floor (~5cm at 1.75m).
-  // Do NOT floor on meshThickness — that value is sized for the torso and
-  // inflates arm/leg capsules to ~16cm, letting them claim chest vertices.
+}
+
+/**
+ * Anatomical fallback when a bone has too few mesh samples (stubs, missing limbs).
+ * Not used as the primary radius for real geometry.
+ */
+function fallbackCapsuleRadius(
+  segment: SkinBoneSegment,
+  height: number,
+  meshThickness: number,
+  torsoHalfWidth: number,
+): number {
+  const length = segmentLength(segment);
   if (isLimbRegion(segment.region)) {
-    return Math.max(height * 0.03, Math.min(height * 0.16, length * 0.25));
+    // Generous enough for clothed limbs; torso gate prevents chest theft.
+    return Math.max(height * 0.045, Math.min(height * 0.12, length * 0.35));
   }
-  // Torso/head need wide capsules so midline bones reach the body surface out
-  // to the shoulders (meshThickness alone is often the depth, not the width).
   const anatomical = segment.region === 'torso' ? length * 0.32 : length * 0.5;
   const bodyFloor = Math.max(meshThickness * 0.45, torsoHalfWidth * 0.95);
   return Math.max(0.025, Math.min(height * 0.22, Math.max(bodyFloor, anatomical)));
+}
+
+/**
+ * Skeleton topology only — which body side a vertex may train a bone's radius.
+ * Prevents chest surface samples from inflating arm capsules (and vice versa).
+ */
+function vertexEligibleForRadiusSample(
+  px: number,
+  py: number,
+  region: AutorigBodyRegion,
+  shoulderX: number,
+  hipY: number,
+): boolean {
+  switch (region) {
+    case 'leftArm':
+      // Past the shoulder socket — chest samples must not train arm radius.
+      return px >= shoulderX * 0.72;
+    case 'rightArm':
+      return px <= -shoulderX * 0.72;
+    case 'leftLeg':
+      // Below/at hips, on the left half — hip socket mixes torso samples.
+      return px >= 0 && py <= hipY + Math.max(shoulderX * 0.25, 0.06);
+    case 'rightLeg':
+      return px <= 0 && py <= hipY + Math.max(shoulderX * 0.25, 0.06);
+    case 'head':
+      return Math.abs(px) <= shoulderX * 0.85 && py >= hipY;
+    case 'torso':
+    default:
+      return Math.abs(px) <= shoulderX * 0.95;
+  }
+}
+
+/** Percentile of a non-empty unsorted sample list (mutates via sort). */
+function percentileSorted(samples: number[], p: number): number {
+  if (samples.length === 1) return samples[0]!;
+  samples.sort((a, b) => a - b);
+  const idx = Math.min(samples.length - 1, Math.max(0, Math.floor((samples.length - 1) * p)));
+  return samples[idx]!;
+}
+
+/**
+ * Per-bone capsule radii measured from the mesh: for each segment, take vertices
+ * that structurally belong to that region, project onto the bone axis, and use a
+ * high percentile of radial distances (plus pad) so the capsule hugs that
+ * character's actual limb/torso thickness — not a fixed cm formula.
+ */
+export function estimateMeshCapsuleRadii(params: {
+  positions: ArrayLike<number>;
+  segments: SkinBoneSegment[];
+  height: number;
+  meshThickness: number;
+  shoulderX: number;
+  hipY: number;
+  torsoHalfWidth: number;
+}): Float32Array {
+  const {
+    positions, segments, height, meshThickness, shoulderX, hipY, torsoHalfWidth,
+  } = params;
+  const segCount = segments.length;
+  const radii = new Float32Array(segCount);
+  const vertexCount = Math.floor(positions.length / 3);
+  // Soft search cylinder: ignore outliers far from any bone during sampling.
+  const searchRadius = Math.max(height * 0.18, meshThickness * 0.7);
+  const searchRadiusSq = searchRadius * searchRadius;
+  const samples: number[][] = Array.from({ length: segCount }, () => []);
+
+  for (let s = 0; s < segCount; s += 1) {
+    const segment = segments[s]!;
+    const abx = segment.end[0] - segment.start[0];
+    const aby = segment.end[1] - segment.start[1];
+    const abz = segment.end[2] - segment.start[2];
+    const lenSq = Math.max(abx * abx + aby * aby + abz * abz, 1e-12);
+    const region = segment.region;
+    const bucket = samples[s]!;
+
+    for (let v = 0; v < vertexCount; v += 1) {
+      const px = positions[v * 3]!;
+      const py = positions[v * 3 + 1]!;
+      const pz = positions[v * 3 + 2]!;
+      if (!vertexEligibleForRadiusSample(px, py, region, shoulderX, hipY)) continue;
+
+      const apx = px - segment.start[0];
+      const apy = py - segment.start[1];
+      const apz = pz - segment.start[2];
+      let t = (apx * abx + apy * aby + apz * abz) / lenSq;
+      // Prefer the shaft; joint neighborhoods mix multiple body parts.
+      if (t < 0.08 || t > 0.98) continue;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = apx - abx * t;
+      const dy = apy - aby * t;
+      const dz = apz - abz * t;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > searchRadiusSq) continue;
+      bucket.push(Math.sqrt(distSq));
+    }
+  }
+
+  for (let s = 0; s < segCount; s += 1) {
+    const segment = segments[s]!;
+    const fallback = fallbackCapsuleRadius(segment, height, meshThickness, torsoHalfWidth);
+    const bucket = samples[s]!;
+    // Need a handful of surface samples; otherwise keep anatomical fallback.
+    if (bucket.length < 4) {
+      radii[s] = fallback;
+      continue;
+    }
+    // ~90th percentile radial extent + pad so surface verts are well inside the capsule.
+    const measured = percentileSorted(bucket, 0.9) * 1.18;
+    const floor = isLimbRegion(segment.region) ? height * 0.035 : height * 0.04;
+    const ceiling = isLimbRegion(segment.region) ? height * 0.14 : height * 0.24;
+    // Never shrink far below fallback for sparse meshes, never explode past ceiling.
+    radii[s] = Math.max(floor, Math.min(ceiling, Math.max(measured, fallback * 0.65)));
+  }
+  return radii;
 }
 
 /**
@@ -127,13 +248,24 @@ export function generateDeterministicSkinWeights(params: {
   const meshThickness = params.meshSize
     ? Math.min(params.meshSize[0], params.meshSize[2])
     : height * 0.3;
-  // Shoulder lateral extent from fitted joints — sizes torso capsules and gates
-  // limb influence so arm bones cannot claim vertices still inside the chest.
+  // Shoulder / hip anchors from fitted joints — structural gates + radius sampling masks.
   const leftShoulderX = Math.abs(params.jointPositions.leftUpperArm?.[0] ?? 0);
   const rightShoulderX = Math.abs(params.jointPositions.rightUpperArm?.[0] ?? 0);
   const shoulderX = Math.max(leftShoulderX, rightShoulderX, meshThickness * 0.35);
   const torsoHalfWidth = shoulderX;
-  const torsoLateralExtent = shoulderX * 0.9;
+  // Arm↔chest gate: hard-suppress inside 85% of shoulder span (clear chest),
+  // then soft-ramp to free by 100% so the deltoid can still bind at the socket.
+  // Hard zero is required because the shoulder bone is often closer to outer-chest
+  // verts than the midline chest bone is — a mild multiply still loses after normalize.
+  const armGateInner = shoulderX * 0.85;
+  const armGateOuter = shoulderX * 1.0;
+  const armGateSpan = Math.max(armGateOuter - armGateInner, 1e-4);
+  const hipY = params.jointPositions.hips?.[1]
+    ?? params.jointPositions.spine?.[1]
+    ?? height * 0.5;
+  const neckY = params.jointPositions.neck?.[1]
+    ?? params.jointPositions.chest?.[1]
+    ?? height * 0.85;
   const segments = buildSkinBoneSegments(params.jointPositions);
   const jointOrder = HUMAN_JOINT_IDS.filter((id) => params.jointPositions[id]);
   const vertexCount = Math.floor(params.positions.length / 3);
@@ -157,6 +289,18 @@ export function generateDeterministicSkinWeights(params: {
   const segJoint = new Uint16Array(segCount);
   /** -1 = left limb, +1 = right limb, 0 = midline (no cross-side penalty). */
   const segSide = new Int8Array(segCount);
+  /** 1 = arm region (eligible for torso lateral gate), 0 otherwise. */
+  const segIsArm = new Uint8Array(segCount);
+  // Mesh-driven radii: each bone's capsule hugs that character's local thickness.
+  const meshRadii = estimateMeshCapsuleRadii({
+    positions: params.positions,
+    segments,
+    height,
+    meshThickness,
+    shoulderX,
+    hipY,
+    torsoHalfWidth,
+  });
   for (let s = 0; s < segCount; s += 1) {
     const segment = segments[s]!;
     const abx = segment.end[0] - segment.start[0];
@@ -169,7 +313,7 @@ export function generateDeterministicSkinWeights(params: {
     segABY[s] = aby;
     segABZ[s] = abz;
     segLenSq[s] = Math.max(abx * abx + aby * aby + abz * abz, 1e-12);
-    const radius = capsuleRadius(segment, height, meshThickness, torsoHalfWidth);
+    const radius = meshRadii[s]!;
     segRadius[s] = radius;
     segRadiusSq[s] = radius * radius;
     segJoint[s] = segment.jointIndex;
@@ -178,6 +322,7 @@ export function generateDeterministicSkinWeights(params: {
       : segment.region === 'rightArm' || segment.region === 'rightLeg'
         ? 1
         : 0;
+    segIsArm[s] = isArmRegion(segment.region) ? 1 : 0;
   }
 
   const hipsIndex = Math.max(0, jointOrder.indexOf('hips'));
@@ -206,9 +351,22 @@ export function generateDeterministicSkinWeights(params: {
       // of being broadly admitted by fixed world-space X/Y thresholds.
       const side = segSide[s]!;
       if ((side < 0 && px < -meshThickness) || (side > 0 && px > meshThickness)) weight *= 0.08;
-      // Torso protection: limb bones must not claim vertices still inside the
-      // torso's lateral extent (even if within a shrunken capsule at the shoulder).
-      if (side !== 0 && Math.abs(px) < torsoLateralExtent) weight *= 0.05;
+      // Torso protection (arms only): chest vertices must not pick up arm bones.
+      // Legs intentionally excluded — thighs sit well inside |x| < shoulderX.
+      if (
+        segIsArm[s]!
+        && py >= hipY - 0.05
+        && py <= neckY + 0.05
+      ) {
+        const ax = Math.abs(px);
+        if (ax < armGateInner) {
+          continue; // hard reject — still clearly on the torso
+        }
+        if (ax < armGateOuter) {
+          const u = (ax - armGateInner) / armGateSpan;
+          weight *= u * u; // soft blend into the shoulder socket
+        }
+      }
       // Stable descending insertion into the fixed top-4 (matches sort+slice).
       if (topN < INFLUENCES_PER_VERTEX || weight > topWeights[INFLUENCES_PER_VERTEX - 1]!) {
         let slot = Math.min(topN, INFLUENCES_PER_VERTEX - 1);

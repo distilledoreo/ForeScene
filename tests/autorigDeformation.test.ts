@@ -35,15 +35,17 @@ function makeFixture() {
   // Torso box spans the chest; half-width stays inside the shoulder gate.
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.3));
   torso.position.set(0, 0.9, 0);
+  // ~8cm half-thickness — thick enough that a fixed tiny capsule would miss, so
+  // mesh-driven radii must expand to enclose these verts.
   const leftForearm = limbBoxAlongSegment(
     (jp.leftLowerArm ?? [0.4, 1.1, 0]) as [number, number, number],
     (jp.leftHand ?? [0.5, 0.85, 0]) as [number, number, number],
-    0.04,
+    0.08,
   );
   const rightForearm = limbBoxAlongSegment(
     (jp.rightLowerArm ?? [-0.4, 1.1, 0]) as [number, number, number],
     (jp.rightHand ?? [-0.5, 0.85, 0]) as [number, number, number],
-    0.04,
+    0.08,
   );
   root.add(torso, leftForearm, rightForearm);
   root.updateMatrixWorld(true);
@@ -233,11 +235,20 @@ describe('autorig deformation acceptance gates', () => {
   it('keeps near-shoulder torso vertices free of arm-bone influence', () => {
     const markers = suggestAutorigMarkers({ size: [1.1, 1.75, 0.35], heightMeters: 1.75 });
     const fitted = fitSkeletonFromMarkers(markers);
-    // Upper-right chest, clearly inside the torso box (x=0.2) but near the
-    // shoulder — the historical bleed sample from the diagnosis.
-    const torsoNearShoulder: [number, number, number] = [0.2, 1.3, 0];
+    // Chest surface cloud so mesh-driven torso radii engage, plus the historical
+    // bleed probe at upper-right chest (x=0.2) near the shoulder.
+    const positions: number[] = [];
+    for (let ix = -2; ix <= 2; ix += 1) {
+      for (let iy = 0; iy <= 3; iy += 1) {
+        for (let iz = -1; iz <= 1; iz += 1) {
+          positions.push(ix * 0.08, 1.05 + iy * 0.1, iz * 0.08);
+        }
+      }
+    }
+    const probeIndex = positions.length / 3;
+    positions.push(0.2, 1.3, 0);
     const buffers = generateDeterministicSkinWeights({
-      positions: Float32Array.from(torsoNearShoulder),
+      positions: Float32Array.from(positions),
       jointPositions: fitted.jointPositions,
       heightMeters: 1.75,
       meshSize: [1.1, 1.75, 0.35],
@@ -254,9 +265,10 @@ describe('autorig deformation acceptance gates', () => {
     );
     let armWeight = 0;
     let torsoWeight = 0;
+    const base = probeIndex * 4;
     for (let i = 0; i < 4; i += 1) {
-      const joint = buffers.indices[i]!;
-      const weight = buffers.weights[i]!;
+      const joint = buffers.indices[base + i]!;
+      const weight = buffers.weights[base + i]!;
       if (armJointIndexes.has(joint)) armWeight += weight;
       if (torsoJointIndexes.has(joint)) torsoWeight += weight;
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSkinBoneSegments,
+  estimateMeshCapsuleRadii,
   generateDeterministicSkinWeights,
 } from '../src/engine/autorigSkinWeights';
 import { suggestAutorigMarkers, fitSkeletonFromMarkers } from '../src/engine/autorigMarkers';
@@ -67,5 +68,74 @@ describe('deterministic autorig skin weights', () => {
       jointPositions: fitted.jointPositions,
     });
     expect(buffers.warnings?.some((warning) => warning.includes('hips fallback'))).toBe(true);
+  });
+
+  it('derives larger limb capsules from thicker mesh samples around that bone', () => {
+    const markers = suggestAutorigMarkers({ size: [1.1, 1.75, 0.35], heightMeters: 1.75 });
+    const fitted = fitSkeletonFromMarkers(markers, 'full');
+    const segments = buildSkinBoneSegments(fitted.jointPositions);
+    const upper = fitted.jointPositions.leftUpperArm!;
+    const lower = fitted.jointPositions.leftLowerArm!;
+    const abx = lower[0]! - upper[0]!;
+    const aby = lower[1]! - upper[1]!;
+    const abz = lower[2]! - upper[2]!;
+    const len = Math.hypot(abx, aby, abz) || 1;
+    // Build an orthonormal radial basis around the upper-arm bone.
+    const dir = [abx / len, aby / len, abz / len] as const;
+    const tmp = Math.abs(dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    const rx = tmp[1]! * dir[2] - tmp[2]! * dir[1];
+    const ry = tmp[2]! * dir[0] - tmp[0]! * dir[2];
+    const rz = tmp[0]! * dir[1] - tmp[1]! * dir[0];
+    const rLen = Math.hypot(rx, ry, rz) || 1;
+    const radial = [rx / rLen, ry / rLen, rz / rLen] as const;
+
+    const ring = (radius: number) => {
+      const positions: number[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const t = 0.2 + (i / 12) * 0.6;
+        const cx = upper[0]! + abx * t;
+        const cy = upper[1]! + aby * t;
+        const cz = upper[2]! + abz * t;
+        const ang = (i / 12) * Math.PI * 2;
+        const cos = Math.cos(ang);
+        const sin = Math.sin(ang);
+        // Rotate radial in a simple plane for a ring (good enough for radius stats).
+        positions.push(
+          cx + radial[0]! * radius * cos,
+          cy + radial[1]! * radius * cos + radius * 0.15 * sin,
+          cz + radial[2]! * radius * cos,
+        );
+      }
+      return Float32Array.from(positions);
+    };
+
+    const height = 1.75;
+    const meshThickness = 0.35;
+    const shoulderX = Math.abs(upper[0]!);
+    const hipY = fitted.jointPositions.hips![1]!;
+    const thin = estimateMeshCapsuleRadii({
+      positions: ring(0.04),
+      segments,
+      height,
+      meshThickness,
+      shoulderX,
+      hipY,
+      torsoHalfWidth: shoulderX,
+    });
+    const thick = estimateMeshCapsuleRadii({
+      positions: ring(0.11),
+      segments,
+      height,
+      meshThickness,
+      shoulderX,
+      hipY,
+      torsoHalfWidth: shoulderX,
+    });
+    const upperIdx = segments.findIndex((segment) => segment.jointId === 'leftUpperArm');
+    expect(upperIdx).toBeGreaterThanOrEqual(0);
+    expect(thick[upperIdx]!).toBeGreaterThan(thin[upperIdx]! + 0.03);
+    // Thick arm should be near the measured surface, not the old meshThickness floor (~0.16).
+    expect(thick[upperIdx]!).toBeGreaterThan(0.1);
+    expect(thick[upperIdx]!).toBeLessThan(0.2);
   });
 });

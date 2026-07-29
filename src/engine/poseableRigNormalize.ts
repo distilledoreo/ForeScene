@@ -12,7 +12,7 @@ export const DEFAULT_POSEABLE_HEIGHT_METERS = 1.75;
 export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
 export const MAX_POSEABLE_HEIGHT_METERS = 3.5;
 /** Bumped whenever canonical fitting/weighting changes invalidate baked rigs. */
-export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 4;
+export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 5;
 
 export function defaultPoseableOrientation(): PoseableCharacterOrientation {
   return {
