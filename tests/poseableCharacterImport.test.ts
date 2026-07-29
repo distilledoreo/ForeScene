@@ -150,8 +150,16 @@ describe('poseable character import shell', () => {
       new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url),
       'utf8',
     ));
+    const dialog = await import('node:fs').then((fs) => fs.readFileSync(
+      new URL('../src/components/common/PoseableCharacterImportDialog.tsx', import.meta.url),
+      'utf8',
+    ));
     expect(build).toContain('data-build-import-poseable-character');
     expect(build).toContain('Import poseable character');
     expect(build).toContain('PoseableCharacterImportDialog');
+    expect(build).toContain('!meta?.appliedSavedRig');
+    expect(dialog).toContain('data-poseable-import-choose-rig');
+    expect(dialog).toContain('parsePoseableRigPackageFile');
+    expect(dialog).toContain('Import with rig');
   });
 });

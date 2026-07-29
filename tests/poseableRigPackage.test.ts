@@ -132,6 +132,31 @@ describe('poseable rig package IO', () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it('rejects packages whose vertex count does not match the target mesh', () => {
+    const imported = {
+      manifest: {
+        format: POSEABLE_RIG_PACKAGE_FORMAT,
+        version: 1 as const,
+        exportedAt: '2026-01-01T00:00:00.000Z',
+        topologyHash: 'topo-abc',
+        rig: sampleRig(),
+      },
+      rig: sampleRig(),
+    };
+    const mismatch = canApplyPoseableRigPackage({
+      targetRig: sampleRig({ regionMap: undefined }),
+      imported,
+      meshVertexCount: 999,
+    });
+    expect(mismatch.ok).toBe(false);
+    const match = canApplyPoseableRigPackage({
+      targetRig: sampleRig({ regionMap: undefined }),
+      imported,
+      meshVertexCount: 4,
+    });
+    expect(match.ok).toBe(true);
+  });
 });
 
 describe('geometry-based gizmo bounds for skinned roots', () => {

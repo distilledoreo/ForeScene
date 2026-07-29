@@ -240,10 +240,12 @@ export async function parsePoseableRigPackageFile(file: File): Promise<ImportedP
 /**
  * Apply an imported rig package onto a selected autorigged character.
  * Requires matching topology when both sides publish a topology hash.
+ * When importing onto a fresh mesh, pass `meshVertexCount` to gate skin compatibility.
  */
 export function canApplyPoseableRigPackage(params: {
   targetRig: PoseableRigAsset;
   imported: ImportedPoseableRigPackage;
+  meshVertexCount?: number;
 }): { ok: true } | { ok: false; reason: string } {
   const importedHash = params.imported.manifest.topologyHash
     ?? params.imported.rig.regionMap?.topologyHash;
@@ -260,7 +262,55 @@ export function canApplyPoseableRigPackage(params: {
       reason: 'This rig package is incomplete (missing bind pose or skin weights).',
     };
   }
+  const packageVertexCount = poseableRigPackageVertexCount(params.imported);
+  if (
+    typeof params.meshVertexCount === 'number'
+    && Number.isFinite(params.meshVertexCount)
+    && typeof packageVertexCount === 'number'
+    && packageVertexCount > 0
+    && packageVertexCount !== params.meshVertexCount
+  ) {
+    return {
+      ok: false,
+      reason: `This rig was built for a mesh with ${packageVertexCount} vertices, but the imported character has ${params.meshVertexCount}.`,
+    };
+  }
   return { ok: true };
+}
+
+/** Best-effort vertex count from region map or inline skin tables. */
+export function poseableRigPackageVertexCount(
+  imported: Pick<ImportedPoseableRigPackage, 'rig'>,
+): number | undefined {
+  const fromRegion = imported.rig.regionMap?.vertexCount;
+  if (typeof fromRegion === 'number' && fromRegion > 0) return fromRegion;
+  const influences = imported.rig.skin?.influencesPerVertex || 4;
+  const indexLen = imported.rig.skin?.indices?.length;
+  if (typeof indexLen === 'number' && indexLen > 0 && influences > 0) {
+    return Math.floor(indexLen / influences);
+  }
+  return undefined;
+}
+
+/** Read vertex count from a parsed package’s skin binary when region metadata is absent. */
+export async function resolvePoseableRigPackageVertexCount(
+  imported: ImportedPoseableRigPackage,
+): Promise<number | undefined> {
+  const quick = poseableRigPackageVertexCount(imported);
+  if (typeof quick === 'number') return quick;
+  const skinAssetId = imported.rig.skin?.skinAssetId ?? imported.skinAsset?.id;
+  if (!skinAssetId || !imported.skinAsset?.uri) return undefined;
+  if (!imported.skinAsset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) return undefined;
+  const key = imported.skinAsset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+  const bytes = await getModelAsset(key);
+  if (!bytes || bytes.byteLength < 24) return undefined;
+  const view = new DataView(bytes);
+  const version = view.getUint32(0, true);
+  if (version !== 1) return undefined;
+  const influencesPerVertex = view.getUint32(4, true) || 4;
+  const indexCount = view.getUint32(8, true);
+  if (influencesPerVertex <= 0 || indexCount <= 0) return undefined;
+  return Math.floor(indexCount / influencesPerVertex);
 }
 
 /** Merge imported rig data onto the target character’s existing rig identity / source links. */

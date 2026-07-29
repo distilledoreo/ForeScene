@@ -1212,7 +1212,7 @@ useEffect(() => {
 
         {selectionToolsVisible && selectionToolsDocked && (
           <aside
-            className="pointer-events-auto z-10 flex h-full w-[min(22rem,100%)] shrink-0 flex-col border-l border-subtle bg-surface-overlay/95 shadow-card backdrop-blur"
+            className="pointer-events-auto z-10 mt-[var(--stage-header-safe)] flex h-[calc(100%-var(--stage-header-safe))] w-[min(22rem,100%)] shrink-0 flex-col border-l border-subtle bg-surface-overlay/95 shadow-card backdrop-blur"
             data-build-selection-tools
             data-build-selection-docked
           >
@@ -1311,10 +1311,10 @@ useEffect(() => {
       <PoseableCharacterImportDialog
         open={poseableImportOpen}
         onClose={() => setPoseableImportOpen(false)}
-        onImported={(object) => {
+        onImported={(object, meta) => {
           setBuildMode('select');
           requestFrame([object.id]);
-          if (object.poseableCharacter?.kind === 'autorigged') {
+          if (object.poseableCharacter?.kind === 'autorigged' && !meta?.appliedSavedRig) {
             setAutorigMarkerOpen(true);
           }
         }}
