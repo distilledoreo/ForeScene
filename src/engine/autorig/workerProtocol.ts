@@ -57,10 +57,15 @@ export interface AutorigApplyRegionOverridesRequest {
 export interface AutorigGenerateWeightsRequest {
   kind: 'generate-weights';
   jobId: string;
-  /** Reserved for Binder V2 — rejected until implemented. */
   positions: Float32Array;
   regionLabels: Uint8Array;
   jointPositions: Partial<Record<HumanJointId, Vec3>>;
+  triangles?: Uint32Array;
+  adjacencyOffsets?: Uint32Array;
+  adjacencyVertices?: Uint32Array;
+  vertexComponent?: Int32Array;
+  heightMeters?: number;
+  meshSize?: Vec3;
 }
 
 export interface AutorigCancelRequest {
@@ -113,6 +118,17 @@ export interface AutorigApplyRegionOverridesResult {
   resolved: Uint8Array;
 }
 
+export interface AutorigGenerateWeightsResult {
+  kind: 'generate-weights';
+  jobId: string;
+  influencesPerVertex: number;
+  indices: Uint16Array;
+  weights: Float32Array;
+  jointOrder: HumanJointId[];
+  fallbackVertexCount: number;
+  warnings?: string[];
+}
+
 export interface AutorigWorkerError {
   kind: 'error';
   jobId: string;
@@ -128,6 +144,7 @@ export type AutorigWorkerResponse =
   | AutorigBuildTopologyResult
   | AutorigAutoLabelResultMessage
   | AutorigApplyRegionOverridesResult
+  | AutorigGenerateWeightsResult
   | AutorigWorkerProgress
   | AutorigWorkerError
   | AutorigWorkerCancelled;
@@ -161,6 +178,10 @@ export function collectAutorigRequestTransferables(
     case 'generate-weights':
       push(request.positions);
       push(request.regionLabels);
+      push(request.triangles);
+      push(request.adjacencyOffsets);
+      push(request.adjacencyVertices);
+      push(request.vertexComponent);
       break;
     case 'cancel':
       break;
@@ -194,6 +215,9 @@ export function collectAutorigResponseTransferables(
     push(response.componentVertices);
   } else if (response.kind === 'apply-region-overrides') {
     push(response.resolved);
+  } else if (response.kind === 'generate-weights') {
+    push(response.indices);
+    push(response.weights);
   }
   return buffers;
 }

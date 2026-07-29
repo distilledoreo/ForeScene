@@ -47,6 +47,9 @@ import {
   prepareCanonicalAutorigMesh,
 } from './autorigCanonicalMesh';
 import { generateRegionMapForCanonicalRoot } from './autorig/generateRegionMap';
+import { generateRegionConstrainedSkinWeights } from './autorig/regionConstrainedWeights';
+import { buildCanonicalAutorigTopology } from './autorig/topology';
+import { CURRENT_AUTORIG_BINDER_VERSION } from './poseableRigNormalize';
 
 
 const templates = new Map<string, THREE.Object3D>();
@@ -403,13 +406,46 @@ export async function generateSkinWeightsForRigAsset(params: {
   });
   const jointPositions = jointPositionsFromRig(params.rig);
   const positions = extractCanonicalVertexPositions(canonical.root);
-  const buffers = generateDeterministicSkinWeights({
-    positions,
-    jointPositions,
-    heightMeters: params.rig.generationSettings?.approximateHeightMeters,
-    meshSize: canonical.size,
-    topologyIndices: extractCanonicalTopology(canonical.root),
-  });
+
+  // Region map first — Binder V2 needs six-region labels before weighting.
+  let regionAsset: ProjectAsset | undefined;
+  let regionLabels: Uint8Array | undefined;
+  let topology = buildCanonicalAutorigTopology(canonical.root);
+  let rigWithRegions = params.rig;
+  try {
+    const regionResult = await generateRegionMapForCanonicalRoot({
+      root: canonical.root,
+      rig: params.rig,
+      jointPositions,
+      sourceAssetId: params.sourceAssetId,
+      overrides: params.regionOverrides,
+      preferWorker: true,
+    });
+    regionAsset = regionResult.regionAsset;
+    regionLabels = regionResult.resolved;
+    topology = regionResult.topology;
+    rigWithRegions = regionResult.rig;
+  } catch {
+    // Fall through to Binder V1 if region classification fails.
+  }
+
+  const buffers = regionLabels
+    ? generateRegionConstrainedSkinWeights({
+      positions,
+      regionLabels,
+      jointPositions,
+      topology,
+      heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+      meshSize: canonical.size,
+    })
+    : generateDeterministicSkinWeights({
+      positions,
+      jointPositions,
+      heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+      meshSize: canonical.size,
+      topologyIndices: extractCanonicalTopology(canonical.root),
+    });
+
   const written = await writeSkinWeightBinaryAsset(buffers);
   const skinAsset: ProjectAsset = {
     id: written.assetId,
@@ -421,29 +457,12 @@ export async function generateSkinWeightsForRigAsset(params: {
     metadata: {
       poseableSkin: true,
       byteLength: written.byteLength,
+      binderVersion: regionLabels ? CURRENT_AUTORIG_BINDER_VERSION : 1,
       ...(buffers.warnings?.length ? { warnings: buffers.warnings } : {}),
     },
   };
   // Compact metadata only — weights live in the binary asset + runtime cache.
-  let rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
-
-  // Also persist the automatic six-region map for guided labeling / Binder V2.
-  // Extract typed arrays here; classification runs in a worker when available.
-  let regionAsset: ProjectAsset | undefined;
-  try {
-    const regionResult = await generateRegionMapForCanonicalRoot({
-      root: canonical.root,
-      rig,
-      jointPositions,
-      sourceAssetId: params.sourceAssetId,
-      overrides: params.regionOverrides,
-      preferWorker: true,
-    });
-    rig = regionResult.rig;
-    regionAsset = regionResult.regionAsset;
-  } catch {
-    // Region maps are additive in this milestone; skin generation still succeeds.
-  }
+  const rig = applySkinBuffersToRig(rigWithRegions, buffers, skinAsset.id);
 
   const cacheKey = skinBufferCacheKey({
     skinAssetId: skinAsset.id,

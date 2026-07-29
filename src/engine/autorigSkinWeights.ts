@@ -4,7 +4,7 @@ import { HUMAN_JOINT_PARENT } from './humanoidSkeleton';
 import { createId } from '../utils/ids';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import { putModelAsset } from './modelAssetStore';
-import { CURRENT_AUTORIG_RIG_GENERATION_VERSION } from './poseableRigNormalize';
+import { CURRENT_AUTORIG_BINDER_VERSION, CURRENT_AUTORIG_RIG_GENERATION_VERSION } from './poseableRigNormalize';
 
 const INFLUENCES_PER_VERTEX = 4;
 
@@ -735,6 +735,7 @@ export function applySkinBuffersToRig(
         indices: Array.from(buffers.indices),
         weights: Array.from(buffers.weights),
       },
+    binderVersion: CURRENT_AUTORIG_BINDER_VERSION,
     rigGenerationVersion: Math.max(CURRENT_AUTORIG_RIG_GENERATION_VERSION, (rig.rigGenerationVersion ?? 0) + 1),
     requiresRerigging: false,
   };

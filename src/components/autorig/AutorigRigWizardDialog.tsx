@@ -77,6 +77,7 @@ import { autoLabelBodyRegions } from '../../engine/autorig/regions';
 import { extractCanonicalTopology, extractCanonicalVertexPositions } from '../../engine/autorigCanonicalMesh';
 import { buildSkinnedCharacterFromTemplate } from '../../engine/autorigSkinnedMesh';
 import { generateDeterministicSkinWeights } from '../../engine/autorigSkinWeights';
+import { generateRegionConstrainedSkinWeights } from '../../engine/autorig/regionConstrainedWeights';
 import {
   createAutorigPreviewInstance,
   ensureAutorigSourceTemplate,
@@ -606,6 +607,16 @@ export function AutorigRigWizardDialog({
 
   const previewBuffers = useMemo(() => {
     if (!meshData || !meshBounds || step !== 'preview') return undefined;
+    if (resolvedRegions && topology) {
+      return generateRegionConstrainedSkinWeights({
+        positions: meshData.positions,
+        regionLabels: resolvedRegions,
+        jointPositions: previewFitted.jointPositions,
+        topology,
+        heightMeters: height,
+        meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
+      });
+    }
     return generateDeterministicSkinWeights({
       positions: meshData.positions,
       jointPositions: previewFitted.jointPositions,
@@ -613,7 +624,7 @@ export function AutorigRigWizardDialog({
       meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
       topologyIndices: meshData.topology,
     });
-  }, [meshData, meshBounds, previewFitted, height, step]);
+  }, [meshData, meshBounds, previewFitted, height, step, resolvedRegions, topology]);
 
   const deformationPreview = useMemo(() => {
     if (!previewBuffers || !meshSource || step !== 'preview') return null;
