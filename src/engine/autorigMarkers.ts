@@ -1,7 +1,9 @@
+import * as THREE from 'three';
 import type { AutorigMarker, HumanJointId, PoseableRigAsset, Vec3 } from '../domain/types';
 import { createId } from '../utils/ids';
 import { HUMAN_JOINT_PARENT } from './humanoidSkeleton';
 import { HUMAN_JOINT_IDS, HUMAN_JOINT_LABELS } from './humanPose';
+import { CURRENT_AUTORIG_RIG_GENERATION_VERSION } from './poseableRigNormalize';
 
 /** Placement markers required for full guided autorig (13). */
 export const AUTORIG_REQUIRED_MARKER_JOINTS = [
@@ -74,6 +76,87 @@ export interface AutorigMarkerSuggestionContext {
   /** Approximate height in meters. */
   heightMeters: number;
   groundLevelMeters?: number;
+}
+
+export interface AutorigMarkerDepthResult {
+  markers: AutorigMarker[];
+  centeredJointIds: HumanJointId[];
+  /** True when the inferred marker set contains meaningful out-of-plane spread. */
+  meaningfulDepth: boolean;
+}
+
+/** Guard used before baking weights; a mostly-flat marker set is not a valid bind. */
+export function areAutorigMarkersSuspiciouslyPlanar(
+  markers: readonly AutorigMarker[],
+  toleranceMeters = 0.015,
+): boolean {
+  if (markers.length < 6) return false;
+  const depths = markers.map((marker) => marker.position[2]);
+  const spread = Math.max(...depths) - Math.min(...depths);
+  if (spread < Math.max(0.08, toleranceMeters * 4)) return true;
+  const meaningful = markers.filter((marker) => Math.abs(marker.position[2]) > toleranceMeters).length;
+  return meaningful / markers.length <= 0.5;
+}
+
+/**
+ * Center markers through the canonical mesh thickness. Front uses X/Y and
+ * infers Z; side uses Z/Y and infers X. A marker with no surface at its
+ * projected location is left untouched so stylized or incomplete meshes can
+ * still be corrected manually.
+ */
+export function centerAutorigMarkersDepth(
+  markers: readonly AutorigMarker[],
+  canonicalMesh: THREE.Object3D,
+  view: 'front' | 'side' = 'front',
+): AutorigMarkerDepthResult {
+  canonicalMesh.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(canonicalMesh);
+  const meshes: THREE.Object3D[] = [];
+  const meshBounds: THREE.Box3[] = [];
+  canonicalMesh.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh && mesh.geometry) {
+      mesh.updateMatrixWorld(true);
+      meshes.push(mesh);
+      meshBounds.push(new THREE.Box3().setFromObject(mesh));
+    }
+  });
+  const raycaster = new THREE.Raycaster();
+  const centeredJointIds: HumanJointId[] = [];
+  const frontView = view === 'front';
+  const next = markers.map((marker) => {
+    const position = new THREE.Vector3(...marker.position);
+    const padding = Math.max(bounds.getSize(new THREE.Vector3()).length() * 0.05, 0.05);
+    const origin = frontView
+      ? new THREE.Vector3(position.x, position.y, bounds.max.z + padding)
+      : new THREE.Vector3(bounds.min.x - padding, position.y, position.z);
+    const direction = frontView ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(1, 0, 0);
+    raycaster.set(origin, direction);
+    let hits = raycaster.intersectObjects(meshes, true);
+    let depths = hits.map((hit) => (frontView ? hit.point.z : hit.point.x)).filter(Number.isFinite);
+    if (depths.length < 2) {
+      const boundsDepths: number[] = [];
+      for (const meshBox of meshBounds) {
+        const inProjectedColumn = (frontView
+          ? position.x >= meshBox.min.x && position.x <= meshBox.max.x
+          : position.z >= meshBox.min.z && position.z <= meshBox.max.z);
+        if (inProjectedColumn
+          && position.y >= meshBox.min.y && position.y <= meshBox.max.y) {
+          boundsDepths.push(frontView ? meshBox.min.z : meshBox.min.x, frontView ? meshBox.max.z : meshBox.max.x);
+        }
+      }
+      if (boundsDepths.length >= 2) depths = boundsDepths;
+    }
+    if (depths.length < 2) return marker;
+    centeredJointIds.push(marker.jointId);
+    const midpoint = (Math.min(...depths) + Math.max(...depths)) * 0.5;
+    return { ...marker, position: frontView
+      ? [marker.position[0], marker.position[1], midpoint] as Vec3
+      : [midpoint, marker.position[1], marker.position[2]] as Vec3 };
+  });
+  const depthValues = next.map((marker) => marker.position[2]);
+  const meaningfulDepth = Math.max(...depthValues) - Math.min(...depthValues) > 0.02;
+  return { markers: next, centeredJointIds, meaningfulDepth };
 }
 
 /** Deterministic suggested marker positions from character bounds (A/T-pose prior). */
@@ -161,7 +244,7 @@ export function mirrorAllMarkers(markers: readonly AutorigMarker[]): AutorigMark
 }
 
 export interface AutorigMarkerIssue {
-  code: 'missing' | 'crossed' | 'ordering' | 'asymmetric';
+  code: 'missing' | 'crossed' | 'ordering' | 'asymmetric' | 'planar';
   message: string;
   jointIds?: HumanJointId[];
 }
@@ -186,6 +269,12 @@ export function validateAutorigMarkers(
         jointIds: [jointId],
       });
     }
+  }
+  if (required.every((jointId) => map.has(jointId)) && areAutorigMarkersSuspiciouslyPlanar(markers)) {
+    issues.push({
+      code: 'planar',
+      message: 'Most joints are nearly planar. Center depth or refine the Side view before generating weights.',
+    });
   }
 
   const hips = getPos(map, 'hips');
@@ -364,45 +453,27 @@ export function completeAutorigMarkers(
   return next;
 }
 
-function lookRotation(from: Vec3, to: Vec3, up: Vec3 = [0, 1, 0]): number[] {
-  // Column-major 4x4: translate to `from`, rotate so +Y aims toward `to` (bone length axis).
+export function canonicalJointFrame(from: Vec3, to: Vec3, forward: Vec3 = [0, 0, 1]): THREE.Matrix4 {
+  // Canonical frame: +Y follows the bone, +Z follows character front, +X is
+  // the resulting lateral axis. If front is nearly parallel, use world +X.
   const fx = to[0] - from[0];
   const fy = to[1] - from[1];
   const fz = to[2] - from[2];
   const len = Math.hypot(fx, fy, fz) || 1;
-  const y = [fx / len, fy / len, fz / len];
-  // x = normalize(cross(up, y)); if parallel, pick another up
-  let ux = up[0];
-  let uy = up[1];
-  let uz = up[2];
-  if (Math.abs(y[0] * ux + y[1] * uy + y[2] * uz) > 0.99) {
-    ux = 1; uy = 0; uz = 0;
-  }
-  let x = [
-    uy * y[2] - uz * y[1],
-    uz * y[0] - ux * y[2],
-    ux * y[1] - uy * y[0],
-  ];
-  const xLen = Math.hypot(x[0], x[1], x[2]) || 1;
-  x = [x[0] / xLen, x[1] / xLen, x[2] / xLen];
-  const z = [
-    x[1] * y[2] - x[2] * y[1],
-    x[2] * y[0] - x[0] * y[2],
-    x[0] * y[1] - x[1] * y[0],
-  ];
-  // Column-major
-  return [
-    x[0], x[1], x[2], 0,
-    y[0], y[1], y[2], 0,
-    z[0], z[1], z[2], 0,
-    from[0], from[1], from[2], 1,
-  ];
+  const y = new THREE.Vector3(fx / len, fy / len, fz / len);
+  const z = new THREE.Vector3(...forward).normalize();
+  if (Math.abs(y.dot(z)) > 0.98) z.set(1, 0, 0);
+  z.addScaledVector(y, -y.dot(z)).normalize();
+  const x = new THREE.Vector3().crossVectors(y, z).normalize();
+  z.crossVectors(x, y).normalize();
+  return new THREE.Matrix4().makeBasis(x, y, z).setPosition(from[0], from[1], from[2]);
 }
 
 export interface FittedPoseableSkeleton {
   markers: AutorigMarker[];
   /** World/bind matrices keyed by semantic joint (column-major 16). */
   bindMatrices: Partial<Record<HumanJointId, number[]>>;
+  canonicalPoseBases: Partial<Record<HumanJointId, number[]>>;
   /** Child joint positions used for bone visualization. */
   jointPositions: Partial<Record<HumanJointId, Vec3>>;
 }
@@ -442,16 +513,19 @@ export function fitSkeletonFromMarkers(
   childOf.rightLowerLeg = 'rightFoot';
 
   const bindMatrices: Partial<Record<HumanJointId, number[]>> = {};
+  const canonicalPoseBases: Partial<Record<HumanJointId, number[]>> = {};
   for (const jointId of HUMAN_JOINT_IDS) {
     const from = jointPositions[jointId];
     if (!from) continue;
     const tipId = childOf[jointId];
     const tip = tipId ? jointPositions[tipId] : undefined;
     const to: Vec3 = tip ?? [from[0], from[1] + 0.08, from[2]];
-    bindMatrices[jointId] = lookRotation(from, to);
+    const frame = canonicalJointFrame(from, to);
+    bindMatrices[jointId] = frame.toArray();
+    canonicalPoseBases[jointId] = new THREE.Quaternion().setFromRotationMatrix(frame).toArray();
   }
 
-  return { markers: completed, bindMatrices, jointPositions };
+  return { markers: completed, bindMatrices, canonicalPoseBases, jointPositions };
 }
 
 export function applyFittedSkeletonToRig(
@@ -462,7 +536,9 @@ export function applyFittedSkeletonToRig(
     ...rig,
     markers: fitted.markers,
     bindMatrices: fitted.bindMatrices,
+    canonicalPoseBases: fitted.canonicalPoseBases,
     skeletonJoints: [...HUMAN_JOINT_IDS],
-    rigGenerationVersion: Math.max(1, (rig.rigGenerationVersion ?? 0) + 1),
+    rigGenerationVersion: Math.max(CURRENT_AUTORIG_RIG_GENERATION_VERSION, (rig.rigGenerationVersion ?? 0) + 1),
+    requiresRerigging: false,
   };
 }

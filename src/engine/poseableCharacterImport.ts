@@ -19,7 +19,9 @@ import { createAutoriggedPoseableCharacterShell } from './autoriggedPoseableChar
 import {
   MAX_POSEABLE_HEIGHT_METERS,
   MIN_POSEABLE_HEIGHT_METERS,
+  CURRENT_AUTORIG_RIG_GENERATION_VERSION,
 } from './poseableRigNormalize';
+import { prepareCanonicalAutorigMesh } from './autorigCanonicalMesh';
 
 export {
   DEFAULT_POSEABLE_HEIGHT_METERS,
@@ -73,40 +75,8 @@ export function isPoseableCharacterImportFile(file: File): boolean {
   return (POSEABLE_CHARACTER_IMPORT_EXTENSIONS as readonly string[]).includes(extension);
 }
 
-function axisToVector(axis: PoseableAxisHint): THREE.Vector3 {
-  switch (axis) {
-    case '+x': return new THREE.Vector3(1, 0, 0);
-    case '-x': return new THREE.Vector3(-1, 0, 0);
-    case '+y': return new THREE.Vector3(0, 1, 0);
-    case '-y': return new THREE.Vector3(0, -1, 0);
-    case '+z': return new THREE.Vector3(0, 0, 1);
-    case '-z': return new THREE.Vector3(0, 0, -1);
-  }
-}
-
 /** Build a rotation that maps source front/up axes onto Continuity Stage +Z / +Y. */
-export function orientationQuaternion(orientation: PoseableCharacterOrientation): THREE.Quaternion {
-  const front = axisToVector(orientation.frontAxis).normalize();
-  const up = axisToVector(orientation.upAxis).normalize();
-  if (Math.abs(front.dot(up)) > 0.999) {
-    return new THREE.Quaternion();
-  }
-  const targetFront = new THREE.Vector3(0, 0, 1);
-  const targetUp = new THREE.Vector3(0, 1, 0);
-  const basisFrom = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3().crossVectors(up, front).normalize(),
-    up.clone(),
-    front.clone(),
-  );
-  const basisTo = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3().crossVectors(targetUp, targetFront).normalize(),
-    targetUp.clone(),
-    targetFront.clone(),
-  );
-  const fromQuat = new THREE.Quaternion().setFromRotationMatrix(basisFrom);
-  const toQuat = new THREE.Quaternion().setFromRotationMatrix(basisTo);
-  return toQuat.multiply(fromQuat.invert());
-}
+export { canonicalOrientationQuaternion as orientationQuaternion } from './autorigCanonicalMesh';
 
 function measureObjectSize(root: THREE.Object3D): { size: Vec3; box: THREE.Box3 } {
   const box = new THREE.Box3().setFromObject(root);
@@ -185,39 +155,22 @@ function applyOrientationAndHeight(
   orientation: PoseableCharacterOrientation,
   approximateHeightMeters: number,
 ): { restTransform: PoseableRestTransform; dimensions: Vec3; warnings: string[] } {
-  const oriented = new THREE.Group();
-  oriented.add(root);
-  oriented.quaternion.copy(orientationQuaternion(orientation));
-  oriented.updateMatrixWorld(true);
+  const canonical = prepareCanonicalAutorigMesh({
+    source: root,
+    orientation,
+    targetHeightMeters: approximateHeightMeters,
+  });
+  const finalSize = new THREE.Vector3(...canonical.size);
 
-  const { size } = measureObjectSize(oriented);
-  const heightAxis = size[1] > 1e-6 ? size[1] : Math.max(size[0], size[2], 1);
-  const scale = approximateHeightMeters / heightAxis;
-  oriented.scale.setScalar(scale);
-  oriented.updateMatrixWorld(true);
-
-  const scaledBox = new THREE.Box3().setFromObject(oriented);
-  const minY = scaledBox.min.y;
-  const centerX = (scaledBox.min.x + scaledBox.max.x) / 2;
-  const centerZ = (scaledBox.min.z + scaledBox.max.z) / 2;
-  oriented.position.x -= centerX;
-  oriented.position.z -= centerZ;
-  oriented.position.y += orientation.groundLevelMeters - minY;
-  oriented.updateMatrixWorld(true);
-
-  const finalBox = new THREE.Box3().setFromObject(oriented);
-  const finalSize = new THREE.Vector3();
-  finalBox.getSize(finalSize);
-
-  const euler = new THREE.Euler().setFromQuaternion(oriented.quaternion, 'XYZ');
+  const euler = new THREE.Euler().setFromQuaternion(canonical.root.quaternion, 'XYZ');
   const restTransform: PoseableRestTransform = {
-    position: [oriented.position.x, oriented.position.y, oriented.position.z],
+    position: [canonical.root.position.x, canonical.root.position.y, canonical.root.position.z],
     rotation: [
       (euler.x * 180) / Math.PI,
       (euler.y * 180) / Math.PI,
       (euler.z * 180) / Math.PI,
     ],
-    scale: [oriented.scale.x, oriented.scale.y, oriented.scale.z],
+    scale: [canonical.root.scale.x, canonical.root.scale.y, canonical.root.scale.z],
   };
 
   const warnings: string[] = [];
@@ -292,7 +245,8 @@ export async function importPoseableCharacter(
     version: 1,
     id: rigId,
     skeletonJoints: [...HUMAN_JOINT_IDS],
-    rigGenerationVersion: 1,
+    rigGenerationVersion: CURRENT_AUTORIG_RIG_GENERATION_VERSION,
+    requiresRerigging: true,
     originalSourceAssetId: sourceAssetId,
     sourceMeshAssetId: sourceAssetId,
     orientation: { ...orientation },

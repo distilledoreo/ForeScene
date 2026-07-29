@@ -43,6 +43,23 @@ describe('poseable character import shell', () => {
     expect(rig?.restTransform?.rotation).toEqual([0, 90, 0]);
   });
 
+  it('marks current-generation rigs as reusable and legacy rigs as requiring rerigging', () => {
+    const current = normalizePoseableRigAsset({
+      version: 1,
+      id: 'current',
+      skeletonJoints: ['hips'],
+      rigGenerationVersion: 2,
+    });
+    const legacy = normalizePoseableRigAsset({
+      version: 1,
+      id: 'legacy',
+      skeletonJoints: ['hips'],
+      rigGenerationVersion: 1,
+    });
+    expect(current?.requiresRerigging).toBeUndefined();
+    expect(legacy?.requiresRerigging).toBe(true);
+  });
+
   it('builds a non-identity orientation quaternion for swapped front axes', () => {
     const q = orientationQuaternion({ frontAxis: '-z', upAxis: '+y', groundLevelMeters: 0 });
     expect(q.equals(new THREE.Quaternion())).toBe(false);

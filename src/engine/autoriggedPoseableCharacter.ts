@@ -30,7 +30,6 @@ import {
   cloneSkinnedPrototypeInstance,
   ensureSkeletonCloneReady,
   ensureSkinBuffersForRig,
-  extractWorldPositionsFromObject,
   getCachedSkinBuffers,
   getCachedSkinnedPrototype,
   getOrBuildSkinnedPrototype,
@@ -42,38 +41,12 @@ import {
   skinnedPrototypeCacheKey,
 } from './autorigSkinnedMesh';
 import type { OrientedMeshBounds } from './autorigMarkerFrame';
-
-function axisToVector(axis: NonNullable<PoseableCharacterOrientation['frontAxis']>): THREE.Vector3 {
-  switch (axis) {
-    case '+x': return new THREE.Vector3(1, 0, 0);
-    case '-x': return new THREE.Vector3(-1, 0, 0);
-    case '+y': return new THREE.Vector3(0, 1, 0);
-    case '-y': return new THREE.Vector3(0, -1, 0);
-    case '+z': return new THREE.Vector3(0, 0, 1);
-    case '-z': return new THREE.Vector3(0, 0, -1);
-  }
-}
-
-function orientationQuaternion(orientation: PoseableCharacterOrientation): THREE.Quaternion {
-  const front = axisToVector(orientation.frontAxis).normalize();
-  const up = axisToVector(orientation.upAxis).normalize();
-  if (Math.abs(front.dot(up)) > 0.999) return new THREE.Quaternion();
-  const targetFront = new THREE.Vector3(0, 0, 1);
-  const targetUp = new THREE.Vector3(0, 1, 0);
-  const basisFrom = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3().crossVectors(up, front).normalize(),
-    up.clone(),
-    front.clone(),
-  );
-  const basisTo = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3().crossVectors(targetUp, targetFront).normalize(),
-    targetUp.clone(),
-    targetFront.clone(),
-  );
-  const fromQuat = new THREE.Quaternion().setFromRotationMatrix(basisFrom);
-  const toQuat = new THREE.Quaternion().setFromRotationMatrix(basisTo);
-  return toQuat.multiply(fromQuat.invert());
-}
+import {
+  extractCanonicalTopology,
+  extractCanonicalVertexPositions,
+  prepareCanonicalAutorigMesh,
+} from './autorigCanonicalMesh';
+import { areAutorigMarkersSuspiciouslyPlanar } from './autorigMarkers';
 
 const templates = new Map<string, THREE.Object3D>();
 const loadPromises = new Map<string, Promise<void>>();
@@ -201,25 +174,12 @@ function orientAndFitTemplate(
   orientation: PoseableCharacterOrientation,
   targetHeight: number,
 ): { oriented: THREE.Group; fittedHeight: number } {
-  const clone = template.clone(true);
-  const oriented = new THREE.Group();
-  oriented.quaternion.copy(orientationQuaternion(orientation));
-  oriented.add(clone);
-  oriented.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(oriented);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const sourceHeight = size.y > 1e-6 ? size.y : Math.max(size.x, size.z, 1);
-  const scale = targetHeight / sourceHeight;
-  oriented.scale.setScalar(scale);
-  oriented.updateMatrixWorld(true);
-
-  const scaledBox = new THREE.Box3().setFromObject(oriented);
-  oriented.position.y += -scaledBox.min.y;
-  oriented.position.x -= (scaledBox.min.x + scaledBox.max.x) / 2;
-  oriented.position.z -= (scaledBox.min.z + scaledBox.max.z) / 2;
-  return { oriented, fittedHeight: targetHeight };
+  const canonical = prepareCanonicalAutorigMesh({
+    source: template,
+    orientation,
+    targetHeightMeters: targetHeight,
+  });
+  return { oriented: canonical.root, fittedHeight: canonical.heightMeters };
 }
 
 function resolveRigForShell(params: {
@@ -255,7 +215,7 @@ export function createAutoriggedPoseableCharacterShell(params: {
         ensureSkeletonCloneReady(),
       ]);
       const rig = resolveRigForShell(params);
-      if (rig?.skin) {
+      if (rig?.skin && !rig.requiresRerigging) {
         await ensureSkinBuffersForRig(rig, assetsContext ?? params.assets);
       }
     },
@@ -285,7 +245,7 @@ export function createAutoriggedPoseableCharacterShell(params: {
       const referenceHeight = object.dimensions[1] || height;
 
       // Prefer cached skinned prototype (shared geometry) when buffers + SkeletonUtils are ready.
-      if (rig?.bindMatrices && rig.skin) {
+      if (rig?.bindMatrices && rig.skin && !rig.requiresRerigging) {
         const bufferKey = skinBufferCacheKey({
           skinAssetId: rig.skin.skinAssetId,
           rigId: rig.id,
@@ -409,7 +369,13 @@ export function createAutoriggedPoseableCharacterShell(params: {
       const bones = instance.userData[BONES_USERDATA_KEY] as Map<HumanJointId, THREE.Bone> | undefined;
       const rests = instance.userData[REST_USERDATA_KEY] as Map<HumanJointId, BoneRestPose> | undefined;
       if (!bones || !rests) return;
-      applySemanticPoseToBones({ bones, rests, pose });
+      const rig = resolveRigForShell(params);
+      applySemanticPoseToBones({
+        bones,
+        rests,
+        pose,
+        canonicalPoseBases: rig?.canonicalPoseBases,
+      });
       // Skeleton matrix update is owned by applyHumanPoseToObject3D (generic wrapper).
     },
   };
@@ -421,18 +387,27 @@ export async function generateSkinWeightsForRigAsset(params: {
   sourceAssetId: string;
   assets?: AssetRegistry;
 }): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset }> {
+  if (areAutorigMarkersSuspiciouslyPlanar(params.rig.markers ?? [])) {
+    throw new Error('Cannot generate autorig weights: most joints are still nearly planar. Center depth or refine Side view markers first.');
+  }
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
   await ensureSkeletonCloneReady();
   const template = templates.get(params.sourceAssetId);
   if (!template) throw new Error('Poseable source mesh is not loaded.');
 
-  const oriented = template.clone(true);
+  const canonical = prepareCanonicalAutorigMesh({
+    source: template,
+    orientation: params.rig.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 },
+    targetHeightMeters: params.rig.generationSettings?.approximateHeightMeters ?? 1.75,
+  });
   const jointPositions = jointPositionsFromRig(params.rig);
-  const positions = extractWorldPositionsFromObject(oriented);
+  const positions = extractCanonicalVertexPositions(canonical.root);
   const buffers = generateDeterministicSkinWeights({
     positions,
     jointPositions,
     heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+    meshSize: canonical.size,
+    topologyIndices: extractCanonicalTopology(canonical.root),
   });
   const written = await writeSkinWeightBinaryAsset(buffers);
   const skinAsset: ProjectAsset = {
@@ -442,7 +417,11 @@ export async function generateSkinWeightsForRigAsset(params: {
     uri: written.uri,
     mimeType: 'application/octet-stream',
     createdAt: new Date().toISOString(),
-    metadata: { poseableSkin: true, byteLength: written.byteLength },
+    metadata: {
+      poseableSkin: true,
+      byteLength: written.byteLength,
+      ...(buffers.warnings?.length ? { warnings: buffers.warnings } : {}),
+    },
   };
   // Compact metadata only — weights live in the binary asset + runtime cache.
   const rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
@@ -470,7 +449,9 @@ export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): nu
     if (!sourceAssetId) continue;
     const mapKey = `${asset.id}:${rig.id}`;
     const fragment = registrationFragment(asset.id, rig, sourceAssetId);
-    if (registeredInventoryFragments.get(mapKey) === fragment) {
+    // Legacy or incomplete rigs stay eligible for hydration until the wizard
+    // regenerates canonical binds and weights.
+    if (registeredInventoryFragments.get(mapKey) === fragment && !rig.requiresRerigging) {
       continue;
     }
     registerAutoriggedPoseableCharacter(

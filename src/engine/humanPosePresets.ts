@@ -42,6 +42,24 @@ export const HUMAN_POSE_PRESETS: readonly HumanPosePreset[] = [
     }, 'a-pose'),
   },
   {
+    id: 'arms-raised',
+    label: 'Arms raised',
+    pose: joints({
+      leftUpperArm: [0, 0, 85],
+      rightUpperArm: [0, 0, -85],
+    }, 'arms-raised'),
+  },
+  {
+    id: 'elbows-bent',
+    label: 'Elbows bent',
+    pose: joints({
+      leftUpperArm: [0, 0, 35],
+      rightUpperArm: [0, 0, -35],
+      leftLowerArm: [95, 0, 0],
+      rightLowerArm: [95, 0, 0],
+    }, 'elbows-bent'),
+  },
+  {
     id: 'standing-relaxed',
     label: 'Standing relaxed',
     pose: joints({
@@ -80,6 +98,18 @@ export const HUMAN_POSE_PRESETS: readonly HumanPosePreset[] = [
       leftLowerArm: [20, 0, 0],
       rightLowerArm: [25, 0, 0],
     }, 'walk-contact-right'),
+  },
+  {
+    id: 'walking',
+    label: 'Walking',
+    pose: joints({
+      leftUpperLeg: [-28, 0, 0],
+      rightUpperLeg: [22, 0, 0],
+      leftLowerLeg: [12, 0, 0],
+      rightLowerLeg: [35, 0, 0],
+      leftUpperArm: [18, 0, 10],
+      rightUpperArm: [-18, 0, -10],
+    }, 'walking'),
   },
   {
     id: 'sitting',

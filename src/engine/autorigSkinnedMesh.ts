@@ -298,38 +298,27 @@ export function buildSkinnedCharacterFromTemplate(params: {
   root.name = 'autorigged-skinned';
 
   // Collect mesh geometries in world space of the template.
-  const geometries: THREE.BufferGeometry[] = [];
-  const materials: THREE.Material[] = [];
+  const meshParts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; vertexCount: number }> = [];
   template.updateMatrixWorld(true);
   template.traverse((node) => {
     const mesh = node as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry) return;
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
-    geometries.push(geometry);
-    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    materials.push(material ?? params.materialFallback ?? new THREE.MeshStandardMaterial({ color: '#9ca3af' }));
+    const material = mesh.material ?? params.materialFallback ?? new THREE.MeshStandardMaterial({ color: '#9ca3af' });
+    meshParts.push({ geometry, material, vertexCount: geometry.getAttribute('position')?.count ?? 0 });
   });
-  if (geometries.length === 0) {
+  if (meshParts.length === 0) {
     root.add(template.clone(true));
     return root;
   }
 
-  // Merge into one geometry for a single skin binding.
-  const merged = geometries.length === 1
-    ? geometries[0]!
-    : mergeBufferGeometriesCompat(geometries);
-  const position = merged.getAttribute('position');
-  if (!position || position.count * buffers.influencesPerVertex !== buffers.indices.length) {
-    // Vertex count mismatch (multi-mesh merge vs weights from first pass) — fall back to rigid.
+  const totalVertices = meshParts.reduce((sum, part) => sum + part.vertexCount, 0);
+  if (totalVertices * buffers.influencesPerVertex !== buffers.indices.length) {
+    // Weight payloads are generated in the same mesh traversal order.
     root.add(template.clone(true));
     return root;
   }
-
-  const skinIndex = new THREE.BufferAttribute(new Uint16Array(buffers.indices), buffers.influencesPerVertex);
-  const skinWeight = new THREE.BufferAttribute(new Float32Array(buffers.weights), buffers.influencesPerVertex);
-  merged.setAttribute('skinIndex', skinIndex);
-  merged.setAttribute('skinWeight', skinWeight);
 
   // Build bone hierarchy.
   const bones: THREE.Bone[] = [];
@@ -376,12 +365,24 @@ export function buildSkinnedCharacterFromTemplate(params: {
   }
 
   const skeleton = new THREE.Skeleton(bones, inverses);
-  const material = materials[0] ?? new THREE.MeshStandardMaterial({ color: '#9ca3af' });
-  const skinned = new THREE.SkinnedMesh(merged, material);
-  skinned.frustumCulled = false;
-  skinned.add(bones.find((bone) => !bone.parent || !(bone.parent as THREE.Bone).isBone) ?? bones[0]!);
-  skinned.bind(skeleton);
-  root.add(skinned);
+  let vertexOffset = 0;
+  for (const part of meshParts) {
+    const indicesStart = vertexOffset * buffers.influencesPerVertex;
+    const indicesEnd = (vertexOffset + part.vertexCount) * buffers.influencesPerVertex;
+    part.geometry.setAttribute(
+      'skinIndex',
+      new THREE.BufferAttribute(buffers.indices.slice(indicesStart, indicesEnd), buffers.influencesPerVertex),
+    );
+    part.geometry.setAttribute(
+      'skinWeight',
+      new THREE.BufferAttribute(buffers.weights.slice(indicesStart, indicesEnd), buffers.influencesPerVertex),
+    );
+    const skinned = new THREE.SkinnedMesh(part.geometry, part.material);
+    skinned.frustumCulled = false;
+    skinned.bind(skeleton);
+    root.add(skinned);
+    vertexOffset += part.vertexCount;
+  }
 
   // Keep labels available for pose UI / debugging.
   for (const jointId of buffers.jointOrder) {
@@ -391,28 +392,6 @@ export function buildSkinnedCharacterFromTemplate(params: {
   root.userData[POSE_BONES_USERDATA_KEY] = boneById;
   cacheSkinnedMeshesOnInstance(root);
   return root;
-}
-
-function mergeBufferGeometriesCompat(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  // Minimal position merge (enough for skinning attribute alignment when counts match).
-  let count = 0;
-  for (const geometry of geometries) count += geometry.getAttribute('position')?.count ?? 0;
-  const positions = new Float32Array(count * 3);
-  let offset = 0;
-  for (const geometry of geometries) {
-    const position = geometry.getAttribute('position');
-    if (!position) continue;
-    for (let i = 0; i < position.count; i += 1) {
-      positions[(offset + i) * 3] = position.getX(i);
-      positions[(offset + i) * 3 + 1] = position.getY(i);
-      positions[(offset + i) * 3 + 2] = position.getZ(i);
-    }
-    offset += position.count;
-  }
-  const merged = new THREE.BufferGeometry();
-  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  merged.computeVertexNormals();
-  return merged;
 }
 
 export function extractWorldPositionsFromObject(root: THREE.Object3D): Float32Array {

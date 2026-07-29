@@ -180,8 +180,12 @@ export function applySemanticPoseToBones(params: {
   bones: Map<HumanJointId, THREE.Bone>;
   rests: Map<HumanJointId, BoneRestPose>;
   pose: HumanPose | undefined;
+  /** Canonical joint-frame quaternions, keyed by semantic joint. */
+  canonicalPoseBases?: Partial<Record<HumanJointId, number[]>>;
 }): void {
   const delta = new THREE.Quaternion();
+  const canonicalToLocal = new THREE.Quaternion();
+  const localSemanticDelta = new THREE.Quaternion();
   for (const jointId of HUMAN_JOINT_IDS) {
     const bone = params.bones.get(jointId);
     const rest = params.rests.get(jointId);
@@ -194,8 +198,17 @@ export function applySemanticPoseToBones(params: {
 
     const [x, y, z, w] = jointPose.rotation ?? IDENTITY_QUATERNION;
     delta.set(x, y, z, w).normalize();
-    // Rest local * pose delta → posed local.
-    bone.quaternion.copy(rest.quaternion).multiply(delta);
+    const basis = params.canonicalPoseBases?.[jointId];
+    if (basis && basis.length === 4 && basis.every(Number.isFinite)) {
+      // Convert the semantic rotation from the canonical anatomical frame
+      // into this bone's local frame before applying it to the rest pose.
+      canonicalToLocal.set(basis[0]!, basis[1]!, basis[2]!, basis[3]!).normalize();
+      localSemanticDelta.copy(canonicalToLocal).invert().multiply(delta).multiply(canonicalToLocal);
+      bone.quaternion.copy(rest.quaternion).multiply(localSemanticDelta);
+    } else {
+      // Built-in rigs retain their established local semantic convention.
+      bone.quaternion.copy(rest.quaternion).multiply(delta);
+    }
 
     if (jointId === 'hips' && jointPose.position) {
       bone.position.set(

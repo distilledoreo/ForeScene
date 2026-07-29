@@ -58,4 +58,14 @@ describe('deterministic autorig skin weights', () => {
     expect(buffers.jointOrder.length).toBeGreaterThan(10);
     expect(buffers.jointOrder.every((id) => (HUMAN_JOINT_IDS as readonly string[]).includes(id))).toBe(true);
   });
+
+  it('reports vertices that require the explicit fallback assignment', () => {
+    const markers = suggestAutorigMarkers({ size: [0.6, 1.75, 0.35], heightMeters: 1.75 });
+    const fitted = fitSkeletonFromMarkers(markers, 'full');
+    const buffers = generateDeterministicSkinWeights({
+      positions: Float32Array.from([4, 4, 4]),
+      jointPositions: fitted.jointPositions,
+    });
+    expect(buffers.warnings?.some((warning) => warning.includes('hips fallback'))).toBe(true);
+  });
 });

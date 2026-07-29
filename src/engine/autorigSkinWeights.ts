@@ -4,6 +4,7 @@ import { HUMAN_JOINT_PARENT } from './humanoidSkeleton';
 import { createId } from '../utils/ids';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import { putModelAsset } from './modelAssetStore';
+import { CURRENT_AUTORIG_RIG_GENERATION_VERSION } from './poseableRigNormalize';
 
 const INFLUENCES_PER_VERTEX = 4;
 
@@ -43,6 +44,7 @@ export interface SkinWeightBuffers {
   indices: Uint16Array;
   weights: Float32Array;
   jointOrder: HumanJointId[];
+  warnings?: string[];
 }
 
 function distancePointToSegment(point: Vec3, start: Vec3, end: Vec3): number {
@@ -82,34 +84,23 @@ export function buildSkinBoneSegments(
   return segments;
 }
 
-function classifyVertexRegion(point: Vec3, hips: Vec3 | undefined, chest: Vec3 | undefined): AutorigBodyRegion {
-  const hipY = hips?.[1] ?? 0.9;
-  const chestY = chest?.[1] ?? hipY + 0.35;
-  if (point[1] >= chestY + 0.12) return 'head';
-  if (point[1] < hipY - 0.02) {
-    return point[0] >= 0 ? 'leftLeg' : 'rightLeg';
-  }
-  // Arms: outside torso X band around shoulder height
-  if (point[1] > hipY + 0.05 && Math.abs(point[0]) > 0.18) {
-    return point[0] >= 0 ? 'leftArm' : 'rightArm';
-  }
-  return 'torso';
-}
-
-function regionAllowsBone(region: AutorigBodyRegion, boneRegion: AutorigBodyRegion): boolean {
-  if (region === boneRegion) return true;
-  // Limited torso reach for arm/leg attachment bones.
-  if (region === 'torso' && (boneRegion === 'leftArm' || boneRegion === 'rightArm')) return true;
-  if (region === 'torso' && (boneRegion === 'leftLeg' || boneRegion === 'rightLeg')) return true;
-  if (region === 'head' && boneRegion === 'torso') return true;
-  if ((region === 'leftArm' || region === 'rightArm') && boneRegion === 'torso') return true;
-  if ((region === 'leftLeg' || region === 'rightLeg') && boneRegion === 'torso') return true;
-  return false;
-}
-
 function falloffWeight(distance: number, radius: number): number {
   const t = Math.max(0, 1 - distance / Math.max(radius, 1e-4));
   return t * t;
+}
+
+function capsuleRadius(segment: SkinBoneSegment, height: number, meshThickness: number): number {
+  const length = Math.hypot(
+    segment.end[0] - segment.start[0],
+    segment.end[1] - segment.start[1],
+    segment.end[2] - segment.start[2],
+  );
+  const anatomical = segment.region === 'torso'
+    ? length * 0.32
+    : segment.region === 'head'
+      ? length * 0.5
+      : length * 0.22;
+  return Math.max(0.025, Math.min(height * 0.16, Math.max(meshThickness * 0.45, anatomical)));
 }
 
 /**
@@ -121,45 +112,39 @@ export function generateDeterministicSkinWeights(params: {
   jointPositions: Partial<Record<HumanJointId, Vec3>>;
   /** Soft influence radius scale relative to character height. */
   heightMeters?: number;
+  /** Canonical mesh thickness used to size capsules without fixed X thresholds. */
+  meshSize?: Vec3;
+  /** Flattened triangle indices in the same traversal order as positions. */
+  topologyIndices?: ArrayLike<number>;
 }): SkinWeightBuffers {
   const height = params.heightMeters ?? 1.75;
-  const radius = Math.max(0.12, height * 0.12);
+  const meshThickness = params.meshSize
+    ? Math.min(params.meshSize[0], params.meshSize[2])
+    : height * 0.3;
   const segments = buildSkinBoneSegments(params.jointPositions);
   const jointOrder = HUMAN_JOINT_IDS.filter((id) => params.jointPositions[id]);
   const vertexCount = Math.floor(params.positions.length / 3);
   const indices = new Uint16Array(vertexCount * INFLUENCES_PER_VERTEX);
   const weights = new Float32Array(vertexCount * INFLUENCES_PER_VERTEX);
-  const hips = params.jointPositions.hips;
-  const chest = params.jointPositions.chest;
-
+  const fallbackVertices: number[] = [];
+  const warnings: string[] = [];
   for (let v = 0; v < vertexCount; v += 1) {
     const point: Vec3 = [
       params.positions[v * 3]!,
       params.positions[v * 3 + 1]!,
       params.positions[v * 3 + 2]!,
     ];
-    const region = classifyVertexRegion(point, hips, chest);
     const scored: Array<{ jointIndex: number; weight: number }> = [];
     for (const segment of segments) {
-      if (!regionAllowsBone(region, segment.region)) continue;
-      // Hard prevent opposite-limb influence.
-      if (region === 'leftArm' && segment.region === 'rightArm') continue;
-      if (region === 'rightArm' && segment.region === 'leftArm') continue;
-      if (region === 'leftLeg' && segment.region === 'rightLeg') continue;
-      if (region === 'rightLeg' && segment.region === 'leftLeg') continue;
-      if (region === 'head' && (segment.region === 'leftLeg' || segment.region === 'rightLeg')) continue;
-      if ((region === 'leftLeg' || region === 'rightLeg') && segment.region === 'head') continue;
-
-      let distance = distancePointToSegment(point, segment.start, segment.end);
-      // Shoulder / hip attachment soften: pull torso vertices slightly toward limb roots.
-      if (region === 'torso' && (segment.jointId === 'leftUpperArm' || segment.jointId === 'rightUpperArm')) {
-        distance *= 0.85;
-      }
-      if (region === 'torso' && (segment.jointId === 'leftUpperLeg' || segment.jointId === 'rightUpperLeg')) {
-        distance *= 0.85;
-      }
-      const weight = falloffWeight(distance, radius);
+      const radius = capsuleRadius(segment, height, meshThickness);
+      const distance = distancePointToSegment(point, segment.start, segment.end);
+      let weight = falloffWeight(distance, radius);
       if (weight <= 1e-5) continue;
+      // Distance is authoritative; neighboring regions are penalized instead
+      // of being broadly admitted by fixed world-space X/Y thresholds.
+      const sideMismatch = (segment.region === 'leftArm' || segment.region === 'leftLeg') && point[0] < -meshThickness
+        || (segment.region === 'rightArm' || segment.region === 'rightLeg') && point[0] > meshThickness;
+      if (sideMismatch) weight *= 0.08;
       scored.push({ jointIndex: segment.jointIndex, weight });
     }
 
@@ -169,6 +154,7 @@ export function generateDeterministicSkinWeights(params: {
     if (top.length === 0) {
       const hipsIndex = jointOrder.indexOf('hips');
       top.push({ jointIndex: Math.max(0, hipsIndex), weight: 1 });
+      fallbackVertices.push(v);
     }
     let sum = top.reduce((acc, item) => acc + item.weight, 0);
     if (sum < 1e-8) {
@@ -182,11 +168,61 @@ export function generateDeterministicSkinWeights(params: {
     }
   }
 
+  // Smooth by joint identity across actual triangle adjacency. Disconnected
+  // components never share neighbors, so clothing or hair cannot borrow a
+  // neighboring component's assignment accidentally.
+  if (params.topologyIndices && params.topologyIndices.length >= 3 && jointOrder.length > 0) {
+    const adjacency = Array.from({ length: vertexCount }, () => new Set<number>());
+    for (let i = 0; i + 2 < params.topologyIndices.length; i += 3) {
+      const a = Number(params.topologyIndices[i]);
+      const b = Number(params.topologyIndices[i + 1]);
+      const c = Number(params.topologyIndices[i + 2]);
+      if (![a, b, c].every((value) => Number.isInteger(value) && value >= 0 && value < vertexCount)) continue;
+      adjacency[a]!.add(b); adjacency[a]!.add(c);
+      adjacency[b]!.add(a); adjacency[b]!.add(c);
+      adjacency[c]!.add(a); adjacency[c]!.add(b);
+    }
+    const dense = new Float32Array(vertexCount * jointOrder.length);
+    for (let v = 0; v < vertexCount; v += 1) {
+      for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
+        const jointIndex = indices[v * INFLUENCES_PER_VERTEX + slot]!;
+        if (jointIndex < jointOrder.length) dense[v * jointOrder.length + jointIndex] += weights[v * INFLUENCES_PER_VERTEX + slot]!;
+      }
+    }
+    const smoothed = new Float32Array(dense);
+    for (let v = 0; v < vertexCount; v += 1) {
+      const neighbors = adjacency[v]!;
+      if (neighbors.size === 0) continue;
+      for (let jointIndex = 0; jointIndex < jointOrder.length; jointIndex += 1) {
+        let neighborAverage = 0;
+        for (const neighbor of neighbors) neighborAverage += dense[neighbor * jointOrder.length + jointIndex]!;
+        smoothed[v * jointOrder.length + jointIndex] = dense[v * jointOrder.length + jointIndex]! * 0.5
+          + (neighborAverage / neighbors.size) * 0.5;
+      }
+    }
+    for (let v = 0; v < vertexCount; v += 1) {
+      const ranked = Array.from({ length: jointOrder.length }, (_, jointIndex) => ({
+        jointIndex,
+        weight: smoothed[v * jointOrder.length + jointIndex]!,
+      })).filter((item) => item.weight > 1e-6).sort((a, b) => b.weight - a.weight).slice(0, INFLUENCES_PER_VERTEX);
+      const sum = ranked.reduce((total, item) => total + item.weight, 0);
+      for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
+        const item = ranked[slot];
+        indices[v * INFLUENCES_PER_VERTEX + slot] = item?.jointIndex ?? 0;
+        weights[v * INFLUENCES_PER_VERTEX + slot] = item ? item.weight / Math.max(sum, 1e-8) : 0;
+      }
+    }
+  }
+  if (fallbackVertices.length > 0) {
+    warnings.push(`${fallbackVertices.length} vertices could not be assigned confidently and use hips fallback.`);
+  }
+
   return {
     influencesPerVertex: INFLUENCES_PER_VERTEX,
     indices,
     weights,
     jointOrder,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -289,7 +325,8 @@ export function applySkinBuffersToRig(
         indices: Array.from(buffers.indices),
         weights: Array.from(buffers.weights),
       },
-    rigGenerationVersion: Math.max(1, (rig.rigGenerationVersion ?? 0) + 1),
+    rigGenerationVersion: Math.max(CURRENT_AUTORIG_RIG_GENERATION_VERSION, (rig.rigGenerationVersion ?? 0) + 1),
+    requiresRerigging: false,
   };
 }
 

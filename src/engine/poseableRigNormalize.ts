@@ -11,6 +11,8 @@ import { HUMAN_JOINT_IDS } from './humanPose';
 export const DEFAULT_POSEABLE_HEIGHT_METERS = 1.75;
 export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
 export const MAX_POSEABLE_HEIGHT_METERS = 3.5;
+/** Bumped whenever canonical fitting/weighting changes invalidate baked rigs. */
+export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 2;
 
 export function defaultPoseableOrientation(): PoseableCharacterOrientation {
   return {
@@ -122,7 +124,14 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(typeof raw.sourceMeshAssetId === 'string' ? { sourceMeshAssetId: raw.sourceMeshAssetId } : {}),
     ...(typeof raw.originalSourceAssetId === 'string' ? { originalSourceAssetId: raw.originalSourceAssetId } : {}),
     ...(typeof raw.rigGenerationVersion === 'number' ? { rigGenerationVersion: raw.rigGenerationVersion } : {}),
+    ...(raw.requiresRerigging === true || (typeof raw.rigGenerationVersion === 'number'
+      && raw.rigGenerationVersion < CURRENT_AUTORIG_RIG_GENERATION_VERSION)
+      ? { requiresRerigging: true }
+      : {}),
     ...(raw.bindMatrices && typeof raw.bindMatrices === 'object' ? { bindMatrices: raw.bindMatrices } : {}),
+    ...(raw.canonicalPoseBases && typeof raw.canonicalPoseBases === 'object'
+      ? { canonicalPoseBases: raw.canonicalPoseBases }
+      : {}),
     ...(raw.skin && typeof raw.skin === 'object' ? { skin: normalizePoseableSkin(raw.skin) } : {}),
     ...(Array.isArray(raw.markers) ? { markers: raw.markers } : {}),
     ...(normalizePoseableCharacterOrientation(raw.orientation)

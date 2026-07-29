@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   completeAutorigMarkers,
   fitSkeletonFromMarkers,
@@ -7,6 +8,8 @@ import {
   suggestAutorigMarkers,
   upsertMarker,
   validateAutorigMarkers,
+  areAutorigMarkersSuspiciouslyPlanar,
+  canonicalJointFrame,
 } from '../src/engine/autorigMarkers';
 import { HUMAN_JOINT_IDS } from '../src/engine/humanPose';
 
@@ -76,5 +79,22 @@ describe('autorig marker placement and skeleton fitting', () => {
       expect(matrix.every(Number.isFinite)).toBe(true);
     }
     expect(fitted.jointPositions.head?.[1]).toBeGreaterThan(fitted.jointPositions.hips?.[1] ?? 0);
+  });
+
+  it('flags a complete marker set that is still effectively flat', () => {
+    const markers = suggestAutorigMarkers({ size: [0.6, 1.75, 0.35], heightMeters: 1.75 });
+    expect(areAutorigMarkersSuspiciouslyPlanar(markers)).toBe(true);
+    expect(validateAutorigMarkers(markers, 'full').some((issue) => issue.code === 'planar')).toBe(true);
+  });
+
+  it('uses a lateral anatomical axis for a vertical knee frame', () => {
+    const frame = canonicalJointFrame([0, 1, 0], [0, 0, 0]);
+    const xAxis = new THREE.Vector3().setFromMatrixColumn(frame, 0);
+    const yAxis = new THREE.Vector3().setFromMatrixColumn(frame, 1);
+    const zAxis = new THREE.Vector3().setFromMatrixColumn(frame, 2);
+    expect(Math.abs(xAxis.x)).toBeCloseTo(1, 5);
+    expect(Math.abs(xAxis.z)).toBeLessThan(1e-5);
+    expect(yAxis.y).toBeCloseTo(-1, 5);
+    expect(zAxis.z).toBeCloseTo(1, 5);
   });
 });
