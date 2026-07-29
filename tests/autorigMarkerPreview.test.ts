@@ -237,7 +237,7 @@ describe('autorig preview instance reuses template cache', () => {
     expect(source).toMatch(/sourceAssetId=\{rig\.originalSourceAssetId \?\? rig\.sourceMeshAssetId\}/);
     expect(source).toMatch(/assets=\{project\.assets\}/);
     const dialog = readFileSync(
-      resolve('src/components/common/AutorigMarkerWizardDialog.tsx'),
+      resolve('src/components/autorig/AutorigRigWizardDialog.tsx'),
       'utf8',
     );
     expect(dialog).toMatch(/createAutorigPreviewInstance/);
@@ -371,7 +371,7 @@ describe('autorig marker magnifier samples mesh canvas', () => {
     expect(ctx.fillRect).toHaveBeenCalled();
 
     const dialog = readFileSync(
-      resolve('src/components/common/AutorigMarkerWizardDialog.tsx'),
+      resolve('src/components/autorig/AutorigRigWizardDialog.tsx'),
       'utf8',
     );
     expect(dialog).toMatch(/drawAutorigMarkerMagnifier/);

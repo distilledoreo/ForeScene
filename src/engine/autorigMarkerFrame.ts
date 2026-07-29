@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Vec3 } from '../domain/types';
 
-export type AutorigMarkerView = 'front' | 'side';
+export type AutorigMarkerView = 'front' | 'side' | 'back';
 
 /** Axis-aligned bounds of the oriented, scaled, grounded preview mesh (world meters). */
 export interface OrientedMeshBounds {
@@ -11,7 +11,7 @@ export interface OrientedMeshBounds {
 
 /**
  * Shared orthographic window used by both the 2D marker canvas and the WebGL mesh layer.
- * Horizontal axis is world X (front) or world Z (side); vertical is always world Y.
+ * Horizontal axis is world X (front), −X (back), or world Z (side); vertical is always world Y.
  */
 export interface AutorigOrthoFrame {
   view: AutorigMarkerView;
@@ -27,7 +27,9 @@ export interface AutorigOrthoFrame {
 }
 
 export function horizontalWorldComponent(position: Vec3, view: AutorigMarkerView): number {
-  return view === 'front' ? position[0] : position[2];
+  if (view === 'front') return position[0];
+  if (view === 'back') return -position[0];
+  return position[2];
 }
 
 /**
@@ -60,6 +62,14 @@ export function computeAutorigOrthoFrame(params: {
     if (params.view === 'front') {
       horizMin = min[0];
       horizMax = max[0];
+      vertMin = min[1];
+      vertMax = max[1];
+      depthMin = min[2];
+      depthMax = max[2];
+    } else if (params.view === 'back') {
+      // Negate X so canvas mapping matches the behind-camera projection.
+      horizMin = -max[0];
+      horizMax = -min[0];
       vertMin = min[1];
       vertMax = max[1];
       depthMin = min[2];
@@ -149,6 +159,7 @@ export function worldToCanvas(position: Vec3, frame: AutorigOrthoFrame): { x: nu
 /**
  * Inverse of worldToCanvas.
  * - Front: edits lateral X and height Y; preserves depth Z from `current`.
+ * - Back: edits lateral X (via −X mapping) and height Y; preserves depth Z.
  * - Side: edits depth Z only; preserves X and Y so Front placements stay intact.
  */
 export function canvasToWorld(
@@ -166,6 +177,7 @@ export function canvasToWorld(
   const xWorld = frame.horizMin + nx * worldW;
   const yWorld = frame.vertMin + ny * worldH;
   if (frame.view === 'front') return [xWorld, yWorld, current[2]];
+  if (frame.view === 'back') return [-xWorld, yWorld, current[2]];
   // Side view is depth-only: horizontal canvas maps to world Z.
   return [current[0], current[1], xWorld];
 }
@@ -210,6 +222,11 @@ export function configureAutorigOrthoCamera(
     // (matches worldToCanvas: larger X → larger canvas X).
     camera.position.set(midH, midV, frame.depthMax + eyePad);
     camera.lookAt(midH, midV, midD);
+  } else if (frame.view === 'back') {
+    // Looking +Z from −Z. Frame horiz is −X, so midH = −avgX → world X = −midH.
+    const worldX = -midH;
+    camera.position.set(worldX, midV, frame.depthMin - eyePad);
+    camera.lookAt(worldX, midV, midD);
   } else {
     // Looking +X from −X: Three.js local +X becomes world +Z
     // (matches worldToCanvas: larger Z → larger canvas X). Eye on +X looking −X

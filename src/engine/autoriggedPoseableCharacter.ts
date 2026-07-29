@@ -387,6 +387,8 @@ export async function generateSkinWeightsForRigAsset(params: {
   rig: PoseableRigAsset;
   sourceAssetId: string;
   assets?: AssetRegistry;
+  /** Hard body-part overrides from the Body Parts wizard step. */
+  regionOverrides?: Uint8Array | null;
 }): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset; regionAsset?: ProjectAsset }> {
   // Near-planar T-pose marker sets are valid; do not refuse weight generation on global Z spread.
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
@@ -434,6 +436,7 @@ export async function generateSkinWeightsForRigAsset(params: {
       rig,
       jointPositions,
       sourceAssetId: params.sourceAssetId,
+      overrides: params.regionOverrides,
       preferWorker: true,
     });
     rig = regionResult.rig;

@@ -1275,7 +1275,7 @@ useEffect(() => {
             rig={rig}
             sourceAssetId={rig.originalSourceAssetId ?? rig.sourceMeshAssetId}
             assets={project.assets}
-            onSave={(next) => {
+            onSave={(next, options) => {
               updatePoseableRigAsset(rigAsset.id, next);
               const sourceId = next.originalSourceAssetId ?? next.sourceMeshAssetId;
               if (!sourceId) return;
@@ -1283,6 +1283,7 @@ useEffect(() => {
                 rig: next,
                 sourceAssetId: sourceId,
                 assets: useContinuityStore.getState().project.assets,
+                regionOverrides: options?.regionOverrides,
               }).then(({ rig: skinnedRig, skinAsset, regionAsset }) => {
                 const state = useContinuityStore.getState();
                 state.updatePoseableRigAsset(rigAsset.id, skinnedRig);
