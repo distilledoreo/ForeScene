@@ -80,18 +80,33 @@ function falloffWeight(distance: number, radius: number): number {
   return t * t;
 }
 
-function capsuleRadius(segment: SkinBoneSegment, height: number, meshThickness: number): number {
+function isLimbRegion(region: AutorigBodyRegion): boolean {
+  return region === 'leftArm' || region === 'rightArm' || region === 'leftLeg' || region === 'rightLeg';
+}
+
+function capsuleRadius(
+  segment: SkinBoneSegment,
+  height: number,
+  meshThickness: number,
+  /** Half-width of the torso from fitted shoulders; keeps midline bones spanning the chest. */
+  torsoHalfWidth: number,
+): number {
   const length = Math.hypot(
     segment.end[0] - segment.start[0],
     segment.end[1] - segment.start[1],
     segment.end[2] - segment.start[2],
   );
-  const anatomical = segment.region === 'torso'
-    ? length * 0.32
-    : segment.region === 'head'
-      ? length * 0.5
-      : length * 0.22;
-  return Math.max(0.025, Math.min(height * 0.16, Math.max(meshThickness * 0.45, anatomical)));
+  // Limbs: length-scaled radius with a small height floor (~5cm at 1.75m).
+  // Do NOT floor on meshThickness — that value is sized for the torso and
+  // inflates arm/leg capsules to ~16cm, letting them claim chest vertices.
+  if (isLimbRegion(segment.region)) {
+    return Math.max(height * 0.03, Math.min(height * 0.16, length * 0.25));
+  }
+  // Torso/head need wide capsules so midline bones reach the body surface out
+  // to the shoulders (meshThickness alone is often the depth, not the width).
+  const anatomical = segment.region === 'torso' ? length * 0.32 : length * 0.5;
+  const bodyFloor = Math.max(meshThickness * 0.45, torsoHalfWidth * 0.95);
+  return Math.max(0.025, Math.min(height * 0.22, Math.max(bodyFloor, anatomical)));
 }
 
 /**
@@ -112,6 +127,13 @@ export function generateDeterministicSkinWeights(params: {
   const meshThickness = params.meshSize
     ? Math.min(params.meshSize[0], params.meshSize[2])
     : height * 0.3;
+  // Shoulder lateral extent from fitted joints — sizes torso capsules and gates
+  // limb influence so arm bones cannot claim vertices still inside the chest.
+  const leftShoulderX = Math.abs(params.jointPositions.leftUpperArm?.[0] ?? 0);
+  const rightShoulderX = Math.abs(params.jointPositions.rightUpperArm?.[0] ?? 0);
+  const shoulderX = Math.max(leftShoulderX, rightShoulderX, meshThickness * 0.35);
+  const torsoHalfWidth = shoulderX;
+  const torsoLateralExtent = shoulderX * 0.9;
   const segments = buildSkinBoneSegments(params.jointPositions);
   const jointOrder = HUMAN_JOINT_IDS.filter((id) => params.jointPositions[id]);
   const vertexCount = Math.floor(params.positions.length / 3);
@@ -147,7 +169,7 @@ export function generateDeterministicSkinWeights(params: {
     segABY[s] = aby;
     segABZ[s] = abz;
     segLenSq[s] = Math.max(abx * abx + aby * aby + abz * abz, 1e-12);
-    const radius = capsuleRadius(segment, height, meshThickness);
+    const radius = capsuleRadius(segment, height, meshThickness, torsoHalfWidth);
     segRadius[s] = radius;
     segRadiusSq[s] = radius * radius;
     segJoint[s] = segment.jointIndex;
@@ -184,6 +206,9 @@ export function generateDeterministicSkinWeights(params: {
       // of being broadly admitted by fixed world-space X/Y thresholds.
       const side = segSide[s]!;
       if ((side < 0 && px < -meshThickness) || (side > 0 && px > meshThickness)) weight *= 0.08;
+      // Torso protection: limb bones must not claim vertices still inside the
+      // torso's lateral extent (even if within a shrunken capsule at the shoulder).
+      if (side !== 0 && Math.abs(px) < torsoLateralExtent) weight *= 0.05;
       // Stable descending insertion into the fixed top-4 (matches sort+slice).
       if (topN < INFLUENCES_PER_VERTEX || weight > topWeights[INFLUENCES_PER_VERTEX - 1]!) {
         let slot = Math.min(topN, INFLUENCES_PER_VERTEX - 1);
@@ -254,6 +279,14 @@ export function generateDeterministicSkinWeights(params: {
     }
 
     const jointCount = jointOrder.length;
+    // Region groups for smoothing: 0 = torso/head, 1 = limb. Neighbor joints
+    // from a different group are ignored so residual arm weight cannot smear
+    // into the chest (and vice versa) across the shoulder seam.
+    const jointRegionGroup = new Int8Array(jointCount);
+    for (let j = 0; j < jointCount; j += 1) {
+      const region = BONE_REGION[jointOrder[j]!] ?? 'torso';
+      jointRegionGroup[j] = isLimbRegion(region) ? 1 : 0;
+    }
     const nbrSeen = new Int32Array(vertexCount); // per-vertex neighbor dedup stamps
     const candStamp = new Int32Array(jointCount);
     const candSum = new Float32Array(jointCount);
@@ -268,6 +301,9 @@ export function generateDeterministicSkinWeights(params: {
       generation += 1;
       let candN = 0;
       const vBase = v * INFLUENCES_PER_VERTEX;
+      // Top influence (weights are already sorted descending from the score pass).
+      const topJoint = indices[vBase]!;
+      const ownGroup = topJoint < jointCount ? jointRegionGroup[topJoint]! : 0;
       for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
         const w = weights[vBase + slot]!;
         if (w <= 0) continue;
@@ -294,6 +330,8 @@ export function generateDeterministicSkinWeights(params: {
           if (w <= 0) continue;
           const j = indices[uBase + slot]!;
           if (j >= jointCount) continue;
+          // Skip cross-group neighbor influences (limb ↔ torso/head).
+          if (jointRegionGroup[j] !== ownGroup) continue;
           if (candStamp[j] !== generation) {
             candStamp[j] = generation;
             candSum[j] = 0;

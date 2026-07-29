@@ -9,18 +9,44 @@ import { eulerDegreesToQuaternion } from '../src/engine/humanPose';
 import { HUMAN_POSE_PRESETS } from '../src/engine/humanPosePresets';
 import type { HumanJointId, HumanPose } from '../src/domain/types';
 
+/** Place a thin box centered on a bone segment so limb capsules enclose the mesh. */
+function limbBoxAlongSegment(start: [number, number, number], end: [number, number, number], radius: number): THREE.Mesh {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const dz = end[2] - start[2];
+  const length = Math.max(Math.hypot(dx, dy, dz), 0.05);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(radius * 2, length, radius * 2));
+  mesh.position.set(
+    (start[0] + end[0]) / 2,
+    (start[1] + end[1]) / 2,
+    (start[2] + end[2]) / 2,
+  );
+  // Default box is Y-aligned; rotate so local +Y follows the bone.
+  const dir = new THREE.Vector3(dx, dy, dz).normalize();
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  return mesh;
+}
+
 function makeFixture() {
-  const root = new THREE.Group();
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.8, 0.3));
-  torso.position.set(0, 0.9, 0);
-  const leftForearm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.45, 0.18));
-  leftForearm.position.set(0.48, 1.18, 0);
-  const rightForearm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.45, 0.18));
-  rightForearm.position.set(-0.48, 1.18, 0);
-  root.add(torso, leftForearm, rightForearm);
-  root.updateMatrixWorld(true);
   const markers = suggestAutorigMarkers({ size: [1.1, 1.75, 0.35], heightMeters: 1.75 });
   const fitted = fitSkeletonFromMarkers(markers);
+  const jp = fitted.jointPositions;
+  const root = new THREE.Group();
+  // Torso box spans the chest; half-width stays inside the shoulder gate.
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.3));
+  torso.position.set(0, 0.9, 0);
+  const leftForearm = limbBoxAlongSegment(
+    (jp.leftLowerArm ?? [0.4, 1.1, 0]) as [number, number, number],
+    (jp.leftHand ?? [0.5, 0.85, 0]) as [number, number, number],
+    0.04,
+  );
+  const rightForearm = limbBoxAlongSegment(
+    (jp.rightLowerArm ?? [-0.4, 1.1, 0]) as [number, number, number],
+    (jp.rightHand ?? [-0.5, 0.85, 0]) as [number, number, number],
+    0.04,
+  );
+  root.add(torso, leftForearm, rightForearm);
+  root.updateMatrixWorld(true);
   const positions = extractCanonicalVertexPositions(root);
   const buffers = generateDeterministicSkinWeights({
     positions,
@@ -196,5 +222,105 @@ describe('autorig deformation acceptance gates', () => {
       for (let i = 0; i < values.length; i += 3) box.expandByPoint(new THREE.Vector3(values[i], values[i + 1], values[i + 2]));
       expect(box.getSize(new THREE.Vector3()).length()).toBeLessThan(neutralSpan * 4);
     }
+  });
+
+  /**
+   * Regression: inflated limb capsules + missing torso gate let arm bones claim
+   * upper-chest vertices (~26% weight), so posing the arm dragged the torso.
+   * Capsule shrink + lateral torso protection + region-aware smoothing must keep
+   * arm influence on a near-shoulder torso sample under 5%.
+   */
+  it('keeps near-shoulder torso vertices free of arm-bone influence', () => {
+    const markers = suggestAutorigMarkers({ size: [1.1, 1.75, 0.35], heightMeters: 1.75 });
+    const fitted = fitSkeletonFromMarkers(markers);
+    // Upper-right chest, clearly inside the torso box (x=0.2) but near the
+    // shoulder — the historical bleed sample from the diagnosis.
+    const torsoNearShoulder: [number, number, number] = [0.2, 1.3, 0];
+    const buffers = generateDeterministicSkinWeights({
+      positions: Float32Array.from(torsoNearShoulder),
+      jointPositions: fitted.jointPositions,
+      heightMeters: 1.75,
+      meshSize: [1.1, 1.75, 0.35],
+    });
+    const armJointIndexes = new Set(
+      (['leftUpperArm', 'leftLowerArm', 'leftHand', 'rightUpperArm', 'rightLowerArm', 'rightHand'] as const)
+        .map((id) => buffers.jointOrder.indexOf(id))
+        .filter((index) => index >= 0),
+    );
+    const torsoJointIndexes = new Set(
+      (['hips', 'spine', 'chest', 'neck'] as const)
+        .map((id) => buffers.jointOrder.indexOf(id))
+        .filter((index) => index >= 0),
+    );
+    let armWeight = 0;
+    let torsoWeight = 0;
+    for (let i = 0; i < 4; i += 1) {
+      const joint = buffers.indices[i]!;
+      const weight = buffers.weights[i]!;
+      if (armJointIndexes.has(joint)) armWeight += weight;
+      if (torsoJointIndexes.has(joint)) torsoWeight += weight;
+    }
+    expect(armWeight).toBeLessThan(0.05);
+    expect(torsoWeight).toBeGreaterThan(0.9);
+  });
+
+  it('posing the left arm moves arm vertices without dragging the torso', () => {
+    const fixture = makeFixture();
+    const skinned = buildSkinnedCharacterFromTemplate({ template: fixture.root, rig: fixture.rig, buffers: fixture.buffers });
+    const bones = new Map<HumanJointId, THREE.Bone>();
+    skinned.traverse((node) => {
+      const bone = node as THREE.Bone;
+      const id = bone.userData.humanJointId as HumanJointId | undefined;
+      if (bone.isBone && id) bones.set(id, bone);
+    });
+    const before = vertexPositions(skinned);
+    const pose: HumanPose = {
+      version: 1,
+      joints: {
+        leftUpperArm: { rotation: eulerDegreesToQuaternion(70, 0, 25) },
+        leftLowerArm: { rotation: eulerDegreesToQuaternion(90, 0, 0) },
+      },
+    };
+    applySemanticPoseToBones({
+      bones,
+      rests: captureBoneRests(bones),
+      pose,
+      canonicalPoseBases: fixture.rig.canonicalPoseBases,
+    });
+    skinned.updateMatrixWorld(true);
+    const after = vertexPositions(skinned);
+
+    // Classify bind vertices from the fixture: torso box |x|≤0.2; left forearm
+    // follows the fitted lower-arm bone (x well past the shoulder).
+    const leftShoulderX = Math.abs(fixture.fitted.jointPositions.leftUpperArm?.[0] ?? 0.24);
+    let maxTorsoDelta = 0;
+    let maxArmDelta = 0;
+    let torsoSamples = 0;
+    let armSamples = 0;
+    for (let i = 0; i < before.length; i += 3) {
+      const bx = before[i]!;
+      const by = before[i + 1]!;
+      const bz = before[i + 2]!;
+      const dx = after[i]! - bx;
+      const dy = after[i + 1]! - by;
+      const dz = after[i + 2]! - bz;
+      const delta = Math.hypot(dx, dy, dz);
+      // Interior torso corners of the chest box.
+      if (Math.abs(bx) <= 0.21 && by > 0.55 && by < 1.35 && Math.abs(bz) <= 0.16) {
+        maxTorsoDelta = Math.max(maxTorsoDelta, delta);
+        torsoSamples += 1;
+      }
+      // Left forearm past the shoulder joint.
+      if (bx > leftShoulderX + 0.05 && by > 0.7 && by < 1.3) {
+        maxArmDelta = Math.max(maxArmDelta, delta);
+        armSamples += 1;
+      }
+    }
+    expect(torsoSamples).toBeGreaterThan(0);
+    expect(armSamples).toBeGreaterThan(0);
+    // Arm must actually deform.
+    expect(maxArmDelta).toBeGreaterThan(0.05);
+    // Torso interior must stay put (no arm-weight drag).
+    expect(maxTorsoDelta).toBeLessThan(0.02);
   });
 });
