@@ -139,6 +139,11 @@ export function AutorigMarkerWizardDialog({
   const preDragMarkersRef = useRef<AutorigMarker[] | undefined>(undefined);
   const depthCenteredRef = useRef(false);
   const previewRootRef = useRef<THREE.Object3D | null>(null);
+  const suggestedRef = useRef(suggested);
+  const attachPreviewMeshRef = useRef<() => void>(() => {});
+  const assetsRef = useRef(assets);
+  suggestedRef.current = suggested;
+  assetsRef.current = assets;
 
   const view = showSide ? 'side' as const : 'front' as const;
 
@@ -154,29 +159,39 @@ export function AutorigMarkerWizardDialog({
   );
   frameRef.current = frame;
 
+  // Seed markers once per open / rig identity — not whenever mesh bounds update
+  // `suggested` (that would wipe in-progress drags and retrigger GL setup).
   useEffect(() => {
     if (!open) return;
     const fromRig = sanitizeAutorigMarkers(rig.markers);
-    setMarkers(fromRig.length > 0 ? fromRig : suggested);
+    setMarkers(fromRig.length > 0 ? fromRig : suggestedRef.current);
     setPast([]);
     setFuture([]);
     depthCenteredRef.current = false;
     setShowTestPose(false);
     setActiveTestPose('neutral');
-  }, [open, rig, suggested]);
+  }, [open, rig]);
 
   // Always sanitize: selected autorig characters mount this dialog even when closed.
   const safeMarkers = useMemo(() => sanitizeAutorigMarkers(markers), [markers]);
   const issues = validateAutorigMarkers(safeMarkers, 'full');
-  const fitted = useMemo(() => fitSkeletonFromMarkers(safeMarkers, 'full'), [safeMarkers]);
 
   // Heavy preview inputs (skin weights) track the fitted skeleton only between
   // drags — never once per pointermove.
   const [isDragging, setIsDragging] = useState(false);
-  const [previewFitted, setPreviewFitted] = useState(fitted);
+  // Skip full 32-joint fit during drag; keep last fitted skeleton for bone lines
+  // and only move the active marker dot from live marker state.
+  const fitted = useMemo(() => {
+    if (isDragging) return null;
+    return fitSkeletonFromMarkers(safeMarkers, 'full');
+  }, [safeMarkers, isDragging]);
+  const [previewFitted, setPreviewFitted] = useState(() => fitSkeletonFromMarkers(safeMarkers, 'full'));
   useEffect(() => {
-    if (!isDragging) setPreviewFitted(fitted);
+    if (!isDragging && fitted) setPreviewFitted(fitted);
   }, [fitted, isDragging]);
+  const displayFitted = fitted ?? previewFitted;
+  // Apply / validation always need a live fit (cheap enough once per idle frame).
+  const applyFitted = fitted ?? previewFitted;
 
   const commit = (next: AutorigMarker[]) => {
     setPast((stack) => [...stack, { markers: safeMarkers }]);
@@ -224,7 +239,7 @@ export function AutorigMarkerWizardDialog({
     }
     const preview = createAutorigPreviewInstance({
       sourceAssetId,
-      assets,
+      assets: assetsRef.current,
       orientation: rig.orientation,
       approximateHeightMeters: height,
     });
@@ -238,16 +253,16 @@ export function AutorigMarkerWizardDialog({
     setMeshBounds(preview.bounds);
     setMeshReady(true);
     if (!rig.markers?.length && !depthCenteredRef.current) {
-      const centered = centerAutorigMarkersDepth(suggested, preview.root);
+      const centered = centerAutorigMarkersDepth(suggestedRef.current, preview.root);
       setMarkers(clampAutorigMarkersToMeshBounds(centered.markers, preview.bounds));
       depthCenteredRef.current = true;
     }
-  }, [assets, height, rig.markers, rig.orientation, sourceAssetId, suggested]);
+  }, [height, rig.markers, rig.orientation, sourceAssetId]);
+  attachPreviewMeshRef.current = attachPreviewMesh;
 
   // WebGL lifecycle: create on open, dispose on close. No continuous rAF.
-  // Preview GL is optional — a failed secondary context must never unmount Build.
-  // Do not force-lose the context on cleanup: React Strict Mode remounts on the
-  // same canvas, and loseContext paints Chrome's permanent sad-face glyph.
+  // Keep this effect independent of attachPreviewMesh / suggested identity so
+  // mesh-bounds updates cannot dispose+recreate GL (that froze marker drags).
   useEffect(() => {
     if (!open) return;
     let meshCanvas = meshCanvasRef.current;
@@ -281,9 +296,9 @@ export function AutorigMarkerWizardDialog({
     const load = async () => {
       if (!sourceAssetId) return;
       try {
-        await ensureAutorigSourceTemplate(sourceAssetId, assets);
+        await ensureAutorigSourceTemplate(sourceAssetId, assetsRef.current);
         if (cancelled) return;
-        attachPreviewMesh();
+        attachPreviewMeshRef.current();
       } catch {
         if (!cancelled) {
           setMeshReady(false);
@@ -294,7 +309,7 @@ export function AutorigMarkerWizardDialog({
     void load();
 
     const unsub = subscribeAutoriggedCharacterReady(() => {
-      if (!cancelled) attachPreviewMesh();
+      if (!cancelled) attachPreviewMeshRef.current();
     });
 
     return () => {
@@ -305,11 +320,21 @@ export function AutorigMarkerWizardDialog({
       setPreviewGlReady(false);
       disposePreviewMaterials(previewRootRef.current);
       previewRootRef.current = null;
+      // Do not clear meshBounds here — that recomputes `suggested` and used to
+      // retrigger this effect via attachPreviewMesh, freezing the dialog.
       setMeshSource(null);
       setMeshReady(false);
-      setMeshBounds(null);
     };
-  }, [open, sourceAssetId, assets, attachPreviewMesh]);
+  }, [open, sourceAssetId]);
+
+  // Clear mesh bounds only when the dialog fully closes.
+  useEffect(() => {
+    if (open) return;
+    setMeshBounds(null);
+    setMeshSource(null);
+    setMeshReady(false);
+    setPreviewGlReady(false);
+  }, [open]);
 
   // Rebuild preview when orientation/height change while open.
   useEffect(() => {
@@ -422,7 +447,7 @@ export function AutorigMarkerWizardDialog({
     // Skeleton preview lines from fitted joints
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.85)';
     ctx.lineWidth = 2;
-    const positions = fitted.jointPositions;
+    const positions = displayFitted.jointPositions;
     const drawBone = (a?: Vec3, b?: Vec3) => {
       if (!a || !b) return;
       const pa = worldToCanvas(a, frame);
@@ -485,11 +510,12 @@ export function AutorigMarkerWizardDialog({
       }
     }
   }, [
-    fitted,
+    displayFitted,
     safeMarkers,
     open,
     selectedJointId,
     frame,
+    isDragging,
     rig.orientation?.groundLevelMeters,
   ]);
 
@@ -573,9 +599,11 @@ export function AutorigMarkerWizardDialog({
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-                const current = safeMarkers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
+                const jointId = dragRef.current.jointId;
+                const current = safeMarkers.find((item) => item.jointId === jointId)?.position ?? [0, 0, 0];
                 const nextPos = canvasToWorld(x, y, frame, current);
-                setMarkers((currentMarkers) => upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos));
+                // Functional update only — no skeleton refit while the pointer is down.
+                setMarkers((currentMarkers) => upsertMarker(currentMarkers, jointId, nextPos));
               }}
               onPointerUp={(event) => {
                 if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
@@ -727,7 +755,7 @@ export function AutorigMarkerWizardDialog({
             data-autorig-apply-skeleton
             disabled={issues.some((issue) => issue.code === 'missing')}
             onClick={() => {
-              const nextRig = applyFittedSkeletonToRig(rig, fitted);
+              const nextRig = applyFittedSkeletonToRig(rig, applyFitted);
               onSave(nextRig);
               onClose();
             }}
