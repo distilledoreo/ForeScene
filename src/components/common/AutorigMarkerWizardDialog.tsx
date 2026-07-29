@@ -18,6 +18,7 @@ import {
   markerJointsForMode,
   mirrorAllMarkers,
   mirrorMarkerAcrossSagittal,
+  sanitizeAutorigMarkers,
   suggestAutorigMarkers,
   upsertMarker,
   validateAutorigMarkers,
@@ -89,7 +90,10 @@ export function AutorigMarkerWizardDialog({
   );
 
   const [mode, setMode] = useState<AutorigMarkerMode>('full');
-  const [markers, setMarkers] = useState<AutorigMarker[]>(rig.markers?.length ? rig.markers : suggested);
+  const [markers, setMarkers] = useState<AutorigMarker[]>(() => {
+    const fromRig = sanitizeAutorigMarkers(rig.markers);
+    return fromRig.length > 0 ? fromRig : suggested;
+  });
   const [selectedJointId, setSelectedJointId] = useState<HumanJointId>('hips');
   const [past, setPast] = useState<HistoryEntry[]>([]);
   const [future, setFuture] = useState<HistoryEntry[]>([]);
@@ -125,7 +129,8 @@ export function AutorigMarkerWizardDialog({
 
   useEffect(() => {
     if (!open) return;
-    setMarkers(rig.markers?.length ? rig.markers : suggested);
+    const fromRig = sanitizeAutorigMarkers(rig.markers);
+    setMarkers(fromRig.length > 0 ? fromRig : suggested);
     setPast([]);
     setFuture([]);
     depthCenteredRef.current = false;
@@ -134,19 +139,21 @@ export function AutorigMarkerWizardDialog({
   }, [open, rig, suggested]);
 
   const required = markerJointsForMode(mode);
-  const issues = validateAutorigMarkers(markers, mode);
-  const fitted = fitSkeletonFromMarkers(markers, mode);
+  // Always sanitize: selected autorig characters mount this dialog even when closed.
+  const safeMarkers = useMemo(() => sanitizeAutorigMarkers(markers), [markers]);
+  const issues = validateAutorigMarkers(safeMarkers, mode);
+  const fitted = fitSkeletonFromMarkers(safeMarkers, mode);
 
   const commit = (next: AutorigMarker[]) => {
-    setPast((stack) => [...stack, { markers }]);
+    setPast((stack) => [...stack, { markers: safeMarkers }]);
     setFuture([]);
-    setMarkers(next);
+    setMarkers(sanitizeAutorigMarkers(next));
   };
 
   const centerDepth = () => {
     const root = canonicalPreviewRootRef.current;
     if (!root) return;
-    const result = centerAutorigMarkersDepth(markers, root);
+    const result = centerAutorigMarkersDepth(safeMarkers, root);
     commit(result.markers);
   };
 
@@ -191,8 +198,8 @@ export function AutorigMarkerWizardDialog({
     setPast((stack) => {
       if (stack.length === 0) return stack;
       const previous = stack[stack.length - 1]!;
-      setFuture((ahead) => [{ markers }, ...ahead]);
-      setMarkers(previous.markers);
+      setFuture((ahead) => [{ markers: safeMarkers }, ...ahead]);
+      setMarkers(sanitizeAutorigMarkers(previous.markers));
       return stack.slice(0, -1);
     });
   };
@@ -201,8 +208,8 @@ export function AutorigMarkerWizardDialog({
     setFuture((stack) => {
       if (stack.length === 0) return stack;
       const next = stack[0]!;
-      setPast((behind) => [...behind, { markers }]);
-      setMarkers(next.markers);
+      setPast((behind) => [...behind, { markers: safeMarkers }]);
+      setMarkers(sanitizeAutorigMarkers(next.markers));
       return stack.slice(1);
     });
   };
@@ -350,7 +357,7 @@ export function AutorigMarkerWizardDialog({
     drawBone(positions.rightLowerLeg, positions.rightFoot);
 
     for (const jointId of required) {
-      const marker = markers.find((item) => item.jointId === jointId);
+      const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
       const selected = selectedJointId === jointId;
@@ -367,7 +374,7 @@ export function AutorigMarkerWizardDialog({
 
     // Magnifier while dragging — zooms mesh under the marker via shared frame coords.
     if (dragRef.current) {
-      const marker = markers.find((item) => item.jointId === dragRef.current?.jointId);
+      const marker = safeMarkers.find((item) => item.jointId === dragRef.current?.jointId);
       if (marker) {
         const point = worldToCanvas(marker.position, frame);
         // Ensure mesh layer is current before sampling.
@@ -385,7 +392,7 @@ export function AutorigMarkerWizardDialog({
     }
   }, [
     fitted,
-    markers,
+    safeMarkers,
     open,
     required,
     selectedJointId,
@@ -396,7 +403,7 @@ export function AutorigMarkerWizardDialog({
 
   const hitTest = (x: number, y: number): HumanJointId | undefined => {
     for (const jointId of required) {
-      const marker = markers.find((item) => item.jointId === jointId);
+      const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
       if (Math.hypot(point.x - x, point.y - y) <= 12) return jointId;
@@ -507,7 +514,7 @@ export function AutorigMarkerWizardDialog({
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
                 const hit = hitTest(x, y) ?? selectedJointId;
                 setSelectedJointId(hit);
-                preDragMarkersRef.current = markers;
+                preDragMarkersRef.current = safeMarkers;
                 dragRef.current = { jointId: hit, pointerId: event.pointerId };
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
@@ -516,7 +523,7 @@ export function AutorigMarkerWizardDialog({
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-                const current = markers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
+                const current = safeMarkers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
                 const nextPos = canvasToWorld(x, y, frame, current);
                 setMarkers((currentMarkers) => {
                   const candidate = upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos);
@@ -542,7 +549,7 @@ export function AutorigMarkerWizardDialog({
             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Markers</div>
             <div className="max-h-64 space-y-1 overflow-y-auto">
               {required.map((jointId) => {
-                const present = markers.some((marker) => marker.jointId === jointId);
+                const present = safeMarkers.some((marker) => marker.jointId === jointId);
                 return (
                   <button
                     key={jointId}
@@ -613,7 +620,7 @@ export function AutorigMarkerWizardDialog({
             type="button"
             className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             data-autorig-reset-depth
-            onClick={() => commit(markers.map((marker) => ({
+            onClick={() => commit(safeMarkers.map((marker) => ({
               ...marker,
               position: [marker.position[0], marker.position[1], 0] as Vec3,
             })))}

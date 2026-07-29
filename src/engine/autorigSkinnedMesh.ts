@@ -414,7 +414,12 @@ export function extractWorldPositionsFromObject(root: THREE.Object3D): Float32Ar
 export function jointPositionsFromRig(rig: PoseableRigAsset): Partial<Record<HumanJointId, Vec3>> {
   const positions: Partial<Record<HumanJointId, Vec3>> = {};
   for (const marker of rig.markers ?? []) {
-    positions[marker.jointId] = [...marker.position] as Vec3;
+    if (!marker || typeof marker.jointId !== 'string' || !Array.isArray(marker.position)) continue;
+    const x = Number(marker.position[0]);
+    const y = Number(marker.position[1]);
+    const z = Number(marker.position[2]);
+    if (![x, y, z].every(Number.isFinite)) continue;
+    positions[marker.jointId] = [x, y, z];
   }
   // Prefer bind matrix translation when markers missing.
   for (const jointId of HUMAN_JOINT_IDS) {

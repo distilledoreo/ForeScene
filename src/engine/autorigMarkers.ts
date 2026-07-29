@@ -56,6 +56,39 @@ export function markerJointsForMode(mode: AutorigMarkerMode): readonly HumanJoin
   return mode === 'simple' ? AUTORIG_SIMPLE_MARKER_JOINTS : AUTORIG_REQUIRED_MARKER_JOINTS;
 }
 
+/** Drop null/undefined/malformed entries so UI/load never crash on `.jointId`. */
+export function isValidAutorigMarker(value: unknown): value is AutorigMarker {
+  if (!value || typeof value !== 'object') return false;
+  const marker = value as Partial<AutorigMarker>;
+  if (typeof marker.jointId !== 'string') return false;
+  if (!(HUMAN_JOINT_IDS as readonly string[]).includes(marker.jointId)) return false;
+  if (!Array.isArray(marker.position) || marker.position.length < 3) return false;
+  const x = Number(marker.position[0]);
+  const y = Number(marker.position[1]);
+  const z = Number(marker.position[2]);
+  return [x, y, z].every(Number.isFinite);
+}
+
+export function sanitizeAutorigMarkers(
+  markers: readonly unknown[] | null | undefined,
+): AutorigMarker[] {
+  if (!Array.isArray(markers)) return [];
+  const out: AutorigMarker[] = [];
+  for (const value of markers) {
+    if (!isValidAutorigMarker(value)) continue;
+    out.push({
+      id: typeof value.id === 'string' && value.id ? value.id : createId(`marker_${value.jointId}`),
+      jointId: value.jointId,
+      position: [
+        Number(value.position[0]),
+        Number(value.position[1]),
+        Number(value.position[2]),
+      ] as Vec3,
+    });
+  }
+  return out;
+}
+
 export function isLeftMarker(jointId: HumanJointId): boolean {
   return jointId.startsWith('left');
 }
@@ -90,12 +123,13 @@ export function areAutorigMarkersSuspiciouslyPlanar(
   markers: readonly AutorigMarker[],
   toleranceMeters = 0.015,
 ): boolean {
-  if (markers.length < 6) return false;
-  const depths = markers.map((marker) => marker.position[2]);
+  const safe = sanitizeAutorigMarkers(markers);
+  if (safe.length < 6) return false;
+  const depths = safe.map((marker) => marker.position[2]);
   const spread = Math.max(...depths) - Math.min(...depths);
   if (spread < Math.max(0.08, toleranceMeters * 4)) return true;
-  const meaningful = markers.filter((marker) => Math.abs(marker.position[2]) > toleranceMeters).length;
-  return meaningful / markers.length <= 0.5;
+  const meaningful = safe.filter((marker) => Math.abs(marker.position[2]) > toleranceMeters).length;
+  return meaningful / safe.length <= 0.5;
 }
 
 /**
@@ -109,6 +143,7 @@ export function centerAutorigMarkersDepth(
   canonicalMesh: THREE.Object3D,
   view: 'front' | 'side' = 'front',
 ): AutorigMarkerDepthResult {
+  const safeMarkers = sanitizeAutorigMarkers(markers);
   canonicalMesh.updateMatrixWorld(true);
   const bounds = new THREE.Box3().setFromObject(canonicalMesh);
   const meshes: THREE.Object3D[] = [];
@@ -124,7 +159,7 @@ export function centerAutorigMarkersDepth(
   const raycaster = new THREE.Raycaster();
   const centeredJointIds: HumanJointId[] = [];
   const frontView = view === 'front';
-  const next = markers.map((marker) => {
+  const next = safeMarkers.map((marker) => {
     const position = new THREE.Vector3(...marker.position);
     const padding = Math.max(bounds.getSize(new THREE.Vector3()).length() * 0.05, 0.05);
     const origin = frontView
@@ -205,7 +240,7 @@ export function suggestAutorigMarkers(context: AutorigMarkerSuggestionContext): 
 
 export function markersToMap(markers: readonly AutorigMarker[]): Map<HumanJointId, AutorigMarker> {
   const map = new Map<HumanJointId, AutorigMarker>();
-  for (const marker of markers) map.set(marker.jointId, marker);
+  for (const marker of sanitizeAutorigMarkers(markers)) map.set(marker.jointId, marker);
   return map;
 }
 
@@ -214,29 +249,32 @@ export function upsertMarker(
   jointId: HumanJointId,
   position: Vec3,
 ): AutorigMarker[] {
-  const existing = markers.find((marker) => marker.jointId === jointId);
+  const safe = sanitizeAutorigMarkers(markers);
+  const existing = safe.find((marker) => marker.jointId === jointId);
   if (existing) {
-    return markers.map((marker) => (
+    return safe.map((marker) => (
       marker.jointId === jointId ? { ...marker, position: [...position] as Vec3 } : marker
     ));
   }
-  return [...markers, { id: createId(`marker_${jointId}`), jointId, position: [...position] as Vec3 }];
+  return [...safe, { id: createId(`marker_${jointId}`), jointId, position: [...position] as Vec3 }];
 }
 
 export function mirrorMarkerAcrossSagittal(
   markers: readonly AutorigMarker[],
   jointId: HumanJointId,
 ): AutorigMarker[] {
-  const source = markers.find((marker) => marker.jointId === jointId);
+  const safe = sanitizeAutorigMarkers(markers);
+  const source = safe.find((marker) => marker.jointId === jointId);
   const mirrorId = AUTORIG_MARKER_MIRROR[jointId];
-  if (!source || !mirrorId) return [...markers];
+  if (!source || !mirrorId) return safe;
   const mirrored: Vec3 = [-source.position[0], source.position[1], source.position[2]];
-  return upsertMarker(markers, mirrorId, mirrored);
+  return upsertMarker(safe, mirrorId, mirrored);
 }
 
 export function mirrorAllMarkers(markers: readonly AutorigMarker[]): AutorigMarker[] {
-  let next = [...markers];
-  for (const marker of markers) {
+  const safe = sanitizeAutorigMarkers(markers);
+  let next = [...safe];
+  for (const marker of safe) {
     if (!isLeftMarker(marker.jointId)) continue;
     next = mirrorMarkerAcrossSagittal(next, marker.jointId);
   }
@@ -258,7 +296,8 @@ export function validateAutorigMarkers(
   markers: readonly AutorigMarker[],
   mode: AutorigMarkerMode = 'full',
 ): AutorigMarkerIssue[] {
-  const map = markersToMap(markers);
+  const safe = sanitizeAutorigMarkers(markers);
+  const map = markersToMap(safe);
   const issues: AutorigMarkerIssue[] = [];
   const required = markerJointsForMode(mode);
   for (const jointId of required) {
@@ -270,7 +309,7 @@ export function validateAutorigMarkers(
       });
     }
   }
-  if (required.every((jointId) => map.has(jointId)) && areAutorigMarkersSuspiciouslyPlanar(markers)) {
+  if (required.every((jointId) => map.has(jointId)) && areAutorigMarkersSuspiciouslyPlanar(safe)) {
     issues.push({
       code: 'planar',
       message: 'Most joints are nearly planar. Center depth or refine the Side view before generating weights.',
@@ -374,7 +413,7 @@ export function completeAutorigMarkers(
   markers: readonly AutorigMarker[],
   mode: AutorigMarkerMode = 'full',
 ): AutorigMarker[] {
-  let next = [...markers];
+  let next = sanitizeAutorigMarkers(markers);
   const map = () => markersToMap(next);
   const ensure = (jointId: HumanJointId, position: Vec3) => {
     if (!map().has(jointId)) next = upsertMarker(next, jointId, position);
@@ -486,8 +525,7 @@ export function fitSkeletonFromMarkers(
   markers: readonly AutorigMarker[],
   mode: AutorigMarkerMode = 'full',
 ): FittedPoseableSkeleton {
-  const completed = completeAutorigMarkers(markers, mode);
-  const map = markersToMap(completed);
+  const completed = completeAutorigMarkers(sanitizeAutorigMarkers(markers), mode);
   const jointPositions: Partial<Record<HumanJointId, Vec3>> = {};
   for (const marker of completed) {
     jointPositions[marker.jointId] = [...marker.position] as Vec3;
