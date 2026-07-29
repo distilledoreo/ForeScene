@@ -46,19 +46,24 @@ import {
 import {
   applyRegionEditDelta,
   createRegionEditDelta,
-  mirrorRegionOverrides,
   resolveRegionLabels,
   type AutorigBodyRegionId,
   type RegionEditHistoryEntry,
 } from '../../engine/autorig/regions';
 import {
+  applyBrushRegionCorrection,
   applyLassoRegionCorrection,
+  type AutorigCorrectionResult,
+  type BrushStrokePoint,
   type LassoPoint,
 } from '../../engine/autorig/regionSelection';
 import {
   createRegionSelectionPass,
   disposeRegionSelectionPass,
+  invalidateRegionSelectionPick,
+  pickVisibleTrianglesAlongBrushStroke,
   pickVisibleTrianglesInLasso,
+  updateRegionSelectionPassFromSkinnedRoot,
   type RegionSelectionPass,
 } from '../../engine/autorig/regionSelectionPass';
 import {
@@ -70,7 +75,9 @@ import {
   decodeRegionDraftBytes,
   encodeRegionDraftBytes,
   loadAutorigWizardDraft,
+  migrateAutorigWizardStep,
   saveAutorigWizardDraft,
+  type AutorigPoseFixMode,
   type AutorigWizardStepId,
 } from '../../engine/autorig/regionDraftStore';
 import { autoLabelBodyRegions } from '../../engine/autorig/regions';
@@ -90,12 +97,16 @@ import {
   subscribeAutoriggedCharacterReady,
 } from '../../engine/autoriggedPoseableCharacter';
 import { applySemanticPoseToBones, captureBoneRests, updateSkinnedMeshes } from '../../engine/poseableCharacter';
+import { HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
 import { Modal } from '../common/Modal';
 import { AutorigWizardProgress } from './AutorigWizardProgress';
 import { AutorigJointStep } from './AutorigJointStep';
-import { AutorigBodyPartsStep, type AutorigBodyPartsView } from './AutorigBodyPartsStep';
-import { AutorigPoseCheckStep } from './AutorigPoseCheckStep';
+import { AutorigPoseFixStep } from './AutorigPoseFixStep';
 import { AutorigLassoOverlay } from './AutorigLassoOverlay';
+import { AutorigBrushOverlay } from './AutorigBrushOverlay';
+import { useAutorigPaintSession } from './hooks/useAutorigPaintSession';
+import { collectPreviewMeshBindings } from './hooks/useAutorigPreviewSession';
+import type { AutorigFixTool } from './AutorigFixToolbar';
 
 interface MarkerHistoryEntry {
   markers: AutorigMarker[];
@@ -104,6 +115,7 @@ interface MarkerHistoryEntry {
 const CANVAS_W = 640;
 const CANVAS_H = 480;
 const REQUIRED_JOINTS = markerJointsForMode('full');
+const DEFAULT_BRUSH_RADIUS = 22;
 
 /** Preview instances own their material but share template geometry — dispose materials only. */
 function disposePreviewMaterials(root: THREE.Object3D | null): void {
@@ -125,9 +137,14 @@ function eventToCanvasPoint(
   };
 }
 
+function poseFromId(poseId: string): HumanPose | undefined {
+  if (poseId === 'neutral') return undefined;
+  return HUMAN_POSE_PRESETS.find((preset) => preset.id === poseId)?.pose;
+}
+
 /**
- * Three-stage guided autorig wizard: Joints → Body Parts → Check Pose.
- * Keeps Binder V1 weight generation for preview/apply until Binder V2 lands.
+ * Two-stage guided autorig wizard: Joints → Pose & Fix.
+ * Region painting happens on the posed preview (Fix deformation).
  */
 export interface AutorigWizardSaveOptions {
   regionOverrides?: Uint8Array | null;
@@ -150,8 +167,8 @@ export function AutorigRigWizardDialog({
   onSave: (next: PoseableRigAsset, options?: AutorigWizardSaveOptions) => void;
   sourceAssetId?: string;
   assets?: AssetRegistry;
-  /** Open directly on a step (e.g. Body Parts after topology-compatible rerig). */
-  initialStep?: AutorigWizardStepId;
+  /** Open directly on a step (legacy `regions`/`preview` map to Pose & Fix). */
+  initialStep?: AutorigWizardStepId | 'regions' | 'preview';
 }) {
   const height = rig.generationSettings?.approximateHeightMeters ?? 1.75;
   const poseHint = rig.generationSettings?.poseHint;
@@ -159,7 +176,7 @@ export function AutorigRigWizardDialog({
     ?? rig.originalSourceAssetId
     ?? rig.sourceMeshAssetId;
 
-  const [step, setStep] = useState<AutorigWizardStepId>(initialStep ?? 'joints');
+  const [step, setStep] = useState<AutorigWizardStepId>(() => migrateAutorigWizardStep(initialStep ?? 'joints'));
   const [markers, setMarkers] = useState<AutorigMarker[]>(() => {
     const fromRig = sanitizeAutorigMarkers(rig.markers);
     if (fromRig.length > 0) return fromRig;
@@ -174,7 +191,6 @@ export function AutorigRigWizardDialog({
   const [markerPast, setMarkerPast] = useState<MarkerHistoryEntry[]>([]);
   const [markerFuture, setMarkerFuture] = useState<MarkerHistoryEntry[]>([]);
   const [jointView, setJointView] = useState<'front' | 'side'>('front');
-  const [regionView, setRegionView] = useState<AutorigBodyPartsView>('front');
   const [previewView, setPreviewView] = useState<'front' | 'side' | 'perspective'>('front');
   const [meshReady, setMeshReady] = useState(false);
   const [meshBounds, setMeshBounds] = useState<OrientedMeshBounds | null>(null);
@@ -187,12 +203,21 @@ export function AutorigRigWizardDialog({
   const [regionConfidence, setRegionConfidence] = useState<Float32Array | null>(null);
   const [regionPast, setRegionPast] = useState<RegionEditHistoryEntry[]>([]);
   const [regionFuture, setRegionFuture] = useState<RegionEditHistoryEntry[]>([]);
-  const [labeling, setLabeling] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [updatingDeformation, setUpdatingDeformation] = useState(false);
   const [topology, setTopology] = useState<CanonicalAutorigTopology | null>(null);
   const [lassoPoints, setLassoPoints] = useState<LassoPoint[]>([]);
   const [lassoDrawing, setLassoDrawing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [poseIssues, setPoseIssues] = useState<AutorigDeformationIssue[]>([]);
+  const [fixEnabled, setFixEnabled] = useState(false);
+  const [fixTool, setFixTool] = useState<AutorigFixTool>('brush');
+  const [restoreAutomatic, setRestoreAutomatic] = useState(false);
+  const [showAssignments, setShowAssignments] = useState(false);
+  const [correctionResult, setCorrectionResult] = useState<AutorigCorrectionResult | null>(null);
+  const [perspectiveYaw, setPerspectiveYaw] = useState(0);
+
+  const paint = useAutorigPaintSession(DEFAULT_BRUSH_RADIUS);
 
   const suggested = useMemo(
     () => suggestAutorigMarkers({
@@ -225,14 +250,23 @@ export function AutorigRigWizardDialog({
   const selectionPassRef = useRef<RegionSelectionPass | null>(null);
   const lassoPointsRef = useRef<LassoPoint[]>([]);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const orbitRef = useRef<{ pointerId: number; lastX: number } | null>(null);
+  const activePoseRef = useRef<HumanPose | undefined>(undefined);
+  const activePoseIdRef = useRef('neutral');
+  const pendingPoseRestoreRef = useRef(false);
   suggestedRef.current = suggested;
   assetsRef.current = assets;
+  activePoseIdRef.current = activeTestPose;
 
-  const orthoView: AutorigMarkerView = step === 'regions'
-    ? regionView
-    : step === 'preview'
-      ? (previewView === 'side' ? 'side' : 'front')
-      : jointView;
+  const poseFixMode: AutorigPoseFixMode = !fixEnabled
+    ? 'inspect'
+    : fixTool === 'lasso'
+      ? 'lasso'
+      : 'paint';
+
+  const orthoView: AutorigMarkerView = step === 'pose-fix'
+    ? (previewView === 'side' ? 'side' : 'front')
+    : jointView;
 
   const frame = useMemo(
     () => computeAutorigOrthoFrame({
@@ -260,9 +294,18 @@ export function AutorigRigWizardDialog({
     setRegionOverrides(null);
     setRegionConfidence(null);
     setTopology(null);
-    setStep(initialStep ?? 'joints');
+    setStep(migrateAutorigWizardStep(initialStep ?? 'joints'));
     setActiveTestPose('neutral');
+    activePoseRef.current = undefined;
     setDirty(false);
+    setFixEnabled(false);
+    setFixTool('brush');
+    setRestoreAutomatic(false);
+    setShowAssignments(false);
+    setCorrectionResult(null);
+    setPerspectiveYaw(0);
+    setPreparing(false);
+    setUpdatingDeformation(false);
     depthCenteredRef.current = false;
 
     void loadAutorigWizardDraft(rig.id).then((draft) => {
@@ -270,12 +313,21 @@ export function AutorigRigWizardDialog({
       try {
         const draftMarkers = sanitizeAutorigMarkers(JSON.parse(draft.markersJson) as AutorigMarker[]);
         if (draftMarkers.length > 0) setMarkers(draftMarkers);
-        if (draft.step) setStep(draft.step);
+        if (draft.step) setStep(migrateAutorigWizardStep(draft.step));
         const suggestedBytes = decodeRegionDraftBytes(draft.suggestedB64);
         const overrideBytes = decodeRegionDraftBytes(draft.overridesB64);
         if (suggestedBytes) setSuggestedRegions(suggestedBytes);
         if (overrideBytes) setRegionOverrides(overrideBytes);
-        if (draft.previewPoseId) setActiveTestPose(draft.previewPoseId);
+        if (draft.previewPoseId) {
+          setActiveTestPose(draft.previewPoseId);
+          activePoseRef.current = poseFromId(draft.previewPoseId);
+        }
+        if (draft.mode === 'paint' || draft.mode === 'lasso') {
+          setFixEnabled(true);
+          setFixTool(draft.mode === 'lasso' ? 'lasso' : 'brush');
+        }
+        if (draft.selectedRegion) setSelectedRegion(draft.selectedRegion as AutorigBodyRegionId);
+        if (typeof draft.brushRadius === 'number') paint.setBrushRadius(draft.brushRadius);
         setDirty(true);
       } catch {
         // Ignore corrupt drafts.
@@ -285,6 +337,8 @@ export function AutorigRigWizardDialog({
     return () => {
       cancelled = true;
     };
+  // paint.setBrushRadius is stable.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rig, initialStep]);
 
   const safeMarkers = useMemo(() => sanitizeAutorigMarkers(markers), [markers]);
@@ -342,7 +396,7 @@ export function AutorigRigWizardDialog({
     });
   };
 
-  const commitRegionOverrides = (next: Uint8Array) => {
+  const commitRegionOverrides = (next: Uint8Array, options?: { skipHistory?: boolean }) => {
     if (!regionOverrides) {
       setRegionOverrides(next);
       setDirty(true);
@@ -350,10 +404,14 @@ export function AutorigRigWizardDialog({
     }
     const delta = createRegionEditDelta(regionOverrides, next);
     if (!delta) return;
-    setRegionPast((stack) => [...stack, delta]);
-    setRegionFuture([]);
+    if (!options?.skipHistory) {
+      setRegionPast((stack) => [...stack, delta]);
+      setRegionFuture([]);
+    }
     setRegionOverrides(next);
     setDirty(true);
+    setUpdatingDeformation(true);
+    pendingPoseRestoreRef.current = true;
   };
 
   const undoRegions = () => {
@@ -365,6 +423,9 @@ export function AutorigRigWizardDialog({
     setRegionFuture((ahead) => [entry, ...ahead]);
     setRegionOverrides(next);
     setDirty(true);
+    setUpdatingDeformation(true);
+    pendingPoseRestoreRef.current = true;
+    setCorrectionResult(null);
   };
 
   const redoRegions = () => {
@@ -376,16 +437,9 @@ export function AutorigRigWizardDialog({
     setRegionPast((behind) => [...behind, entry]);
     setRegionOverrides(next);
     setDirty(true);
-  };
-
-  const mirrorLabels = () => {
-    if (!topology || !regionOverrides) return;
-    const next = mirrorRegionOverrides({
-      positions: topology.positions,
-      overrides: regionOverrides,
-      topologyHash: topology.topologyHash,
-    });
-    commitRegionOverrides(next);
+    setUpdatingDeformation(true);
+    pendingPoseRestoreRef.current = true;
+    setCorrectionResult(null);
   };
 
   const attachPreviewMesh = useCallback(() => {
@@ -517,92 +571,54 @@ export function AutorigRigWizardDialog({
   useEffect(() => {
     if (!open) return;
     renderMeshLayer();
-  }, [open, frame, meshReady, step, renderMeshLayer, resolvedRegions]);
+  }, [open, frame, meshReady, step, renderMeshLayer, resolvedRegions, showAssignments, perspectiveYaw]);
 
-  // Auto-label when entering Body Parts with fitted joints + mesh.
-  useEffect(() => {
-    if (!open || step !== 'regions' || !meshSource) return;
-    if (suggestedRegions && topology) return;
-    let cancelled = false;
-    setLabeling(true);
+  /** Ensure topology + automatic regions exist before Pose & Fix. */
+  const ensureRegionsReady = useCallback((options?: { forceRelabel?: boolean }): boolean => {
+    if (!meshSource) return false;
+    if (!options?.forceRelabel && suggestedRegions && topology) return true;
     try {
-      const built = buildCanonicalAutorigTopology(meshSource);
-      if (cancelled) return;
+      const built = (!options?.forceRelabel && topology)
+        ? topology
+        : buildCanonicalAutorigTopology(meshSource);
       setTopology(built);
       const labeled = autoLabelBodyRegions({
         topology: built,
         jointPositions: applyFitted.jointPositions,
         poseHint,
       });
-      if (cancelled) return;
-      setSuggestedRegions((current) => current ?? labeled.suggested);
-      setRegionOverrides((current) => current ?? new Uint8Array(labeled.suggested.length));
-      setRegionConfidence(labeled.confidence);
-    } finally {
-      if (!cancelled) setLabeling(false);
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [open, step, meshSource, suggestedRegions, topology, applyFitted.jointPositions, poseHint]);
-
-  // Region color overlay while on Body Parts.
-  useEffect(() => {
-    if (!open || step !== 'regions' || !meshSource || !resolvedRegions) {
-      regionColorDisposerRef.current?.();
-      regionColorDisposerRef.current = null;
-      const gl = glRef.current;
-      if (gl && meshSource && step !== 'preview') {
-        setAutorigMarkerPreviewRoot(gl, meshSource);
-        renderMeshLayer();
+      if (options?.forceRelabel) {
+        setSuggestedRegions(labeled.suggested);
+        // Preserve existing hard overrides when topology length matches.
+        setRegionOverrides((current) => (
+          current && current.length === labeled.suggested.length
+            ? current
+            : new Uint8Array(labeled.suggested.length)
+        ));
+      } else {
+        setSuggestedRegions((current) => current ?? labeled.suggested);
+        setRegionOverrides((current) => current ?? new Uint8Array(labeled.suggested.length));
       }
-      return;
-    }
-    if (!regionColorDisposerRef.current) {
-      regionColorDisposerRef.current = applyRegionColorsToPreviewRoot({
-        root: meshSource,
-        labels: resolvedRegions,
-        confidence: regionConfidence,
-      });
-    } else {
-      updateRegionColorsOnPreviewRoot({
-        root: meshSource,
-        labels: resolvedRegions,
-        confidence: regionConfidence,
-      });
-    }
-    const gl = glRef.current;
-    if (gl) {
-      setAutorigMarkerPreviewRoot(gl, meshSource);
-      renderMeshLayer();
-    }
-  }, [open, step, meshSource, resolvedRegions, regionConfidence, renderMeshLayer]);
-
-  // Selection pass lifecycle for Body Parts.
-  useEffect(() => {
-    if (!open || step !== 'regions' || !topology) {
-      disposeRegionSelectionPass(selectionPassRef.current);
-      selectionPassRef.current = null;
-      return;
-    }
-    try {
-      selectionPassRef.current = createRegionSelectionPass({
-        topology,
-        width: CANVAS_W,
-        height: CANVAS_H,
-      });
+      setRegionConfidence(labeled.confidence);
+      return true;
     } catch {
-      selectionPassRef.current = null;
+      return false;
     }
-    return () => {
-      disposeRegionSelectionPass(selectionPassRef.current);
-      selectionPassRef.current = null;
-    };
-  }, [open, step, topology]);
+  }, [meshSource, suggestedRegions, topology, applyFitted.jointPositions, poseHint]);
 
-  // ---- Deformation preview (Binder V1 until PR 78) ----
+  // Auto-prepare when landing on Pose & Fix (draft restore / rerig handoff).
+  useEffect(() => {
+    if (!open || step !== 'pose-fix' || !meshSource) return;
+    if (suggestedRegions && topology) return;
+    setPreparing(true);
+    const ok = ensureRegionsReady();
+    setPreparing(false);
+    if (!ok) setCorrectionResult({ status: 'failed', message: 'Could not prepare pose preview.' });
+  }, [open, step, meshSource, suggestedRegions, topology, ensureRegionsReady]);
+
+  // ---- Deformation preview (Binder V2 when regions are ready) ----
   const meshData = useMemo(() => {
-    if (step !== 'preview' || !meshSource) return null;
+    if (step !== 'pose-fix' || !meshSource) return null;
     return {
       positions: extractCanonicalVertexPositions(meshSource),
       topology: extractCanonicalTopology(meshSource),
@@ -612,7 +628,7 @@ export function AutorigRigWizardDialog({
   const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
 
   const previewBuffers = useMemo(() => {
-    if (!meshData || !meshBounds || step !== 'preview') return undefined;
+    if (!meshData || !meshBounds || step !== 'pose-fix') return undefined;
     if (resolvedRegions && topology) {
       return generateRegionConstrainedSkinWeights({
         positions: meshData.positions,
@@ -633,7 +649,7 @@ export function AutorigRigWizardDialog({
   }, [meshData, meshBounds, previewFitted, height, step, resolvedRegions, topology]);
 
   const deformationPreview = useMemo(() => {
-    if (!previewBuffers || !meshSource || step !== 'preview') return null;
+    if (!previewBuffers || !meshSource || step !== 'pose-fix') return null;
     const root = buildSkinnedCharacterFromTemplate({ template: meshSource, rig: previewRig, buffers: previewBuffers });
     const bones = new Map<HumanJointId, THREE.Bone>();
     root.traverse((node) => {
@@ -641,19 +657,80 @@ export function AutorigRigWizardDialog({
       const jointId = bone.userData.humanJointId as HumanJointId | undefined;
       if (bone.isBone && jointId) bones.set(jointId, bone);
     });
-    return { root, bones, rests: captureBoneRests(bones) };
+    const meshBindings = collectPreviewMeshBindings(root);
+    return { root, bones, rests: captureBoneRests(bones), meshBindings, buffers: previewBuffers };
   }, [meshSource, previewRig, previewBuffers, step]);
+
+  const applyActivePoseToPreview = useCallback((preview = deformationPreview) => {
+    if (!preview) return;
+    applySemanticPoseToBones({
+      bones: preview.bones,
+      rests: preview.rests,
+      pose: activePoseRef.current,
+      canonicalPoseBases: previewRig.canonicalPoseBases,
+    });
+    updateSkinnedMeshes(preview.root);
+    if (previewView === 'perspective') {
+      preview.root.rotation.y = perspectiveYaw;
+    } else {
+      preview.root.rotation.y = 0;
+    }
+    preview.root.updateMatrixWorld(true);
+  }, [deformationPreview, previewRig.canonicalPoseBases, previewView, perspectiveYaw]);
+
+  const refreshSelectionPassFromPose = useCallback(() => {
+    const pass = selectionPassRef.current;
+    const preview = deformationPreview;
+    if (!pass || !preview) return;
+    try {
+      updateRegionSelectionPassFromSkinnedRoot(pass, preview.root, preview.meshBindings);
+    } catch {
+      invalidateRegionSelectionPick(pass);
+    }
+  }, [deformationPreview]);
 
   useEffect(() => {
     const gl = glRef.current;
     if (!gl || !open) return;
-    if (step === 'preview' && deformationPreview) {
+    if (step === 'pose-fix' && deformationPreview) {
+      applyActivePoseToPreview(deformationPreview);
       setAutorigMarkerPreviewRoot(gl, deformationPreview.root);
+
+      // Show assignments overlay on the skinned preview when requested.
+      regionColorDisposerRef.current?.();
+      regionColorDisposerRef.current = null;
+      if (showAssignments && resolvedRegions) {
+        regionColorDisposerRef.current = applyRegionColorsToPreviewRoot({
+          root: deformationPreview.root,
+          labels: resolvedRegions,
+          confidence: regionConfidence,
+        });
+      }
+
+      renderMeshLayer();
+      refreshSelectionPassFromPose();
+      if (pendingPoseRestoreRef.current) {
+        pendingPoseRestoreRef.current = false;
+        setUpdatingDeformation(false);
+      }
     } else if (meshSource) {
+      regionColorDisposerRef.current?.();
+      regionColorDisposerRef.current = null;
       setAutorigMarkerPreviewRoot(gl, meshSource);
+      renderMeshLayer();
     }
-    renderMeshLayer();
-  }, [open, step, deformationPreview, meshSource, renderMeshLayer]);
+  }, [
+    open,
+    step,
+    deformationPreview,
+    meshSource,
+    renderMeshLayer,
+    applyActivePoseToPreview,
+    showAssignments,
+    resolvedRegions,
+    regionConfidence,
+    refreshSelectionPassFromPose,
+  ]);
 
   useEffect(() => {
     if (!deformationPreview) return;
@@ -665,19 +742,30 @@ export function AutorigRigWizardDialog({
     };
   }, [deformationPreview]);
 
-  const previewTestPose = (poseId: string, pose: HumanPose | undefined) => {
-    if (!deformationPreview || !meshData) return;
-    applySemanticPoseToBones({
-      bones: deformationPreview.bones,
-      rests: deformationPreview.rests,
-      pose,
-      canonicalPoseBases: previewRig.canonicalPoseBases,
-    });
-    updateSkinnedMeshes(deformationPreview.root);
-    renderMeshLayer();
-    setActiveTestPose(poseId);
+  // Selection pass lifecycle for Pose & Fix (posed picking).
+  useEffect(() => {
+    if (!open || step !== 'pose-fix' || !topology) {
+      disposeRegionSelectionPass(selectionPassRef.current);
+      selectionPassRef.current = null;
+      return;
+    }
+    try {
+      selectionPassRef.current = createRegionSelectionPass({
+        topology,
+        width: CANVAS_W,
+        height: CANVAS_H,
+      });
+    } catch {
+      selectionPassRef.current = null;
+    }
+    return () => {
+      disposeRegionSelectionPass(selectionPassRef.current);
+      selectionPassRef.current = null;
+    };
+  }, [open, step, topology]);
 
-    // Collect posed vertex positions for plain-language diagnostics.
+  const runPoseDiagnostics = useCallback((poseId: string, pose: HumanPose | undefined) => {
+    if (!deformationPreview || !meshData) return;
     const posed: number[] = [];
     deformationPreview.root.traverse((node) => {
       const mesh = node as THREE.SkinnedMesh;
@@ -690,7 +778,7 @@ export function AutorigRigWizardDialog({
         posed.push(point.x, point.y, point.z);
       }
     });
-    const issues = poseId === 'neutral' || !pose
+    const nextIssues = poseId === 'neutral' || !pose
       ? validateNeutralDeformation({
         restPositions: meshData.positions,
         posedPositions: posed,
@@ -704,8 +792,35 @@ export function AutorigRigWizardDialog({
         heightMeters: height,
         buffers: previewBuffers,
       });
-    setPoseIssues(issues);
+    setPoseIssues(nextIssues);
+  }, [
+    deformationPreview,
+    meshData,
+    resolvedRegions,
+    topology,
+    previewFitted.jointPositions,
+    height,
+    previewBuffers,
+  ]);
+
+  const previewTestPose = (poseId: string, pose: HumanPose | undefined) => {
+    if (!deformationPreview || !meshData) return;
+    activePoseRef.current = pose;
+    applyActivePoseToPreview(deformationPreview);
+    renderMeshLayer();
+    refreshSelectionPassFromPose();
+    setActiveTestPose(poseId);
+    setDirty(true);
+    runPoseDiagnostics(poseId, pose);
   };
+
+  // Re-apply yaw / diagnostics when perspective yaw changes.
+  useEffect(() => {
+    if (step !== 'pose-fix' || !deformationPreview) return;
+    applyActivePoseToPreview(deformationPreview);
+    renderMeshLayer();
+    refreshSelectionPassFromPose();
+  }, [perspectiveYaw, step, deformationPreview, applyActivePoseToPreview, renderMeshLayer, refreshSelectionPassFromPose]);
 
   // 2D marker overlay (joints step only).
   useEffect(() => {
@@ -806,12 +921,16 @@ export function AutorigRigWizardDialog({
     draftTimerRef.current = setTimeout(() => {
       void saveAutorigWizardDraft({
         rigId: rig.id,
+        version: 2,
         step,
+        mode: poseFixMode,
         markersJson: JSON.stringify(safeMarkers),
         topologyHash: topology?.topologyHash,
         suggestedB64: suggestedRegions ? encodeRegionDraftBytes(suggestedRegions) : undefined,
         overridesB64: regionOverrides ? encodeRegionDraftBytes(regionOverrides) : undefined,
         previewPoseId: activeTestPose,
+        selectedRegion,
+        brushRadius: paint.brushRadius,
         updatedAt: Date.now(),
       });
     }, 400);
@@ -823,12 +942,31 @@ export function AutorigRigWizardDialog({
     dirty,
     rig.id,
     step,
+    poseFixMode,
     safeMarkers,
     topology?.topologyHash,
     suggestedRegions,
     regionOverrides,
     activeTestPose,
+    selectedRegion,
+    paint.brushRadius,
   ]);
+
+  // Brush size shortcuts while Fix mode is active.
+  useEffect(() => {
+    if (!open || step !== 'pose-fix' || !fixEnabled) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === '[') {
+        event.preventDefault();
+        paint.nudgeBrushRadius(-4);
+      } else if (event.key === ']') {
+        event.preventDefault();
+        paint.nudgeBrushRadius(4);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, step, fixEnabled, paint]);
 
   const hitTest = (x: number, y: number): HumanJointId | undefined => {
     for (const jointId of REQUIRED_JOINTS) {
@@ -840,13 +978,112 @@ export function AutorigRigWizardDialog({
     return undefined;
   };
 
+  const projectCanonicalVertex = useCallback((vertexIndex: number) => {
+    const pass = selectionPassRef.current;
+    const positions = pass?.posedCanonicalPositions ?? topology?.positions;
+    if (!positions) return null;
+    const i = vertexIndex * 3;
+    if (i + 2 >= positions.length) return null;
+    const position: Vec3 = [positions[i]!, positions[i + 1]!, positions[i + 2]!];
+    return worldToCanvas(position, frame);
+  }, [topology, frame]);
+
+  const flashSelectionTint = useCallback((vertexIndices: ArrayLike<number>, region: AutorigBodyRegionId | 'automatic') => {
+    if (!deformationPreview || !resolvedRegions) return;
+    const tinted = new Uint8Array(resolvedRegions);
+    const code = region === 'automatic'
+      ? 0
+      : ({
+        head: 1, torso: 2, leftArm: 3, rightArm: 4, leftLeg: 5, rightLeg: 6,
+      } as const)[region];
+    for (let i = 0; i < vertexIndices.length; i += 1) {
+      const v = vertexIndices[i]! >>> 0;
+      if (v < tinted.length && code > 0) tinted[v] = code;
+    }
+    if (!regionColorDisposerRef.current) {
+      regionColorDisposerRef.current = applyRegionColorsToPreviewRoot({
+        root: deformationPreview.root,
+        labels: tinted,
+        confidence: regionConfidence,
+      });
+    } else {
+      updateRegionColorsOnPreviewRoot({
+        root: deformationPreview.root,
+        labels: tinted,
+        confidence: regionConfidence,
+      });
+    }
+    renderMeshLayer();
+  }, [deformationPreview, resolvedRegions, regionConfidence, renderMeshLayer]);
+
+  const finishBrushStroke = (points: BrushStrokePoint[]) => {
+    if (!topology || !suggestedRegions || !regionOverrides || !resolvedRegions) {
+      setCorrectionResult({ status: 'empty' });
+      return;
+    }
+    if (points.length === 0) {
+      setCorrectionResult({ status: 'empty' });
+      return;
+    }
+
+    applyActivePoseToPreview();
+    refreshSelectionPassFromPose();
+
+    let visibleTriangleIds: Uint32Array | null = null;
+    const pass = selectionPassRef.current;
+    if (pass) {
+      try {
+        visibleTriangleIds = pickVisibleTrianglesAlongBrushStroke({
+          pass,
+          frame,
+          stroke: points,
+        });
+      } catch {
+        visibleTriangleIds = null;
+      }
+    }
+
+    const correction = applyBrushRegionCorrection({
+      topology,
+      suggested: suggestedRegions,
+      overrides: regionOverrides,
+      resolved: resolvedRegions,
+      region: selectedRegion,
+      stroke: points,
+      projectVertex: projectCanonicalVertex,
+      visibleTriangleIds,
+      restoreAutomatic,
+    });
+
+    setCorrectionResult(correction.result);
+    if (correction.result.status === 'empty' || correction.result.status === 'unchanged') {
+      return;
+    }
+    if (correction.result.status === 'changed') {
+      flashSelectionTint(
+        correction.affectedVertices,
+        restoreAutomatic ? 'automatic' : selectedRegion,
+      );
+      commitRegionOverrides(correction.overrides);
+    }
+  };
+
   const finishLasso = () => {
     const points = lassoPointsRef.current;
     setLassoDrawing(false);
     setLassoPoints([]);
     lassoPointsRef.current = [];
-    if (!topology || !suggestedRegions || !regionOverrides || !resolvedRegions) return;
-    if (points.length < 3) return;
+    if (!topology || !suggestedRegions || !regionOverrides || !resolvedRegions) {
+      setCorrectionResult({ status: 'empty' });
+      return;
+    }
+    if (points.length < 3) {
+      setCorrectionResult({ status: 'empty' });
+      return;
+    }
+
+    applyActivePoseToPreview();
+    refreshSelectionPassFromPose();
 
     let visibleTriangleIds: Uint32Array | null = null;
     const pass = selectionPassRef.current;
@@ -862,6 +1099,27 @@ export function AutorigRigWizardDialog({
       }
     }
 
+    if (restoreAutomatic) {
+      const correction = applyBrushRegionCorrection({
+        topology,
+        suggested: suggestedRegions,
+        overrides: regionOverrides,
+        resolved: resolvedRegions,
+        region: selectedRegion,
+        stroke: points.map((p) => ({ x: p.x, y: p.y, radius: 2 })),
+        projectVertex: projectCanonicalVertex,
+        visibleTriangleIds,
+        restoreAutomatic: true,
+      });
+      setCorrectionResult(correction.result);
+      if (correction.result.status === 'changed') {
+        flashSelectionTint(correction.affectedVertices, 'automatic');
+        commitRegionOverrides(correction.overrides);
+      }
+      return;
+    }
+
+    const previousOverrides = regionOverrides;
     const result = applyLassoRegionCorrection({
       topology,
       suggested: suggestedRegions,
@@ -869,34 +1127,61 @@ export function AutorigRigWizardDialog({
       resolved: resolvedRegions,
       region: selectedRegion,
       polygon: points,
-      projectVertex: (vertexIndex) => {
-        const i = vertexIndex * 3;
-        const position: Vec3 = [
-          topology.positions[i]!,
-          topology.positions[i + 1]!,
-          topology.positions[i + 2]!,
-        ];
-        return worldToCanvas(position, frame);
-      },
+      projectVertex: projectCanonicalVertex,
       visibleTriangleIds,
     });
-    if (result.affectedVertices.length === 0) return;
+
+    if (result.affectedVertices.length === 0) {
+      setCorrectionResult({ status: 'empty' });
+      return;
+    }
+
+    const nextResolved = resolveRegionLabels({
+      suggested: suggestedRegions,
+      overrides: result.overrides,
+    });
+    let changed = 0;
+    for (let v = 0; v < nextResolved.length; v += 1) {
+      if (nextResolved[v] !== resolvedRegions[v] || result.overrides[v] !== previousOverrides[v]) {
+        changed += 1;
+      }
+    }
+    if (changed === 0) {
+      setCorrectionResult({ status: 'unchanged', region: selectedRegion });
+      return;
+    }
+
+    setCorrectionResult({
+      status: 'changed',
+      affectedVertexCount: changed,
+      oldRegions: [],
+      newRegion: selectedRegion,
+    });
+    flashSelectionTint(result.affectedVertices, selectedRegion);
     commitRegionOverrides(result.overrides);
   };
 
   const canContinueJoints = !issues.some((issue) => issue.code === 'missing');
-  const canContinueRegions = Boolean(resolvedRegions) && !labeling;
   const hasBlockingPoseIssues = poseIssues.some((issue) => issue.severity === 'blocking');
-  const uncertainHint = regionConfidence && suggestedRegions
-    ? (() => {
-      let uncertain = 0;
-      for (let i = 0; i < regionConfidence.length; i += 1) {
-        if ((regionConfidence[i] ?? 1) < 0.22) uncertain += 1;
-      }
-      if (uncertain === 0) return null;
-      return 'Pale areas are less certain — check those first.';
-    })()
-    : null;
+  const canApply = canContinueJoints && Boolean(previewBuffers) && !preparing && !hasBlockingPoseIssues;
+
+  const handleContinueToPoseFix = () => {
+    setPoseIssues([]);
+    setCorrectionResult(null);
+    setPreparing(true);
+    setActiveTestPose('neutral');
+    activePoseRef.current = undefined;
+    // Marker edits invalidate automatic regions — force a fresh label pass.
+    const ok = ensureRegionsReady({ forceRelabel: true });
+    setPreparing(false);
+    setStep('pose-fix');
+    if (!ok) {
+      setCorrectionResult({
+        status: 'failed',
+        message: 'Could not prepare pose preview.',
+      });
+    }
+  };
 
   const handleApply = () => {
     const nextRig = applyFittedSkeletonToRig(rig, applyFitted);
@@ -913,6 +1198,32 @@ export function AutorigRigWizardDialog({
   const handleClose = () => {
     onClose();
   };
+
+  const handleOrbitPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (previewView !== 'perspective') return false;
+    if (event.button === 2 || event.button === 1) {
+      orbitRef.current = { pointerId: event.pointerId, lastX: event.clientX };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return true;
+    }
+    return false;
+  };
+
+  const handleOrbitPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!orbitRef.current || orbitRef.current.pointerId !== event.pointerId) return false;
+    const dx = event.clientX - orbitRef.current.lastX;
+    orbitRef.current.lastX = event.clientX;
+    setPerspectiveYaw((yaw) => yaw + dx * 0.01);
+    return true;
+  };
+
+  const handleOrbitPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!orbitRef.current || orbitRef.current.pointerId !== event.pointerId) return;
+    orbitRef.current = null;
+  };
+
+  const showFixOverlay = step === 'pose-fix' && fixEnabled && Boolean(deformationPreview);
 
   return (
     <Modal open={open} onClose={handleClose} title="Rig character" size="xl">
@@ -980,7 +1291,48 @@ export function AutorigRigWizardDialog({
                 }}
               />
             )}
-            {step === 'regions' && (
+            {showFixOverlay && fixTool === 'brush' && (
+              <AutorigBrushOverlay
+                width={CANVAS_W}
+                height={CANVAS_H}
+                stroke={paint.stroke}
+                drawing={paint.drawing}
+                cursor={paint.cursor}
+                radius={paint.brushRadius}
+                region={selectedRegion}
+                restoreAutomatic={restoreAutomatic}
+                className="relative h-full w-full rounded-xl bg-transparent"
+                onPointerDown={(event) => {
+                  if (handleOrbitPointerDown(event)) return;
+                  if (event.button !== 0) return;
+                  const point = eventToCanvasPoint(event);
+                  paint.beginStroke(point.x, point.y);
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  if (handleOrbitPointerMove(event)) return;
+                  const point = eventToCanvasPoint(event);
+                  paint.setCursor({ x: point.x, y: point.y });
+                  if (!paint.drawing) return;
+                  paint.extendStroke(point.x, point.y);
+                }}
+                onPointerUp={(event) => {
+                  handleOrbitPointerUp(event);
+                  if (!paint.drawing) return;
+                  const points = paint.endStroke();
+                  finishBrushStroke(points);
+                }}
+                onPointerCancel={() => {
+                  orbitRef.current = null;
+                  paint.cancelStroke();
+                }}
+                onWheel={(event) => {
+                  event.preventDefault();
+                  paint.nudgeBrushRadius(event.deltaY > 0 ? -3 : 3);
+                }}
+              />
+            )}
+            {showFixOverlay && fixTool === 'lasso' && (
               <AutorigLassoOverlay
                 width={CANVAS_W}
                 height={CANVAS_H}
@@ -988,6 +1340,8 @@ export function AutorigRigWizardDialog({
                 drawing={lassoDrawing}
                 className="relative h-full w-full cursor-crosshair rounded-xl bg-transparent"
                 onPointerDown={(event) => {
+                  if (handleOrbitPointerDown(event)) return;
+                  if (event.button !== 0) return;
                   const point = eventToCanvasPoint(event);
                   lassoPointsRef.current = [point];
                   setLassoPoints([point]);
@@ -995,27 +1349,48 @@ export function AutorigRigWizardDialog({
                   event.currentTarget.setPointerCapture(event.pointerId);
                 }}
                 onPointerMove={(event) => {
+                  if (handleOrbitPointerMove(event)) return;
                   if (!lassoDrawing) return;
                   const point = eventToCanvasPoint(event);
                   lassoPointsRef.current = [...lassoPointsRef.current, point];
                   setLassoPoints(lassoPointsRef.current);
                 }}
-                onPointerUp={() => {
+                onPointerUp={(event) => {
+                  handleOrbitPointerUp(event);
                   if (!lassoDrawing) return;
                   finishLasso();
                 }}
                 onPointerCancel={() => {
+                  orbitRef.current = null;
                   setLassoDrawing(false);
                   setLassoPoints([]);
                   lassoPointsRef.current = [];
                 }}
               />
             )}
-            {step === 'preview' && (
+            {step === 'pose-fix' && !showFixOverlay && (
               <div
                 className="relative h-full w-full rounded-xl"
                 style={{ width: CANVAS_W, height: CANVAS_H }}
-                aria-hidden
+                data-autorig-pose-inspect-layer
+                onContextMenu={(event) => event.preventDefault()}
+                onPointerDown={(event) => {
+                  if (previewView !== 'perspective') return;
+                  if (event.button === 2 || event.button === 1) {
+                    orbitRef.current = { pointerId: event.pointerId, lastX: event.clientX };
+                    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
+                    event.preventDefault();
+                  }
+                }}
+                onPointerMove={(event) => {
+                  if (!orbitRef.current || orbitRef.current.pointerId !== event.pointerId) return;
+                  const dx = event.clientX - orbitRef.current.lastX;
+                  orbitRef.current.lastX = event.clientX;
+                  setPerspectiveYaw((yaw) => yaw + dx * 0.01);
+                }}
+                onPointerUp={() => {
+                  orbitRef.current = null;
+                }}
               />
             )}
           </div>
@@ -1041,37 +1416,50 @@ export function AutorigRigWizardDialog({
                 issues={issues}
               />
             )}
-            {step === 'regions' && (
-              <AutorigBodyPartsStep
-                view={regionView}
-                onViewChange={setRegionView}
+            {step === 'pose-fix' && (
+              <AutorigPoseFixStep
+                view={previewView}
+                onViewChange={(view) => {
+                  setPreviewView(view);
+                  if (view !== 'perspective') setPerspectiveYaw(0);
+                }}
+                meshReady={meshReady}
+                preparing={preparing || (!previewBuffers && meshReady)}
+                updating={updatingDeformation}
+                activeTestPose={activeTestPose}
+                onSelectPose={previewTestPose}
+                fixEnabled={fixEnabled}
+                onFixEnabledChange={(value) => {
+                  setFixEnabled(value);
+                  setCorrectionResult(null);
+                  if (!value) {
+                    paint.cancelStroke();
+                    setLassoDrawing(false);
+                    setLassoPoints([]);
+                  }
+                }}
+                tool={fixTool}
+                onToolChange={setFixTool}
                 selectedRegion={selectedRegion}
                 onSelectRegion={setSelectedRegion}
-                meshReady={meshReady}
-                labeling={labeling}
-                uncertainHint={uncertainHint}
+                restoreAutomatic={restoreAutomatic}
+                onRestoreAutomaticChange={setRestoreAutomatic}
+                brushRadius={paint.brushRadius}
+                onBrushRadiusChange={paint.setBrushRadius}
+                showAssignments={showAssignments}
+                onShowAssignmentsChange={setShowAssignments}
                 canUndo={regionPast.length > 0}
                 canRedo={regionFuture.length > 0}
                 onUndo={undoRegions}
                 onRedo={redoRegions}
-                onMirrorLabels={mirrorLabels}
-              />
-            )}
-            {step === 'preview' && (
-              <AutorigPoseCheckStep
-                view={previewView}
-                onViewChange={setPreviewView}
-                meshReady={meshReady}
-                generating={!previewBuffers && meshReady}
-                activeTestPose={activeTestPose}
-                onSelectPose={previewTestPose}
+                correctionResult={correctionResult}
+                onAdjustJoint={() => {
+                  setFixEnabled(false);
+                  setStep('joints');
+                }}
                 warnings={previewBuffers?.warnings}
                 fallbackCount={previewBuffers?.fallbackVertexCount}
                 issues={poseIssues}
-                onFixBodyParts={() => {
-                  setPoseIssues([]);
-                  setStep('regions');
-                }}
               />
             )}
           </div>
@@ -1079,23 +1467,14 @@ export function AutorigRigWizardDialog({
 
         <div className="flex flex-wrap justify-between gap-2 border-t border-subtle pt-3">
           <div className="flex flex-wrap gap-2">
-            {step !== 'joints' && (
-              <button
-                type="button"
-                className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary"
-                data-autorig-back
-                onClick={() => setStep(step === 'preview' ? 'regions' : 'joints')}
-              >
-                {step === 'preview' ? 'Fix body parts' : 'Adjust joints'}
-              </button>
-            )}
-            {step === 'preview' && (
+            {step === 'pose-fix' && (
               <button
                 type="button"
                 className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary"
                 data-autorig-adjust-joints
                 onClick={() => {
                   setPoseIssues([]);
+                  setFixEnabled(false);
                   setStep('joints');
                 }}
               >
@@ -1113,40 +1492,21 @@ export function AutorigRigWizardDialog({
                 className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 data-autorig-continue-joints
                 disabled={!canContinueJoints}
-                onClick={() => {
-                  // Marker edits invalidate suggested regions.
-                  setSuggestedRegions(null);
-                  setTopology(null);
-                  setStep('regions');
-                }}
+                onClick={handleContinueToPoseFix}
               >
                 Continue
               </button>
             )}
-            {step === 'regions' && (
-              <button
-                type="button"
-                className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                data-autorig-continue-regions
-                disabled={!canContinueRegions}
-                onClick={() => {
-                  setPoseIssues([]);
-                  setStep('preview');
-                }}
-              >
-                Continue
-              </button>
-            )}
-            {step === 'preview' && (
+            {step === 'pose-fix' && (
               <button
                 type="button"
                 className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 data-autorig-apply-skeleton
-                disabled={!canContinueJoints || !previewBuffers || hasBlockingPoseIssues}
+                disabled={!canApply}
                 onClick={handleApply}
               >
                 <CheckCircle2 className="h-4 w-4" />
-                Looks good — Apply rig
+                Apply rig
               </button>
             )}
           </div>

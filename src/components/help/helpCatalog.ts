@@ -246,7 +246,7 @@ export const helpSections: readonly HelpSection[] = [
       {
         id: 'build-poseable-import',
         title: 'Import poseable character',
-        summary: 'A separate import path from graybox geometry. Establishes the poseable_rig asset lifecycle and the guided Joints → Body Parts → Check Pose wizard.',
+        summary: 'A separate import path from graybox geometry. Establishes the poseable_rig asset lifecycle and the guided Joints → Pose & Fix wizard.',
         controls: [
           { label: 'Choose GLB / glTF', description: 'Loads one primary upright humanoid and previews the original mesh with materials and textures preserved when possible.' },
           { label: 'Front / Up', description: 'Declares which source axes should face the camera (+Z) and world up (+Y).' },
@@ -255,8 +255,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Rest pose hint', description: 'Records whether the source is roughly an A-pose or T-pose for later marker suggestions.' },
           { label: 'Import character', description: 'Writes the unmodified source asset, a poseable_rig shell, and a Person scene object, then opens the rigging wizard.' },
           { label: 'Place joints', description: 'Move each dot to the matching joint. Front adjusts left/right and height; Side adjusts depth only.' },
-          { label: 'Check body parts', description: 'PanoRef colors the head, torso, arms, and legs. Loosely circle any area with the wrong color and choose the correct body part.' },
-          { label: 'Check the pose', description: 'Try several example poses. If part of the model bends with the wrong limb, return to Body Parts and relabel that area.' },
+          { label: 'Pose & Fix', description: 'Try example poses. Turn on Fix deformation to paint problem areas directly on the posed character, then Apply rig.' },
         ],
         notes: [
           'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',

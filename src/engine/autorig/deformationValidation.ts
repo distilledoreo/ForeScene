@@ -116,7 +116,7 @@ export function validateAutorigRigReady(params: {
         if (!Number.isFinite(w) || w < -1e-6) {
           issues.push({
             id: 'bad-weights',
-            message: 'Some skin weights look invalid. Return to Body Parts and try again.',
+            message: 'Some skin weights look invalid. Turn on Fix deformation and try again.',
             severity: 'blocking',
           });
           return issues;
@@ -135,7 +135,7 @@ export function validateAutorigRigReady(params: {
       if (Math.abs(sum - 1) > 0.05) {
         issues.push({
           id: 'weight-sum',
-          message: 'Some skin weights do not add up correctly. Regenerate from Body Parts.',
+          message: 'Some skin weights do not add up correctly. Turn on Fix deformation and try again.',
           severity: 'warning',
         });
         break;
@@ -174,7 +174,7 @@ export function analyzeDiagnosticPose(params: DeformationValidationInput): Autor
     if (![rx, ry, rz, px, py, pz].every(Number.isFinite)) {
       issues.push({
         id: 'nan-vertex',
-        message: 'Part of the model became invalid while posing. Return to Body Parts and relabel.',
+        message: 'Part of the model became invalid while posing. Turn on Fix deformation and relabel.',
         severity: 'blocking',
       });
       return issues;
@@ -230,7 +230,7 @@ export function analyzeDiagnosticPose(params: DeformationValidationInput): Autor
       'The {region} may be assigned incorrectly — it moves too far in this pose. Check the highlighted area.',
     ) ?? {
       id: 'explode',
-      message: 'Some parts move too far in this pose. Return to Body Parts and relabel the problem area.',
+      message: 'Some parts move too far in this pose. Turn on Fix deformation and paint the problem area.',
       vertexIndices: Uint32Array.from(explodeVerts.slice(0, 256)),
       severity: 'warning',
     });
