@@ -125,7 +125,7 @@ interface MarkerHistoryEntry {
 const CANVAS_W = 640;
 const CANVAS_H = 480;
 const REQUIRED_JOINTS = markerJointsForMode('full');
-const DEFAULT_BRUSH_RADIUS = 22;
+const DEFAULT_BRUSH_RADIUS = 36;
 
 /** Preview instances own their material but share template geometry — dispose materials only. */
 function disposePreviewMaterials(root: THREE.Object3D | null): void {
@@ -1207,6 +1207,9 @@ export function AutorigRigWizardDialog({
       projectVertex: projectCanonicalVertex,
       visibleTriangleIds,
       restoreAutomatic,
+      jointPositions: previewFitted.jointPositions,
+      posedPositions: pass?.posedCanonicalPositions ?? null,
+      reach: 'normal',
     });
 
     setCorrectionResult(correction.result);
@@ -1264,6 +1267,9 @@ export function AutorigRigWizardDialog({
         projectVertex: projectCanonicalVertex,
         visibleTriangleIds,
         restoreAutomatic: true,
+        jointPositions: previewFitted.jointPositions,
+        posedPositions: pass?.posedCanonicalPositions ?? null,
+        reach: 'normal',
       });
       setCorrectionResult(correction.result);
       if (correction.result.status === 'changed') {

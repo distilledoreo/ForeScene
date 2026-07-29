@@ -83,8 +83,8 @@ export function AutorigFixToolbar({
           </div>
           <input
             type="range"
-            min={8}
-            max={64}
+            min={10}
+            max={80}
             step={1}
             value={brushRadius}
             onChange={(event) => onBrushRadiusChange(Number(event.target.value))}
@@ -126,7 +126,7 @@ export function AutorigFixToolbar({
       </div>
 
       <p className="text-[11px] text-muted" data-autorig-fix-hint>
-        Paint with left drag · Rotate with right drag
+        One stroke selects the surrounding surface · Paint with left drag · Rotate with right drag
       </p>
     </div>
   );

@@ -141,8 +141,8 @@ export function buildDirtyVertexSet(params: {
   paintRings?: number;
   seamRings?: number;
 }): Uint32Array {
-  const paintRings = params.paintRings ?? 4;
-  const seamRings = params.seamRings ?? 2;
+  const paintRings = params.paintRings ?? 6;
+  const seamRings = params.seamRings ?? 3;
   const paintedExpanded = expandVertexRings({
     topology: params.topology,
     seeds: params.edit.changedVertices,

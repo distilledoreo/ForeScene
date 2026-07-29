@@ -134,17 +134,25 @@ describe('brush region correction', () => {
   });
 
   it('returns unchanged when painting an area that already matches', () => {
-    const topology = makeArmTorsoTopology();
-    // Entire painted neighborhood already tagged leftArm (including shared edge).
+    // Isolated arm-only triangle — grow has nowhere else to claim.
+    const topology = buildCanonicalTopologyFromBuffers({
+      positions: Float32Array.from([
+        70, 100, 0,
+        80, 100, 0,
+        75, 110, 0,
+      ]),
+      triangles: Uint32Array.from([0, 1, 2]),
+    });
     const suggested = new Uint8Array([
-      AUTORIG_REGION_CODE.torso,
       AUTORIG_REGION_CODE.leftArm,
-      AUTORIG_REGION_CODE.leftArm,
-      AUTORIG_REGION_CODE.torso,
       AUTORIG_REGION_CODE.leftArm,
       AUTORIG_REGION_CODE.leftArm,
     ]);
-    const overrides = new Uint8Array(suggested.length);
+    const overrides = new Uint8Array([
+      AUTORIG_REGION_CODE.leftArm,
+      AUTORIG_REGION_CODE.leftArm,
+      AUTORIG_REGION_CODE.leftArm,
+    ]);
     const resolved = resolveRegionLabels({ suggested, overrides });
     const result = applyBrushRegionCorrection({
       topology,
@@ -152,7 +160,7 @@ describe('brush region correction', () => {
       overrides,
       resolved,
       region: 'leftArm',
-      stroke: [{ x: 70, y: 110, radius: 18 }],
+      stroke: [{ x: 75, y: 105, radius: 18 }],
       projectVertex: (v) => ({
         x: topology.positions[v * 3]!,
         y: topology.positions[v * 3 + 1]!,

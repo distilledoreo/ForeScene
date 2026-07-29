@@ -1,9 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
 import type { BrushStrokePoint } from '../../../engine/autorig/regionSelection';
 
-const DEFAULT_BRUSH_RADIUS = 22;
-const MIN_BRUSH_RADIUS = 8;
-const MAX_BRUSH_RADIUS = 64;
+const DEFAULT_BRUSH_RADIUS = 36;
+const MIN_BRUSH_RADIUS = 10;
+const MAX_BRUSH_RADIUS = 80;
 
 export function clampBrushRadius(value: number): number {
   return Math.min(MAX_BRUSH_RADIUS, Math.max(MIN_BRUSH_RADIUS, value));

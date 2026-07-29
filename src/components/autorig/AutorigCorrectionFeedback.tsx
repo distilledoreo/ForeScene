@@ -12,10 +12,21 @@ export function formatAutorigCorrectionMessage(
       const label = result.newRegion === 'automatic'
         ? 'automatic'
         : AUTORIG_REGION_LABELS[result.newRegion];
+      const count = result.affectedVertexCount;
       if (result.newRegion === 'automatic') {
-        return `Restored ${result.affectedVertexCount} vertices to automatic.`;
+        return `Restored the selected surface (${count} vertices) to automatic.`;
       }
-      return `Updated ${result.affectedVertexCount} vertices to ${label}.`;
+      if (result.selectionKind === 'component') {
+        return `Selected the entire connected piece and assigned it to ${label} (${count} vertices).`;
+      }
+      if (result.selectionKind === 'expanded') {
+        const seed = result.seedVertexCount ?? 0;
+        if (seed > 0 && count > seed) {
+          return `Expanded your stroke across the surrounding surface and updated ${count} vertices to ${label}.`;
+        }
+        return `Updated the surrounding surface to ${label} (${count} vertices).`;
+      }
+      return `Updated ${count} vertices to ${label}.`;
     }
     case 'unchanged':
       return `This area already belongs to ${AUTORIG_REGION_LABELS[result.region]}. Try Adjust joint if it still bends incorrectly.`;

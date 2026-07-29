@@ -7,6 +7,11 @@ import {
   AUTORIG_REGION_ID_BY_CODE,
   isValidRegionCode,
 } from './regions';
+import {
+  smartGrowRegionPatch,
+  type SmartPaintReach,
+} from './smartRegionGrow';
+import type { HumanJointId, Vec3 } from '../../domain/types';
 
 export interface LassoPoint {
   x: number;
@@ -306,8 +311,11 @@ export type AutorigCorrectionResult =
   | {
       status: 'changed';
       affectedVertexCount: number;
+      seedVertexCount?: number;
       oldRegions: AutorigBodyRegionId[];
       newRegion: AutorigBodyRegionId | 'automatic';
+      /** How the selection was expanded beyond the raw stroke. */
+      selectionKind?: 'local' | 'expanded' | 'component';
     }
   | {
       status: 'unchanged';
@@ -371,8 +379,9 @@ export function classifyRegionCorrection(params: {
 }
 
 /**
- * Apply a brush (or precomputed triangle) region correction.
- * When `restoreAutomatic` is true, clears hard overrides instead of painting a region.
+ * Apply a brush (or precomputed triangle) region correction via Smart Paint.
+ * The raw stroke is only a seed — the patch expands across the logical surface.
+ * When `restoreAutomatic` is true, clears hard overrides on the grown patch.
  */
 export function applyBrushRegionCorrection(params: {
   topology: CanonicalAutorigTopology;
@@ -384,6 +393,9 @@ export function applyBrushRegionCorrection(params: {
   projectVertex: (vertexIndex: number) => { x: number; y: number } | null;
   visibleTriangleIds?: ArrayLike<number> | null;
   restoreAutomatic?: boolean;
+  jointPositions?: Partial<Record<HumanJointId, Vec3>> | null;
+  posedPositions?: Float32Array | null;
+  reach?: SmartPaintReach;
 }): {
   overrides: Uint8Array;
   affectedVertices: Uint32Array;
@@ -408,28 +420,26 @@ export function applyBrushRegionCorrection(params: {
     };
   }
 
-  if (!params.restoreAutomatic) {
-    const target = AUTORIG_REGION_CODE_BY_ID[params.region];
-    let allMatch = true;
-    for (let i = 0; i < seeds.length; i += 1) {
-      const v = seeds[i]! >>> 0;
-      if (v >= params.resolved.length || params.resolved[v] !== target) {
-        allMatch = false;
-        break;
-      }
-    }
-    if (allMatch) {
-      return {
-        overrides: new Uint8Array(params.overrides),
-        affectedVertices: new Uint32Array(0),
-        seedVertices: seeds,
-        result: { status: 'unchanged', region: params.region },
-      };
-    }
-  } else {
+  const grown = smartGrowRegionPatch({
+    topology: params.topology,
+    positions: params.posedPositions ?? params.topology.positions,
+    resolvedLabels: params.resolved,
+    seedTriangles: triangleIds,
+    seedVertices: seeds,
+    targetRegion: params.region,
+    jointPositions: params.jointPositions,
+    reach: params.reach ?? 'normal',
+  });
+
+  const patch = grown.expandedVertices.length > 0
+    ? grown.expandedVertices
+    : seeds;
+
+  let nextOverrides: Uint8Array;
+  if (params.restoreAutomatic) {
     let anyOverride = false;
-    for (let i = 0; i < seeds.length; i += 1) {
-      const v = seeds[i]! >>> 0;
+    for (let i = 0; i < patch.length; i += 1) {
+      const v = patch[i]!;
       if (v < params.overrides.length && params.overrides[v] !== AUTORIG_REGION_CODE.unknown) {
         anyOverride = true;
         break;
@@ -443,31 +453,14 @@ export function applyBrushRegionCorrection(params: {
         result: { status: 'unchanged', region: params.region },
       };
     }
-  }
-
-  let nextOverrides: Uint8Array;
-  let affected: Uint32Array;
-  if (params.restoreAutomatic) {
     nextOverrides = clearRegionOverridesAt({
       overrides: params.overrides,
-      vertexIndices: seeds,
+      vertexIndices: patch,
     });
-    affected = seeds;
   } else {
-    const expanded = expandRegionCorrection({
-      topology: params.topology,
-      resolved: params.resolved,
-      seedVertices: seeds,
-      region: params.region,
-      suggested: params.suggested,
-    });
-    const merged = new Set<number>();
-    for (let i = 0; i < seeds.length; i += 1) merged.add(seeds[i]!);
-    for (let i = 0; i < expanded.length; i += 1) merged.add(expanded[i]!);
-    affected = Uint32Array.from(merged);
     nextOverrides = applyRegionLassoOverride({
       overrides: params.overrides,
-      vertexIndices: affected,
+      vertexIndices: patch,
       region: params.region,
     });
   }
@@ -482,9 +475,27 @@ export function applyBrushRegionCorrection(params: {
     region: params.restoreAutomatic ? 'automatic' : params.region,
   });
 
+  if (result.status === 'changed') {
+    const selectionKind = grown.selectedWholeComponent
+      ? 'component'
+      : patch.length > seeds.length * 1.5
+        ? 'expanded'
+        : 'local';
+    return {
+      overrides: nextOverrides,
+      affectedVertices: patch,
+      seedVertices: seeds,
+      result: {
+        ...result,
+        seedVertexCount: grown.seedVertexCount || seeds.length,
+        selectionKind,
+      },
+    };
+  }
+
   return {
     overrides: nextOverrides,
-    affectedVertices: affected,
+    affectedVertices: result.status === 'unchanged' ? new Uint32Array(0) : patch,
     seedVertices: seeds,
     result,
   };
@@ -584,6 +595,7 @@ export function applyLassoRegionCorrection(params: {
   if (seeds.length === 0) {
     return { overrides: new Uint8Array(params.overrides), affectedVertices: new Uint32Array(0) };
   }
+  // Lasso keeps the classic connected-region expand; brush uses Smart Paint.
   const expanded = expandRegionCorrection({
     topology: params.topology,
     resolved: params.resolved,
@@ -591,7 +603,6 @@ export function applyLassoRegionCorrection(params: {
     region: params.region,
     suggested: params.suggested,
   });
-  // Always include explicit seeds even if expansion filtered nothing extra.
   const merged = new Set<number>();
   for (let i = 0; i < seeds.length; i += 1) merged.add(seeds[i]!);
   for (let i = 0; i < expanded.length; i += 1) merged.add(expanded[i]!);

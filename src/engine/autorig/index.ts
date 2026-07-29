@@ -12,6 +12,7 @@ export * from './regionConstrainedWeights';
 export * from './dirtyRegionSet';
 export * from './partialSkinUpdate';
 export * from './previewSession';
+export * from './smartRegionGrow';
 export * from './deformationValidation';
 export * from './workerProtocol';
 export {
