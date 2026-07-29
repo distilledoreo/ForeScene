@@ -46,6 +46,7 @@ import {
   extractCanonicalVertexPositions,
   prepareCanonicalAutorigMesh,
 } from './autorigCanonicalMesh';
+import { generateRegionMapForCanonicalRoot } from './autorig/generateRegionMap';
 
 
 const templates = new Map<string, THREE.Object3D>();
@@ -386,7 +387,7 @@ export async function generateSkinWeightsForRigAsset(params: {
   rig: PoseableRigAsset;
   sourceAssetId: string;
   assets?: AssetRegistry;
-}): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset }> {
+}): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset; regionAsset?: ProjectAsset }> {
   // Near-planar T-pose marker sets are valid; do not refuse weight generation on global Z spread.
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
   await ensureSkeletonCloneReady();
@@ -422,14 +423,30 @@ export async function generateSkinWeightsForRigAsset(params: {
     },
   };
   // Compact metadata only — weights live in the binary asset + runtime cache.
-  const rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
+  let rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
+
+  // Also persist the automatic six-region map for guided labeling / Binder V2.
+  let regionAsset: ProjectAsset | undefined;
+  try {
+    const regionResult = await generateRegionMapForCanonicalRoot({
+      root: canonical.root,
+      rig,
+      jointPositions,
+      sourceAssetId: params.sourceAssetId,
+    });
+    rig = regionResult.rig;
+    regionAsset = regionResult.regionAsset;
+  } catch {
+    // Region maps are additive in this milestone; skin generation still succeeds.
+  }
+
   const cacheKey = skinBufferCacheKey({
     skinAssetId: skinAsset.id,
     rigId: rig.id,
     rigGenerationVersion: rig.rigGenerationVersion,
   });
   setCachedSkinBuffers(cacheKey, buffers);
-  return { rig, skinAsset };
+  return { rig, skinAsset, ...(regionAsset ? { regionAsset } : {}) };
 }
 
 /**

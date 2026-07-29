@@ -176,6 +176,18 @@ export interface PoseableRigGenerationSettings {
 }
 
 /**
+ * Compact reference to a binary six-region body-part map (one Uint8 per vertex).
+ * Labels themselves live in a model binary asset — never in project JSON.
+ */
+export interface PoseableRegionMapReference {
+  version: 1;
+  regionAssetId: string;
+  vertexCount: number;
+  topologyHash: string;
+  sourceAssetId: string;
+}
+
+/**
  * Serializable poseable-character rig asset.
  * 2A establishes the lifecycle shell; 2B/2C fill markers, bind matrices, and skin.
  * Large vertex/skin arrays stay in binary assets — not ordinary project JSON.
@@ -212,9 +224,20 @@ export interface PoseableRigAsset {
     /** Binary payload asset id for indices+weights (required for production skins). */
     skinAssetId?: string;
   };
+  /**
+   * Six-region body-part map used by guided labeling / Binder V2.
+   * Binary labels are referenced by `regionAssetId` — not embedded here.
+   */
+  regionMap?: PoseableRegionMapReference;
   markers?: AutorigMarker[];
   /** Bump when weight/fitting algorithms change so assets can be regenerated. */
   rigGenerationVersion?: number;
+  /**
+   * Independent binder algorithm version (region-constrained weights).
+   * Distinct from {@link rigGenerationVersion} so marker/skeleton changes and
+   * weight-solver changes can invalidate separately.
+   */
+  binderVersion?: number;
   /** Legacy baked weights/binds must be regenerated before this rig is usable. */
   requiresRerigging?: boolean;
   /**

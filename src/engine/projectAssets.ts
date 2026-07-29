@@ -20,6 +20,7 @@ export function getReferencedProjectAssetIds(project: LocationProject): Set<stri
       if (rig?.sourceMeshAssetId) referenced.add(rig.sourceMeshAssetId);
       if (rig?.meshAssetId) referenced.add(rig.meshAssetId);
       if (rig?.skin?.skinAssetId) referenced.add(rig.skin.skinAssetId);
+      if (rig?.regionMap?.regionAssetId) referenced.add(rig.regionMap.regionAssetId);
     }
   }
   for (const pano of project.panoRefs) {
