@@ -5,6 +5,7 @@ import {
 } from '../engine/autorig/topology';
 import {
   autoLabelBodyRegions,
+  ensureAllVerticesLabeled,
   resolveRegionLabels,
 } from '../engine/autorig/regions';
 import type {
@@ -72,6 +73,8 @@ self.onmessage = (event: MessageEvent<AutorigWorkerRequest>) => {
         adjacencyOffsets: topology.adjacencyOffsets,
         adjacencyVertices: topology.adjacencyVertices,
         vertexComponent: topology.vertexComponent,
+        componentOffsets: topology.componentOffsets,
+        componentVertices: topology.componentVertices,
       });
       return;
     }
@@ -95,6 +98,19 @@ self.onmessage = (event: MessageEvent<AutorigWorkerRequest>) => {
         jointPositions: request.jointPositions,
         poseHint: request.poseHint,
       });
+      const vertexCount = labeled.suggested.length;
+      const overrides = request.overrides && request.overrides.length === vertexCount
+        ? new Uint8Array(request.overrides)
+        : new Uint8Array(vertexCount);
+      const withOverrides = resolveRegionLabels({
+        suggested: labeled.suggested,
+        overrides,
+      });
+      const resolved = ensureAllVerticesLabeled({
+        labels: withOverrides,
+        topology,
+        jointPositions: request.jointPositions,
+      });
       if (cancelledJobs.has(request.jobId)) {
         post({ kind: 'cancelled', jobId: request.jobId });
         return;
@@ -104,11 +120,15 @@ self.onmessage = (event: MessageEvent<AutorigWorkerRequest>) => {
         jobId: request.jobId,
         topologyHash: request.topologyHash ?? topology.topologyHash,
         suggested: labeled.suggested,
+        overrides,
+        resolved,
         confidence: labeled.confidence,
         uncertainVertexCount: labeled.uncertainVertexCount,
         adjacencyOffsets: topology.adjacencyOffsets,
         adjacencyVertices: topology.adjacencyVertices,
         vertexComponent: topology.vertexComponent,
+        componentOffsets: topology.componentOffsets,
+        componentVertices: topology.componentVertices,
         componentCount: topology.componentCount,
       });
       return;

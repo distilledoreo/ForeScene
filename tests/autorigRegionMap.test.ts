@@ -11,21 +11,15 @@ import {
   AUTORIG_REGION_CODE,
   autoLabelBodyRegions,
   applyRegionEditDelta,
+  clearMirrorCorrespondenceCache,
   createRegionEditDelta,
   ensureAllVerticesLabeled,
+  getOrBuildMirrorCorrespondence,
   mirrorRegionOverrides,
   normalizeRegionLabels,
   resolveRegionLabels,
 } from '../src/engine/autorig/regions';
-import {
-  decodeRegionMapBinary,
-  encodeRegionMapBinary,
-  regionMapMatchesTopology,
-  writeRegionMapBinaryAsset,
-  loadRegionMapLabelsFromUri,
-  applyRegionMapToRig,
-} from '../src/engine/autorig/regionPersistence';
-import { buildAndClassifyRegionsFromBuffers } from '../src/engine/autorig/generateRegionMap';
+import { buildAndClassifyRegionsFromBuffers, generateRegionMapFromBuffers } from '../src/engine/autorig/generateRegionMap';
 import { suggestAutorigMarkers, fitSkeletonFromMarkers } from '../src/engine/autorigMarkers';
 import { prepareCanonicalAutorigMesh } from '../src/engine/autorigCanonicalMesh';
 import { getReferencedProjectAssetIds, pruneUnreferencedProjectAssets } from '../src/engine/projectAssets';
@@ -36,6 +30,14 @@ import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
 import { resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import type { PoseableRigAsset, SceneObject } from '../src/domain/types';
 import { HUMAN_JOINT_IDS } from '../src/engine/humanPose';
+import {
+  decodeRegionMapBinary,
+  encodeRegionMapBinary,
+  regionMapMatchesTopology,
+  writeRegionMapBinaryAsset,
+  loadRegionMapLabelsFromUri,
+  applyRegionMapToRig,
+} from '../src/engine/autorig/regionPersistence';
 
 function makeSeparatedHumanoidPositions(): {
   positions: Float32Array;
@@ -130,13 +132,35 @@ describe('autorig topology', () => {
 });
 
 describe('autorig region map', () => {
-  it('round-trips binary region labels', () => {
-    const labels = Uint8Array.from([1, 2, 3, 4, 5, 6, 2, 2]);
-    const encoded = encodeRegionMapBinary({ labels, topologyHash: 'abc123def4567890' });
+  it('round-trips binary region labels with separate overrides', () => {
+    const resolved = Uint8Array.from([1, 2, 3, 4, 5, 6, 2, 2]);
+    const overrides = Uint8Array.from([0, 4, 0, 0, 0, 0, 0, 3]);
+    const encoded = encodeRegionMapBinary({
+      resolved,
+      overrides,
+      topologyHash: 'abc123def4567890',
+    });
     const decoded = decodeRegionMapBinary(encoded);
+    expect(decoded.formatVersion).toBe(2);
     expect(decoded.vertexCount).toBe(8);
     expect(decoded.topologyHash).toBe('abc123def4567890');
-    expect(Array.from(decoded.labels)).toEqual(Array.from(labels));
+    expect(Array.from(decoded.resolved)).toEqual(Array.from(resolved));
+    expect(Array.from(decoded.overrides)).toEqual(Array.from(overrides));
+  });
+
+  it('reads legacy v1 binaries as resolved-only with empty overrides', () => {
+    // Manually craft a v1 payload: magic, version=1, count, hashLen, hash, labels.
+    const labels = Uint8Array.from([1, 2, 3]);
+    const hash = new TextEncoder().encode('legacyhash000001');
+    const header = new Uint32Array([0x47524e50, 1, 3, hash.length]);
+    const bytes = new Uint8Array(header.byteLength + hash.length + labels.length);
+    bytes.set(new Uint8Array(header.buffer), 0);
+    bytes.set(hash, header.byteLength);
+    bytes.set(labels, header.byteLength + hash.length);
+    const decoded = decodeRegionMapBinary(bytes.buffer);
+    expect(decoded.formatVersion).toBe(1);
+    expect(Array.from(decoded.resolved)).toEqual([1, 2, 3]);
+    expect(Array.from(decoded.overrides)).toEqual([0, 0, 0]);
   });
 
   it('detects topology-hash mismatches', () => {
@@ -176,6 +200,7 @@ describe('autorig region map', () => {
   });
 
   it('mirrors left/right hard overrides across X=0', () => {
+    clearMirrorCorrespondenceCache();
     const positions = Float32Array.from([
       0.4, 1, 0,
       -0.4, 1, 0,
@@ -186,8 +211,72 @@ describe('autorig region map', () => {
       0,
       0,
     ]);
-    const mirrored = mirrorRegionOverrides({ positions, overrides, tolerance: 0.1 });
+    const mirrored = mirrorRegionOverrides({
+      positions,
+      overrides,
+      tolerance: 0.1,
+      topologyHash: 'mirror_fixture',
+    });
     expect(mirrored[1]).toBe(AUTORIG_REGION_CODE.rightArm);
+    // Cached correspondence should be reused for the same topology hash.
+    const again = getOrBuildMirrorCorrespondence({
+      positions,
+      tolerance: 0.1,
+      topologyHash: 'mirror_fixture',
+    });
+    expect(again[0]).toBe(1);
+    expect(again[1]).toBe(0);
+  });
+
+  it('preserves hard overrides when regenerating suggested labels', () => {
+    const fixture = makeSeparatedHumanoidPositions();
+    const first = buildAndClassifyRegionsFromBuffers({
+      positions: fixture.positions,
+      triangles: fixture.triangles,
+      jointPositions: fixture.jointPositions,
+    });
+    const overrides = new Uint8Array(first.suggested.length);
+    overrides[0] = AUTORIG_REGION_CODE.torso; // force head seed → torso
+    const second = buildAndClassifyRegionsFromBuffers({
+      positions: fixture.positions,
+      triangles: fixture.triangles,
+      jointPositions: fixture.jointPositions,
+      overrides,
+    });
+    expect(second.overrides[0]).toBe(AUTORIG_REGION_CODE.torso);
+    expect(second.resolved[0]).toBe(AUTORIG_REGION_CODE.torso);
+    // Non-overridden limb seeds stay automatic.
+    expect(second.overrides[6]).toBe(0);
+    expect(second.resolved[6]).toBe(AUTORIG_REGION_CODE.leftArm);
+  });
+
+  it('persists resolved and overrides together through generateRegionMapFromBuffers', async () => {
+    resetModelAssetStoreForTests();
+    const fixture = makeSeparatedHumanoidPositions();
+    const overrides = new Uint8Array(fixture.positions.length / 3);
+    overrides[0] = AUTORIG_REGION_CODE.torso;
+    const rig: PoseableRigAsset = {
+      version: 1,
+      id: 'rig_gen_buffers',
+      skeletonJoints: [...HUMAN_JOINT_IDS],
+      originalSourceAssetId: 'src_gen',
+      generationSettings: { approximateHeightMeters: 1.75, poseHint: 'a-pose' },
+    };
+    const result = await generateRegionMapFromBuffers({
+      positions: fixture.positions,
+      triangles: fixture.triangles,
+      jointPositions: fixture.jointPositions,
+      rig,
+      sourceAssetId: 'src_gen',
+      overrides,
+      preferWorker: false,
+    });
+    expect(result.usedWorker).toBe(false);
+    expect(result.overrides[0]).toBe(AUTORIG_REGION_CODE.torso);
+    expect(result.resolved[0]).toBe(AUTORIG_REGION_CODE.torso);
+    const decoded = await loadRegionMapLabelsFromUri(result.regionAsset.uri);
+    expect(Array.from(decoded.overrides)).toEqual(Array.from(result.overrides));
+    expect(Array.from(decoded.resolved)).toEqual(Array.from(result.resolved));
   });
 
   it('auto-labels separated A-pose landmarks into the six regions', () => {
@@ -251,14 +340,17 @@ describe('autorig region map', () => {
 
   it('persists region assets and keeps them reachable for pruning', async () => {
     resetModelAssetStoreForTests();
-    const labels = Uint8Array.from([1, 2, 3, 4, 5, 6]);
+    const resolved = Uint8Array.from([1, 2, 3, 4, 5, 6]);
+    const overrides = Uint8Array.from([0, 0, 4, 0, 0, 0]);
     const written = await writeRegionMapBinaryAsset({
-      labels,
+      resolved,
+      overrides,
       topologyHash: 'topo_test_hash_01',
       sourceAssetId: 'src_region',
     });
     const decoded = await loadRegionMapLabelsFromUri(written.uri);
-    expect(Array.from(decoded.labels)).toEqual(Array.from(labels));
+    expect(Array.from(decoded.resolved)).toEqual(Array.from(resolved));
+    expect(Array.from(decoded.overrides)).toEqual(Array.from(overrides));
 
     let rig: PoseableRigAsset = {
       version: 1,
@@ -382,13 +474,20 @@ describe('autorig region map', () => {
 });
 
 describe('connected component helpers', () => {
-  it('reports isolated vertices as their own components', () => {
-    const { vertexComponent, componentCount } = computeConnectedComponents(
+  it('reports isolated vertices as their own components with CSR lists', () => {
+    const {
+      vertexComponent,
+      componentCount,
+      componentOffsets,
+      componentVertices,
+    } = computeConnectedComponents(
       3,
       new Uint32Array([0, 0, 0, 0]),
       new Uint32Array(0),
     );
     expect(componentCount).toBe(3);
     expect(Array.from(vertexComponent)).toEqual([0, 1, 2]);
+    expect(Array.from(componentOffsets)).toEqual([0, 1, 2, 3]);
+    expect(Array.from(componentVertices)).toEqual([0, 1, 2]);
   });
 });

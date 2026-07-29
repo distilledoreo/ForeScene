@@ -111,6 +111,7 @@ export function runAutorigAutoLabel(
     topologyHash: input.topologyHash,
     jointPositions: input.jointPositions,
     poseHint: input.poseHint,
+    overrides: input.overrides,
   };
   return runAutorigWorkerJob(request, onProgress);
 }

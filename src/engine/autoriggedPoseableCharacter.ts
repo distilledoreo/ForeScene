@@ -426,6 +426,7 @@ export async function generateSkinWeightsForRigAsset(params: {
   let rig = applySkinBuffersToRig(params.rig, buffers, skinAsset.id);
 
   // Also persist the automatic six-region map for guided labeling / Binder V2.
+  // Extract typed arrays here; classification runs in a worker when available.
   let regionAsset: ProjectAsset | undefined;
   try {
     const regionResult = await generateRegionMapForCanonicalRoot({
@@ -433,6 +434,7 @@ export async function generateSkinWeightsForRigAsset(params: {
       rig,
       jointPositions,
       sourceAssetId: params.sourceAssetId,
+      preferWorker: true,
     });
     rig = regionResult.rig;
     regionAsset = regionResult.regionAsset;

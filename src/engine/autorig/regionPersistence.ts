@@ -5,13 +5,21 @@ import { putModelAsset, getRegisteredModelAssetBytes, getModelAsset } from '../m
 
 /** Magic ASCII "PNRG" as little-endian Uint32. */
 export const REGION_MAP_MAGIC = 0x47524e50; // 'P''N''R''G' little-endian → PNRG
-export const REGION_MAP_FORMAT_VERSION = 1;
+/** v1: resolved labels only. v2: resolved + hard overrides (0 = automatic). */
+export const REGION_MAP_FORMAT_VERSION = 2;
+export const REGION_MAP_FORMAT_VERSION_V1 = 1;
 
-export interface DecodedRegionMapAsset {
+/** Persisted body-part map: resolved display labels + hard user overrides. */
+export interface PersistedRegionMap {
+  resolved: Uint8Array;
+  /** 0 means automatic / no hard override. */
+  overrides: Uint8Array;
+}
+
+export interface DecodedRegionMapAsset extends PersistedRegionMap {
   formatVersion: number;
   vertexCount: number;
   topologyHash: string;
-  labels: Uint8Array;
 }
 
 function encodeUtf8(value: string): Uint8Array {
@@ -23,14 +31,25 @@ function decodeUtf8(bytes: Uint8Array): string {
 }
 
 /**
- * Serialize region labels to the PNRG binary format:
+ * Serialize resolved + override labels to the PNRG binary format (v2):
  * Header: magic, formatVersion, vertexCount, topologyHashLength, topologyHash
- * Payload: Uint8 region code per vertex
+ * Payload: Uint8 resolved[vertexCount], Uint8 overrides[vertexCount]
  */
 export function encodeRegionMapBinary(params: {
-  labels: Uint8Array;
+  resolved: Uint8Array;
+  overrides?: Uint8Array | null;
   topologyHash: string;
+  /** @deprecated Prefer `resolved`. Accepted for call-site migration. */
+  labels?: Uint8Array;
 }): ArrayBuffer {
+  const resolved = params.resolved ?? params.labels;
+  if (!resolved) throw new Error('Region map encode requires resolved labels.');
+  const overrides = params.overrides && params.overrides.length === resolved.length
+    ? params.overrides
+    : new Uint8Array(resolved.length);
+  if (overrides.length !== resolved.length) {
+    throw new Error('Region map overrides length must match resolved labels.');
+  }
   const hashBytes = encodeUtf8(params.topologyHash);
   if (hashBytes.length > 0xffff) {
     throw new Error('Topology hash exceeds binary header capacity.');
@@ -38,15 +57,17 @@ export function encodeRegionMapBinary(params: {
   const headerWords = new Uint32Array([
     REGION_MAP_MAGIC,
     REGION_MAP_FORMAT_VERSION,
-    params.labels.length >>> 0,
+    resolved.length >>> 0,
     hashBytes.length >>> 0,
   ]);
   const bytes = new Uint8Array(
-    headerWords.byteLength + hashBytes.length + params.labels.length,
+    headerWords.byteLength + hashBytes.length + resolved.length + overrides.length,
   );
   bytes.set(new Uint8Array(headerWords.buffer), 0);
   bytes.set(hashBytes, headerWords.byteLength);
-  bytes.set(params.labels, headerWords.byteLength + hashBytes.length);
+  const payloadStart = headerWords.byteLength + hashBytes.length;
+  bytes.set(resolved, payloadStart);
+  bytes.set(overrides, payloadStart + resolved.length);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
@@ -62,23 +83,40 @@ export function decodeRegionMapBinary(buffer: ArrayBuffer): DecodedRegionMapAsse
   if (magic !== REGION_MAP_MAGIC) {
     throw new Error('Region map binary has unexpected magic.');
   }
-  if (formatVersion !== REGION_MAP_FORMAT_VERSION) {
+  if (
+    formatVersion !== REGION_MAP_FORMAT_VERSION
+    && formatVersion !== REGION_MAP_FORMAT_VERSION_V1
+  ) {
     throw new Error(`Unsupported region map format version ${formatVersion}.`);
   }
   const hashStart = 16;
   const hashEnd = hashStart + hashLength;
-  const labelsStart = hashEnd;
-  const labelsEnd = labelsStart + vertexCount;
-  if (buffer.byteLength < labelsEnd) {
+  const resolvedStart = hashEnd;
+  const resolvedEnd = resolvedStart + vertexCount;
+  if (buffer.byteLength < resolvedEnd) {
     throw new Error('Region map binary payload is truncated.');
   }
   const hashBytes = new Uint8Array(buffer, hashStart, hashLength);
-  const labels = new Uint8Array(buffer.slice(labelsStart, labelsEnd));
+  const resolved = new Uint8Array(buffer.slice(resolvedStart, resolvedEnd));
+
+  let overrides: Uint8Array;
+  if (formatVersion >= REGION_MAP_FORMAT_VERSION) {
+    const overridesEnd = resolvedEnd + vertexCount;
+    if (buffer.byteLength < overridesEnd) {
+      throw new Error('Region map binary overrides payload is truncated.');
+    }
+    overrides = new Uint8Array(buffer.slice(resolvedEnd, overridesEnd));
+  } else {
+    // v1 had only a single labels array — treat everything as automatic.
+    overrides = new Uint8Array(vertexCount);
+  }
+
   return {
     formatVersion,
     vertexCount,
     topologyHash: decodeUtf8(hashBytes),
-    labels,
+    resolved,
+    overrides,
   };
 }
 
@@ -93,12 +131,21 @@ export function regionMapMatchesTopology(
 }
 
 export async function writeRegionMapBinaryAsset(params: {
-  labels: Uint8Array;
+  resolved: Uint8Array;
+  overrides?: Uint8Array | null;
   topologyHash: string;
   sourceAssetId: string;
+  /** @deprecated Prefer `resolved`. */
+  labels?: Uint8Array;
 }): Promise<{ assetId: string; uri: string; byteLength: number; reference: PoseableRegionMapReference }> {
+  const resolved = params.resolved ?? params.labels;
+  if (!resolved) throw new Error('Region map write requires resolved labels.');
+  const overrides = params.overrides && params.overrides.length === resolved.length
+    ? params.overrides
+    : new Uint8Array(resolved.length);
   const payload = encodeRegionMapBinary({
-    labels: params.labels,
+    resolved,
+    overrides,
     topologyHash: params.topologyHash,
   });
   const assetId = createId('poseable_region');
@@ -107,7 +154,7 @@ export async function writeRegionMapBinaryAsset(params: {
   const reference: PoseableRegionMapReference = {
     version: 1,
     regionAssetId: assetId,
-    vertexCount: params.labels.length,
+    vertexCount: resolved.length,
     topologyHash: params.topologyHash,
     sourceAssetId: params.sourceAssetId,
   };
@@ -136,6 +183,7 @@ export function createRegionMapProjectAsset(params: {
     createdAt: new Date().toISOString(),
     metadata: {
       poseableRegionMap: true,
+      regionMapFormatVersion: REGION_MAP_FORMAT_VERSION,
       byteLength: params.byteLength,
       topologyHash: params.topologyHash,
       vertexCount: params.vertexCount,

@@ -33,6 +33,12 @@ export interface CanonicalAutorigTopology {
   /** Connected component id per vertex (−1 unused). */
   vertexComponent: Int32Array;
   componentCount: number;
+  /**
+   * CSR listing of vertices per component:
+   * componentVertices[componentOffsets[c] .. componentOffsets[c+1])
+   */
+  componentOffsets: Uint32Array;
+  componentVertices: Uint32Array;
 
   topologyHash: string;
 }
@@ -172,7 +178,12 @@ export function computeConnectedComponents(
   vertexCount: number,
   adjacencyOffsets: Uint32Array,
   adjacencyVertices: Uint32Array,
-): { vertexComponent: Int32Array; componentCount: number } {
+): {
+  vertexComponent: Int32Array;
+  componentCount: number;
+  componentOffsets: Uint32Array;
+  componentVertices: Uint32Array;
+} {
   const vertexComponent = new Int32Array(vertexCount);
   vertexComponent.fill(-1);
   let componentCount = 0;
@@ -197,7 +208,27 @@ export function computeConnectedComponents(
       }
     }
   }
-  return { vertexComponent, componentCount };
+
+  // CSR component → vertex list so callers never rescan the full mesh per component.
+  const componentOffsets = new Uint32Array(componentCount + 1);
+  for (let v = 0; v < vertexCount; v += 1) {
+    const c = vertexComponent[v]!;
+    if (c >= 0) componentOffsets[c + 1]! += 1;
+  }
+  for (let c = 0; c < componentCount; c += 1) {
+    componentOffsets[c + 1]! += componentOffsets[c]!;
+  }
+  const componentVertices = new Uint32Array(vertexCount);
+  const write = new Uint32Array(componentCount);
+  for (let v = 0; v < vertexCount; v += 1) {
+    const c = vertexComponent[v]!;
+    if (c < 0) continue;
+    const slot = componentOffsets[c]! + write[c]!;
+    componentVertices[slot] = v;
+    write[c]! += 1;
+  }
+
+  return { vertexComponent, componentCount, componentOffsets, componentVertices };
 }
 
 function defaultSingleMeshParts(
@@ -238,7 +269,12 @@ export function buildCanonicalTopologyFromBuffers(input: TopologyBuffersInput): 
   }
 
   const { adjacencyOffsets, adjacencyVertices } = buildVertexAdjacency(vertexCount, triangles);
-  const { vertexComponent, componentCount } = computeConnectedComponents(
+  const {
+    vertexComponent,
+    componentCount,
+    componentOffsets,
+    componentVertices,
+  } = computeConnectedComponents(
     vertexCount,
     adjacencyOffsets,
     adjacencyVertices,
@@ -255,6 +291,8 @@ export function buildCanonicalTopologyFromBuffers(input: TopologyBuffersInput): 
     adjacencyVertices,
     vertexComponent,
     componentCount,
+    componentOffsets,
+    componentVertices,
     topologyHash,
   };
 }

@@ -237,18 +237,23 @@ export function resolveRegionLabels(params: ResolveRegionMapParams): Uint8Array 
 
 /**
  * Mirror left/right hard overrides across X=0 by nearest opposite vertex.
- * Returns a new override buffer (does not mutate).
+ * Uses a uniform grid + cached correspondence so large meshes stay linear.
  */
 export function mirrorRegionOverrides(params: {
   positions: Float32Array;
   overrides: Uint8Array;
   tolerance?: number;
+  topologyHash?: string;
 }): Uint8Array {
   const { positions, overrides } = params;
   const vertexCount = Math.floor(positions.length / 3);
   const out = new Uint8Array(overrides);
   const tolerance = params.tolerance ?? estimateMirrorTolerance(positions);
-  const tolSq = tolerance * tolerance;
+  const correspondence = getOrBuildMirrorCorrespondence({
+    positions,
+    tolerance,
+    topologyHash: params.topologyHash,
+  });
 
   const swapCode = (code: number): number => {
     if (code === AUTORIG_REGION_CODE.leftArm) return AUTORIG_REGION_CODE.rightArm;
@@ -269,25 +274,105 @@ export function mirrorRegionOverrides(params: {
     ) {
       continue;
     }
+    const opposite = correspondence[v]!;
+    if (opposite >= 0) out[opposite] = swapCode(code);
+  }
+  return out;
+}
+
+/** Clear the mirror-correspondence cache (tests / topology changes). */
+export function clearMirrorCorrespondenceCache(): void {
+  mirrorCorrespondenceCache.clear();
+}
+
+const mirrorCorrespondenceCache = new Map<string, Int32Array>();
+const MAX_MIRROR_CACHE = 4;
+
+function cellKey(ix: number, iy: number, iz: number): string {
+  return `${ix},${iy},${iz}`;
+}
+
+/**
+ * Build (and cache) nearest reflected-vertex correspondence.
+ * mirror[v] = opposite vertex index, or -1 when none is within tolerance.
+ */
+export function getOrBuildMirrorCorrespondence(params: {
+  positions: Float32Array;
+  tolerance: number;
+  topologyHash?: string;
+}): Int32Array {
+  const vertexCount = Math.floor(params.positions.length / 3);
+  const cacheKey = params.topologyHash
+    ? `${params.topologyHash}:${params.tolerance.toFixed(6)}:${vertexCount}`
+    : null;
+  if (cacheKey) {
+    const hit = mirrorCorrespondenceCache.get(cacheKey);
+    if (hit && hit.length === vertexCount) return hit;
+  }
+
+  const { positions, tolerance } = params;
+  const cellSize = Math.max(tolerance, 1e-4);
+  const inv = 1 / cellSize;
+  const buckets = new Map<string, number[]>();
+
+  for (let v = 0; v < vertexCount; v += 1) {
+    const x = positions[v * 3]!;
+    const y = positions[v * 3 + 1]!;
+    const z = positions[v * 3 + 2]!;
+    const ix = Math.floor(x * inv);
+    const iy = Math.floor(y * inv);
+    const iz = Math.floor(z * inv);
+    const key = cellKey(ix, iy, iz);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(v);
+    else buckets.set(key, [v]);
+  }
+
+  const correspondence = new Int32Array(vertexCount);
+  correspondence.fill(-1);
+  const tolSq = tolerance * tolerance;
+
+  for (let v = 0; v < vertexCount; v += 1) {
     const ox = -positions[v * 3]!;
     const oy = positions[v * 3 + 1]!;
     const oz = positions[v * 3 + 2]!;
+    const ix = Math.floor(ox * inv);
+    const iy = Math.floor(oy * inv);
+    const iz = Math.floor(oz * inv);
     let best = -1;
     let bestDist = tolSq;
-    for (let u = 0; u < vertexCount; u += 1) {
-      if (u === v) continue;
-      const dx = positions[u * 3]! - ox;
-      const dy = positions[u * 3 + 1]! - oy;
-      const dz = positions[u * 3 + 2]! - oz;
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d <= bestDist) {
-        bestDist = d;
-        best = u;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          const bucket = buckets.get(cellKey(ix + dx, iy + dy, iz + dz));
+          if (!bucket) continue;
+          for (const u of bucket) {
+            if (u === v) continue;
+            const ddx = positions[u * 3]! - ox;
+            const ddy = positions[u * 3 + 1]! - oy;
+            const ddz = positions[u * 3 + 2]! - oz;
+            const d = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (d <= bestDist) {
+              bestDist = d;
+              best = u;
+            }
+          }
+        }
       }
     }
-    if (best >= 0) out[best] = swapCode(code);
+    correspondence[v] = best;
   }
-  return out;
+
+  if (cacheKey) {
+    if (mirrorCorrespondenceCache.has(cacheKey)) mirrorCorrespondenceCache.delete(cacheKey);
+    mirrorCorrespondenceCache.set(cacheKey, correspondence);
+    while (mirrorCorrespondenceCache.size > MAX_MIRROR_CACHE) {
+      const oldest = mirrorCorrespondenceCache.keys().next().value;
+      if (oldest == null) break;
+      mirrorCorrespondenceCache.delete(oldest);
+    }
+  }
+  return correspondence;
 }
 
 function estimateMirrorTolerance(positions: Float32Array): number {
@@ -446,18 +531,22 @@ export function cleanupRegionLabels(params: {
   const vertexCount = labels.length;
   const islandFraction = params.islandFraction ?? 0.02;
   const segments = buildChainSegments(params.jointPositions);
+  // One reusable visited buffer for all components (generation stamp).
+  const visited = new Int32Array(vertexCount);
+  visited.fill(-1);
 
-  // Per-component region histogram + island cleanup via region-subgraph flood.
   for (let componentId = 0; componentId < topology.componentCount; componentId += 1) {
-    let componentSize = 0;
+    const compStart = topology.componentOffsets[componentId]!;
+    const compEnd = topology.componentOffsets[componentId + 1]!;
+    const componentSize = compEnd - compStart;
+    if (componentSize === 0) continue;
+
     const regionCounts = new Uint32Array(7);
-    for (let v = 0; v < vertexCount; v += 1) {
-      if (topology.vertexComponent[v] !== componentId) continue;
-      componentSize += 1;
+    for (let i = compStart; i < compEnd; i += 1) {
+      const v = topology.componentVertices[i]!;
       const code = labels[v]!;
       if (isValidRegionCode(code)) regionCounts[code]! += 1;
     }
-    if (componentSize === 0) continue;
 
     let dominantCode: AutorigRegionCode = AUTORIG_REGION_CODE.torso;
     let dominantCount = 0;
@@ -469,13 +558,13 @@ export function cleanupRegionLabels(params: {
       }
     }
 
-    // Tiny disconnected accessories → dominant nearest region by chain distance.
+    // Tiny disconnected accessories → nearest region by chain distance.
     if (componentSize <= Math.max(8, Math.floor(vertexCount * 0.005))) {
       let sumX = 0;
       let sumY = 0;
       let sumZ = 0;
-      for (let v = 0; v < vertexCount; v += 1) {
-        if (topology.vertexComponent[v] !== componentId) continue;
+      for (let i = compStart; i < compEnd; i += 1) {
+        const v = topology.componentVertices[i]!;
         sumX += topology.positions[v * 3]!;
         sumY += topology.positions[v * 3 + 1]!;
         sumZ += topology.positions[v * 3 + 2]!;
@@ -498,44 +587,43 @@ export function cleanupRegionLabels(params: {
         }
       }
       const code = AUTORIG_REGION_CODE_BY_ID[bestRegion];
-      for (let v = 0; v < vertexCount; v += 1) {
-        if (topology.vertexComponent[v] === componentId) labels[v] = code;
+      for (let i = compStart; i < compEnd; i += 1) {
+        labels[topology.componentVertices[i]!] = code;
       }
       continue;
     }
 
     // Within larger components, absorb tiny region islands into the local majority.
-    const visited = new Uint8Array(vertexCount);
     const islandThreshold = Math.max(4, Math.floor(componentSize * islandFraction));
-    for (let seed = 0; seed < vertexCount; seed += 1) {
-      if (topology.vertexComponent[seed] !== componentId || visited[seed]) continue;
+    for (let i = compStart; i < compEnd; i += 1) {
+      const seed = topology.componentVertices[i]!;
+      if (visited[seed] === componentId) continue;
       const regionCode = labels[seed]!;
       const queue = [seed];
-      visited[seed] = 1;
+      visited[seed] = componentId;
       const members = [seed];
       let qi = 0;
       while (qi < queue.length) {
         const v = queue[qi++]!;
         const start = topology.adjacencyOffsets[v]!;
         const end = topology.adjacencyOffsets[v + 1]!;
-        for (let i = start; i < end; i += 1) {
-          const n = topology.adjacencyVertices[i]!;
-          if (visited[n] || topology.vertexComponent[n] !== componentId) continue;
+        for (let ai = start; ai < end; ai += 1) {
+          const n = topology.adjacencyVertices[ai]!;
+          if (visited[n] === componentId || topology.vertexComponent[n] !== componentId) continue;
           if (labels[n] !== regionCode) continue;
-          visited[n] = 1;
+          visited[n] = componentId;
           queue.push(n);
           members.push(n);
         }
       }
       if (members.length > islandThreshold) continue;
       if (regionCode === dominantCode) continue;
-      // Relabel island to neighbor-majority (fallback: component dominant).
       const neighborCounts = new Uint32Array(7);
       for (const v of members) {
         const start = topology.adjacencyOffsets[v]!;
         const end = topology.adjacencyOffsets[v + 1]!;
-        for (let i = start; i < end; i += 1) {
-          const n = topology.adjacencyVertices[i]!;
+        for (let ai = start; ai < end; ai += 1) {
+          const n = topology.adjacencyVertices[ai]!;
           if (topology.vertexComponent[n] !== componentId) continue;
           if (labels[n] === regionCode) continue;
           const code = labels[n]!;

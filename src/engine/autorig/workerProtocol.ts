@@ -43,6 +43,8 @@ export interface AutorigAutoLabelRequest {
   topologyHash?: string;
   jointPositions: Partial<Record<HumanJointId, Vec3>>;
   poseHint?: 'a-pose' | 't-pose';
+  /** Hard user overrides (0 = automatic). Preserved across reclassification. */
+  overrides?: Uint8Array;
 }
 
 export interface AutorigApplyRegionOverridesRequest {
@@ -82,6 +84,8 @@ export interface AutorigBuildTopologyResult {
   adjacencyOffsets: Uint32Array;
   adjacencyVertices: Uint32Array;
   vertexComponent: Int32Array;
+  componentOffsets: Uint32Array;
+  componentVertices: Uint32Array;
 }
 
 export interface AutorigAutoLabelResultMessage {
@@ -89,11 +93,17 @@ export interface AutorigAutoLabelResultMessage {
   jobId: string;
   topologyHash: string;
   suggested: Uint8Array;
+  /** Hard overrides echoed / normalized (0 = automatic). */
+  overrides: Uint8Array;
+  /** Suggested with hard overrides applied and unknowns filled. */
+  resolved: Uint8Array;
   confidence: Float32Array;
   uncertainVertexCount: number;
   adjacencyOffsets: Uint32Array;
   adjacencyVertices: Uint32Array;
   vertexComponent: Int32Array;
+  componentOffsets: Uint32Array;
+  componentVertices: Uint32Array;
   componentCount: number;
 }
 
@@ -142,6 +152,7 @@ export function collectAutorigRequestTransferables(
       push(request.triangles);
       push(request.vertexMeshPart);
       push(request.triangleMeshPart);
+      push(request.overrides);
       break;
     case 'apply-region-overrides':
       push(request.suggested);
@@ -169,12 +180,18 @@ export function collectAutorigResponseTransferables(
     push(response.adjacencyOffsets);
     push(response.adjacencyVertices);
     push(response.vertexComponent);
+    push(response.componentOffsets);
+    push(response.componentVertices);
   } else if (response.kind === 'auto-label') {
     push(response.suggested);
+    push(response.overrides);
+    push(response.resolved);
     push(response.confidence);
     push(response.adjacencyOffsets);
     push(response.adjacencyVertices);
     push(response.vertexComponent);
+    push(response.componentOffsets);
+    push(response.componentVertices);
   } else if (response.kind === 'apply-region-overrides') {
     push(response.resolved);
   }

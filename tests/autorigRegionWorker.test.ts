@@ -27,26 +27,36 @@ describe('autorig worker protocol', () => {
 
   it('collects transferable buffers from auto-label responses', () => {
     const suggested = new Uint8Array([1, 2]);
+    const overrides = new Uint8Array([0, 4]);
+    const resolved = new Uint8Array([1, 4]);
     const confidence = new Float32Array([0.9, 0.4]);
     const adjacencyOffsets = new Uint32Array([0, 0, 0]);
     const adjacencyVertices = new Uint32Array(0);
     const vertexComponent = new Int32Array([0, 0]);
+    const componentOffsets = new Uint32Array([0, 2]);
+    const componentVertices = new Uint32Array([0, 1]);
     const response: AutorigWorkerResponse = {
       kind: 'auto-label',
       jobId: 'job_1',
       topologyHash: 'hash',
       suggested,
+      overrides,
+      resolved,
       confidence,
       uncertainVertexCount: 1,
       adjacencyOffsets,
       adjacencyVertices,
       vertexComponent,
+      componentOffsets,
+      componentVertices,
       componentCount: 1,
     };
     const transfer = collectAutorigResponseTransferables(response);
     expect(transfer).toContain(suggested.buffer);
+    expect(transfer).toContain(overrides.buffer);
+    expect(transfer).toContain(resolved.buffer);
     expect(transfer).toContain(confidence.buffer);
-    expect(transfer).toContain(adjacencyOffsets.buffer);
+    expect(transfer).toContain(componentOffsets.buffer);
   });
 
   it('supports the same classify path the worker uses', () => {
