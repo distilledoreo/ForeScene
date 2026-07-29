@@ -84,15 +84,19 @@ export type HumanJointId =
   | 'leftUpperArm'
   | 'leftLowerArm'
   | 'leftHand'
+  | 'leftHandEnd'
   | 'rightUpperArm'
   | 'rightLowerArm'
   | 'rightHand'
+  | 'rightHandEnd'
   | 'leftUpperLeg'
   | 'leftLowerLeg'
   | 'leftFoot'
+  | 'leftToeBase'
   | 'rightUpperLeg'
   | 'rightLowerLeg'
-  | 'rightFoot';
+  | 'rightFoot'
+  | 'rightToeBase';
 
 export interface HumanJointPose {
   /** Local rotation relative to the character rest/bind pose. */

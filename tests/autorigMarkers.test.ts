@@ -81,10 +81,12 @@ describe('autorig marker placement and skeleton fitting', () => {
     expect(fitted.jointPositions.head?.[1]).toBeGreaterThan(fitted.jointPositions.hips?.[1] ?? 0);
   });
 
-  it('flags a complete marker set that is still effectively flat', () => {
+  it('detects near-planar markers but does not hard-block validation', () => {
     const markers = suggestAutorigMarkers({ size: [0.6, 1.75, 0.35], heightMeters: 1.75 });
-    expect(areAutorigMarkersSuspiciouslyPlanar(markers)).toBe(true);
-    expect(validateAutorigMarkers(markers, 'full').some((issue) => issue.code === 'planar')).toBe(true);
+    const planar = markers.map((m) => ({ ...m, position: [m.position[0], m.position[1], 0] as [number, number, number] }));
+    expect(areAutorigMarkersSuspiciouslyPlanar(planar)).toBe(true);
+    // Symmetric T-pose planarity is allowed — no hard fail.
+    expect(validateAutorigMarkers(planar, 'full').some((issue) => issue.code === 'planar')).toBe(false);
   });
 
   it('uses a lateral anatomical axis for a vertical knee frame', () => {

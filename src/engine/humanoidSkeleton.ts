@@ -31,15 +31,19 @@ export const HUMAN_JOINT_PARENT: Partial<Record<HumanJointId, HumanJointId>> = {
   leftUpperArm: 'chest',
   leftLowerArm: 'leftUpperArm',
   leftHand: 'leftLowerArm',
+  leftHandEnd: 'leftHand',
   rightUpperArm: 'chest',
   rightLowerArm: 'rightUpperArm',
   rightHand: 'rightLowerArm',
+  rightHandEnd: 'rightHand',
   leftUpperLeg: 'hips',
   leftLowerLeg: 'leftUpperLeg',
   leftFoot: 'leftLowerLeg',
+  leftToeBase: 'leftFoot',
   rightUpperLeg: 'hips',
   rightLowerLeg: 'rightUpperLeg',
   rightFoot: 'rightLowerLeg',
+  rightToeBase: 'rightFoot',
 };
 
 /**
@@ -56,15 +60,19 @@ export const HUMAN_JOINT_LIMITS_DEGREES: Record<HumanJointId, HumanJointEulerLim
   leftUpperArm: { min: [-120, -90, -120], max: [90, 90, 100] },
   leftLowerArm: { min: [-5, -25, -20], max: [155, 25, 20] },
   leftHand: { min: [-50, -50, -60], max: [50, 50, 60] },
+  leftHandEnd: { min: [0, 0, 0], max: [0, 0, 0] },
   rightUpperArm: { min: [-120, -90, -100], max: [90, 90, 120] },
   rightLowerArm: { min: [-5, -25, -20], max: [155, 25, 20] },
   rightHand: { min: [-50, -50, -60], max: [50, 50, 60] },
+  rightHandEnd: { min: [0, 0, 0], max: [0, 0, 0] },
   leftUpperLeg: { min: [-120, -55, -90], max: [45, 55, 45] },
   leftLowerLeg: { min: [-5, -25, -25], max: [145, 25, 25] },
   leftFoot: { min: [-50, -40, -35], max: [50, 40, 50] },
+  leftToeBase: { min: [0, 0, 0], max: [0, 0, 0] },
   rightUpperLeg: { min: [-120, -55, -45], max: [45, 55, 90] },
   rightLowerLeg: { min: [-5, -25, -25], max: [145, 25, 25] },
   rightFoot: { min: [-50, -40, -50], max: [50, 40, 35] },
+  rightToeBase: { min: [0, 0, 0], max: [0, 0, 0] },
 };
 
 export function createCanonicalHumanoidSkeleton(): HumanoidSkeleton {

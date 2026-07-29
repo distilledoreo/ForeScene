@@ -176,6 +176,14 @@ export function captureBoneRests(
   return rests;
 }
 
+/** Terminal tip joints exist for bone axes/skin segments; they must not share a parent bone's pose slot. */
+const TERMINAL_TIP_JOINTS: ReadonlySet<HumanJointId> = new Set([
+  'leftHandEnd',
+  'rightHandEnd',
+  'leftToeBase',
+  'rightToeBase',
+]);
+
 export function applySemanticPoseToBones(params: {
   bones: Map<HumanJointId, THREE.Bone>;
   rests: Map<HumanJointId, BoneRestPose>;
@@ -186,12 +194,26 @@ export function applySemanticPoseToBones(params: {
   const delta = new THREE.Quaternion();
   const canonicalToLocal = new THREE.Quaternion();
   const localSemanticDelta = new THREE.Quaternion();
+
+  // Reset each unique bone once. Tip aliases that share a parent bone must not
+  // re-reset after the hand/foot pose is applied (would wipe the pose to identity).
+  const resetBones = new Set<THREE.Bone>();
   for (const jointId of HUMAN_JOINT_IDS) {
     const bone = params.bones.get(jointId);
     const rest = params.rests.get(jointId);
-    if (!bone || !rest) continue;
+    if (!bone || !rest || resetBones.has(bone)) continue;
+    resetBones.add(bone);
     bone.position.copy(rest.position);
     bone.quaternion.copy(rest.quaternion);
+  }
+
+  for (const jointId of HUMAN_JOINT_IDS) {
+    // Tips are bind endpoints, not independent pose channels (unless explicitly posed).
+    if (TERMINAL_TIP_JOINTS.has(jointId) && !params.pose?.joints[jointId]) continue;
+
+    const bone = params.bones.get(jointId);
+    const rest = params.rests.get(jointId);
+    if (!bone || !rest) continue;
 
     const jointPose = params.pose?.joints[jointId];
     if (!jointPose) continue;

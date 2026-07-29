@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import * as THREE from 'three';
 import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
 import type { HumanJointId, HumanPose, QuaternionTuple } from '../src/domain/types';
@@ -17,6 +18,8 @@ import {
 import { applyHumanPosePreset, HUMAN_POSE_PRESETS } from '../src/engine/humanPosePresets';
 import { BUILTIN_MANNEQUIN_BONE_MAP } from '../src/engine/builtinMannequinCharacter';
 import {
+  applySemanticPoseToBones,
+  captureBoneRests,
   resolvePoseableCharacterForObject,
 } from '../src/engine/poseableCharacter';
 import {
@@ -72,16 +75,43 @@ describe('poseable character foundation', () => {
   it('maps semantic joints to mannequin bones without persisting bone names', () => {
     expect(BUILTIN_MANNEQUIN_BONE_MAP.leftUpperArm).toBe('LeftArm');
     expect(BUILTIN_MANNEQUIN_BONE_MAP.hips).toBe('Hips');
-    expect(HUMAN_JOINT_IDS).toHaveLength(17);
+    // Tip joints must not alias hand/foot bones (would wipe poses on apply).
+    expect(BUILTIN_MANNEQUIN_BONE_MAP.leftHandEnd).toBeUndefined();
+    expect(BUILTIN_MANNEQUIN_BONE_MAP.rightHandEnd).toBeUndefined();
+    expect(HUMAN_JOINT_IDS).toHaveLength(21);
     const person = createSceneObject('human_dummy', 1);
     const character = resolvePoseableCharacterForObject(person);
-    expect(character?.skeleton.joints).toHaveLength(17);
+    expect(character?.skeleton.joints).toHaveLength(21);
     expect(character?.skeleton.joints[0]?.limitsDegrees).toBeDefined();
     expect(character?.createInstance).toBeTypeOf('function');
     const source = readFileSync(new URL('../src/domain/types.ts', import.meta.url), 'utf8');
     expect(source).toContain('HumanJointId');
     expect(source).toContain('PoseableRigAsset');
     expect(source).not.toContain('LeftForeArm');
+  });
+
+  it('keeps leftHand pose when a tip joint aliases the same bone object', () => {
+    // Shared-bone map: tip id points at the same THREE.Bone as leftHand (historical bug).
+    const hand = new THREE.Bone();
+    hand.name = 'LeftHand';
+    const bones = new Map<HumanJointId, THREE.Bone>([
+      ['leftHand', hand],
+      ['leftHandEnd', hand],
+    ]);
+    const rests = captureBoneRests(bones);
+    const pose: HumanPose = {
+      version: 1,
+      joints: {
+        leftHand: { rotation: eulerDegreesToQuaternion(45, 0, 0) },
+      },
+    };
+    applySemanticPoseToBones({ bones, rests, pose });
+    // Tip joint must not reset the shared bone back to identity rest.
+    expect(hand.quaternion.angleTo(rests.get('leftHand')!.quaternion)).toBeGreaterThan(0.5);
+    const expected = rests.get('leftHand')!.quaternion.clone().multiply(
+      new THREE.Quaternion().set(...eulerDegreesToQuaternion(45, 0, 0)),
+    );
+    expect(hand.quaternion.angleTo(expected)).toBeLessThan(1e-5);
   });
 
   it('routes scene construction through PoseableCharacter.createInstance', () => {

@@ -87,21 +87,19 @@ export function AutorigMarkerWizardDialog({
   assets?: AssetRegistry;
 }) {
   const height = rig.generationSettings?.approximateHeightMeters ?? 1.75;
+  const poseHint = rig.generationSettings?.poseHint;
   const sourceAssetId = sourceAssetIdProp
     ?? rig.originalSourceAssetId
     ?? rig.sourceMeshAssetId;
-  const suggested = useMemo(
-    () => suggestAutorigMarkers({
-      size: [height * 0.45, height, height * 0.25],
-      heightMeters: height,
-      groundLevelMeters: rig.orientation?.groundLevelMeters ?? 0,
-    }),
-    [height, rig.orientation?.groundLevelMeters],
-  );
-
   const [markers, setMarkers] = useState<AutorigMarker[]>(() => {
     const fromRig = sanitizeAutorigMarkers(rig.markers);
-    return fromRig.length > 0 ? fromRig : suggested;
+    if (fromRig.length > 0) return fromRig;
+    return suggestAutorigMarkers({
+      size: [height * 0.4, height, height * 0.22],
+      heightMeters: height,
+      groundLevelMeters: rig.orientation?.groundLevelMeters ?? 0,
+      poseHint,
+    });
   });
   const [selectedJointId, setSelectedJointId] = useState<HumanJointId>('hips');
   const [past, setPast] = useState<HistoryEntry[]>([]);
@@ -112,6 +110,23 @@ export function AutorigMarkerWizardDialog({
   const [meshSource, setMeshSource] = useState<THREE.Object3D | null>(null);
   const [showTestPose, setShowTestPose] = useState(false);
   const [activeTestPose, setActiveTestPose] = useState('neutral');
+
+  const suggested = useMemo(
+    () => suggestAutorigMarkers({
+      // Prefer actual mesh bounds once known; otherwise use height-scaled defaults (not a fixed mannequin).
+      size: meshBounds
+        ? [
+          Math.max(meshBounds.max[0] - meshBounds.min[0], height * 0.2),
+          Math.max(meshBounds.max[1] - meshBounds.min[1], height * 0.5),
+          Math.max(meshBounds.max[2] - meshBounds.min[2], height * 0.12),
+        ]
+        : [height * 0.4, height, height * 0.22],
+      heightMeters: height,
+      groundLevelMeters: rig.orientation?.groundLevelMeters ?? 0,
+      poseHint,
+    }),
+    [height, meshBounds, poseHint, rig.orientation?.groundLevelMeters],
+  );
 
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
   const meshCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -633,24 +648,34 @@ export function AutorigMarkerWizardDialog({
             </button>
           </div>
           {showTestPose && (
-            <div className="flex flex-wrap gap-2">
-              {HUMAN_POSE_PRESETS
-                .filter((preset) => PREVIEW_POSE_IDS.includes(preset.id))
-                .map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={`rounded-lg border px-2 py-1.5 text-xs font-semibold ${
-                      activeTestPose === preset.id
-                        ? 'border-accent text-accent'
-                        : 'border-subtle text-secondary'
-                    }`}
-                    data-autorig-test-pose={preset.id}
-                    onClick={() => previewTestPose(preset.id, preset.id === 'neutral' ? undefined : preset.pose)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {HUMAN_POSE_PRESETS
+                  .filter((preset) => PREVIEW_POSE_IDS.includes(preset.id))
+                  .map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={`rounded-lg border px-2 py-1.5 text-xs font-semibold ${
+                        activeTestPose === preset.id
+                          ? 'border-accent text-accent'
+                          : 'border-subtle text-secondary'
+                      }`}
+                      data-autorig-test-pose={preset.id}
+                      onClick={() => previewTestPose(preset.id, preset.id === 'neutral' ? undefined : preset.pose)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+              </div>
+              {previewBuffers && (
+                <p className="text-[11px] text-muted" data-autorig-fallback-count>
+                  Weight quality: {(previewBuffers.fallbackVertexCount ?? 0) === 0
+                    ? 'all vertices assigned to bones'
+                    : `${previewBuffers.fallbackVertexCount} vertices use hips fallback (unmatched)`}
+                  {previewBuffers.warnings?.length ? ` · ${previewBuffers.warnings[0]}` : ''}
+                </p>
+              )}
             </div>
           )}
         </div>

@@ -46,7 +46,7 @@ import {
   extractCanonicalVertexPositions,
   prepareCanonicalAutorigMesh,
 } from './autorigCanonicalMesh';
-import { areAutorigMarkersSuspiciouslyPlanar } from './autorigMarkers';
+
 
 const templates = new Map<string, THREE.Object3D>();
 const loadPromises = new Map<string, Promise<void>>();
@@ -387,9 +387,7 @@ export async function generateSkinWeightsForRigAsset(params: {
   sourceAssetId: string;
   assets?: AssetRegistry;
 }): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset }> {
-  if (areAutorigMarkersSuspiciouslyPlanar(params.rig.markers ?? [])) {
-    throw new Error('Cannot generate autorig weights: most joints are still nearly planar. Center depth or refine Side view markers first.');
-  }
+  // Near-planar T-pose marker sets are valid; do not refuse weight generation on global Z spread.
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
   await ensureSkeletonCloneReady();
   const template = templates.get(params.sourceAssetId);

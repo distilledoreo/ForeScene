@@ -19,10 +19,10 @@ export type AutorigBodyRegion =
 const REGION_BONES: Record<AutorigBodyRegion, readonly HumanJointId[]> = {
   head: ['neck', 'head'],
   torso: ['hips', 'spine', 'chest'],
-  leftArm: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
-  rightArm: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
-  leftLeg: ['leftUpperLeg', 'leftLowerLeg', 'leftFoot'],
-  rightLeg: ['rightUpperLeg', 'rightLowerLeg', 'rightFoot'],
+  leftArm: ['leftUpperArm', 'leftLowerArm', 'leftHand', 'leftHandEnd'],
+  rightArm: ['rightUpperArm', 'rightLowerArm', 'rightHand', 'rightHandEnd'],
+  leftLeg: ['leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToeBase'],
+  rightLeg: ['rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToeBase'],
 };
 
 const BONE_REGION: Partial<Record<HumanJointId, AutorigBodyRegion>> = Object.fromEntries(
@@ -44,8 +44,30 @@ export interface SkinWeightBuffers {
   indices: Uint16Array;
   weights: Float32Array;
   jointOrder: HumanJointId[];
+  /** Vertices that fell back to hips (no bone capsule hit). Present on freshly generated weights. */
+  fallbackVertexCount?: number;
   warnings?: string[];
 }
+
+/** Preferred child tips so hands run through the palm and feet through the toes. */
+const SEGMENT_CHILD_OVERRIDE: Partial<Record<HumanJointId, HumanJointId>> = {
+  leftHand: 'leftHandEnd',
+  rightHand: 'rightHandEnd',
+  leftFoot: 'leftToeBase',
+  rightFoot: 'rightToeBase',
+  leftLowerArm: 'leftHand',
+  rightLowerArm: 'rightHand',
+  leftLowerLeg: 'leftFoot',
+  rightLowerLeg: 'rightFoot',
+  leftUpperArm: 'leftLowerArm',
+  rightUpperArm: 'rightLowerArm',
+  leftUpperLeg: 'leftLowerLeg',
+  rightUpperLeg: 'rightLowerLeg',
+  hips: 'spine',
+  spine: 'chest',
+  chest: 'neck',
+  neck: 'head',
+};
 
 export function buildSkinBoneSegments(
   jointPositions: Partial<Record<HumanJointId, Vec3>>,
@@ -56,13 +78,26 @@ export function buildSkinBoneSegments(
   for (const [child, parent] of Object.entries(HUMAN_JOINT_PARENT) as Array<[HumanJointId, HumanJointId]>) {
     if (!childOf.has(parent)) childOf.set(parent, child);
   }
+  for (const [parent, child] of Object.entries(SEGMENT_CHILD_OVERRIDE) as Array<[HumanJointId, HumanJointId]>) {
+    childOf.set(parent, child);
+  }
   const segments: SkinBoneSegment[] = [];
   for (const jointId of jointOrder) {
     const start = jointPositions[jointId];
     if (!start) continue;
-    // Prefer a child tip; otherwise a short stub along +Y.
+    // Skip pure tip joints as segment origins (they only exist as endpoints).
+    if (
+      jointId === 'leftHandEnd' || jointId === 'rightHandEnd'
+      || jointId === 'leftToeBase' || jointId === 'rightToeBase'
+    ) {
+      continue;
+    }
     const child = childOf.get(jointId);
-    const end = (child && jointPositions[child]) || [start[0], start[1] + 0.08, start[2]] as Vec3;
+    let end = (child && jointPositions[child]) || undefined;
+    if (!end) {
+      // Last-resort continuation; prefer along limb, not arbitrary +Y.
+      end = [start[0], start[1] + 0.08, start[2]] as Vec3;
+    }
     const region = BONE_REGION[jointId] ?? 'torso';
     segments.push({
       jointId,
@@ -108,8 +143,8 @@ function fallbackCapsuleRadius(
 ): number {
   const length = segmentLength(segment);
   if (isLimbRegion(segment.region)) {
-    // Generous enough for clothed limbs; torso gate prevents chest theft.
-    return Math.max(height * 0.045, Math.min(height * 0.12, length * 0.35));
+    // Generous enough for clothed limbs and boxy fixtures; torso gate prevents chest theft.
+    return Math.max(height * 0.07, Math.min(height * 0.15, Math.max(length * 0.42, height * 0.07)));
   }
   const anatomical = segment.region === 'torso' ? length * 0.32 : length * 0.5;
   const bodyFloor = Math.max(meshThickness * 0.45, torsoHalfWidth * 0.95);
@@ -220,12 +255,12 @@ export function estimateMeshCapsuleRadii(params: {
       radii[s] = fallback;
       continue;
     }
-    // ~90th percentile radial extent + pad so surface verts are well inside the capsule.
-    const measured = percentileSorted(bucket, 0.9) * 1.18;
-    const floor = isLimbRegion(segment.region) ? height * 0.035 : height * 0.04;
-    const ceiling = isLimbRegion(segment.region) ? height * 0.14 : height * 0.24;
-    // Never shrink far below fallback for sparse meshes, never explode past ceiling.
-    radii[s] = Math.max(floor, Math.min(ceiling, Math.max(measured, fallback * 0.65)));
+    // High percentile + pad so surface and corner verts stay inside the capsule.
+    const measured = percentileSorted(bucket, 0.98) * 1.65;
+    const floor = isLimbRegion(segment.region) ? height * 0.07 : height * 0.04;
+    const ceiling = isLimbRegion(segment.region) ? height * 0.18 : height * 0.24;
+    // Prefer measured thickness; never collapse below a usable limb floor.
+    radii[s] = Math.max(floor, Math.min(ceiling, Math.max(measured, fallback)));
   }
   return radii;
 }
@@ -253,12 +288,12 @@ export function generateDeterministicSkinWeights(params: {
   const rightShoulderX = Math.abs(params.jointPositions.rightUpperArm?.[0] ?? 0);
   const shoulderX = Math.max(leftShoulderX, rightShoulderX, meshThickness * 0.35);
   const torsoHalfWidth = shoulderX;
-  // Arm↔chest gate: hard-suppress inside 85% of shoulder span (clear chest),
-  // then soft-ramp to free by 100% so the deltoid can still bind at the socket.
+  // Arm↔chest gate: hard-suppress inside 95% of shoulder span (clear chest),
+  // then soft-ramp through the socket out to 108% of shoulder X for the deltoid.
   // Hard zero is required because the shoulder bone is often closer to outer-chest
   // verts than the midline chest bone is — a mild multiply still loses after normalize.
-  const armGateInner = shoulderX * 0.85;
-  const armGateOuter = shoulderX * 1.0;
+  const armGateInner = shoulderX * 0.95;
+  const armGateOuter = shoulderX * 1.08;
   const armGateSpan = Math.max(armGateOuter - armGateInner, 1e-4);
   const hipY = params.jointPositions.hips?.[1]
     ?? params.jointPositions.spine?.[1]
@@ -528,8 +563,9 @@ export function generateDeterministicSkinWeights(params: {
     }
   }
 
-  if (fallbackVertices.length > 0) {
-    warnings.push(`${fallbackVertices.length} vertices could not be assigned confidently and use hips fallback.`);
+  const fallbackVertexCount = fallbackVertices.length;
+  if (fallbackVertexCount > 0) {
+    warnings.push(`${fallbackVertexCount} vertices could not be assigned confidently and use hips fallback.`);
   }
 
   return {
@@ -537,6 +573,7 @@ export function generateDeterministicSkinWeights(params: {
     indices,
     weights,
     jointOrder,
+    fallbackVertexCount,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

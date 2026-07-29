@@ -16,15 +16,19 @@ export const HUMAN_JOINT_IDS: readonly HumanJointId[] = [
   'leftUpperArm',
   'leftLowerArm',
   'leftHand',
+  'leftHandEnd',
   'rightUpperArm',
   'rightLowerArm',
   'rightHand',
+  'rightHandEnd',
   'leftUpperLeg',
   'leftLowerLeg',
   'leftFoot',
+  'leftToeBase',
   'rightUpperLeg',
   'rightLowerLeg',
   'rightFoot',
+  'rightToeBase',
 ] as const;
 
 export const HUMAN_JOINT_LABELS: Record<HumanJointId, string> = {
@@ -36,15 +40,19 @@ export const HUMAN_JOINT_LABELS: Record<HumanJointId, string> = {
   leftUpperArm: 'Left upper arm',
   leftLowerArm: 'Left lower arm',
   leftHand: 'Left hand',
+  leftHandEnd: 'Left hand tip',
   rightUpperArm: 'Right upper arm',
   rightLowerArm: 'Right lower arm',
   rightHand: 'Right hand',
-  leftUpperLeg: 'Left upper leg',
+  rightHandEnd: 'Right hand tip',
+  leftUpperLeg: 'Left hip',
   leftLowerLeg: 'Left lower leg',
   leftFoot: 'Left foot',
-  rightUpperLeg: 'Right upper leg',
+  leftToeBase: 'Left toes',
+  rightUpperLeg: 'Right hip',
   rightLowerLeg: 'Right lower leg',
   rightFoot: 'Right foot',
+  rightToeBase: 'Right toes',
 };
 
 /** Left/right pairs for mirror. */
@@ -52,15 +60,19 @@ export const HUMAN_JOINT_MIRROR: Partial<Record<HumanJointId, HumanJointId>> = {
   leftUpperArm: 'rightUpperArm',
   leftLowerArm: 'rightLowerArm',
   leftHand: 'rightHand',
+  leftHandEnd: 'rightHandEnd',
   rightUpperArm: 'leftUpperArm',
   rightLowerArm: 'leftLowerArm',
   rightHand: 'leftHand',
+  rightHandEnd: 'leftHandEnd',
   leftUpperLeg: 'rightUpperLeg',
   leftLowerLeg: 'rightLowerLeg',
   leftFoot: 'rightFoot',
+  leftToeBase: 'rightToeBase',
   rightUpperLeg: 'leftUpperLeg',
   rightLowerLeg: 'leftLowerLeg',
   rightFoot: 'leftFoot',
+  rightToeBase: 'leftToeBase',
 };
 
 export const IDENTITY_QUATERNION: QuaternionTuple = [0, 0, 0, 1];
