@@ -44,12 +44,18 @@ export type AutorigMarkerMode = 'full' | 'simple';
  * (arm chains). All other joints use character-space deltas (see fitSkeletonFromMarkers).
  */
 export const AUTORIG_LOCAL_DELTA_JOINTS: ReadonlySet<HumanJointId> = new Set<HumanJointId>([
+  'leftClavicle',
   'leftUpperArm',
+  'leftUpperArmTwist',
   'leftLowerArm',
+  'leftLowerArmTwist',
   'leftHand',
   'leftHandEnd',
+  'rightClavicle',
   'rightUpperArm',
+  'rightUpperArmTwist',
   'rightLowerArm',
+  'rightLowerArmTwist',
   'rightHand',
   'rightHandEnd',
 ]);
@@ -371,12 +377,15 @@ export function suggestAutorigMarkers(context: AutorigMarkerSuggestionContext): 
   const headY = ground + height * 0.96;
   const kneeY = ground + height * 0.28;
   const ankleY = ground + height * 0.04;
+  // Stay inside the character AABB: half-width is the outermost mesh surface for a
+  // symmetric T-pose. Fractions of totalWidth must never exceed ~0.49.
+  const lateralMax = width * 0.49;
   // T-pose: arms more horizontal / wider. A-pose: elbows lower, wrists closer to body.
-  const shoulderX = width * (isTPose ? 0.24 : 0.2);
+  const shoulderX = Math.min(width * (isTPose ? 0.22 : 0.2), lateralMax * 0.55);
   const elbowY = ground + height * (isTPose ? 0.78 : 0.62);
   const wristY = ground + height * (isTPose ? 0.78 : 0.48);
-  const elbowX = width * (isTPose ? 0.42 : 0.34);
-  const wristX = width * (isTPose ? 0.58 : 0.46);
+  const elbowX = Math.min(width * (isTPose ? 0.36 : 0.3), lateralMax * 0.82);
+  const wristX = Math.min(width * (isTPose ? 0.48 : 0.4), lateralMax);
   const armZ = isTPose ? 0 : depth * 0.04;
   const kneeX = width * 0.1;
   const ankleX = width * 0.09;
@@ -423,6 +432,38 @@ export function suggestAutorigMarkers(context: AutorigMarkerSuggestionContext): 
     place('leftToeBase', toeBaseFromFoot(leftAnkle, height)),
     place('rightToeBase', toeBaseFromFoot(rightAnkle, height)),
   ];
+}
+
+/**
+ * Clamp limb markers that sit outside the character AABB (common when
+ * percentage-of-width heuristics exceed half-extent on a symmetric T-pose).
+ */
+export function clampAutorigMarkersToMeshBounds(
+  markers: readonly AutorigMarker[],
+  bounds: { min: Vec3; max: Vec3 },
+): AutorigMarker[] {
+  const halfSpan = Math.max((bounds.max[0] - bounds.min[0]) * 0.5, 1e-4);
+  const limit = halfSpan * 0.98;
+  return sanitizeAutorigMarkers(markers).map((marker) => {
+    if (
+      marker.jointId !== 'leftHand'
+      && marker.jointId !== 'rightHand'
+      && marker.jointId !== 'leftLowerArm'
+      && marker.jointId !== 'rightLowerArm'
+      && marker.jointId !== 'leftUpperArm'
+      && marker.jointId !== 'rightUpperArm'
+      && marker.jointId !== 'leftHandEnd'
+      && marker.jointId !== 'rightHandEnd'
+    ) {
+      return marker;
+    }
+    const x = Math.max(-limit, Math.min(limit, marker.position[0]));
+    if (x === marker.position[0]) return marker;
+    return {
+      ...marker,
+      position: [x, marker.position[1], marker.position[2]] as Vec3,
+    };
+  });
 }
 
 export function markersToMap(markers: readonly AutorigMarker[]): Map<HumanJointId, AutorigMarker> {
@@ -644,9 +685,14 @@ export function completeAutorigMarkers(
       hips[2] * 0.7 + head[2] * 0.3,
     ]);
     ensure('chest', [
-      hips[0] * 0.35 + head[0] * 0.65,
-      hips[1] + (head[1] - hips[1]) * 0.55,
-      hips[2] * 0.35 + head[2] * 0.65,
+      hips[0] * 0.4 + head[0] * 0.6,
+      hips[1] + (head[1] - hips[1]) * 0.48,
+      hips[2] * 0.4 + head[2] * 0.6,
+    ]);
+    ensure('upperSpine', [
+      hips[0] * 0.28 + head[0] * 0.72,
+      hips[1] + (head[1] - hips[1]) * 0.62,
+      hips[2] * 0.28 + head[2] * 0.72,
     ]);
     ensure('neck', [
       hips[0] * 0.15 + head[0] * 0.85,
@@ -698,6 +744,46 @@ export function completeAutorigMarkers(
         }),
       );
     }
+  }
+
+  // Clavicles: near upper spine, slightly toward each shoulder socket.
+  const upperSpine = map().get('upperSpine')?.position ?? map().get('chest')?.position;
+  for (const side of ['left', 'right'] as const) {
+    const shoulder = map().get(`${side}UpperArm` as HumanJointId)?.position;
+    if (upperSpine && shoulder) {
+      ensure(`${side}Clavicle` as HumanJointId, [
+        upperSpine[0] * 0.55 + shoulder[0] * 0.45,
+        upperSpine[1] * 0.85 + shoulder[1] * 0.15,
+        upperSpine[2] * 0.7 + shoulder[2] * 0.3,
+      ]);
+    }
+  }
+
+  // Twist helpers sit at mid-segment along the primary limb bone.
+  const ensureTwist = (
+    twistId: HumanJointId,
+    start?: Vec3,
+    end?: Vec3,
+    t = 0.5,
+  ) => {
+    if (!start || !end) return;
+    ensure(twistId, [
+      start[0] + (end[0] - start[0]) * t,
+      start[1] + (end[1] - start[1]) * t,
+      start[2] + (end[2] - start[2]) * t,
+    ]);
+  };
+  for (const side of ['left', 'right'] as const) {
+    const upperArm = map().get(`${side}UpperArm` as HumanJointId)?.position;
+    const lowerArm = map().get(`${side}LowerArm` as HumanJointId)?.position;
+    const hand = map().get(`${side}Hand` as HumanJointId)?.position;
+    const upperLeg = map().get(`${side}UpperLeg` as HumanJointId)?.position;
+    const lowerLeg = map().get(`${side}LowerLeg` as HumanJointId)?.position;
+    const foot = map().get(`${side}Foot` as HumanJointId)?.position;
+    ensureTwist(`${side}UpperArmTwist` as HumanJointId, upperArm, lowerArm, 0.5);
+    ensureTwist(`${side}LowerArmTwist` as HumanJointId, lowerArm, hand, 0.5);
+    ensureTwist(`${side}UpperLegTwist` as HumanJointId, upperLeg, lowerLeg, 0.5);
+    ensureTwist(`${side}LowerLegTwist` as HumanJointId, lowerLeg, foot, 0.5);
   }
 
   // Hand / toe terminals so palm and foot bones have real axes.
@@ -763,19 +849,30 @@ export function fitSkeletonFromMarkers(
   // Prefer more specific tips for chains (hands→fingers, feet→toes).
   childOf.hips = 'spine';
   childOf.spine = 'chest';
-  childOf.chest = 'neck';
+  childOf.chest = 'upperSpine';
+  childOf.upperSpine = 'neck';
   childOf.neck = 'head';
+  childOf.leftClavicle = 'leftUpperArm';
+  childOf.rightClavicle = 'rightUpperArm';
   childOf.leftUpperArm = 'leftLowerArm';
+  childOf.leftUpperArmTwist = 'leftLowerArm';
   childOf.leftLowerArm = 'leftHand';
+  childOf.leftLowerArmTwist = 'leftHand';
   childOf.leftHand = 'leftHandEnd';
   childOf.rightUpperArm = 'rightLowerArm';
+  childOf.rightUpperArmTwist = 'rightLowerArm';
   childOf.rightLowerArm = 'rightHand';
+  childOf.rightLowerArmTwist = 'rightHand';
   childOf.rightHand = 'rightHandEnd';
   childOf.leftUpperLeg = 'leftLowerLeg';
+  childOf.leftUpperLegTwist = 'leftLowerLeg';
   childOf.leftLowerLeg = 'leftFoot';
+  childOf.leftLowerLegTwist = 'leftFoot';
   childOf.leftFoot = 'leftToeBase';
   childOf.rightUpperLeg = 'rightLowerLeg';
+  childOf.rightUpperLegTwist = 'rightLowerLeg';
   childOf.rightLowerLeg = 'rightFoot';
+  childOf.rightLowerLegTwist = 'rightFoot';
   childOf.rightFoot = 'rightToeBase';
 
   const bindMatrices: Partial<Record<HumanJointId, number[]>> = {};

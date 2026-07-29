@@ -8,6 +8,7 @@ import type {
 } from '../domain/types';
 import {
   HUMAN_JOINT_IDS,
+  HUMAN_TWIST_FOLLOWER,
   IDENTITY_QUATERNION,
   normalizePoseableCharacterSource,
 } from './humanPose';
@@ -230,6 +231,27 @@ export function applySemanticPoseToBones(params: {
     } else {
       // Built-in rigs retain their established local semantic convention.
       bone.quaternion.copy(rest.quaternion).multiply(delta);
+    }
+
+    // Distribute part of the primary limb rotation onto its twist helper so the
+    // twist bones are live deformation channels, not empty hierarchy stubs.
+    const twistId = HUMAN_TWIST_FOLLOWER[jointId];
+    if (twistId && !params.pose?.joints[twistId]) {
+      const twistBone = params.bones.get(twistId);
+      const twistRest = params.rests.get(twistId);
+      if (twistBone && twistRest) {
+        const appliedDelta = (
+          basis && basis.length === 4 && basis.every(Number.isFinite)
+        )
+          ? localSemanticDelta
+          : delta;
+        const half = new THREE.Quaternion().slerpQuaternions(
+          new THREE.Quaternion(0, 0, 0, 1),
+          appliedDelta,
+          0.5,
+        );
+        twistBone.quaternion.copy(twistRest.quaternion).multiply(half);
+      }
     }
 
     if (jointId === 'hips' && jointPose.position) {

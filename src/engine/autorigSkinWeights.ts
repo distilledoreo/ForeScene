@@ -18,11 +18,39 @@ export type AutorigBodyRegion =
 
 const REGION_BONES: Record<AutorigBodyRegion, readonly HumanJointId[]> = {
   head: ['neck', 'head'],
-  torso: ['hips', 'spine', 'chest'],
-  leftArm: ['leftUpperArm', 'leftLowerArm', 'leftHand', 'leftHandEnd'],
-  rightArm: ['rightUpperArm', 'rightLowerArm', 'rightHand', 'rightHandEnd'],
-  leftLeg: ['leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToeBase'],
-  rightLeg: ['rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToeBase'],
+  torso: ['hips', 'spine', 'chest', 'upperSpine', 'leftClavicle', 'rightClavicle'],
+  leftArm: [
+    'leftUpperArm',
+    'leftUpperArmTwist',
+    'leftLowerArm',
+    'leftLowerArmTwist',
+    'leftHand',
+    'leftHandEnd',
+  ],
+  rightArm: [
+    'rightUpperArm',
+    'rightUpperArmTwist',
+    'rightLowerArm',
+    'rightLowerArmTwist',
+    'rightHand',
+    'rightHandEnd',
+  ],
+  leftLeg: [
+    'leftUpperLeg',
+    'leftUpperLegTwist',
+    'leftLowerLeg',
+    'leftLowerLegTwist',
+    'leftFoot',
+    'leftToeBase',
+  ],
+  rightLeg: [
+    'rightUpperLeg',
+    'rightUpperLegTwist',
+    'rightLowerLeg',
+    'rightLowerLegTwist',
+    'rightFoot',
+    'rightToeBase',
+  ],
 };
 
 const BONE_REGION: Partial<Record<HumanJointId, AutorigBodyRegion>> = Object.fromEntries(
@@ -57,15 +85,26 @@ const SEGMENT_CHILD_OVERRIDE: Partial<Record<HumanJointId, HumanJointId>> = {
   rightFoot: 'rightToeBase',
   leftLowerArm: 'leftHand',
   rightLowerArm: 'rightHand',
+  leftLowerArmTwist: 'leftHand',
+  rightLowerArmTwist: 'rightHand',
   leftLowerLeg: 'leftFoot',
   rightLowerLeg: 'rightFoot',
+  leftLowerLegTwist: 'leftFoot',
+  rightLowerLegTwist: 'rightFoot',
   leftUpperArm: 'leftLowerArm',
   rightUpperArm: 'rightLowerArm',
+  leftUpperArmTwist: 'leftLowerArm',
+  rightUpperArmTwist: 'rightLowerArm',
   leftUpperLeg: 'leftLowerLeg',
   rightUpperLeg: 'rightLowerLeg',
+  leftUpperLegTwist: 'leftLowerLeg',
+  rightUpperLegTwist: 'rightLowerLeg',
+  leftClavicle: 'leftUpperArm',
+  rightClavicle: 'rightUpperArm',
   hips: 'spine',
   spine: 'chest',
-  chest: 'neck',
+  chest: 'upperSpine',
+  upperSpine: 'neck',
   neck: 'head',
 };
 
@@ -143,8 +182,9 @@ function fallbackCapsuleRadius(
 ): number {
   const length = segmentLength(segment);
   if (isLimbRegion(segment.region)) {
-    // Generous enough for clothed limbs and boxy fixtures; torso gate prevents chest theft.
-    return Math.max(height * 0.07, Math.min(height * 0.15, Math.max(length * 0.42, height * 0.07)));
+    // Capture clothed limbs / boxy fixtures (corner radius ≈ half-extent√2)
+    // without returning to the old 7–18% height balloon.
+    return Math.max(height * 0.065, Math.min(height * 0.13, Math.max(length * 0.4, height * 0.065)));
   }
   const anatomical = segment.region === 'torso' ? length * 0.32 : length * 0.5;
   const bodyFloor = Math.max(meshThickness * 0.45, torsoHalfWidth * 0.95);
@@ -165,9 +205,9 @@ function vertexEligibleForRadiusSample(
   switch (region) {
     case 'leftArm':
       // Past the shoulder socket — chest samples must not train arm radius.
-      return px >= shoulderX * 0.72;
+      return px >= shoulderX * 0.9;
     case 'rightArm':
-      return px <= -shoulderX * 0.72;
+      return px <= -shoulderX * 0.9;
     case 'leftLeg':
       // Below/at hips, on the left half — hip socket mixes torso samples.
       return px >= 0 && py <= hipY + Math.max(shoulderX * 0.25, 0.06);
@@ -211,7 +251,7 @@ export function estimateMeshCapsuleRadii(params: {
   const radii = new Float32Array(segCount);
   const vertexCount = Math.floor(positions.length / 3);
   // Soft search cylinder: ignore outliers far from any bone during sampling.
-  const searchRadius = Math.max(height * 0.18, meshThickness * 0.7);
+  const searchRadius = Math.max(height * 0.15, meshThickness * 0.6);
   const searchRadiusSq = searchRadius * searchRadius;
   const samples: number[][] = Array.from({ length: segCount }, () => []);
 
@@ -255,12 +295,15 @@ export function estimateMeshCapsuleRadii(params: {
       radii[s] = fallback;
       continue;
     }
-    // High percentile + pad so surface and corner verts stay inside the capsule.
-    const measured = percentileSorted(bucket, 0.98) * 1.65;
-    const floor = isLimbRegion(segment.region) ? height * 0.07 : height * 0.04;
-    const ceiling = isLimbRegion(segment.region) ? height * 0.18 : height * 0.24;
+    // Prefer measured thickness with a modest pad. Avoid the previous
+    // 98th×1.65 / 18%-height ceiling that stole torso and skirt verts.
+    const measured = percentileSorted(bucket, 0.94) * 1.35;
+    const floor = isLimbRegion(segment.region) ? height * 0.065 : height * 0.035;
+    const ceiling = isLimbRegion(segment.region) ? height * 0.13 : height * 0.22;
     // Prefer measured thickness; never collapse below a usable limb floor.
-    radii[s] = Math.max(floor, Math.min(ceiling, Math.max(measured, fallback)));
+    // Also cap by bone length so a fat upper-arm capsule cannot swallow the forearm.
+    const lengthCap = Math.max(segmentLength(segment) * 0.55, floor);
+    radii[s] = Math.max(floor, Math.min(ceiling, lengthCap, Math.max(measured, fallback)));
   }
   return radii;
 }
@@ -326,6 +369,8 @@ export function generateDeterministicSkinWeights(params: {
   const segSide = new Int8Array(segCount);
   /** 1 = arm region (eligible for torso lateral gate), 0 otherwise. */
   const segIsArm = new Uint8Array(segCount);
+  /** 1 = leg region (eligible for hip-height gate), 0 otherwise. */
+  const segIsLeg = new Uint8Array(segCount);
   // Mesh-driven radii: each bone's capsule hugs that character's local thickness.
   const meshRadii = estimateMeshCapsuleRadii({
     positions: params.positions,
@@ -358,18 +403,28 @@ export function generateDeterministicSkinWeights(params: {
         ? 1
         : 0;
     segIsArm[s] = isArmRegion(segment.region) ? 1 : 0;
+    segIsLeg[s] = segment.region === 'leftLeg' || segment.region === 'rightLeg' ? 1 : 0;
   }
 
   const hipsIndex = Math.max(0, jointOrder.indexOf('hips'));
   // Reusable top-4 scratch (no per-vertex allocations / sorts).
   const topJoints = new Uint16Array(INFLUENCES_PER_VERTEX);
   const topWeights = new Float32Array(INFLUENCES_PER_VERTEX);
+  // Legs must not claim chest/forearm verts; arms must still reach A-pose wrists
+  // that hang well below the pelvis.
+  const legGateY = hipY + Math.max(height * 0.02, 0.03);
+  const armMinY = hipY - height * 0.45;
   for (let v = 0; v < vertexCount; v += 1) {
     const px = params.positions[v * 3]!;
     const py = params.positions[v * 3 + 1]!;
     const pz = params.positions[v * 3 + 2]!;
     let topN = 0;
     for (let s = 0; s < segCount; s += 1) {
+      // Height + lateral gates: thighs must not swallow A-pose forearms hanging
+      // below the pelvis, and arm capsules must not claim near-midline legs.
+      if (segIsLeg[s]! && py > legGateY) continue;
+      if (segIsLeg[s]! && Math.abs(px) > shoulderX * 0.75) continue;
+      if (segIsArm[s]! && py < armMinY) continue;
       const apx = px - segStartX[s]!;
       const apy = py - segStartY[s]!;
       const apz = pz - segStartZ[s]!;
@@ -382,6 +437,9 @@ export function generateDeterministicSkinWeights(params: {
       if (distSq >= segRadiusSq[s]!) continue; // zero falloff — skip the sqrt.
       let weight = falloffWeight(Math.sqrt(distSq), segRadius[s]!);
       if (weight <= 1e-5) continue;
+      // Endpoint-only hits are weak: an upper-arm capsule must not claim the
+      // forearm shaft just because the elbow tip is within radius.
+      if (t < 0.04 || t > 0.96) weight *= 0.3;
       // Distance is authoritative; neighboring regions are penalized instead
       // of being broadly admitted by fixed world-space X/Y thresholds.
       const side = segSide[s]!;

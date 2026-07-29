@@ -162,6 +162,51 @@ describe('P0 autorig skeleton correctness', () => {
     expect(completed.some((m) => m.jointId === 'leftToeBase')).toBe(true);
   });
 
+  it('completes upper spine, clavicles, and twist joints and fits bind matrices for them', () => {
+    const markers = suggestAutorigMarkers({ size: [0.6, 1.75, 0.35], heightMeters: 1.75 });
+    const completed = completeAutorigMarkers(markers, 'full', { heightMeters: 1.75, widthMeters: 0.6 });
+    for (const id of [
+      'upperSpine',
+      'leftClavicle',
+      'rightClavicle',
+      'leftUpperArmTwist',
+      'leftLowerArmTwist',
+      'rightUpperArmTwist',
+      'rightLowerArmTwist',
+      'leftUpperLegTwist',
+      'leftLowerLegTwist',
+      'rightUpperLegTwist',
+      'rightLowerLegTwist',
+    ] as const) {
+      expect(completed.some((m) => m.jointId === id)).toBe(true);
+    }
+    const fitted = fitSkeletonFromMarkers(markers, 'full');
+    expect(fitted.bindMatrices.upperSpine).toHaveLength(16);
+    expect(fitted.bindMatrices.leftClavicle).toHaveLength(16);
+    expect(fitted.bindMatrices.leftUpperArmTwist).toHaveLength(16);
+    expect(fitted.jointPositions.leftUpperArmTwist).toBeDefined();
+    // Twist sits between shoulder and elbow.
+    const shoulder = fitted.jointPositions.leftUpperArm!;
+    const elbow = fitted.jointPositions.leftLowerArm!;
+    const twist = fitted.jointPositions.leftUpperArmTwist!;
+    expect(twist[0]).toBeGreaterThan(Math.min(shoulder[0], elbow[0]));
+    expect(twist[0]).toBeLessThan(Math.max(shoulder[0], elbow[0]));
+  });
+
+  it('keeps T-pose wrist suggestions inside the character half-width', () => {
+    const width = 0.7;
+    const markers = suggestAutorigMarkers({
+      size: [width, 1.75, 0.3],
+      heightMeters: 1.75,
+      poseHint: 't-pose',
+    });
+    const leftWrist = markers.find((m) => m.jointId === 'leftHand')!.position[0];
+    const rightWrist = markers.find((m) => m.jointId === 'rightHand')!.position[0];
+    expect(leftWrist).toBeLessThanOrEqual(width * 0.5);
+    expect(rightWrist).toBeGreaterThanOrEqual(-width * 0.5);
+    expect(Math.abs(leftWrist)).toBeLessThan(width * 0.5);
+  });
+
   it('bumps rig generation version for regenerated weights', () => {
     expect(CURRENT_AUTORIG_RIG_GENERATION_VERSION).toBeGreaterThanOrEqual(6);
   });

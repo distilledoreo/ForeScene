@@ -1,7 +1,7 @@
 import React from 'react';
 import type { HumanJointId, HumanPose } from '../../domain/types';
 import {
-  HUMAN_JOINT_IDS,
+  HUMAN_POSE_EDITABLE_JOINT_IDS,
   HUMAN_JOINT_LABELS,
   cloneHumanPose,
   createEmptyHumanPose,
@@ -93,7 +93,7 @@ export function CharacterPosePanel({
       <div>
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Joints</div>
         <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto" data-pose-joint-list>
-          {HUMAN_JOINT_IDS.map((jointId) => {
+          {HUMAN_POSE_EDITABLE_JOINT_IDS.map((jointId) => {
             const active = selectedJointId === jointId;
             const posed = Boolean(current.joints[jointId]);
             return (

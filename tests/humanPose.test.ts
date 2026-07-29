@@ -78,10 +78,10 @@ describe('poseable character foundation', () => {
     // Tip joints must not alias hand/foot bones (would wipe poses on apply).
     expect(BUILTIN_MANNEQUIN_BONE_MAP.leftHandEnd).toBeUndefined();
     expect(BUILTIN_MANNEQUIN_BONE_MAP.rightHandEnd).toBeUndefined();
-    expect(HUMAN_JOINT_IDS).toHaveLength(21);
+    expect(HUMAN_JOINT_IDS).toHaveLength(32);
     const person = createSceneObject('human_dummy', 1);
     const character = resolvePoseableCharacterForObject(person);
-    expect(character?.skeleton.joints).toHaveLength(21);
+    expect(character?.skeleton.joints).toHaveLength(32);
     expect(character?.skeleton.joints[0]?.limitsDegrees).toBeDefined();
     expect(character?.createInstance).toBeTypeOf('function');
     const source = readFileSync(new URL('../src/domain/types.ts', import.meta.url), 'utf8');

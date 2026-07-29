@@ -26,7 +26,8 @@ describe('interactive viewer rendering', () => {
     expect(sceneViewport).toContain('const shouldAnimateFly = (framing?.flyActive || freeCameraActiveRef.current) && hasActiveFlyInput();');
     expect(sceneViewport).toContain('if (shouldAnimateFly) requestRender();');
     expect(sceneViewport).toContain('const sceneStructureKey = useMemo');
-    expect(sceneViewport).toContain('applySceneObjectTransform(node, object.transform');
+    expect(sceneViewport).toContain('diffAndApplySceneObjectUpdates');
+    expect(sceneViewport).toContain('buildSceneObjectNodeMap');
     expect(sceneViewport).toContain('const frustumHelpers = new Map<string, THREE.CameraHelper>();');
     expect(cropPreview).toContain('const PREVIEW_DEBOUNCE_MS = 140;');
     expect(cropPreview).toContain("await import('../../engine/renderers')");

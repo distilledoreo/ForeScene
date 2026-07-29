@@ -26,12 +26,27 @@ export function createAutorigMarkerPreviewGl(params: {
   const canvas = params.canvas ?? document.createElement('canvas');
   canvas.width = params.width;
   canvas.height = params.height;
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    alpha: true,
-    antialias: true,
-    preserveDrawingBuffer: true,
-  });
+  let renderer: THREE.WebGLRenderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas,
+      alpha: true,
+      antialias: false,
+      preserveDrawingBuffer: true,
+      powerPreference: 'low-power',
+      failIfMajorPerformanceCaveat: false,
+    });
+    // Abort early if the browser handed back a dead context (common under
+    // multi-context CI limits) so callers can skip mesh preview safely.
+    if (!renderer.getContext()) {
+      renderer.dispose();
+      throw new Error('Autorig marker preview WebGL context is unavailable.');
+    }
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error('Autorig marker preview WebGL context is unavailable.');
+  }
   renderer.setPixelRatio(1);
   renderer.setSize(params.width, params.height, false);
   renderer.setClearColor(0x000000, 0);
@@ -81,9 +96,14 @@ export function renderAutorigMarkerPreview(
   gl: AutorigMarkerPreviewGl,
   frame: AutorigOrthoFrame,
 ): void {
-  configureAutorigOrthoCamera(gl.camera, frame);
-  gl.renderer.render(gl.scene, gl.camera);
-  gl.renderCount += 1;
+  if (!gl.renderer.getContext()) return;
+  try {
+    configureAutorigOrthoCamera(gl.camera, frame);
+    gl.renderer.render(gl.scene, gl.camera);
+    gl.renderCount += 1;
+  } catch {
+    // Context loss mid-frame must not tear down the host Build workspace.
+  }
 }
 
 /**

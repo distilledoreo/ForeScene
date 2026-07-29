@@ -142,7 +142,7 @@ describe('poseable character import shell', () => {
     expect(hydrated).toBeGreaterThan(0);
     const character = resolvePoseableCharacter(parsedObject?.poseableCharacter, parsed.assets);
     expect(character?.source).toEqual({ kind: 'autorigged', assetId: rigAsset.id, rigId: rig.id });
-    expect(character?.skeleton.joints).toHaveLength(21);
+    expect(character?.skeleton.joints).toHaveLength(32);
   });
 
   it('exposes the Build tray command for poseable import', async () => {
