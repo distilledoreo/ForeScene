@@ -14,6 +14,7 @@ export * from './partialSkinUpdate';
 export * from './previewSession';
 export * from './smartRegionGrow';
 export * from './deformationValidation';
+export * from './deformationAutoRepair';
 export * from './workerProtocol';
 export {
   runAutorigAutoLabel,

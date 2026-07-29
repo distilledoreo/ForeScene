@@ -40,6 +40,7 @@ export function AutorigPoseFixStep({
   onUndo,
   onRedo,
   correctionResult,
+  prepareNotice,
   onAdjustJoint,
   warnings,
   fallbackCount,
@@ -69,6 +70,8 @@ export function AutorigPoseFixStep({
   onUndo: () => void;
   onRedo: () => void;
   correctionResult?: AutorigCorrectionResult | null;
+  /** Shown once after silent spike auto-repair during prepare. */
+  prepareNotice?: string | null;
   onAdjustJoint?: () => void;
   warnings?: string[];
   fallbackCount?: number;
@@ -79,8 +82,17 @@ export function AutorigPoseFixStep({
   return (
     <div className="space-y-3" data-autorig-pose-fix-step>
       <p className="text-sm text-secondary">
-        Try example poses. Turn on Fix deformation to paint problem areas directly on the posed character.
+        Try example poses. Turn on Fix deformation and stroke across a problem area — PanoRef expands to the surrounding surface and updates the rig.
       </p>
+
+      {prepareNotice && !updating && (
+        <div
+          className="rounded-xl border border-subtle bg-surface-muted/60 px-3 py-2"
+          data-autorig-prepare-notice
+        >
+          <p className="text-xs text-secondary">{prepareNotice}</p>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {([

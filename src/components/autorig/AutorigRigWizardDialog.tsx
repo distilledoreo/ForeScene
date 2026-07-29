@@ -90,6 +90,7 @@ import {
 import {
   applyPartialSkinUpdateToPreviewSession,
   createAutorigPreviewSession,
+  extractCanonicalPosedPositions,
   type AutorigPreviewSession,
 } from '../../engine/autorig/previewSession';
 import {
@@ -102,13 +103,20 @@ import {
   type AutorigDeformationIssue,
 } from '../../engine/autorig/deformationValidation';
 import {
+  DEFORMATION_AUTO_REPAIR_POSE_IDS,
+  formatDeformationAutoRepairMessage,
+  overridesFromRepairedLabels,
+  runHighConfidenceDeformationAutoRepair,
+} from '../../engine/autorig/deformationAutoRepair';
+import {
   createAutorigPreviewInstance,
   ensureAutorigSourceTemplate,
   isAutorigSourceTemplateReady,
   subscribeAutoriggedCharacterReady,
 } from '../../engine/autoriggedPoseableCharacter';
 import { applySemanticPoseToBones, captureBoneRests, updateSkinnedMeshes } from '../../engine/poseableCharacter';
-import { HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
+import { getHumanPosePreset, HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
+import type { SkinWeightBuffers } from '../../engine/autorigSkinWeights';
 import { Modal } from '../common/Modal';
 import { AutorigWizardProgress } from './AutorigWizardProgress';
 import { AutorigJointStep } from './AutorigJointStep';
@@ -225,6 +233,7 @@ export function AutorigRigWizardDialog({
   const [restoreAutomatic, setRestoreAutomatic] = useState(false);
   const [showAssignments, setShowAssignments] = useState(false);
   const [correctionResult, setCorrectionResult] = useState<AutorigCorrectionResult | null>(null);
+  const [prepareNotice, setPrepareNotice] = useState<string | null>(null);
   const [perspectiveYaw, setPerspectiveYaw] = useState(0);
 
   const paint = useAutorigPaintSession(DEFAULT_BRUSH_RADIUS);
@@ -658,20 +667,28 @@ export function AutorigRigWizardDialog({
   const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
 
   // Build (or rebuild) the skinned preview only when joints / topology / mesh change —
-  // not after every paint stroke.
+  // not after every paint stroke. Runs silent diagnostic poses and high-confidence
+  // spike auto-repair before the user reaches the brush.
   useEffect(() => {
     if (!open || step !== 'pose-fix' || !meshSource || !meshData || !meshBounds) return;
     if (!topology || !resolvedRegions) return;
 
     disposePreviewSession();
+    setPrepareNotice(null);
 
-    const buffers = generateRegionConstrainedSkinWeights({
+    const meshSize: [number, number, number] = [
+      meshBounds.max[0] - meshBounds.min[0],
+      height,
+      meshBounds.max[2] - meshBounds.min[2],
+    ];
+
+    let buffers = generateRegionConstrainedSkinWeights({
       positions: meshData.positions,
       regionLabels: resolvedRegions,
       jointPositions: previewFitted.jointPositions,
       topology,
       heightMeters: height,
-      meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
+      meshSize,
     });
 
     const root = buildSkinnedCharacterFromTemplate({
@@ -685,18 +702,148 @@ export function AutorigRigWizardDialog({
       const jointId = bone.userData.humanJointId as HumanJointId | undefined;
       if (bone.isBone && jointId) bones.set(jointId, bone);
     });
+    const rests = captureBoneRests(bones);
+
+    let finalLabels = new Uint8Array(resolvedRegions);
+
+    const poseRoot = (
+      pose: HumanPose | undefined,
+      candidateBuffers?: SkinWeightBuffers,
+    ) => {
+      if (candidateBuffers) {
+        // Push candidate weights onto the temporary root before posing.
+        const ipv = candidateBuffers.influencesPerVertex;
+        let vertexOffset = 0;
+        root.traverse((node) => {
+          const mesh = node as THREE.SkinnedMesh;
+          if (!mesh.isSkinnedMesh || !mesh.geometry) return;
+          const position = mesh.geometry.getAttribute('position');
+          const vertexCount = position?.count ?? 0;
+          const indexAttr = mesh.geometry.getAttribute('skinIndex') as THREE.BufferAttribute | undefined;
+          const weightAttr = mesh.geometry.getAttribute('skinWeight') as THREE.BufferAttribute | undefined;
+          if (!indexAttr || !weightAttr) {
+            vertexOffset += vertexCount;
+            return;
+          }
+          const srcStart = vertexOffset * ipv;
+          for (let i = 0; i < vertexCount * ipv; i += 1) {
+            (indexAttr.array as Uint16Array)[i] = candidateBuffers.indices[srcStart + i]!;
+            (weightAttr.array as Float32Array)[i] = candidateBuffers.weights[srcStart + i]!;
+          }
+          indexAttr.needsUpdate = true;
+          weightAttr.needsUpdate = true;
+          vertexOffset += vertexCount;
+        });
+      }
+      applySemanticPoseToBones({
+        bones,
+        rests,
+        pose,
+        canonicalPoseBases: previewRig.canonicalPoseBases,
+      });
+      updateSkinnedMeshes(root);
+      root.rotation.y = 0;
+      root.updateMatrixWorld(true);
+    };
+
+    try {
+      const frames = [];
+      for (const poseId of DEFORMATION_AUTO_REPAIR_POSE_IDS) {
+        const preset = getHumanPosePreset(poseId);
+        if (!preset) continue;
+        poseRoot(preset.pose, buffers);
+        frames.push({
+          poseId,
+          positions: extractCanonicalPosedPositions(root),
+        });
+      }
+      poseRoot(undefined, buffers);
+
+      if (frames.length > 0) {
+        const repair = runHighConfidenceDeformationAutoRepair({
+          restPositions: meshData.positions,
+          topology,
+          regionLabels: finalLabels,
+          buffers,
+          frames,
+          jointPositions: previewFitted.jointPositions,
+          regenerateWeights: (labels) => generateRegionConstrainedSkinWeights({
+            positions: meshData.positions,
+            regionLabels: labels,
+            jointPositions: previewFitted.jointPositions,
+            topology,
+            heightMeters: height,
+            meshSize,
+          }),
+          evaluatePoseFrames: (candidateBuffers) => {
+            const nextFrames = [];
+            for (const poseId of DEFORMATION_AUTO_REPAIR_POSE_IDS) {
+              const preset = getHumanPosePreset(poseId);
+              if (!preset) continue;
+              poseRoot(preset.pose, candidateBuffers);
+              nextFrames.push({
+                poseId,
+                positions: extractCanonicalPosedPositions(root),
+              });
+            }
+            poseRoot(undefined, candidateBuffers);
+            const neutralPosed = extractCanonicalPosedPositions(root);
+            let neutralMaxDrift = 0;
+            const rest = meshData.positions;
+            const n = Math.floor(Math.min(rest.length, neutralPosed.length) / 3);
+            for (let v = 0; v < n; v += 1) {
+              const i = v * 3;
+              const dist = Math.hypot(
+                neutralPosed[i]! - rest[i]!,
+                neutralPosed[i + 1]! - rest[i + 1]!,
+                neutralPosed[i + 2]! - rest[i + 2]!,
+              );
+              if (dist > neutralMaxDrift) neutralMaxDrift = dist;
+            }
+            return { frames: nextFrames, neutralMaxDrift };
+          },
+        });
+
+        buffers = repair.buffers;
+        finalLabels = repair.regionLabels;
+        poseRoot(undefined, buffers);
+
+        if (repair.repairedVertexCount > 0) {
+          setPrepareNotice(formatDeformationAutoRepairMessage(repair));
+          if (suggestedRegions) {
+            let labelsChanged = false;
+            for (let v = 0; v < finalLabels.length; v += 1) {
+              if (finalLabels[v] !== resolvedRegions[v]) {
+                labelsChanged = true;
+                break;
+              }
+            }
+            if (labelsChanged) {
+              setRegionOverrides(overridesFromRepairedLabels({
+                suggested: suggestedRegions,
+                previousOverrides: regionOverrides,
+                repairedLabels: repair.regionLabels,
+              }));
+            }
+          }
+        }
+      }
+    } catch {
+      // Keep the initial Binder V2 result if silent diagnostics fail.
+      poseRoot(undefined, buffers);
+    }
 
     const session = createAutorigPreviewSession({
       root,
       bones,
-      rests: captureBoneRests(bones),
+      rests,
       topology,
       buffers,
       activePoseId: activePoseIdRef.current,
       activePose: activePoseRef.current,
     });
     previewSessionRef.current = session;
-    previousResolvedRef.current = new Uint8Array(resolvedRegions);
+    previousResolvedRef.current = finalLabels;
     setSessionVersion((value) => value + 1);
 
     return () => {
@@ -1213,6 +1360,7 @@ export function AutorigRigWizardDialog({
     });
 
     setCorrectionResult(correction.result);
+    setPrepareNotice(null);
     if (correction.result.status === 'empty' || correction.result.status === 'unchanged') {
       return;
     }
@@ -1272,6 +1420,7 @@ export function AutorigRigWizardDialog({
         reach: 'normal',
       });
       setCorrectionResult(correction.result);
+      setPrepareNotice(null);
       if (correction.result.status === 'changed') {
         flashSelectionTint(correction.affectedVertices, 'automatic');
         commitRegionOverrides(correction.overrides);
@@ -1317,6 +1466,7 @@ export function AutorigRigWizardDialog({
       oldRegions: [],
       newRegion: selectedRegion,
     });
+    setPrepareNotice(null);
     flashSelectionTint(result.affectedVertices, selectedRegion);
     commitRegionOverrides(result.overrides);
   };
@@ -1328,6 +1478,7 @@ export function AutorigRigWizardDialog({
   const handleContinueToPoseFix = () => {
     setPoseIssues([]);
     setCorrectionResult(null);
+    setPrepareNotice(null);
     setPreparing(true);
     setActiveTestPose('neutral');
     activePoseRef.current = undefined;
@@ -1613,6 +1764,7 @@ export function AutorigRigWizardDialog({
                 onUndo={undoRegions}
                 onRedo={redoRegions}
                 correctionResult={correctionResult}
+                prepareNotice={prepareNotice}
                 onAdjustJoint={() => {
                   setFixEnabled(false);
                   setStep('joints');

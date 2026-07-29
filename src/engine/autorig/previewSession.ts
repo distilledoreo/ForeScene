@@ -173,6 +173,33 @@ export function createAutorigPreviewSession(params: {
   };
 }
 
+/**
+ * Read posed vertex positions in canonical order from the skinned preview root.
+ * Uses getVertexPosition so Linear Blend Skinning is applied.
+ */
+export function extractCanonicalPosedPositions(
+  root: THREE.Object3D,
+  meshBindings?: AutorigPreviewMeshBinding[],
+): Float32Array {
+  const bindings = meshBindings ?? collectPreviewMeshBindings(root);
+  let total = 0;
+  for (const binding of bindings) total = Math.max(total, binding.canonicalVertexStart + binding.vertexCount);
+  const out = new Float32Array(total * 3);
+  const point = new THREE.Vector3();
+  for (const binding of bindings) {
+    const { mesh, canonicalVertexStart, vertexCount } = binding;
+    for (let i = 0; i < vertexCount; i += 1) {
+      mesh.getVertexPosition(i, point);
+      point.applyMatrix4(mesh.matrixWorld);
+      const dst = (canonicalVertexStart + i) * 3;
+      out[dst] = point.x;
+      out[dst + 1] = point.y;
+      out[dst + 2] = point.z;
+    }
+  }
+  return out;
+}
+
 export {
   applyPartialSkinUpdate,
   validatePartialSkinUpdate,
