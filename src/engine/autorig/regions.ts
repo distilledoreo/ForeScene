@@ -205,7 +205,7 @@ function buildChainSegments(
   return segments;
 }
 
-function isValidRegionCode(code: number): code is AutorigRegionCode {
+export function isValidRegionCode(code: number): code is AutorigRegionCode {
   return code >= AUTORIG_REGION_CODE.head && code <= AUTORIG_REGION_CODE.rightLeg;
 }
 
