@@ -3,8 +3,7 @@ import type { AutorigWizardStepId } from '../../engine/autorig/regionDraftStore'
 
 const STEPS: Array<{ id: AutorigWizardStepId; label: string; hint: string }> = [
   { id: 'joints', label: 'Joints', hint: 'Place markers' },
-  { id: 'regions', label: 'Body parts', hint: 'Correct colors' },
-  { id: 'preview', label: 'Check pose', hint: 'Review & apply' },
+  { id: 'pose-fix', label: 'Pose & Fix', hint: 'Review & correct' },
 ];
 
 export function AutorigWizardProgress({

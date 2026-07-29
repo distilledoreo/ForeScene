@@ -7,10 +7,18 @@ const DATABASE_NAME = 'panoref-autorig-drafts';
 const STORE_NAME = 'wizard-drafts';
 const DATABASE_VERSION = 1;
 
-export type AutorigWizardStepId = 'joints' | 'regions' | 'preview';
+/** Current two-step wizard. Legacy `regions` / `preview` map to `pose-fix`. */
+export type AutorigWizardStepId = 'joints' | 'pose-fix';
+
+/** Legacy three-step IDs still present in older drafts. */
+export type AutorigWizardLegacyStepId = 'joints' | 'regions' | 'preview' | AutorigWizardStepId;
+
+export type AutorigPoseFixMode = 'inspect' | 'paint' | 'lasso';
 
 export interface AutorigWizardDraftRecord {
   rigId: string;
+  /** Draft schema version. Missing / 1 = legacy three-step. */
+  version?: 1 | 2;
   step: AutorigWizardStepId;
   /** JSON-serializable marker list */
   markersJson: string;
@@ -20,7 +28,38 @@ export interface AutorigWizardDraftRecord {
   /** Base64 of hard override Uint8 labels */
   overridesB64?: string;
   previewPoseId?: string;
+  mode?: AutorigPoseFixMode;
+  selectedRegion?: string;
+  brushRadius?: number;
   updatedAt: number;
+}
+
+/** Accepts current or legacy draft shapes before normalization. */
+export type AutorigWizardDraftInput = Omit<AutorigWizardDraftRecord, 'step' | 'version'> & {
+  version?: 1 | 2;
+  step: AutorigWizardLegacyStepId | string;
+};
+
+/** Map old draft / caller step IDs onto the two-step wizard. */
+export function migrateAutorigWizardStep(
+  step: AutorigWizardLegacyStepId | string | null | undefined,
+): AutorigWizardStepId {
+  if (step === 'joints') return 'joints';
+  if (step === 'pose-fix' || step === 'regions' || step === 'preview') return 'pose-fix';
+  return 'joints';
+}
+
+export function normalizeAutorigWizardDraft(
+  record: AutorigWizardDraftInput,
+): AutorigWizardDraftRecord {
+  return {
+    ...record,
+    version: 2,
+    step: migrateAutorigWizardStep(record.step),
+    mode: record.mode === 'paint' || record.mode === 'lasso' || record.mode === 'inspect'
+      ? record.mode
+      : undefined,
+  };
 }
 
 function openDatabase(): Promise<IDBDatabase | undefined> {
@@ -79,8 +118,9 @@ export async function loadAutorigWizardDraft(rigId: string): Promise<AutorigWiza
     const tx = db.transaction(STORE_NAME, 'readonly');
     const request = tx.objectStore(STORE_NAME).get(rigId);
     request.onsuccess = () => {
-      resolve((request.result as AutorigWizardDraftRecord | undefined) ?? null);
+      const raw = (request.result as AutorigWizardDraftRecord | undefined) ?? null;
       db.close();
+      resolve(raw ? normalizeAutorigWizardDraft(raw) : null);
     };
     request.onerror = () => {
       db.close();
@@ -89,12 +129,13 @@ export async function loadAutorigWizardDraft(rigId: string): Promise<AutorigWiza
   });
 }
 
-export async function saveAutorigWizardDraft(record: AutorigWizardDraftRecord): Promise<void> {
+export async function saveAutorigWizardDraft(record: AutorigWizardDraftInput): Promise<void> {
   const db = await openDatabase();
   if (!db) return;
+  const normalized = normalizeAutorigWizardDraft(record);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put(record);
+    tx.objectStore(STORE_NAME).put(normalized);
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -126,12 +167,13 @@ export async function clearAutorigWizardDraft(rigId: string): Promise<void> {
 /** In-memory fallback used by unit tests when IndexedDB is unavailable. */
 const memoryDrafts = new Map<string, AutorigWizardDraftRecord>();
 
-export function saveAutorigWizardDraftSyncForTests(record: AutorigWizardDraftRecord): void {
-  memoryDrafts.set(record.rigId, record);
+export function saveAutorigWizardDraftSyncForTests(record: AutorigWizardDraftInput): void {
+  memoryDrafts.set(record.rigId, normalizeAutorigWizardDraft(record));
 }
 
 export function loadAutorigWizardDraftSyncForTests(rigId: string): AutorigWizardDraftRecord | null {
-  return memoryDrafts.get(rigId) ?? null;
+  const raw = memoryDrafts.get(rigId);
+  return raw ? normalizeAutorigWizardDraft(raw) : null;
 }
 
 export function clearAutorigWizardDraftSyncForTests(rigId?: string): void {

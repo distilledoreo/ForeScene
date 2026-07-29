@@ -1326,7 +1326,7 @@ useEffect(() => {
             assets={project.assets}
             initialStep={
               rig.requiresRerigging && (rig.markers?.length ?? 0) > 0
-                ? 'regions'
+                ? 'pose-fix'
                 : undefined
             }
             onSave={(next, options) => {

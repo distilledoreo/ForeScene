@@ -366,6 +366,7 @@ export function buildSkinnedCharacterFromTemplate(params: {
 
   const skeleton = new THREE.Skeleton(bones, inverses);
   let vertexOffset = 0;
+  let triangleOffset = 0;
   for (const part of meshParts) {
     const indicesStart = vertexOffset * buffers.influencesPerVertex;
     const indicesEnd = (vertexOffset + part.vertexCount) * buffers.influencesPerVertex;
@@ -380,8 +381,17 @@ export function buildSkinnedCharacterFromTemplate(params: {
     const skinned = new THREE.SkinnedMesh(part.geometry, part.material);
     skinned.frustumCulled = false;
     skinned.bind(skeleton);
+    const index = part.geometry.getIndex();
+    const triangleCount = index
+      ? Math.floor(index.count / 3)
+      : Math.floor(part.vertexCount / 3);
+    skinned.userData.autorigVertexStart = vertexOffset;
+    skinned.userData.autorigTriangleStart = triangleOffset;
+    skinned.userData.autorigVertexCount = part.vertexCount;
+    skinned.userData.autorigTriangleCount = triangleCount;
     root.add(skinned);
     vertexOffset += part.vertexCount;
+    triangleOffset += triangleCount;
   }
 
   // Keep labels available for pose UI / debugging.

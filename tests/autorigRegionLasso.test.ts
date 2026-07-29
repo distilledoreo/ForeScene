@@ -191,7 +191,7 @@ describe('region overlay colors', () => {
 });
 
 describe('region draft encoding', () => {
-  it('round-trips label bytes and memory draft helpers', () => {
+  it('round-trips label bytes and migrates legacy regions step to pose-fix', () => {
     const labels = Uint8Array.from([1, 2, 3, 4, 5, 6]);
     const b64 = encodeRegionDraftBytes(labels);
     expect(Array.from(decodeRegionDraftBytes(b64)!)).toEqual([1, 2, 3, 4, 5, 6]);
@@ -205,7 +205,8 @@ describe('region draft encoding', () => {
       updatedAt: 1,
     });
     const loaded = loadAutorigWizardDraftSyncForTests('rig-1');
-    expect(loaded?.step).toBe('regions');
+    expect(loaded?.step).toBe('pose-fix');
+    expect(loaded?.version).toBe(2);
     clearAutorigWizardDraftSyncForTests('rig-1');
     expect(loadAutorigWizardDraftSyncForTests('rig-1')).toBeNull();
   });

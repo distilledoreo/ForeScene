@@ -123,14 +123,11 @@ test.describe('@smoke autorig character workflow', () => {
     const wizard = page.getByRole('dialog', { name: /Rig character/i });
     await expect(wizard).toBeVisible({ timeout: 10000 });
 
-    // Guided wizard: Joints → Body Parts → Check Pose → Apply.
+    // Guided wizard: Joints → Pose & Fix → Apply.
     await expect(wizard.locator('[data-autorig-continue-joints]')).toBeEnabled({ timeout: 10000 });
     await wizard.locator('[data-autorig-continue-joints]').click();
-    await expect(wizard.locator('[data-autorig-body-parts-step]')).toBeVisible({ timeout: 10000 });
-    await expect(wizard.locator('[data-autorig-continue-regions]')).toBeEnabled({ timeout: 15000 });
-    await wizard.locator('[data-autorig-continue-regions]').click();
-    await expect(wizard.locator('[data-autorig-pose-check-step]')).toBeVisible({ timeout: 10000 });
-    await expect(wizard.locator('[data-autorig-apply-skeleton]')).toBeEnabled({ timeout: 15000 });
+    await expect(wizard.locator('[data-autorig-pose-fix-step]')).toBeVisible({ timeout: 10000 });
+    await expect(wizard.locator('[data-autorig-apply-skeleton]')).toBeEnabled({ timeout: 20000 });
     await wizard.locator('[data-autorig-apply-skeleton]').click();
     await expect(wizard).toBeHidden({ timeout: 10000 });
 

@@ -15,6 +15,15 @@ import {
   type SkinBoneSegment,
   type SkinWeightBuffers,
 } from '../autorigSkinWeights';
+import {
+  extractPartialSkinUpdate,
+  type PartialSkinWeightUpdate,
+} from './partialSkinUpdate';
+import {
+  buildDirtyVertexSet,
+  createRegionEditFromLabels,
+  type AutorigRegionEdit,
+} from './dirtyRegionSet';
 
 const INFLUENCES_PER_VERTEX = 4;
 
@@ -474,6 +483,72 @@ export function generateRegionConstrainedSkinWeights(params: {
   };
 }
 
+/**
+ * Regenerate Binder V2 weights and return only the dirty vertex slice.
+ * Uses a full regeneration under the hood so dirty vertices match a complete
+ * rebind byte-for-byte; GPU updates then patch only those vertices.
+ */
+export function generatePartialRegionConstrainedSkinWeights(params: {
+  positions: ArrayLike<number>;
+  regionLabels: Uint8Array;
+  previousRegionLabels?: Uint8Array | null;
+  jointPositions: Partial<Record<HumanJointId, Vec3>>;
+  topology: CanonicalAutorigTopology;
+  heightMeters?: number;
+  meshSize?: Vec3;
+  seamHopWidth?: number;
+  revision: number;
+  /** Explicit dirty vertices; derived from label diff when omitted. */
+  dirtyVertices?: Uint32Array | null;
+  edit?: AutorigRegionEdit | null;
+}): PartialSkinWeightUpdate {
+  const full = generateRegionConstrainedSkinWeights({
+    positions: params.positions,
+    regionLabels: params.regionLabels,
+    jointPositions: params.jointPositions,
+    topology: params.topology,
+    heightMeters: params.heightMeters,
+    meshSize: params.meshSize,
+    seamHopWidth: params.seamHopWidth,
+  });
+
+  let dirty = params.dirtyVertices ?? null;
+  if (!dirty) {
+    const edit = params.edit ?? (
+      params.previousRegionLabels
+        ? createRegionEditFromLabels({
+          previousLabels: params.previousRegionLabels,
+          nextLabels: params.regionLabels,
+        })
+        : null
+    );
+    if (edit) {
+      dirty = buildDirtyVertexSet({
+        topology: params.topology,
+        edit,
+      });
+    }
+  }
+  if (!dirty || dirty.length === 0) {
+    // Nothing dirty — return empty update (caller keeps previous deformation).
+    return {
+      revision: params.revision,
+      vertexIndices: new Uint32Array(0),
+      skinIndices: new Uint16Array(0),
+      skinWeights: new Float32Array(0),
+      warnings: [],
+      fallbackVertexCount: full.fallbackVertexCount,
+    };
+  }
+
+  return extractPartialSkinUpdate({
+    buffers: full,
+    vertexIndices: dirty,
+    revision: params.revision,
+    warnings: full.warnings,
+  });
+}
+
 /** True when every influence on a vertex is in the region's allowed set (incl. seam extras). */
 export function assertNoForbiddenInfluences(params: {
   indices: Uint16Array;
@@ -508,4 +583,4 @@ export function assertNoForbiddenInfluences(params: {
   return { ok: violations === 0, violations };
 }
 
-export type { SkinBoneSegment };
+export type { SkinBoneSegment, AutorigRegionEdit, PartialSkinWeightUpdate };

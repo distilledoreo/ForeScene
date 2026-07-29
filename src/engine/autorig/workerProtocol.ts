@@ -68,6 +68,38 @@ export interface AutorigGenerateWeightsRequest {
   meshSize?: Vec3;
 }
 
+export interface AutorigInitializeRigSessionRequest {
+  kind: 'initialize-rig-session';
+  jobId: string;
+  sessionId: string;
+  positions: Float32Array;
+  triangles: Uint32Array;
+  adjacencyOffsets: Uint32Array;
+  adjacencyVertices: Uint32Array;
+  vertexComponent: Int32Array;
+  jointPositions: Partial<Record<HumanJointId, Vec3>>;
+  regionLabels: Uint8Array;
+  heightMeters?: number;
+  meshSize?: Vec3;
+}
+
+export interface AutorigUpdateRigRegionsRequest {
+  kind: 'update-rig-regions';
+  jobId: string;
+  sessionId: string;
+  revision: number;
+  changedVertices: Uint32Array;
+  changedLabels: Uint8Array;
+  /** Full next label buffer when available (preferred). */
+  regionLabels?: Uint8Array;
+}
+
+export interface AutorigDisposeRigSessionRequest {
+  kind: 'dispose-rig-session';
+  jobId: string;
+  sessionId: string;
+}
+
 export interface AutorigCancelRequest {
   kind: 'cancel';
   jobId: string;
@@ -78,6 +110,9 @@ export type AutorigWorkerRequest =
   | AutorigAutoLabelRequest
   | AutorigApplyRegionOverridesRequest
   | AutorigGenerateWeightsRequest
+  | AutorigInitializeRigSessionRequest
+  | AutorigUpdateRigRegionsRequest
+  | AutorigDisposeRigSessionRequest
   | AutorigCancelRequest;
 
 export interface AutorigBuildTopologyResult {
@@ -129,6 +164,36 @@ export interface AutorigGenerateWeightsResult {
   warnings?: string[];
 }
 
+export interface AutorigInitializeRigSessionResult {
+  kind: 'initialize-rig-session';
+  jobId: string;
+  sessionId: string;
+  influencesPerVertex: number;
+  indices: Uint16Array;
+  weights: Float32Array;
+  jointOrder: HumanJointId[];
+  fallbackVertexCount: number;
+  warnings?: string[];
+}
+
+export interface AutorigUpdateRigRegionsResult {
+  kind: 'update-rig-regions';
+  jobId: string;
+  sessionId: string;
+  revision: number;
+  vertexIndices: Uint32Array;
+  skinIndices: Uint16Array;
+  skinWeights: Float32Array;
+  warnings: string[];
+  fallbackVertexCount?: number;
+}
+
+export interface AutorigDisposeRigSessionResult {
+  kind: 'dispose-rig-session';
+  jobId: string;
+  sessionId: string;
+}
+
 export interface AutorigWorkerError {
   kind: 'error';
   jobId: string;
@@ -145,6 +210,9 @@ export type AutorigWorkerResponse =
   | AutorigAutoLabelResultMessage
   | AutorigApplyRegionOverridesResult
   | AutorigGenerateWeightsResult
+  | AutorigInitializeRigSessionResult
+  | AutorigUpdateRigRegionsResult
+  | AutorigDisposeRigSessionResult
   | AutorigWorkerProgress
   | AutorigWorkerError
   | AutorigWorkerCancelled;
@@ -183,6 +251,20 @@ export function collectAutorigRequestTransferables(
       push(request.adjacencyVertices);
       push(request.vertexComponent);
       break;
+    case 'initialize-rig-session':
+      push(request.positions);
+      push(request.triangles);
+      push(request.adjacencyOffsets);
+      push(request.adjacencyVertices);
+      push(request.vertexComponent);
+      push(request.regionLabels);
+      break;
+    case 'update-rig-regions':
+      push(request.changedVertices);
+      push(request.changedLabels);
+      push(request.regionLabels);
+      break;
+    case 'dispose-rig-session':
     case 'cancel':
       break;
   }
@@ -215,9 +297,13 @@ export function collectAutorigResponseTransferables(
     push(response.componentVertices);
   } else if (response.kind === 'apply-region-overrides') {
     push(response.resolved);
-  } else if (response.kind === 'generate-weights') {
+  } else if (response.kind === 'generate-weights' || response.kind === 'initialize-rig-session') {
     push(response.indices);
     push(response.weights);
+  } else if (response.kind === 'update-rig-regions') {
+    push(response.vertexIndices);
+    push(response.skinIndices);
+    push(response.skinWeights);
   }
   return buffers;
 }

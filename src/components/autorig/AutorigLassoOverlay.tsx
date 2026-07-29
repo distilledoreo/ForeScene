@@ -61,6 +61,7 @@ export function AutorigLassoOverlay({
       height={height}
       className={className}
       data-autorig-lasso-canvas
+      onContextMenu={(event) => event.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

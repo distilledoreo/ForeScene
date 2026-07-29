@@ -4,8 +4,14 @@ import {
   type AutorigBodyRegionId,
   type AutorigRegionCode,
   AUTORIG_REGION_CODE_BY_ID,
+  AUTORIG_REGION_ID_BY_CODE,
   isValidRegionCode,
 } from './regions';
+import {
+  smartGrowRegionPatch,
+  type SmartPaintReach,
+} from './smartRegionGrow';
+import type { HumanJointId, Vec3 } from '../../domain/types';
 
 export interface LassoPoint {
   x: number;
@@ -167,6 +173,345 @@ export function clearRegionOverridesAt(params: {
   return next;
 }
 
+export interface BrushStrokePoint {
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/** Axis-aligned bounds expanded by each sample’s brush radius. */
+export function brushStrokeBoundingRect(
+  stroke: ReadonlyArray<BrushStrokePoint>,
+): LassoBounds | null {
+  if (stroke.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of stroke) {
+    const r = Math.max(0, p.radius);
+    if (p.x - r < minX) minX = p.x - r;
+    if (p.y - r < minY) minY = p.y - r;
+    if (p.x + r > maxX) maxX = p.x + r;
+    if (p.y + r > maxY) maxY = p.y + r;
+  }
+  if (!Number.isFinite(minX)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Distance from point to the brush polyline (segments + endpoint disks).
+ * Returns true when the point falls within any sample radius.
+ */
+export function pointHitsBrushStroke(
+  x: number,
+  y: number,
+  stroke: ReadonlyArray<BrushStrokePoint>,
+): boolean {
+  if (stroke.length === 0) return false;
+  for (let i = 0; i < stroke.length; i += 1) {
+    const p = stroke[i]!;
+    const r = Math.max(0, p.radius);
+    const dx = x - p.x;
+    const dy = y - p.y;
+    if (dx * dx + dy * dy <= r * r) return true;
+  }
+  for (let i = 1; i < stroke.length; i += 1) {
+    const a = stroke[i - 1]!;
+    const b = stroke[i]!;
+    const radius = Math.max(a.radius, b.radius);
+    if (radius <= 0) continue;
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const lenSq = abx * abx + aby * aby;
+    if (lenSq < 1e-12) continue;
+    let t = ((x - a.x) * abx + (y - a.y) * aby) / lenSq;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+    const px = a.x + abx * t;
+    const py = a.y + aby * t;
+    const dx = x - px;
+    const dy = y - py;
+    if (dx * dx + dy * dy <= radius * radius) return true;
+  }
+  return false;
+}
+
+/**
+ * Drop near-duplicate brush samples while preserving stroke coverage.
+ * Also interpolates sparse gaps so fast strokes do not leave holes.
+ */
+export function simplifyBrushStroke(
+  points: ReadonlyArray<BrushStrokePoint>,
+  minDistance = 1.5,
+): BrushStrokePoint[] {
+  if (points.length === 0) return [];
+  const out: BrushStrokePoint[] = [{ ...points[0]! }];
+  const minDistSq = minDistance * minDistance;
+  for (let i = 1; i < points.length; i += 1) {
+    const p = points[i]!;
+    const prev = out[out.length - 1]!;
+    const dx = p.x - prev.x;
+    const dy = p.y - prev.y;
+    const distSq = dx * dx + dy * dy;
+    const gap = Math.max(prev.radius, p.radius) * 0.85;
+    if (gap > 0 && distSq > gap * gap) {
+      const dist = Math.sqrt(distSq);
+      const steps = Math.max(1, Math.ceil(dist / Math.max(gap, minDistance)));
+      for (let s = 1; s < steps; s += 1) {
+        const t = s / steps;
+        out.push({
+          x: prev.x + dx * t,
+          y: prev.y + dy * t,
+          radius: prev.radius + (p.radius - prev.radius) * t,
+        });
+      }
+    }
+    if (distSq < minDistSq && Math.abs(p.radius - prev.radius) < 0.5) {
+      out[out.length - 1] = { ...p };
+      continue;
+    }
+    out.push({ ...p });
+  }
+  return out;
+}
+
+/**
+ * CPU fallback: select triangles whose projected centroid lies under the brush.
+ */
+export function selectTrianglesInBrushCpu(params: {
+  topology: CanonicalAutorigTopology;
+  projectVertex: (vertexIndex: number) => { x: number; y: number } | null;
+  stroke: ReadonlyArray<BrushStrokePoint>;
+}): Uint32Array {
+  const { topology } = params;
+  const stroke = simplifyBrushStroke(params.stroke);
+  if (stroke.length === 0) return new Uint32Array(0);
+  const bounds = brushStrokeBoundingRect(stroke);
+  if (!bounds) return new Uint32Array(0);
+  const triangleCount = Math.floor(topology.triangles.length / 3);
+  const hit: number[] = [];
+  for (let t = 0; t < triangleCount; t += 1) {
+    const i0 = topology.triangles[t * 3]!;
+    const i1 = topology.triangles[t * 3 + 1]!;
+    const i2 = topology.triangles[t * 3 + 2]!;
+    const p0 = params.projectVertex(i0);
+    const p1 = params.projectVertex(i1);
+    const p2 = params.projectVertex(i2);
+    if (!p0 || !p1 || !p2) continue;
+    const cx = (p0.x + p1.x + p2.x) / 3;
+    const cy = (p0.y + p1.y + p2.y) / 3;
+    if (cx < bounds.minX || cx > bounds.maxX || cy < bounds.minY || cy > bounds.maxY) continue;
+    if (pointHitsBrushStroke(cx, cy, stroke)) hit.push(t);
+  }
+  return Uint32Array.from(hit);
+}
+
+export type AutorigCorrectionResult =
+  | {
+      status: 'changed';
+      affectedVertexCount: number;
+      seedVertexCount?: number;
+      oldRegions: AutorigBodyRegionId[];
+      newRegion: AutorigBodyRegionId | 'automatic';
+      /** How the selection was expanded beyond the raw stroke. */
+      selectionKind?: 'local' | 'expanded' | 'component';
+    }
+  | {
+      status: 'unchanged';
+      region: AutorigBodyRegionId;
+    }
+  | {
+      status: 'empty';
+    }
+  | {
+      status: 'failed';
+      message: string;
+    };
+
+/** Compare previous vs next overrides for painted seeds and classify the outcome. */
+export function classifyRegionCorrection(params: {
+  previousOverrides: Uint8Array;
+  nextOverrides: Uint8Array;
+  previousResolved: Uint8Array;
+  nextResolved: Uint8Array;
+  seedVertices: ArrayLike<number>;
+  region: AutorigBodyRegionId | 'automatic';
+}): AutorigCorrectionResult {
+  const { seedVertices } = params;
+  if (seedVertices.length === 0) return { status: 'empty' };
+
+  let changed = 0;
+  const oldRegionSet = new Set<AutorigBodyRegionId>();
+  let sameRegion: AutorigBodyRegionId | null = null;
+
+  for (let v = 0; v < params.nextResolved.length; v += 1) {
+    if (params.previousResolved[v] !== params.nextResolved[v]
+      || params.previousOverrides[v] !== params.nextOverrides[v]) {
+      changed += 1;
+      const prevId = AUTORIG_REGION_ID_BY_CODE[params.previousResolved[v]! as AutorigRegionCode];
+      if (prevId) oldRegionSet.add(prevId);
+    }
+  }
+
+  if (changed === 0) {
+    for (let i = 0; i < seedVertices.length; i += 1) {
+      const v = seedVertices[i]! >>> 0;
+      if (v >= params.previousResolved.length) continue;
+      const prevId = AUTORIG_REGION_ID_BY_CODE[params.previousResolved[v]! as AutorigRegionCode];
+      if (prevId) {
+        sameRegion = prevId;
+        break;
+      }
+    }
+    if (params.region !== 'automatic') {
+      return { status: 'unchanged', region: params.region };
+    }
+    return { status: 'unchanged', region: sameRegion ?? 'torso' };
+  }
+
+  return {
+    status: 'changed',
+    affectedVertexCount: changed,
+    oldRegions: [...oldRegionSet],
+    newRegion: params.region,
+  };
+}
+
+/**
+ * Apply a brush (or precomputed triangle) region correction via Smart Paint.
+ * The raw stroke is only a seed — the patch expands across the logical surface.
+ * When `restoreAutomatic` is true, clears hard overrides on the grown patch.
+ */
+export function applyBrushRegionCorrection(params: {
+  topology: CanonicalAutorigTopology;
+  suggested: Uint8Array;
+  overrides: Uint8Array;
+  resolved: Uint8Array;
+  region: AutorigBodyRegionId;
+  stroke: ReadonlyArray<BrushStrokePoint>;
+  projectVertex: (vertexIndex: number) => { x: number; y: number } | null;
+  visibleTriangleIds?: ArrayLike<number> | null;
+  restoreAutomatic?: boolean;
+  jointPositions?: Partial<Record<HumanJointId, Vec3>> | null;
+  posedPositions?: Float32Array | null;
+  reach?: SmartPaintReach;
+}): {
+  overrides: Uint8Array;
+  affectedVertices: Uint32Array;
+  seedVertices: Uint32Array;
+  result: AutorigCorrectionResult;
+} {
+  const stroke = simplifyBrushStroke(params.stroke);
+  const triangleIds = params.visibleTriangleIds && params.visibleTriangleIds.length > 0
+    ? params.visibleTriangleIds
+    : selectTrianglesInBrushCpu({
+      topology: params.topology,
+      projectVertex: params.projectVertex,
+      stroke,
+    });
+  const seeds = trianglesToSeedVertices(params.topology, triangleIds);
+  if (seeds.length === 0) {
+    return {
+      overrides: new Uint8Array(params.overrides),
+      affectedVertices: new Uint32Array(0),
+      seedVertices: seeds,
+      result: { status: 'empty' },
+    };
+  }
+
+  const grown = smartGrowRegionPatch({
+    topology: params.topology,
+    positions: params.posedPositions ?? params.topology.positions,
+    resolvedLabels: params.resolved,
+    seedTriangles: triangleIds,
+    seedVertices: seeds,
+    targetRegion: params.region,
+    jointPositions: params.jointPositions,
+    reach: params.reach ?? 'normal',
+  });
+
+  const patch = grown.expandedVertices.length > 0
+    ? grown.expandedVertices
+    : seeds;
+
+  let nextOverrides: Uint8Array;
+  if (params.restoreAutomatic) {
+    let anyOverride = false;
+    for (let i = 0; i < patch.length; i += 1) {
+      const v = patch[i]!;
+      if (v < params.overrides.length && params.overrides[v] !== AUTORIG_REGION_CODE.unknown) {
+        anyOverride = true;
+        break;
+      }
+    }
+    if (!anyOverride) {
+      return {
+        overrides: new Uint8Array(params.overrides),
+        affectedVertices: new Uint32Array(0),
+        seedVertices: seeds,
+        result: { status: 'unchanged', region: params.region },
+      };
+    }
+    nextOverrides = clearRegionOverridesAt({
+      overrides: params.overrides,
+      vertexIndices: patch,
+    });
+  } else {
+    nextOverrides = applyRegionLassoOverride({
+      overrides: params.overrides,
+      vertexIndices: patch,
+      region: params.region,
+    });
+  }
+
+  const nextResolved = resolveLabelsLocal(params.suggested, nextOverrides);
+  const result = classifyRegionCorrection({
+    previousOverrides: params.overrides,
+    nextOverrides,
+    previousResolved: params.resolved,
+    nextResolved,
+    seedVertices: seeds,
+    region: params.restoreAutomatic ? 'automatic' : params.region,
+  });
+
+  if (result.status === 'changed') {
+    const selectionKind = grown.selectedWholeComponent
+      ? 'component'
+      : patch.length > seeds.length * 1.5
+        ? 'expanded'
+        : 'local';
+    return {
+      overrides: nextOverrides,
+      affectedVertices: patch,
+      seedVertices: seeds,
+      result: {
+        ...result,
+        seedVertexCount: grown.seedVertexCount || seeds.length,
+        selectionKind,
+      },
+    };
+  }
+
+  return {
+    overrides: nextOverrides,
+    affectedVertices: result.status === 'unchanged' ? new Uint32Array(0) : patch,
+    seedVertices: seeds,
+    result,
+  };
+}
+
+function resolveLabelsLocal(suggested: Uint8Array, overrides: Uint8Array | null | undefined): Uint8Array {
+  const out = new Uint8Array(suggested);
+  if (!overrides) return out;
+  const n = Math.min(out.length, overrides.length);
+  for (let i = 0; i < n; i += 1) {
+    const code = overrides[i]!;
+    if (code !== AUTORIG_REGION_CODE.unknown && isValidRegionCode(code)) out[i] = code;
+  }
+  return out;
+}
+
 /**
  * CPU fallback: select triangles whose projected centroid lies inside the lasso.
  * Prefer the WebGL visible-surface pass when available; this is for tests and
@@ -250,6 +595,7 @@ export function applyLassoRegionCorrection(params: {
   if (seeds.length === 0) {
     return { overrides: new Uint8Array(params.overrides), affectedVertices: new Uint32Array(0) };
   }
+  // Lasso keeps the classic connected-region expand; brush uses Smart Paint.
   const expanded = expandRegionCorrection({
     topology: params.topology,
     resolved: params.resolved,
@@ -257,7 +603,6 @@ export function applyLassoRegionCorrection(params: {
     region: params.region,
     suggested: params.suggested,
   });
-  // Always include explicit seeds even if expansion filtered nothing extra.
   const merged = new Set<number>();
   for (let i = 0; i < seeds.length; i += 1) merged.add(seeds[i]!);
   for (let i = 0; i < expanded.length; i += 1) merged.add(expanded[i]!);
