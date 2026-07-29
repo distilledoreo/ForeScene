@@ -12,6 +12,7 @@ import type {
 import {
   applyFittedSkeletonToRig,
   centerAutorigMarkersDepth,
+  clampAutorigMarkersToMeshBounds,
   fitSkeletonFromMarkers,
   markerColor,
   markerJointsForMode,
@@ -236,25 +237,31 @@ export function AutorigMarkerWizardDialog({
     setMeshReady(true);
     if (!rig.markers?.length && !depthCenteredRef.current) {
       const centered = centerAutorigMarkersDepth(suggested, preview.root);
-      if (centered.centeredJointIds.length > 0) setMarkers(centered.markers);
+      setMarkers(clampAutorigMarkersToMeshBounds(centered.markers, preview.bounds));
       depthCenteredRef.current = true;
     }
   }, [assets, height, rig.markers, rig.orientation, sourceAssetId, suggested]);
 
   // WebGL lifecycle: create on open, dispose on close. No continuous rAF.
+  // Preview GL is optional — a failed secondary context must never unmount Build.
   useEffect(() => {
     if (!open) return;
     const meshCanvas = meshCanvasRef.current;
     if (!meshCanvas) return;
 
-    const gl = createAutorigMarkerPreviewGl({
-      width: CANVAS_W,
-      height: CANVAS_H,
-      canvas: meshCanvas,
-    });
-    glRef.current = gl;
-
     let cancelled = false;
+    let gl: AutorigMarkerPreviewGl | null = null;
+    try {
+      gl = createAutorigMarkerPreviewGl({
+        width: CANVAS_W,
+        height: CANVAS_H,
+        canvas: meshCanvas,
+      });
+      glRef.current = gl;
+    } catch {
+      glRef.current = null;
+    }
+
     const load = async () => {
       if (!sourceAssetId) return;
       try {
@@ -410,12 +417,15 @@ export function AutorigMarkerWizardDialog({
     };
     drawBone(positions.hips, positions.spine);
     drawBone(positions.spine, positions.chest);
-    drawBone(positions.chest, positions.neck);
+    drawBone(positions.chest, positions.upperSpine);
+    drawBone(positions.upperSpine, positions.neck);
     drawBone(positions.neck, positions.head);
-    drawBone(positions.chest, positions.leftUpperArm);
+    drawBone(positions.upperSpine, positions.leftClavicle);
+    drawBone(positions.leftClavicle, positions.leftUpperArm);
     drawBone(positions.leftUpperArm, positions.leftLowerArm);
     drawBone(positions.leftLowerArm, positions.leftHand);
-    drawBone(positions.chest, positions.rightUpperArm);
+    drawBone(positions.upperSpine, positions.rightClavicle);
+    drawBone(positions.rightClavicle, positions.rightUpperArm);
     drawBone(positions.rightUpperArm, positions.rightLowerArm);
     drawBone(positions.rightLowerArm, positions.rightHand);
     drawBone(positions.hips, positions.leftUpperLeg);

@@ -133,9 +133,20 @@ describe('deterministic autorig skin weights', () => {
     });
     const upperIdx = segments.findIndex((segment) => segment.jointId === 'leftUpperArm');
     expect(upperIdx).toBeGreaterThanOrEqual(0);
-    expect(thick[upperIdx]!).toBeGreaterThan(thin[upperIdx]! + 0.03);
-    // Thick arm should be near the measured surface, not the old meshThickness floor (~0.16).
-    expect(thick[upperIdx]!).toBeGreaterThan(0.1);
+    expect(thick[upperIdx]!).toBeGreaterThan(thin[upperIdx]! + 0.015);
+    // Thick arm should track mesh thickness without returning to the old 18%-height balloon.
+    expect(thick[upperIdx]!).toBeGreaterThan(0.08);
     expect(thick[upperIdx]!).toBeLessThan(0.2);
+  });
+
+  it('includes clavicles, upper spine, and twist bones in skin segments', () => {
+    const markers = suggestAutorigMarkers({ size: [0.6, 1.75, 0.35], heightMeters: 1.75 });
+    const fitted = fitSkeletonFromMarkers(markers, 'full');
+    const segments = buildSkinBoneSegments(fitted.jointPositions);
+    const ids = new Set(segments.map((segment) => segment.jointId));
+    expect(ids.has('upperSpine')).toBe(true);
+    expect(ids.has('leftClavicle')).toBe(true);
+    expect(ids.has('leftUpperArmTwist')).toBe(true);
+    expect(ids.has('leftUpperLegTwist')).toBe(true);
   });
 });

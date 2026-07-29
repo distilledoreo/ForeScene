@@ -42,6 +42,45 @@ export const HUMAN_JOINT_IDS: readonly HumanJointId[] = [
   'rightToeBase',
 ] as const;
 
+/**
+ * Joints shown in the ordinary pose UI / 3D handles.
+ * Twist helpers, palm/toe tips stay hidden — they follow primary bones.
+ */
+export const HUMAN_POSE_EDITABLE_JOINT_IDS: readonly HumanJointId[] = [
+  'hips',
+  'spine',
+  'chest',
+  'upperSpine',
+  'neck',
+  'head',
+  'leftClavicle',
+  'leftUpperArm',
+  'leftLowerArm',
+  'leftHand',
+  'rightClavicle',
+  'rightUpperArm',
+  'rightLowerArm',
+  'rightHand',
+  'leftUpperLeg',
+  'leftLowerLeg',
+  'leftFoot',
+  'rightUpperLeg',
+  'rightLowerLeg',
+  'rightFoot',
+] as const;
+
+/** Helper joints that receive distributed twist from their primary parent bone. */
+export const HUMAN_TWIST_FOLLOWER: Partial<Record<HumanJointId, HumanJointId>> = {
+  leftUpperArm: 'leftUpperArmTwist',
+  leftLowerArm: 'leftLowerArmTwist',
+  rightUpperArm: 'rightUpperArmTwist',
+  rightLowerArm: 'rightLowerArmTwist',
+  leftUpperLeg: 'leftUpperLegTwist',
+  leftLowerLeg: 'leftLowerLegTwist',
+  rightUpperLeg: 'rightUpperLegTwist',
+  rightLowerLeg: 'rightLowerLegTwist',
+};
+
 export const HUMAN_JOINT_LABELS: Record<HumanJointId, string> = {
   hips: 'Hips',
   spine: 'Spine',

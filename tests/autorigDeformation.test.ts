@@ -270,7 +270,7 @@ describe('autorig deformation acceptance gates', () => {
         .filter((index) => index >= 0),
     );
     const torsoJointIndexes = new Set(
-      (['hips', 'spine', 'chest', 'neck'] as const)
+      (['hips', 'spine', 'chest', 'upperSpine', 'leftClavicle', 'rightClavicle', 'neck'] as const)
         .map((id) => buffers.jointOrder.indexOf(id))
         .filter((index) => index >= 0),
     );
