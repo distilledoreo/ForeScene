@@ -47,30 +47,21 @@ export interface SkinWeightBuffers {
   warnings?: string[];
 }
 
-function distancePointToSegment(point: Vec3, start: Vec3, end: Vec3): number {
-  const ab: Vec3 = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
-  const ap: Vec3 = [point[0] - start[0], point[1] - start[1], point[2] - start[2]];
-  const abLenSq = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-  if (abLenSq < 1e-12) {
-    return Math.hypot(ap[0], ap[1], ap[2]);
-  }
-  const t = Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / abLenSq));
-  const closest: Vec3 = [start[0] + ab[0] * t, start[1] + ab[1] * t, start[2] + ab[2] * t];
-  return Math.hypot(point[0] - closest[0], point[1] - closest[1], point[2] - closest[2]);
-}
-
 export function buildSkinBoneSegments(
   jointPositions: Partial<Record<HumanJointId, Vec3>>,
 ): SkinBoneSegment[] {
   const jointOrder = HUMAN_JOINT_IDS.filter((id) => jointPositions[id]);
   const indexOf = new Map(jointOrder.map((id, index) => [id, index] as const));
+  const childOf = new Map<HumanJointId, HumanJointId>();
+  for (const [child, parent] of Object.entries(HUMAN_JOINT_PARENT) as Array<[HumanJointId, HumanJointId]>) {
+    if (!childOf.has(parent)) childOf.set(parent, child);
+  }
   const segments: SkinBoneSegment[] = [];
   for (const jointId of jointOrder) {
     const start = jointPositions[jointId];
     if (!start) continue;
     // Prefer a child tip; otherwise a short stub along +Y.
-    const child = (Object.entries(HUMAN_JOINT_PARENT) as Array<[HumanJointId, HumanJointId]>)
-      .find(([, parent]) => parent === jointId)?.[0];
+    const child = childOf.get(jointId);
     const end = (child && jointPositions[child]) || [start[0], start[1] + 0.08, start[2]] as Vec3;
     const region = BONE_REGION[jointId] ?? 'torso';
     segments.push({
@@ -128,91 +119,219 @@ export function generateDeterministicSkinWeights(params: {
   const weights = new Float32Array(vertexCount * INFLUENCES_PER_VERTEX);
   const fallbackVertices: number[] = [];
   const warnings: string[] = [];
+
+  // Flatten segment data once so the per-vertex loop is a tight typed-array scan
+  // (capsule radii and segment vectors are vertex-invariant).
+  const segCount = segments.length;
+  const segStartX = new Float32Array(segCount);
+  const segStartY = new Float32Array(segCount);
+  const segStartZ = new Float32Array(segCount);
+  const segABX = new Float32Array(segCount);
+  const segABY = new Float32Array(segCount);
+  const segABZ = new Float32Array(segCount);
+  const segLenSq = new Float32Array(segCount);
+  const segRadius = new Float32Array(segCount);
+  const segRadiusSq = new Float32Array(segCount);
+  const segJoint = new Uint16Array(segCount);
+  /** -1 = left limb, +1 = right limb, 0 = midline (no cross-side penalty). */
+  const segSide = new Int8Array(segCount);
+  for (let s = 0; s < segCount; s += 1) {
+    const segment = segments[s]!;
+    const abx = segment.end[0] - segment.start[0];
+    const aby = segment.end[1] - segment.start[1];
+    const abz = segment.end[2] - segment.start[2];
+    segStartX[s] = segment.start[0];
+    segStartY[s] = segment.start[1];
+    segStartZ[s] = segment.start[2];
+    segABX[s] = abx;
+    segABY[s] = aby;
+    segABZ[s] = abz;
+    segLenSq[s] = Math.max(abx * abx + aby * aby + abz * abz, 1e-12);
+    const radius = capsuleRadius(segment, height, meshThickness);
+    segRadius[s] = radius;
+    segRadiusSq[s] = radius * radius;
+    segJoint[s] = segment.jointIndex;
+    segSide[s] = segment.region === 'leftArm' || segment.region === 'leftLeg'
+      ? -1
+      : segment.region === 'rightArm' || segment.region === 'rightLeg'
+        ? 1
+        : 0;
+  }
+
+  const hipsIndex = Math.max(0, jointOrder.indexOf('hips'));
+  // Reusable top-4 scratch (no per-vertex allocations / sorts).
+  const topJoints = new Uint16Array(INFLUENCES_PER_VERTEX);
+  const topWeights = new Float32Array(INFLUENCES_PER_VERTEX);
   for (let v = 0; v < vertexCount; v += 1) {
-    const point: Vec3 = [
-      params.positions[v * 3]!,
-      params.positions[v * 3 + 1]!,
-      params.positions[v * 3 + 2]!,
-    ];
-    const scored: Array<{ jointIndex: number; weight: number }> = [];
-    for (const segment of segments) {
-      const radius = capsuleRadius(segment, height, meshThickness);
-      const distance = distancePointToSegment(point, segment.start, segment.end);
-      let weight = falloffWeight(distance, radius);
+    const px = params.positions[v * 3]!;
+    const py = params.positions[v * 3 + 1]!;
+    const pz = params.positions[v * 3 + 2]!;
+    let topN = 0;
+    for (let s = 0; s < segCount; s += 1) {
+      const apx = px - segStartX[s]!;
+      const apy = py - segStartY[s]!;
+      const apz = pz - segStartZ[s]!;
+      let t = (apx * segABX[s]! + apy * segABY[s]! + apz * segABZ[s]!) / segLenSq[s]!;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = apx - segABX[s]! * t;
+      const dy = apy - segABY[s]! * t;
+      const dz = apz - segABZ[s]! * t;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq >= segRadiusSq[s]!) continue; // zero falloff — skip the sqrt.
+      let weight = falloffWeight(Math.sqrt(distSq), segRadius[s]!);
       if (weight <= 1e-5) continue;
       // Distance is authoritative; neighboring regions are penalized instead
       // of being broadly admitted by fixed world-space X/Y thresholds.
-      const sideMismatch = (segment.region === 'leftArm' || segment.region === 'leftLeg') && point[0] < -meshThickness
-        || (segment.region === 'rightArm' || segment.region === 'rightLeg') && point[0] > meshThickness;
-      if (sideMismatch) weight *= 0.08;
-      scored.push({ jointIndex: segment.jointIndex, weight });
+      const side = segSide[s]!;
+      if ((side < 0 && px < -meshThickness) || (side > 0 && px > meshThickness)) weight *= 0.08;
+      // Stable descending insertion into the fixed top-4 (matches sort+slice).
+      if (topN < INFLUENCES_PER_VERTEX || weight > topWeights[INFLUENCES_PER_VERTEX - 1]!) {
+        let slot = Math.min(topN, INFLUENCES_PER_VERTEX - 1);
+        while (slot > 0 && topWeights[slot - 1]! < weight) {
+          topWeights[slot] = topWeights[slot - 1]!;
+          topJoints[slot] = topJoints[slot - 1]!;
+          slot -= 1;
+        }
+        topWeights[slot] = weight;
+        topJoints[slot] = segJoint[s]!;
+        if (topN < INFLUENCES_PER_VERTEX) topN += 1;
+      }
     }
 
-    scored.sort((a, b) => b.weight - a.weight);
-    const top = scored.slice(0, INFLUENCES_PER_VERTEX);
     // Ensure at least hips influence if nothing matched (clothing outliers).
-    if (top.length === 0) {
-      const hipsIndex = jointOrder.indexOf('hips');
-      top.push({ jointIndex: Math.max(0, hipsIndex), weight: 1 });
+    if (topN === 0) {
+      topJoints[0] = hipsIndex;
+      topWeights[0] = 1;
+      topN = 1;
       fallbackVertices.push(v);
     }
-    let sum = top.reduce((acc, item) => acc + item.weight, 0);
+    let sum = 0;
+    for (let i = 0; i < topN; i += 1) sum += topWeights[i]!;
     if (sum < 1e-8) {
-      top[0]!.weight = 1;
+      topWeights[0] = 1;
       sum = 1;
     }
     for (let i = 0; i < INFLUENCES_PER_VERTEX; i += 1) {
-      const item = top[i];
-      indices[v * INFLUENCES_PER_VERTEX + i] = item?.jointIndex ?? 0;
-      weights[v * INFLUENCES_PER_VERTEX + i] = item ? item.weight / sum : 0;
+      indices[v * INFLUENCES_PER_VERTEX + i] = i < topN ? topJoints[i]! : 0;
+      weights[v * INFLUENCES_PER_VERTEX + i] = i < topN ? topWeights[i]! / sum : 0;
     }
   }
 
-  // Smooth by joint identity across actual triangle adjacency. Disconnected
-  // components never share neighbors, so clothing or hair cannot borrow a
-  // neighboring component's assignment accidentally.
-  if (params.topologyIndices && params.topologyIndices.length >= 3 && jointOrder.length > 0) {
-    const adjacency = Array.from({ length: vertexCount }, () => new Set<number>());
-    for (let i = 0; i + 2 < params.topologyIndices.length; i += 3) {
-      const a = Number(params.topologyIndices[i]);
-      const b = Number(params.topologyIndices[i + 1]);
-      const c = Number(params.topologyIndices[i + 2]);
+  // Laplacian smoothing over triangle adjacency (when provided) softens region seams.
+  // Sparse implementation: only joints present in a vertex's own or its neighbors'
+  // top-4 slots are touched — no dense V×J matrices and no per-vertex Sets.
+  if (params.topologyIndices && params.topologyIndices.length >= 3 && vertexCount > 0) {
+    const topo = params.topologyIndices;
+    const triCount = Math.floor(topo.length / 3);
+    const tris = new Int32Array(triCount * 3);
+    let keptTris = 0;
+    for (let i = 0; i + 2 < topo.length; i += 3) {
+      const a = Number(topo[i]);
+      const b = Number(topo[i + 1]);
+      const c = Number(topo[i + 2]);
       if (![a, b, c].every((value) => Number.isInteger(value) && value >= 0 && value < vertexCount)) continue;
-      adjacency[a]!.add(b); adjacency[a]!.add(c);
-      adjacency[b]!.add(a); adjacency[b]!.add(c);
-      adjacency[c]!.add(a); adjacency[c]!.add(b);
+      tris[keptTris * 3] = a;
+      tris[keptTris * 3 + 1] = b;
+      tris[keptTris * 3 + 2] = c;
+      keptTris += 1;
     }
-    const dense = new Float32Array(vertexCount * jointOrder.length);
+    // CSR adjacency (directed, with duplicate edges; dedup happens per vertex below).
+    const offsets = new Int32Array(vertexCount + 1);
+    for (let i = 0; i < keptTris * 3; i += 1) offsets[tris[i]! + 1] += 2;
+    for (let v = 0; v < vertexCount; v += 1) offsets[v + 1] += offsets[v]!;
+    const neighbors = new Int32Array(offsets[vertexCount]!);
+    const cursor = new Int32Array(vertexCount);
+    for (let i = 0; i < keptTris; i += 1) {
+      const a = tris[i * 3]!;
+      const b = tris[i * 3 + 1]!;
+      const c = tris[i * 3 + 2]!;
+      neighbors[offsets[a]! + cursor[a]!] = b; cursor[a] += 1;
+      neighbors[offsets[a]! + cursor[a]!] = c; cursor[a] += 1;
+      neighbors[offsets[b]! + cursor[b]!] = a; cursor[b] += 1;
+      neighbors[offsets[b]! + cursor[b]!] = c; cursor[b] += 1;
+      neighbors[offsets[c]! + cursor[c]!] = a; cursor[c] += 1;
+      neighbors[offsets[c]! + cursor[c]!] = b; cursor[c] += 1;
+    }
+
+    const jointCount = jointOrder.length;
+    const nbrSeen = new Int32Array(vertexCount); // per-vertex neighbor dedup stamps
+    const candStamp = new Int32Array(jointCount);
+    const candSum = new Float32Array(jointCount);
+    const ownStamp = new Int32Array(jointCount);
+    const ownWeight = new Float32Array(jointCount);
+    const candList = new Int32Array(jointCount);
+    let generation = 0;
     for (let v = 0; v < vertexCount; v += 1) {
+      const start = offsets[v]!;
+      const end = offsets[v + 1]!;
+      if (start === end) continue;
+      generation += 1;
+      let candN = 0;
+      const vBase = v * INFLUENCES_PER_VERTEX;
       for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
-        const jointIndex = indices[v * INFLUENCES_PER_VERTEX + slot]!;
-        if (jointIndex < jointOrder.length) dense[v * jointOrder.length + jointIndex] += weights[v * INFLUENCES_PER_VERTEX + slot]!;
+        const w = weights[vBase + slot]!;
+        if (w <= 0) continue;
+        const j = indices[vBase + slot]!;
+        if (j >= jointCount) continue;
+        ownStamp[j] = generation;
+        ownWeight[j] = w;
+        if (candStamp[j] !== generation) {
+          candStamp[j] = generation;
+          candSum[j] = 0;
+          candList[candN] = j;
+          candN += 1;
+        }
       }
-    }
-    const smoothed = new Float32Array(dense);
-    for (let v = 0; v < vertexCount; v += 1) {
-      const neighbors = adjacency[v]!;
-      if (neighbors.size === 0) continue;
-      for (let jointIndex = 0; jointIndex < jointOrder.length; jointIndex += 1) {
-        let neighborAverage = 0;
-        for (const neighbor of neighbors) neighborAverage += dense[neighbor * jointOrder.length + jointIndex]!;
-        smoothed[v * jointOrder.length + jointIndex] = dense[v * jointOrder.length + jointIndex]! * 0.5
-          + (neighborAverage / neighbors.size) * 0.5;
+      let dedupCount = 0;
+      for (let k = start; k < end; k += 1) {
+        const u = neighbors[k]!;
+        if (nbrSeen[u] === generation) continue;
+        nbrSeen[u] = generation;
+        dedupCount += 1;
+        const uBase = u * INFLUENCES_PER_VERTEX;
+        for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
+          const w = weights[uBase + slot]!;
+          if (w <= 0) continue;
+          const j = indices[uBase + slot]!;
+          if (j >= jointCount) continue;
+          if (candStamp[j] !== generation) {
+            candStamp[j] = generation;
+            candSum[j] = 0;
+            candList[candN] = j;
+            candN += 1;
+          }
+          candSum[j] = candSum[j]! + w;
+        }
       }
-    }
-    for (let v = 0; v < vertexCount; v += 1) {
-      const ranked = Array.from({ length: jointOrder.length }, (_, jointIndex) => ({
-        jointIndex,
-        weight: smoothed[v * jointOrder.length + jointIndex]!,
-      })).filter((item) => item.weight > 1e-6).sort((a, b) => b.weight - a.weight).slice(0, INFLUENCES_PER_VERTEX);
-      const sum = ranked.reduce((total, item) => total + item.weight, 0);
+      if (dedupCount === 0) continue;
+      // smoothed = own * 0.5 + (neighbor average) * 0.5 → re-rank top-4 (>1e-6).
+      let topN = 0;
+      for (let c = 0; c < candN; c += 1) {
+        const j = candList[c]!;
+        const own = ownStamp[j] === generation ? ownWeight[j]! : 0;
+        const smoothed = own * 0.5 + (candSum[j]! / dedupCount) * 0.5;
+        if (smoothed <= 1e-6) continue;
+        if (topN < INFLUENCES_PER_VERTEX || smoothed > topWeights[INFLUENCES_PER_VERTEX - 1]!) {
+          let slot = Math.min(topN, INFLUENCES_PER_VERTEX - 1);
+          while (slot > 0 && topWeights[slot - 1]! < smoothed) {
+            topWeights[slot] = topWeights[slot - 1]!;
+            topJoints[slot] = topJoints[slot - 1]!;
+            slot -= 1;
+          }
+          topWeights[slot] = smoothed;
+          topJoints[slot] = j;
+          if (topN < INFLUENCES_PER_VERTEX) topN += 1;
+        }
+      }
+      let sum = 0;
+      for (let i = 0; i < topN; i += 1) sum += topWeights[i]!;
       for (let slot = 0; slot < INFLUENCES_PER_VERTEX; slot += 1) {
-        const item = ranked[slot];
-        indices[v * INFLUENCES_PER_VERTEX + slot] = item?.jointIndex ?? 0;
-        weights[v * INFLUENCES_PER_VERTEX + slot] = item ? item.weight / Math.max(sum, 1e-8) : 0;
+        indices[vBase + slot] = slot < topN ? topJoints[slot]! : 0;
+        weights[vBase + slot] = slot < topN ? topWeights[slot]! / Math.max(sum, 1e-8) : 0;
       }
     }
   }
+
   if (fallbackVertices.length > 0) {
     warnings.push(`${fallbackVertices.length} vertices could not be assigned confidently and use hips fallback.`);
   }

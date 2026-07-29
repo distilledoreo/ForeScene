@@ -126,6 +126,54 @@ describe('autorig deformation acceptance gates', () => {
     expect(frame.determinant()).toBeCloseTo(1, 5);
   });
 
+  it('poses anatomically through stored canonicalPoseBases (elbow/knee/hip/shoulder directions)', () => {
+    const fixture = makeFixture();
+    const skinned = buildSkinnedCharacterFromTemplate({ template: fixture.root, rig: fixture.rig, buffers: fixture.buffers });
+    const bones = new Map<HumanJointId, THREE.Bone>();
+    skinned.traverse((node) => {
+      const bone = node as THREE.Bone;
+      const id = bone.userData.humanJointId as HumanJointId | undefined;
+      if (bone.isBone && id) bones.set(id, bone);
+    });
+    const rests = captureBoneRests(bones);
+    const worldOf = (jointId: HumanJointId) => {
+      skinned.updateMatrixWorld(true);
+      return new THREE.Vector3().setFromMatrixPosition(bones.get(jointId)!.matrixWorld);
+    };
+    const neutralHand = worldOf('leftHand');
+    const neutralFoot = worldOf('leftFoot');
+    const neutralRightHand = worldOf('rightHand');
+    const bases = fixture.rig.canonicalPoseBases;
+    const applyProbe = (joints: HumanPose['joints']) => {
+      applySemanticPoseToBones({ bones, rests, pose: { version: 1, joints }, canonicalPoseBases: bases });
+      skinned.updateMatrixWorld(true);
+    };
+
+    // Elbow flexion (+X): hand curls forward (+Z), not backward; right side untouched.
+    applyProbe({ leftLowerArm: { rotation: eulerDegreesToQuaternion(95, 0, 0) } });
+    const elbowHand = worldOf('leftHand');
+    expect(elbowHand.z).toBeGreaterThan(neutralHand.z + 0.05);
+    expect(worldOf('rightHand').distanceTo(neutralRightHand)).toBeLessThan(1e-6);
+
+    // Knee flexion (+X): heel swings backward (−Z) and up.
+    applyProbe({ leftLowerLeg: { rotation: eulerDegreesToQuaternion(110, 0, 0) } });
+    const kneeFoot = worldOf('leftFoot');
+    expect(kneeFoot.z).toBeLessThan(neutralFoot.z - 0.05);
+    expect(kneeFoot.y).toBeGreaterThan(neutralFoot.y + 0.02);
+
+    // Hip flexion (−X): thigh swings the foot forward (+Z).
+    applyProbe({ leftUpperLeg: { rotation: eulerDegreesToQuaternion(-95, 0, 0) } });
+    expect(worldOf('leftFoot').z).toBeGreaterThan(neutralFoot.z + 0.05);
+
+    // Shoulder abduction (+Z): arm rises.
+    applyProbe({ leftUpperArm: { rotation: eulerDegreesToQuaternion(0, 0, 35) } });
+    expect(worldOf('leftHand').y).toBeGreaterThan(neutralHand.y + 0.03);
+
+    // Shoulder flexion (+X): arm swings forward, not backward.
+    applyProbe({ leftUpperArm: { rotation: eulerDegreesToQuaternion(85, 0, 0) } });
+    expect(worldOf('leftHand').z).toBeGreaterThan(neutralHand.z + 0.05);
+  });
+
   it('keeps every wizard test pose finite and within a bounded expansion', () => {
     const fixture = makeFixture();
     const skinned = buildSkinnedCharacterFromTemplate({ template: fixture.root, rig: fixture.rig, buffers: fixture.buffers });

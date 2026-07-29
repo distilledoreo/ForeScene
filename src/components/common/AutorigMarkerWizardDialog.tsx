@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as THREE from 'three';
-import { CheckCircle2, FlipHorizontal2, RotateCcw, Sparkles } from 'lucide-react';
+import { CheckCircle2, FlipHorizontal2, RotateCcw } from 'lucide-react';
 import type {
   AssetRegistry,
   AutorigMarker,
@@ -10,19 +10,16 @@ import type {
   Vec3,
 } from '../../domain/types';
 import {
-  AUTORIG_MARKER_MIRROR,
   applyFittedSkeletonToRig,
   centerAutorigMarkersDepth,
   fitSkeletonFromMarkers,
   markerColor,
   markerJointsForMode,
   mirrorAllMarkers,
-  mirrorMarkerAcrossSagittal,
   sanitizeAutorigMarkers,
   suggestAutorigMarkers,
   upsertMarker,
   validateAutorigMarkers,
-  type AutorigMarkerMode,
 } from '../../engine/autorigMarkers';
 import {
   canvasToWorld,
@@ -50,7 +47,7 @@ import {
 } from '../../engine/autoriggedPoseableCharacter';
 import { HUMAN_JOINT_LABELS } from '../../engine/humanPose';
 import { HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
-import { applySemanticPoseToBones, captureBoneRests } from '../../engine/poseableCharacter';
+import { applySemanticPoseToBones, captureBoneRests, updateSkinnedMeshes } from '../../engine/poseableCharacter';
 import { Modal } from './Modal';
 
 interface HistoryEntry {
@@ -59,6 +56,19 @@ interface HistoryEntry {
 
 const CANVAS_W = 640;
 const CANVAS_H = 480;
+
+const REQUIRED_JOINTS = markerJointsForMode('full');
+const PREVIEW_POSE_IDS = ['neutral', 'arms-raised', 'elbows-bent', 'sitting', 'walking', 'crouching'];
+
+/** Preview instances own their material but share template geometry — dispose materials only. */
+function disposePreviewMaterials(root: THREE.Object3D | null): void {
+  root?.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) material?.dispose();
+  });
+}
 
 export function AutorigMarkerWizardDialog({
   open,
@@ -89,7 +99,6 @@ export function AutorigMarkerWizardDialog({
     [height, rig.orientation?.groundLevelMeters],
   );
 
-  const [mode, setMode] = useState<AutorigMarkerMode>('full');
   const [markers, setMarkers] = useState<AutorigMarker[]>(() => {
     const fromRig = sanitizeAutorigMarkers(rig.markers);
     return fromRig.length > 0 ? fromRig : suggested;
@@ -100,7 +109,8 @@ export function AutorigMarkerWizardDialog({
   const [showSide, setShowSide] = useState(false);
   const [meshReady, setMeshReady] = useState(false);
   const [meshBounds, setMeshBounds] = useState<OrientedMeshBounds | null>(null);
-  const [previewedTestPose, setPreviewedTestPose] = useState(false);
+  const [meshSource, setMeshSource] = useState<THREE.Object3D | null>(null);
+  const [showTestPose, setShowTestPose] = useState(false);
   const [activeTestPose, setActiveTestPose] = useState('neutral');
 
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -110,8 +120,7 @@ export function AutorigMarkerWizardDialog({
   const dragRef = useRef<{ jointId: HumanJointId; pointerId: number } | undefined>(undefined);
   const preDragMarkersRef = useRef<AutorigMarker[] | undefined>(undefined);
   const depthCenteredRef = useRef(false);
-  const canonicalPreviewRootRef = useRef<THREE.Object3D | null>(null);
-  const deformationPreviewRootRef = useRef<THREE.Object3D | null>(null);
+  const previewRootRef = useRef<THREE.Object3D | null>(null);
 
   const view = showSide ? 'side' as const : 'front' as const;
 
@@ -134,15 +143,22 @@ export function AutorigMarkerWizardDialog({
     setPast([]);
     setFuture([]);
     depthCenteredRef.current = false;
-    setPreviewedTestPose(false);
+    setShowTestPose(false);
     setActiveTestPose('neutral');
   }, [open, rig, suggested]);
 
-  const required = markerJointsForMode(mode);
   // Always sanitize: selected autorig characters mount this dialog even when closed.
   const safeMarkers = useMemo(() => sanitizeAutorigMarkers(markers), [markers]);
-  const issues = validateAutorigMarkers(safeMarkers, mode);
-  const fitted = fitSkeletonFromMarkers(safeMarkers, mode);
+  const issues = validateAutorigMarkers(safeMarkers, 'full');
+  const fitted = useMemo(() => fitSkeletonFromMarkers(safeMarkers, 'full'), [safeMarkers]);
+
+  // Heavy preview inputs (skin weights) track the fitted skeleton only between
+  // drags — never once per pointermove.
+  const [isDragging, setIsDragging] = useState(false);
+  const [previewFitted, setPreviewFitted] = useState(fitted);
+  useEffect(() => {
+    if (!isDragging) setPreviewFitted(fitted);
+  }, [fitted, isDragging]);
 
   const commit = (next: AutorigMarker[]) => {
     setPast((stack) => [...stack, { markers: safeMarkers }]);
@@ -151,47 +167,9 @@ export function AutorigMarkerWizardDialog({
   };
 
   const centerDepth = () => {
-    const root = canonicalPreviewRootRef.current;
-    if (!root) return;
-    const result = centerAutorigMarkersDepth(safeMarkers, root);
+    if (!meshSource) return;
+    const result = centerAutorigMarkersDepth(safeMarkers, meshSource, view);
     commit(result.markers);
-  };
-
-  const showTestPose = (poseId: string, pose: HumanPose) => {
-    const root = canonicalPreviewRootRef.current;
-    const gl = glRef.current;
-    if (!root || !gl) return;
-    const positions = extractCanonicalVertexPositions(root);
-    const previewSize: Vec3 = meshBounds
-      ? [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]]
-      : [height * 0.4, height, height * 0.3];
-    const buffers = generateDeterministicSkinWeights({
-      positions,
-      jointPositions: fitted.jointPositions,
-      heightMeters: height,
-      meshSize: previewSize,
-      topologyIndices: extractCanonicalTopology(root),
-    });
-    const previewRig = applyFittedSkeletonToRig(rig, fitted);
-    const skinned = buildSkinnedCharacterFromTemplate({ template: root, rig: previewRig, buffers });
-    const bones = new Map<HumanJointId, THREE.Bone>();
-    skinned.traverse((node) => {
-      const bone = node as THREE.Bone;
-      const jointId = bone.userData.humanJointId as HumanJointId | undefined;
-      if (bone.isBone && jointId) bones.set(jointId, bone);
-    });
-    applySemanticPoseToBones({
-      bones,
-      rests: captureBoneRests(bones),
-      pose,
-      canonicalPoseBases: previewRig.canonicalPoseBases,
-    });
-    skinned.updateMatrixWorld(true);
-    deformationPreviewRootRef.current = skinned;
-    setAutorigMarkerPreviewRoot(gl, skinned);
-    setActiveTestPose(poseId);
-    setPreviewedTestPose(true);
-    renderMeshLayer();
   };
 
   const undo = () => {
@@ -215,11 +193,15 @@ export function AutorigMarkerWizardDialog({
   };
 
   const attachPreviewMesh = useCallback(() => {
+    const replacePreviewRoot = (root: THREE.Object3D | null) => {
+      disposePreviewMaterials(previewRootRef.current);
+      previewRootRef.current = root;
+      setMeshSource(root);
+    };
     if (!sourceAssetId || !isAutorigSourceTemplateReady(sourceAssetId)) {
       setMeshReady(false);
       setMeshBounds(null);
-      canonicalPreviewRootRef.current = null;
-      if (glRef.current) setAutorigMarkerPreviewRoot(glRef.current, null);
+      replacePreviewRoot(null);
       return;
     }
     const preview = createAutorigPreviewInstance({
@@ -228,13 +210,13 @@ export function AutorigMarkerWizardDialog({
       orientation: rig.orientation,
       approximateHeightMeters: height,
     });
-    if (!preview || !glRef.current) {
+    if (!preview) {
       setMeshReady(false);
       setMeshBounds(null);
+      replacePreviewRoot(null);
       return;
     }
-    setAutorigMarkerPreviewRoot(glRef.current, preview.root);
-    canonicalPreviewRootRef.current = preview.root;
+    replacePreviewRoot(preview.root);
     setMeshBounds(preview.bounds);
     setMeshReady(true);
     if (!rig.markers?.length && !depthCenteredRef.current) {
@@ -282,6 +264,9 @@ export function AutorigMarkerWizardDialog({
       unsub();
       disposeAutorigMarkerPreviewGl(glRef.current);
       glRef.current = null;
+      disposePreviewMaterials(previewRootRef.current);
+      previewRootRef.current = null;
+      setMeshSource(null);
       setMeshReady(false);
       setMeshBounds(null);
     };
@@ -306,6 +291,75 @@ export function AutorigMarkerWizardDialog({
     if (!open) return;
     renderMeshLayer();
   }, [open, frame, meshReady, renderMeshLayer]);
+
+
+  // ---- Deformation preview (built once per marker set; pose chips re-pose for free) ----
+  const meshData = useMemo(() => {
+    if (!showTestPose || !meshSource) return null;
+    return {
+      positions: extractCanonicalVertexPositions(meshSource),
+      topology: extractCanonicalTopology(meshSource),
+    };
+  }, [showTestPose, meshSource]);
+
+  const previewRig = useMemo(() => applyFittedSkeletonToRig(rig, previewFitted), [rig, previewFitted]);
+
+  const previewBuffers = useMemo(() => {
+    if (!meshData || !meshBounds) return undefined;
+    return generateDeterministicSkinWeights({
+      positions: meshData.positions,
+      jointPositions: previewFitted.jointPositions,
+      heightMeters: height,
+      meshSize: [meshBounds.max[0] - meshBounds.min[0], height, meshBounds.max[2] - meshBounds.min[2]],
+      topologyIndices: meshData.topology,
+    });
+  }, [meshData, meshBounds, previewFitted, height]);
+
+  const deformationPreview = useMemo(() => {
+    if (!previewBuffers || !meshSource) return null;
+    const root = buildSkinnedCharacterFromTemplate({ template: meshSource, rig: previewRig, buffers: previewBuffers });
+    const bones = new Map<HumanJointId, THREE.Bone>();
+    root.traverse((node) => {
+      const bone = node as THREE.Bone;
+      const jointId = bone.userData.humanJointId as HumanJointId | undefined;
+      if (bone.isBone && jointId) bones.set(jointId, bone);
+    });
+    return { root, bones, rests: captureBoneRests(bones) };
+  }, [meshSource, previewRig, previewBuffers]);
+
+  // Swap the GL layer between the static clay mesh and the deformation preview.
+  useEffect(() => {
+    const gl = glRef.current;
+    if (!gl || !open) return;
+    setAutorigMarkerPreviewRoot(gl, deformationPreview ? deformationPreview.root : meshSource);
+    renderMeshLayer();
+  }, [open, deformationPreview, meshSource, renderMeshLayer]);
+
+  // Deformation previews own cloned geometries (materials are shared with the clay
+  // preview) — dispose geometries when a preview is replaced or the dialog unmounts.
+  useEffect(() => {
+    if (!deformationPreview) return;
+    return () => {
+      deformationPreview.root.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose();
+      });
+    };
+  }, [deformationPreview]);
+
+  const previewTestPose = (poseId: string, pose: HumanPose | undefined) => {
+    if (!deformationPreview) return;
+    applySemanticPoseToBones({
+      bones: deformationPreview.bones,
+      rests: deformationPreview.rests,
+      pose,
+      canonicalPoseBases: previewRig.canonicalPoseBases,
+    });
+    updateSkinnedMeshes(deformationPreview.root);
+    renderMeshLayer();
+    setActiveTestPose(poseId);
+  };
+
 
   // 2D marker overlay (transparent over mesh; keeps pointer interaction).
   useEffect(() => {
@@ -356,7 +410,7 @@ export function AutorigMarkerWizardDialog({
     drawBone(positions.rightUpperLeg, positions.rightLowerLeg);
     drawBone(positions.rightLowerLeg, positions.rightFoot);
 
-    for (const jointId of required) {
+    for (const jointId of REQUIRED_JOINTS) {
       const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
@@ -372,13 +426,11 @@ export function AutorigMarkerWizardDialog({
       }
     }
 
-    // Magnifier while dragging — zooms mesh under the marker via shared frame coords.
+    // Magnifier while dragging — samples the already-rendered mesh canvas (no re-render).
     if (dragRef.current) {
       const marker = safeMarkers.find((item) => item.jointId === dragRef.current?.jointId);
       if (marker) {
         const point = worldToCanvas(marker.position, frame);
-        // Ensure mesh layer is current before sampling.
-        renderMeshLayer();
         drawAutorigMarkerMagnifier({
           ctx,
           meshCanvas: meshCanvasRef.current,
@@ -394,15 +446,13 @@ export function AutorigMarkerWizardDialog({
     fitted,
     safeMarkers,
     open,
-    required,
     selectedJointId,
     frame,
     rig.orientation?.groundLevelMeters,
-    renderMeshLayer,
   ]);
 
   const hitTest = (x: number, y: number): HumanJointId | undefined => {
-    for (const jointId of required) {
+    for (const jointId of REQUIRED_JOINTS) {
       const marker = safeMarkers.find((item) => item.jointId === jointId);
       if (!marker) continue;
       const point = worldToCanvas(marker.position, frame);
@@ -411,31 +461,16 @@ export function AutorigMarkerWizardDialog({
     return undefined;
   };
 
+
   return (
-    <Modal open={open} onClose={onClose} title="Place autorig markers" size="xl">
+    <Modal open={open} onClose={onClose} title="Rig character" size="xl">
       <div className="space-y-3" data-autorig-marker-wizard>
         <p className="text-sm text-secondary">
-          Drag markers on the orthographic view over the imported mesh. Blue = left, amber = right, green = midline.
-          Skeleton lines are fitted from markers. Test-pose buttons preview the generated deformation before acceptance.
+          Markers are placed for you — drag any that are off onto the matching joint
+          (blue = left, amber = right, green = midline), then click Rig character.
         </p>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${mode === 'full' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
-            onClick={() => setMode('full')}
-            data-autorig-mode-full
-          >
-            Full (13)
-          </button>
-          <button
-            type="button"
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${mode === 'simple' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
-            onClick={() => setMode('simple')}
-            data-autorig-mode-simple
-          >
-            Simple (9)
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className={`rounded-full px-3 py-1 text-xs font-semibold ${!showSide ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
@@ -459,63 +494,31 @@ export function AutorigMarkerWizardDialog({
           )}
         </div>
 
-        <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-autorig-test-poses>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold text-primary">Deformation preview</div>
-              <div className="text-[11px] text-muted">
-                {previewedTestPose ? `Previewed: ${activeTestPose}` : 'Preview a test pose before accepting the rig.'}
-              </div>
-            </div>
-            <CheckCircle2 className={`h-4 w-4 ${previewedTestPose ? 'text-emerald-400' : 'text-muted'}`} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {HUMAN_POSE_PRESETS
-              .filter((preset) => ['neutral', 'arms-raised', 'elbows-bent', 'sitting', 'walking', 'crouching'].includes(preset.id))
-              .map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
-                  data-autorig-test-pose={preset.id}
-                  onClick={() => showTestPose(preset.id, preset.pose)}
-                  disabled={!meshReady}
-                >
-                  {preset.label}
-                </button>
-              ))}
-          </div>
-        </div>
-
         <div className="grid gap-3 lg:grid-cols-[1fr_14rem]">
-          <div
-            className="relative w-full overflow-hidden rounded-xl border border-subtle bg-[#0b1220]"
-            data-autorig-marker-stage
-          >
-            {/* Bottom: on-demand WebGL mesh (non-interactive). */}
+          <div className="relative" style={{ width: CANVAS_W, maxWidth: '100%' }}>
             <canvas
               ref={meshCanvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
-              className="pointer-events-none absolute inset-0 h-full w-full"
               data-autorig-mesh-canvas
-              aria-hidden
+              className="pointer-events-none absolute inset-0 h-full w-full rounded-xl border border-subtle bg-surface"
             />
-            {/* Top: 2D markers + skeleton; owns pointer interaction. */}
             <canvas
               ref={markerCanvasRef}
               width={CANVAS_W}
               height={CANVAS_H}
-              className="relative z-10 w-full touch-none bg-transparent"
+              className="relative h-full w-full cursor-crosshair rounded-xl"
               data-autorig-marker-canvas
               onPointerDown={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 const x = ((event.clientX - rect.left) / rect.width) * event.currentTarget.width;
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
-                const hit = hitTest(x, y) ?? selectedJointId;
+                const hit = hitTest(x, y);
+                if (!hit) return;
                 setSelectedJointId(hit);
                 preDragMarkersRef.current = safeMarkers;
                 dragRef.current = { jointId: hit, pointerId: event.pointerId };
+                setIsDragging(true);
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
               onPointerMove={(event) => {
@@ -525,22 +528,32 @@ export function AutorigMarkerWizardDialog({
                 const y = ((event.clientY - rect.top) / rect.height) * event.currentTarget.height;
                 const current = safeMarkers.find((item) => item.jointId === dragRef.current!.jointId)?.position ?? [0, 0, 0];
                 const nextPos = canvasToWorld(x, y, frame, current);
-                setMarkers((currentMarkers) => {
-                  const candidate = upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos);
-                  const canonicalRoot = canonicalPreviewRootRef.current;
-                  return canonicalRoot
-                    ? centerAutorigMarkersDepth(candidate, canonicalRoot, view).markers
-                    : candidate;
-                });
+                setMarkers((currentMarkers) => upsertMarker(currentMarkers, dragRef.current!.jointId, nextPos));
               }}
               onPointerUp={(event) => {
                 if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+                const draggedJointId = dragRef.current.jointId;
                 if (preDragMarkersRef.current) {
                   setPast((stack) => [...stack, { markers: preDragMarkersRef.current! }]);
                   setFuture([]);
                 }
                 preDragMarkersRef.current = undefined;
                 dragRef.current = undefined;
+                setIsDragging(false);
+                // Snap the dragged marker to the mesh mid-depth once per drag (not per move).
+                if (meshSource) {
+                  setMarkers((currentMarkers) => centerAutorigMarkersDepth(
+                    currentMarkers,
+                    meshSource,
+                    view,
+                    draggedJointId,
+                  ).markers);
+                }
+              }}
+              onPointerCancel={() => {
+                preDragMarkersRef.current = undefined;
+                dragRef.current = undefined;
+                setIsDragging(false);
               }}
             />
           </div>
@@ -548,7 +561,7 @@ export function AutorigMarkerWizardDialog({
           <div className="space-y-2">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Markers</div>
             <div className="max-h-64 space-y-1 overflow-y-auto">
-              {required.map((jointId) => {
+              {REQUIRED_JOINTS.map((jointId) => {
                 const present = safeMarkers.some((marker) => marker.jointId === jointId);
                 return (
                   <button
@@ -569,43 +582,24 @@ export function AutorigMarkerWizardDialog({
           </div>
         </div>
 
+
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary" onClick={undo} disabled={past.length === 0}>Undo</button>
-          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary" onClick={redo} disabled={future.length === 0}>Redo</button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
-            data-autorig-mirror-marker
-            onClick={() => commit(mirrorMarkerAcrossSagittal(markers, selectedJointId))}
-            disabled={!AUTORIG_MARKER_MIRROR[selectedJointId]}
-          >
-            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror marker
-          </button>
+          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50" onClick={undo} disabled={past.length === 0}>Undo</button>
+          <button type="button" className="rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50" onClick={redo} disabled={future.length === 0}>Redo</button>
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             onClick={() => commit(mirrorAllMarkers(markers))}
           >
-            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror all L→R
+            <FlipHorizontal2 className="h-3.5 w-3.5" /> Mirror L→R
           </button>
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             data-autorig-restore-suggested
-            onClick={() => {
-              const suggestion = suggested.find((marker) => marker.jointId === selectedJointId);
-              if (!suggestion) return;
-              commit(upsertMarker(markers, selectedJointId, suggestion.position));
-            }}
-          >
-            <RotateCcw className="h-3.5 w-3.5" /> Restore suggested
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
             onClick={() => commit(suggested)}
           >
-            <Sparkles className="h-3.5 w-3.5" /> Reset all suggested
+            <RotateCcw className="h-3.5 w-3.5" /> Reset markers
           </button>
           <button
             type="button"
@@ -616,17 +610,47 @@ export function AutorigMarkerWizardDialog({
           >
             Center depth
           </button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary"
-            data-autorig-reset-depth
-            onClick={() => commit(safeMarkers.map((marker) => ({
-              ...marker,
-              position: [marker.position[0], marker.position[1], 0] as Vec3,
-            })))}
-          >
-            Reset depth
-          </button>
+        </div>
+
+        <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-autorig-test-poses>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold text-primary">Deformation preview (optional)</div>
+              <div className="text-[11px] text-muted">
+                {showTestPose ? 'Pick a pose to check how the rig deforms.' : 'Check how the rig bends before applying it.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`rounded-full px-3 py-1 text-xs font-semibold disabled:opacity-50 ${showTestPose ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'}`}
+              onClick={() => setShowTestPose((current) => !current)}
+              disabled={!meshReady}
+              data-autorig-toggle-preview
+            >
+              {showTestPose ? 'Hide preview' : 'Preview deformation'}
+            </button>
+          </div>
+          {showTestPose && (
+            <div className="flex flex-wrap gap-2">
+              {HUMAN_POSE_PRESETS
+                .filter((preset) => PREVIEW_POSE_IDS.includes(preset.id))
+                .map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`rounded-lg border px-2 py-1.5 text-xs font-semibold ${
+                      activeTestPose === preset.id
+                        ? 'border-accent text-accent'
+                        : 'border-subtle text-secondary'
+                    }`}
+                    data-autorig-test-pose={preset.id}
+                    onClick={() => previewTestPose(preset.id, preset.id === 'neutral' ? undefined : preset.pose)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+            </div>
+          )}
         </div>
 
         {issues.length > 0 && (
@@ -643,7 +667,7 @@ export function AutorigMarkerWizardDialog({
             type="button"
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
             data-autorig-apply-skeleton
-            disabled={issues.some((issue) => issue.code === 'missing' || issue.code === 'planar') || !previewedTestPose}
+            disabled={issues.some((issue) => issue.code === 'missing')}
             onClick={() => {
               const nextRig = applyFittedSkeletonToRig(rig, fitted);
               onSave(nextRig);
@@ -651,10 +675,11 @@ export function AutorigMarkerWizardDialog({
             }}
           >
             <CheckCircle2 className="h-4 w-4" />
-            Apply skeleton
+            Rig character
           </button>
         </div>
       </div>
     </Modal>
   );
 }
+

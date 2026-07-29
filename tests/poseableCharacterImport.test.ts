@@ -8,6 +8,7 @@ import {
   orientationQuaternion,
 } from '../src/engine/poseableCharacterImport';
 import { HUMAN_JOINT_IDS } from '../src/engine/humanPose';
+import { CURRENT_AUTORIG_RIG_GENERATION_VERSION } from '../src/engine/poseableRigNormalize';
 import { registerModelAssetBytes } from '../src/engine/modelAssetStore';
 import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
 import { hydrateAutoriggedCharactersFromAssets } from '../src/engine/autoriggedPoseableCharacter';
@@ -48,7 +49,7 @@ describe('poseable character import shell', () => {
       version: 1,
       id: 'current',
       skeletonJoints: ['hips'],
-      rigGenerationVersion: 2,
+      rigGenerationVersion: CURRENT_AUTORIG_RIG_GENERATION_VERSION,
     });
     const legacy = normalizePoseableRigAsset({
       version: 1,

@@ -37,6 +37,19 @@ export const AUTORIG_SIMPLE_MARKER_JOINTS = [
 
 export type AutorigMarkerMode = 'full' | 'simple';
 
+/**
+ * Joints whose semantic pose deltas are expressed in the fitted joint frame
+ * (arm chains). All other joints use character-space deltas (see fitSkeletonFromMarkers).
+ */
+export const AUTORIG_LOCAL_DELTA_JOINTS: ReadonlySet<HumanJointId> = new Set<HumanJointId>([
+  'leftUpperArm',
+  'leftLowerArm',
+  'leftHand',
+  'rightUpperArm',
+  'rightLowerArm',
+  'rightHand',
+]);
+
 export const AUTORIG_MARKER_MIRROR: Partial<Record<HumanJointId, HumanJointId>> = {
   leftUpperArm: 'rightUpperArm',
   rightUpperArm: 'leftUpperArm',
@@ -142,6 +155,8 @@ export function centerAutorigMarkersDepth(
   markers: readonly AutorigMarker[],
   canonicalMesh: THREE.Object3D,
   view: 'front' | 'side' = 'front',
+  /** Restrict raycasts to one marker (cheap per-drag-end recentering). */
+  onlyJointId?: HumanJointId,
 ): AutorigMarkerDepthResult {
   const safeMarkers = sanitizeAutorigMarkers(markers);
   canonicalMesh.updateMatrixWorld(true);
@@ -160,6 +175,7 @@ export function centerAutorigMarkersDepth(
   const centeredJointIds: HumanJointId[] = [];
   const frontView = view === 'front';
   const next = safeMarkers.map((marker) => {
+    if (onlyJointId && marker.jointId !== onlyJointId) return marker;
     const position = new THREE.Vector3(...marker.position);
     const padding = Math.max(bounds.getSize(new THREE.Vector3()).length() * 0.05, 0.05);
     const origin = frontView
@@ -560,7 +576,16 @@ export function fitSkeletonFromMarkers(
     const to: Vec3 = tip ?? [from[0], from[1] + 0.08, from[2]];
     const frame = canonicalJointFrame(from, to);
     bindMatrices[jointId] = frame.toArray();
-    canonicalPoseBases[jointId] = new THREE.Quaternion().setFromRotationMatrix(frame).toArray();
+    // Retarget basis for semantic pose deltas (see applySemanticPoseToBones):
+    // - Arm chains: identity, so deltas apply in the fitted joint frame whose X axis
+    //   is the anatomical flexion axis (bone × forward). Elbows/wrists curl forward
+    //   and shoulders flex forward regardless of T- or A-pose arm direction.
+    // - Torso + legs: the bind world rotation, so deltas apply as character-space
+    //   rotations (X = lateral, Z = forward). Knees flex backward, hips hinge forward,
+    //   and left/right spread mirrors across the sagittal plane.
+    canonicalPoseBases[jointId] = AUTORIG_LOCAL_DELTA_JOINTS.has(jointId)
+      ? [0, 0, 0, 1]
+      : new THREE.Quaternion().setFromRotationMatrix(frame).toArray();
   }
 
   return { markers: completed, bindMatrices, canonicalPoseBases, jointPositions };
