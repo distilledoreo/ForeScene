@@ -44,9 +44,10 @@ import { degreesToRadians, flyCameraFromCamera } from './sync';
 import { computeGrayboxPanoFarPlane } from './sceneBounds';
 import { createFinalRenderSceneOptions } from './finalRenderProfile';
 import {
-  getSceneObjectStagingRole,
+  isObjectVisibleForContentMode,
   resolveProjectForAnimatedCameraMove,
   resolveProjectForShot,
+  type SceneContentMode,
 } from './shotSceneState';
 import {
   cameraKeyframesHaveObjectAnimation,
@@ -54,6 +55,11 @@ import {
 } from './objectKeyframes';
 import { findSceneObjectMesh } from './transformGizmo';
 import type { PeopleRenderVariant } from './peopleExport';
+import {
+  characterPassIncludesGreenMp4,
+  characterPassIncludesPngSequence,
+} from './characterPassExport';
+import type { CharacterMotionExportFormat } from '../domain/types';
 import {
   clampShotNearClip,
 } from './cameraClipping';
@@ -197,6 +203,27 @@ export interface CameraMoveVideoOptions {
   includeDataUrl?: boolean;
   /** Hide all objects classified as people for clean-plate output. */
   peopleVariant?: PeopleRenderVariant;
+  /** Preferred over peopleVariant when set (full / clean plate / characters only). */
+  contentMode?: SceneContentMode;
+  /** Hex background for characters-only green-screen MP4 (e.g. `#00FF00`). */
+  backgroundColor?: string;
+  /** Include character-linked props when contentMode is characters_only. */
+  includeCharacterAttachments?: boolean;
+  /**
+   * Alpha-capable WebGL context. Required for transparent character frames;
+   * when combined with backgroundColor + characters_only, frames are composited
+   * onto green before H.264 encode (Both format).
+   */
+  transparent?: boolean;
+  /**
+   * Called after each deterministic frame is rendered to the WebGL canvas,
+   * before H.264 encode — used to fork transparent PNG frames without a second pass.
+   */
+  onFrameRendered?: (
+    canvas: HTMLCanvasElement,
+    frameIndex: number,
+    timeSeconds: number,
+  ) => void | Promise<void>;
 }
 
 const MP4_MIME_CANDIDATES = [
@@ -365,7 +392,9 @@ export async function renderShotFrame(
   options: { peopleVariant?: PeopleRenderVariant } = {},
 ): Promise<ImageRenderResult> {
   return renderViewportClay(
-    resolveProjectForShot(project, shot, { hidePeople: options.peopleVariant === 'clean_plate' }),
+    resolveProjectForShot(project, shot, {
+      contentMode: options.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene',
+    }),
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
@@ -377,11 +406,16 @@ export async function renderShotCameraMoveMp4(
   shot: Shot,
   options: CameraMoveVideoOptions = {},
 ): Promise<VideoRenderResult> {
-  const hidePeople = options.peopleVariant === 'clean_plate';
+  const contentMode = resolveCameraMoveContentMode(options);
+  const includeCharacterAttachments = options.includeCharacterAttachments !== false;
   const animateObjects = cameraKeyframesHaveObjectAnimation(shot.cameraKeyframes);
+  const resolveOptions = {
+    contentMode,
+    includeCharacterAttachments,
+  };
   const shotProject = animateObjects
-    ? resolveProjectForAnimatedCameraMove(project, shot, { hidePeople })
-    : resolveProjectForShot(project, shot, { hidePeople });
+    ? resolveProjectForAnimatedCameraMove(project, shot, resolveOptions)
+    : resolveProjectForShot(project, shot, resolveOptions);
   const keyframes = getSortedCameraKeyframes(shot.cameraKeyframes);
   if (!hasRenderableCameraMove(keyframes)) {
     throw new Error('Capture start and end camera keyframes before exporting MP4.');
@@ -428,6 +462,11 @@ export async function renderShotCameraMoveMp4(
       animateObjects,
       sourceProject: project,
       peopleVariant: options.peopleVariant,
+      contentMode,
+      includeCharacterAttachments,
+      backgroundColor: options.backgroundColor,
+      onFrameRendered: options.onFrameRendered,
+      transparent: options.transparent === true,
       depthRange: options.depthRange,
       depthInvert: options.depthInvert === true,
     });
@@ -450,9 +489,21 @@ export async function renderShotCameraMoveMp4(
     animateObjects,
     sourceProject: project,
     peopleVariant: options.peopleVariant,
+    contentMode,
+    includeCharacterAttachments,
+    backgroundColor: options.backgroundColor,
     depthRange: options.depthRange,
     depthInvert: options.depthInvert === true,
   });
+}
+
+function resolveCameraMoveContentMode(options: {
+  contentMode?: SceneContentMode;
+  peopleVariant?: PeopleRenderVariant;
+}): SceneContentMode {
+  if (options.contentMode) return options.contentMode;
+  if (options.peopleVariant === 'clean_plate') return 'clean_plate';
+  return 'full_scene';
 }
 
 interface CameraMoveRenderContext {
@@ -473,8 +524,14 @@ interface CameraMoveRenderContext {
   animateObjects?: boolean;
   /** Original project (pre-shot resolve) for base object transforms during animation. */
   sourceProject?: LocationProject;
-  /** Must reach each frame so clean-plate visibility cannot be overridden by a keyframe. */
+  /** Legacy people variant; prefer contentMode. */
   peopleVariant: PeopleRenderVariant | undefined;
+  contentMode: SceneContentMode;
+  includeCharacterAttachments: boolean;
+  backgroundColor?: string;
+  onFrameRendered?: CameraMoveVideoOptions['onFrameRendered'];
+  /** When true, create an alpha-capable WebGL context (transparent PNG path). */
+  transparent?: boolean;
   depthRange?: { nearMeters: number; farMeters: number };
   depthInvert?: boolean;
 }
@@ -498,7 +555,11 @@ async function renderShotCameraMoveMp4Deterministic(
     includeDataUrl = false,
     animateObjects = false,
     sourceProject,
-    peopleVariant,
+    contentMode,
+    includeCharacterAttachments,
+    backgroundColor,
+    onFrameRendered,
+    transparent = false,
     depthRange,
     depthInvert = false,
   } = ctx;
@@ -521,10 +582,12 @@ async function renderShotCameraMoveMp4Deterministic(
   }
 
   await ensureHumanMannequinForProject(project);
-  const renderer = createRenderer(width, height);
+  const renderer = createRenderer(width, height, { alpha: transparent });
   let projectedResources: ProjectedSceneResources | undefined;
   let scene: THREE.Scene | undefined;
   let depthResources: DepthPassResources | undefined;
+  let compositeCanvas: HTMLCanvasElement | undefined;
+  let compositeCtx: CanvasRenderingContext2D | undefined;
 
   try {
     if (appearance === 'projected') {
@@ -542,6 +605,30 @@ async function renderShotCameraMoveMp4Deterministic(
       scene.background = new THREE.Color(0x000000);
       scene.fog = null;
       depthResources = createDepthPassResources(width, height);
+    } else if (contentMode === 'characters_only') {
+      scene.fog = null;
+      if (transparent) {
+        scene.background = null;
+        renderer.setClearColor(0x000000, 0);
+      } else if (backgroundColor) {
+        scene.background = new THREE.Color(backgroundColor);
+      }
+    }
+
+    // When transparent characters-only + green background, encode from a 2D composite.
+    const encodeOntoGreen = Boolean(
+      contentMode === 'characters_only'
+      && backgroundColor
+      && transparent,
+    );
+    if (encodeOntoGreen) {
+      compositeCanvas = document.createElement('canvas');
+      compositeCanvas.width = width;
+      compositeCanvas.height = height;
+      compositeCtx = compositeCanvas.getContext('2d') ?? undefined;
+      if (!compositeCtx) {
+        throw new Error('Could not create composite canvas for character MP4 encode.');
+      }
     }
 
     const nearMeters = Math.max(
@@ -571,11 +658,11 @@ async function renderShotCameraMoveMp4Deterministic(
     });
 
     const encoded = await encodeCanvasFramesToMp4({
-      canvas: renderer.domElement,
+      canvas: encodeOntoGreen && compositeCanvas ? compositeCanvas : renderer.domElement,
       preset,
       totalFrames,
       signal,
-      renderFrame: (frameIndex) => {
+      renderFrame: async (frameIndex) => {
         if (signal?.aborted) {
           throw new Error('MP4 export was cancelled.');
         }
@@ -595,7 +682,8 @@ async function renderShotCameraMoveMp4Deterministic(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
-                peopleVariant,
+                contentMode,
+                includeCharacterAttachments,
               }
               : undefined,
             depth: appearance === 'depth' && depthRange
@@ -608,6 +696,14 @@ async function renderShotCameraMoveMp4Deterministic(
               : undefined,
           },
         );
+        if (onFrameRendered) {
+          await onFrameRendered(renderer.domElement, frameIndex, timeSeconds);
+        }
+        if (encodeOntoGreen && compositeCtx && compositeCanvas && backgroundColor) {
+          compositeCtx.fillStyle = backgroundColor;
+          compositeCtx.fillRect(0, 0, width, height);
+          compositeCtx.drawImage(renderer.domElement, 0, 0);
+        }
       },
       onFrameEncoded: (completedFrames, frames) => {
         const renderProgress = completedFrames / frames;
@@ -682,7 +778,9 @@ async function renderShotCameraMoveMp4QuickPreview(
     includeDataUrl = false,
     animateObjects = false,
     sourceProject,
-    peopleVariant,
+    contentMode,
+    includeCharacterAttachments,
+    backgroundColor,
     depthRange,
     depthInvert = false,
   } = ctx;
@@ -715,6 +813,11 @@ async function renderShotCameraMoveMp4QuickPreview(
     scene.background = new THREE.Color(0x000000);
     scene.fog = null;
     depthResources = createDepthPassResources(width, height);
+  } else if (contentMode === 'characters_only') {
+    scene.fog = null;
+    if (backgroundColor) {
+      scene.background = new THREE.Color(backgroundColor);
+    }
   }
 
   const nearMeters = Math.max(
@@ -817,7 +920,8 @@ async function renderShotCameraMoveMp4QuickPreview(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
-                peopleVariant,
+                contentMode,
+                includeCharacterAttachments,
               }
               : undefined,
             depth: appearance === 'depth' && depthRange
@@ -919,7 +1023,10 @@ export function renderCameraMoveFrame(
     objectAnimation?: {
       shot: Pick<Shot, 'objectOverrides'>;
       baseObjects: LocationProject['scene']['objects'];
-      peopleVariant: PeopleRenderVariant | undefined;
+      contentMode?: SceneContentMode;
+      includeCharacterAttachments?: boolean;
+      /** @deprecated Prefer contentMode. */
+      peopleVariant?: PeopleRenderVariant;
     };
     depth?: {
       nearMeters: number;
@@ -952,7 +1059,11 @@ export function renderCameraMoveFrame(
         normalized.objectAnimation.baseObjects,
       ),
       normalized.objectAnimation.baseObjects,
-      normalized.objectAnimation.peopleVariant,
+      {
+        contentMode: normalized.objectAnimation.contentMode
+          ?? (normalized.objectAnimation.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene'),
+        includeCharacterAttachments: normalized.objectAnimation.includeCharacterAttachments,
+      },
     );
   }
 
@@ -976,15 +1087,19 @@ export function renderCameraMoveFrame(
   renderer.render(scene, camera);
 }
 
+type CameraMoveObjectAnimationOptions = {
+  shot: Pick<Shot, 'objectOverrides'>;
+  baseObjects: LocationProject['scene']['objects'];
+  contentMode?: SceneContentMode;
+  includeCharacterAttachments?: boolean;
+  peopleVariant?: PeopleRenderVariant;
+};
+
 function normalizeCameraMoveFrameOptions(
   options: Parameters<typeof renderCameraMoveFrame>[8],
 ): {
   pass: SceneRenderPass;
-  objectAnimation?: {
-    shot: Pick<Shot, 'objectOverrides'>;
-    baseObjects: LocationProject['scene']['objects'];
-    peopleVariant: PeopleRenderVariant | undefined;
-  };
+  objectAnimation?: CameraMoveObjectAnimationOptions;
   depth?: {
     nearMeters: number;
     farMeters: number;
@@ -997,11 +1112,7 @@ function normalizeCameraMoveFrameOptions(
   if ('shot' in options && 'baseObjects' in options && !('pass' in options) && !('objectAnimation' in options)) {
     return {
       pass: 'clay',
-      objectAnimation: options as {
-        shot: Pick<Shot, 'objectOverrides'>;
-        baseObjects: LocationProject['scene']['objects'];
-        peopleVariant: PeopleRenderVariant | undefined;
-      },
+      objectAnimation: options as CameraMoveObjectAnimationOptions,
     };
   }
   return {
@@ -1015,7 +1126,10 @@ function applyAnimatedObjectOverridesToScene(
   scene: THREE.Scene,
   overrides: ReturnType<typeof interpolateObjectOverrides>,
   baseObjects: LocationProject['scene']['objects'],
-  peopleVariant: PeopleRenderVariant | undefined,
+  contentOptions: {
+    contentMode?: SceneContentMode;
+    includeCharacterAttachments?: boolean;
+  },
 ) {
   const baseById = new Map(baseObjects.map((object) => [object.id, object]));
   for (const [objectId, override] of Object.entries(overrides)) {
@@ -1024,13 +1138,12 @@ function applyAnimatedObjectOverridesToScene(
     const base = baseById.get(objectId);
     if (!base) continue;
     const transform = override.transform ?? base.transform;
+    const requestedVisible = override.visible ?? base.visible;
     applySceneObjectTransform(node, transform, {
       applyScale: !sceneObjectUsesProceduralScale(base.type),
       // Keyframe snapshots retain source visibility, so they must never
-      // reverse the clean-plate rule after the scene has been resolved.
-      visible: peopleVariant === 'clean_plate' && getSceneObjectStagingRole(base) === 'person'
-        ? false
-        : (override.visible ?? base.visible),
+      // reverse clean-plate / characters-only rules after the scene is resolved.
+      visible: isObjectVisibleForContentMode(base, requestedVisible, contentOptions),
     });
     applyHumanPoseToObject3D(node, {
       type: base.type,
@@ -1291,11 +1404,380 @@ export async function renderShotProjectedFrame(
   options: { peopleVariant?: PeopleRenderVariant } = {},
 ): Promise<ImageRenderResult> {
   return renderViewportProjected(
-    resolveProjectForShot(project, shot, { hidePeople: options.peopleVariant === 'clean_plate' }),
+    resolveProjectForShot(project, shot, {
+      contentMode: options.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene',
+    }),
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
   );
+}
+
+/** Transparent PNG still of characters (+ optional linked props) for package export. */
+export async function renderShotCharacterFrame(
+  project: LocationProject,
+  shot: Shot,
+  options: {
+    appearance?: 'clay' | 'projected';
+    includeAttachedProps?: boolean;
+  } = {},
+): Promise<BlobImageRenderResult> {
+  const appearance = options.appearance ?? 'clay';
+  const includeCharacterAttachments = options.includeAttachedProps !== false;
+  const shotProject = resolveProjectForShot(project, shot, {
+    contentMode: 'characters_only',
+    includeCharacterAttachments,
+  });
+
+  await ensureHumanMannequinForProject(shotProject);
+  const width = shot.exportSettings.width;
+  const height = shot.exportSettings.height;
+  const renderer = createRenderer(width, height, { alpha: true });
+  let projectedResources: ProjectedSceneResources | undefined;
+  let scene: THREE.Scene | undefined;
+
+  try {
+    if (appearance === 'projected') {
+      projectedResources = await loadProjectedSceneResources(renderer, shotProject);
+      if (!projectedResources) {
+        throw new Error(
+          'Projected character still requires an importable styled panorama with a valid image asset.',
+        );
+      }
+    }
+
+    scene = buildScene(shotProject, {
+      ...createFinalRenderSceneOptions(),
+      appearance: projectedResources ? 'projected' : 'clay',
+      projected: projectedResources?.options,
+    });
+    scene.background = null;
+    scene.fog = null;
+    renderer.setClearColor(0x000000, 0);
+
+    const clipping = computeCameraMoveClippingRange({
+      scene,
+      keyframeCameras: [shot.camera],
+      nearMeters: shot.camera.near,
+    });
+    const camera = new THREE.PerspectiveCamera(
+      shot.camera.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    applyFlyCameraToPerspectiveCamera(
+      camera,
+      flyCameraFromCamera(shot.camera),
+      shot.camera.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    renderer.render(scene, camera);
+    const blob = await canvasToBlob(renderer.domElement, 'image/png');
+    return { blob, width, height };
+  } finally {
+    if (scene) disposeScene(scene);
+    projectedResources?.dispose();
+    disposeRenderer(renderer);
+  }
+}
+
+export interface CharacterMotionExportResult {
+  mp4?: VideoRenderResult;
+  frameCount: number;
+  durationSeconds: number;
+  frameRate: number;
+  width: number;
+  height: number;
+}
+
+export interface CharacterMotionExportOptions {
+  appearance?: 'clay' | 'projected';
+  motionFormat: CharacterMotionExportFormat;
+  backgroundColor?: string;
+  includeAttachedProps?: boolean;
+  frameRate?: number;
+  resolutionPreset?: VideoResolutionPresetId;
+  onProgress?: CameraMoveVideoOptions['onProgress'];
+  signal?: AbortSignal;
+  /** Receive each transparent PNG frame (1-based numbering handled by caller). */
+  onPngFrame?: (
+    frameIndex: number,
+    blob: Blob,
+    meta: { timeSeconds: number; width: number; height: number },
+  ) => void | Promise<void>;
+}
+
+/**
+ * Characters-only camera-move export: green MP4, transparent PNG sequence, or both
+ * from a single WebGL pass when Both is selected.
+ */
+export async function renderShotCharacterMotion(
+  project: LocationProject,
+  shot: Shot,
+  options: CharacterMotionExportOptions,
+): Promise<CharacterMotionExportResult> {
+  const includeMp4 = characterPassIncludesGreenMp4(options.motionFormat);
+  const includePng = characterPassIncludesPngSequence(options.motionFormat);
+  const backgroundColor = options.backgroundColor ?? '#00FF00';
+  const includeAttachedProps = options.includeAttachedProps !== false;
+  const appearance = options.appearance ?? 'clay';
+
+  if (!includeMp4 && !includePng) {
+    throw new Error('Character motion export requires MP4 and/or PNG sequence output.');
+  }
+
+  if (includeMp4 && includePng) {
+    // One WebGL pass: transparent frames fork to PNG; composite onto green for H.264.
+    const video = await renderShotCameraMoveMp4(project, shot, {
+      mode: 'render',
+      appearance,
+      contentMode: 'characters_only',
+      includeCharacterAttachments: includeAttachedProps,
+      backgroundColor,
+      transparent: true,
+      resolutionPreset: options.resolutionPreset ?? '1080p',
+      frameRate: options.frameRate,
+      includeDataUrl: false,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      onFrameRendered: async (canvas, frameIndex, timeSeconds) => {
+        if (!options.onPngFrame) return;
+        const blob = await canvasToBlob(canvas, 'image/png');
+        await options.onPngFrame(frameIndex, blob, {
+          timeSeconds,
+          width: canvas.width,
+          height: canvas.height,
+        });
+      },
+    });
+    return {
+      mp4: video,
+      frameCount: computeCameraMoveFrameCount(video.durationSeconds, video.frameRate),
+      durationSeconds: video.durationSeconds,
+      frameRate: video.frameRate,
+      width: video.width,
+      height: video.height,
+    };
+  }
+
+  if (includeMp4) {
+    const video = await renderShotCameraMoveMp4(project, shot, {
+      mode: 'render',
+      appearance,
+      contentMode: 'characters_only',
+      includeCharacterAttachments: includeAttachedProps,
+      backgroundColor,
+      resolutionPreset: options.resolutionPreset ?? '1080p',
+      frameRate: options.frameRate,
+      includeDataUrl: false,
+      signal: options.signal,
+      onProgress: options.onProgress,
+    });
+    return {
+      mp4: video,
+      frameCount: computeCameraMoveFrameCount(video.durationSeconds, video.frameRate),
+      durationSeconds: video.durationSeconds,
+      frameRate: video.frameRate,
+      width: video.width,
+      height: video.height,
+    };
+  }
+
+  // PNG sequence only — shared deterministic frame producer, no encoder.
+  const sequence = await renderCameraMoveFrames({
+    project,
+    shot,
+    appearance,
+    contentMode: 'characters_only',
+    includeCharacterAttachments: includeAttachedProps,
+    transparent: true,
+    frameRate: options.frameRate,
+    resolutionPreset: options.resolutionPreset ?? '1080p',
+    signal: options.signal,
+    onProgress: options.onProgress,
+    consumeFrame: async (canvas, frameIndex, timeSeconds) => {
+      if (!options.onPngFrame) return;
+      const blob = await canvasToBlob(canvas, 'image/png');
+      await options.onPngFrame(frameIndex, blob, {
+        timeSeconds,
+        width: canvas.width,
+        height: canvas.height,
+      });
+    },
+  });
+
+  return {
+    frameCount: sequence.frameCount,
+    durationSeconds: sequence.durationSeconds,
+    frameRate: sequence.frameRate,
+    width: sequence.width,
+    height: sequence.height,
+  };
+}
+
+export interface CameraMoveSequenceMetadata {
+  frameCount: number;
+  durationSeconds: number;
+  frameRate: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Deterministic camera-move frame producer shared by MP4 and PNG sequence exporters.
+ */
+export async function renderCameraMoveFrames(options: {
+  project: LocationProject;
+  shot: Shot;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+  resolutionPreset?: VideoResolutionPresetId;
+  appearance?: 'clay' | 'projected' | 'depth';
+  contentMode?: SceneContentMode;
+  includeCharacterAttachments?: boolean;
+  transparent?: boolean;
+  backgroundColor?: string;
+  signal?: AbortSignal;
+  onProgress?: CameraMoveVideoOptions['onProgress'];
+  consumeFrame: (
+    canvas: HTMLCanvasElement,
+    frameIndex: number,
+    timeSeconds: number,
+  ) => Promise<void>;
+}): Promise<CameraMoveSequenceMetadata> {
+  const contentMode = options.contentMode ?? 'full_scene';
+  const includeCharacterAttachments = options.includeCharacterAttachments !== false;
+  const appearance = options.appearance ?? 'clay';
+  const animateObjects = cameraKeyframesHaveObjectAnimation(options.shot.cameraKeyframes);
+  const resolveOptions = { contentMode, includeCharacterAttachments };
+  const shotProject = animateObjects
+    ? resolveProjectForAnimatedCameraMove(options.project, options.shot, resolveOptions)
+    : resolveProjectForShot(options.project, options.shot, resolveOptions);
+  const keyframes = getSortedCameraKeyframes(options.shot.cameraKeyframes);
+  if (!hasRenderableCameraMove(keyframes)) {
+    throw new Error('Capture start and end camera keyframes before exporting frames.');
+  }
+
+  const preset = resolveVideoPreset(options.resolutionPreset ?? '1080p');
+  const frameRate = options.frameRate ?? preset.frameRate ?? DEFAULT_VIDEO_FRAME_RATE;
+  const width = options.width ?? preset.width;
+  const height = options.height ?? preset.height;
+  const durationSeconds = getCameraMoveDurationSeconds(keyframes);
+  const totalFrames = computeCameraMoveFrameCount(durationSeconds, frameRate);
+  const signal = options.signal;
+
+  emitProgress(options.onProgress, {
+    phase: 'preparing',
+    progress: 0,
+    completedFrames: 0,
+    totalFrames,
+    message: 'Preparing scene',
+  });
+
+  if (signal?.aborted) {
+    throw new Error('Camera move export was cancelled.');
+  }
+
+  await ensureHumanMannequinForProject(shotProject);
+  const renderer = createRenderer(width, height, { alpha: options.transparent === true });
+  let projectedResources: ProjectedSceneResources | undefined;
+  let scene: THREE.Scene | undefined;
+
+  try {
+    if (appearance === 'projected') {
+      projectedResources = await loadProjectedSceneResources(renderer, shotProject, {
+        occlusionFilterMode: 'fast',
+      });
+      if (!projectedResources) {
+        throw new Error(
+          'Projected character sequence requires an importable styled panorama with a valid image asset.',
+        );
+      }
+    }
+
+    scene = buildScene(shotProject, {
+      ...createFinalRenderSceneOptions(),
+      appearance: projectedResources ? 'projected' : 'clay',
+      projected: projectedResources?.options,
+    });
+    scene.fog = null;
+    if (options.transparent) {
+      scene.background = null;
+      renderer.setClearColor(0x000000, 0);
+    } else if (options.backgroundColor) {
+      scene.background = new THREE.Color(options.backgroundColor);
+    }
+
+    const nearMeters = Math.max(
+      ...keyframes.map((keyframe) =>
+        clampShotNearClip(keyframe.camera.near, keyframe.camera.far),
+      ),
+    );
+    const clipping = computeCameraMoveClippingRange({
+      scene,
+      keyframeCameras: keyframes.map((keyframe) => keyframe.camera),
+      nearMeters,
+    });
+    const camera = new THREE.PerspectiveCamera(
+      options.shot.camera.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+
+    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
+      if (signal?.aborted) {
+        throw new Error('Camera move export was cancelled.');
+      }
+      const timeSeconds = cameraMoveFrameTimeSeconds(frameIndex, frameRate, durationSeconds);
+      renderCameraMoveFrame(
+        renderer,
+        scene,
+        camera,
+        keyframes,
+        timeSeconds,
+        width,
+        height,
+        clipping,
+        {
+          pass: appearance === 'depth' ? 'clay' : appearance,
+          objectAnimation: animateObjects
+            ? {
+              shot: options.shot,
+              baseObjects: options.project.scene.objects,
+              contentMode,
+              includeCharacterAttachments,
+            }
+            : undefined,
+        },
+      );
+      await options.consumeFrame(renderer.domElement, frameIndex, timeSeconds);
+      const completedFrames = frameIndex + 1;
+      emitProgress(options.onProgress, {
+        phase: 'rendering',
+        progress: completedFrames / totalFrames,
+        completedFrames,
+        totalFrames,
+        message: `Rendering frame ${completedFrames} of ${totalFrames}`,
+      });
+    }
+
+    return {
+      frameCount: totalFrames,
+      durationSeconds,
+      frameRate,
+      width,
+      height,
+    };
+  } finally {
+    if (scene) disposeScene(scene);
+    projectedResources?.dispose();
+    disposeRenderer(renderer);
+  }
 }
 
 export async function renderPanoPerspectiveCrop(
@@ -1519,10 +2001,18 @@ async function renderPanoCubemapFaceBlob(
   }
 }
 
-function createRenderer(width: number, height: number): THREE.WebGLRenderer {
+interface RendererCreationOptions {
+  alpha?: boolean;
+}
+
+function createRenderer(
+  width: number,
+  height: number,
+  options: RendererCreationOptions = {},
+): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
-    alpha: false,
+    alpha: options.alpha === true,
     preserveDrawingBuffer: true,
   });
   renderer.setPixelRatio(1);

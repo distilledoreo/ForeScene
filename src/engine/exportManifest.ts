@@ -1,4 +1,5 @@
 import { LocationProject, PanoReference, Shot } from '../domain/types';
+import { normalizeCharacterPassExportSettings } from '../domain/defaults';
 import { getShotPackageBaseName } from './exportNaming';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES } from './cameraMoveCubemap';
@@ -11,6 +12,18 @@ import {
 import { canUseProjectedAppearance } from './projectedStyle';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
+import {
+  characterMotionMp4Path,
+  characterPassIncludesGreenMp4,
+  characterPassIncludesPngSequence,
+  characterPassMetadataPath,
+  characterSequenceDirPath,
+  characterSequenceFrameFileName,
+  characterStillPath,
+  resolveCharacterMotionTiming,
+  shotHasVisibleCharactersForPass,
+} from './characterPassExport';
+import { DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
 
 export interface ShotPackageManifest {
   rootFolder: string;
@@ -202,6 +215,59 @@ export function createShotPackageManifest(
     files.push({ path: `${rootFolder}/metadata/landmarks.json`, kind: 'json', required: true });
     files.push({ path: `${rootFolder}/metadata/location.json`, kind: 'json', required: true });
   }
+
+  const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);
+  if (
+    characterPass.enabled
+    && shotHasVisibleCharactersForPass(project, shot, characterPass)
+  ) {
+    const canProject = canUseProjectedAppearance(project);
+    if (characterPass.includeStill) {
+      files.push({ path: characterStillPath(rootFolder, 'clay'), kind: 'image', required: true });
+      if (shot.exportSettings.includeProjectedViewport && canProject) {
+        files.push({ path: characterStillPath(rootFolder, 'projected'), kind: 'image', required: false });
+      }
+    }
+    if (characterPass.includeMotion && hasRenderableCameraMove(shot.cameraKeyframes)) {
+      const timing = resolveCharacterMotionTiming(shot, DEFAULT_VIDEO_FRAME_RATE);
+      const motionAppearances: Array<'clay' | 'projected'> = ['clay'];
+      if (shot.exportSettings.includeProjectedCameraMoveVideo && canProject) {
+        motionAppearances.push('projected');
+      }
+      for (const appearance of motionAppearances) {
+        if (characterPassIncludesGreenMp4(characterPass.motionFormat)) {
+          files.push({
+            path: characterMotionMp4Path(rootFolder, appearance),
+            kind: 'video',
+            required: false,
+          });
+        }
+        if (characterPassIncludesPngSequence(characterPass.motionFormat)) {
+          const sequenceDir = characterSequenceDirPath(rootFolder, appearance);
+          for (let frame = 1; frame <= timing.frameCount; frame += 1) {
+            files.push({
+              path: `${sequenceDir}/${characterSequenceFrameFileName(frame)}`,
+              kind: 'image',
+              required: false,
+            });
+          }
+          files.push({
+            path: `${sequenceDir}/sequence.json`,
+            kind: 'json',
+            required: false,
+          });
+        }
+      }
+    }
+    if (shot.exportSettings.includeMetadata) {
+      files.push({
+        path: characterPassMetadataPath(rootFolder),
+        kind: 'json',
+        required: false,
+      });
+    }
+  }
+
   if (shot.exportSettings.includePrompt) {
     files.push({ path: `${rootFolder}/prompts/image_gen_prompt.txt`, kind: 'text', required: true });
     files.push({ path: `${rootFolder}/prompts/video_gen_prompt.txt`, kind: 'text', required: true });

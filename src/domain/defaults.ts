@@ -1,6 +1,8 @@
 import {
   CameraData,
   CameraKeyframe,
+  CharacterMotionExportFormat,
+  CharacterPassExportSettings,
   Landmark,
   LocationProject,
   PanoCropSettings,
@@ -179,10 +181,50 @@ export function normalizeShotDepthSettings(
   };
 }
 
+export const DEFAULT_CHARACTER_PASS_BACKGROUND = '#00FF00';
+
+export const defaultCharacterPassExportSettings: CharacterPassExportSettings = {
+  enabled: false,
+  includeStill: true,
+  includeMotion: true,
+  motionFormat: 'green_mp4',
+  backgroundColor: DEFAULT_CHARACTER_PASS_BACKGROUND,
+  includeAttachedProps: true,
+};
+
+/** Accept `#RRGGBB` only; fall back to chroma green. */
+export function normalizeHexBackgroundColor(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_CHARACTER_PASS_BACKGROUND;
+  const match = /^#([0-9A-Fa-f]{6})$/.exec(value.trim());
+  if (!match) return DEFAULT_CHARACTER_PASS_BACKGROUND;
+  return `#${match[1].toUpperCase()}`;
+}
+
+export function normalizeCharacterMotionExportFormat(
+  value: unknown,
+): CharacterMotionExportFormat {
+  if (value === 'transparent_png_sequence' || value === 'both') return value;
+  return 'green_mp4';
+}
+
+export function normalizeCharacterPassExportSettings(
+  settings?: Partial<CharacterPassExportSettings> | null,
+): CharacterPassExportSettings {
+  return {
+    enabled: settings?.enabled === true,
+    includeStill: settings?.includeStill !== false,
+    includeMotion: settings?.includeMotion !== false,
+    motionFormat: normalizeCharacterMotionExportFormat(settings?.motionFormat),
+    backgroundColor: normalizeHexBackgroundColor(settings?.backgroundColor),
+    includeAttachedProps: settings?.includeAttachedProps !== false,
+  };
+}
+
 export const defaultShotExportSettings: ShotExportSettings = {
   width: DEFAULT_SHOT_WIDTH,
   height: DEFAULT_SHOT_HEIGHT,
   peopleExportMode: 'with_people',
+  characterPass: { ...defaultCharacterPassExportSettings },
   includeViewport: true,
   /** Include projected stills alongside clay when a styled pano is available. */
   includeProjectedViewport: true,
@@ -306,6 +348,7 @@ export function createShot(params: {
     landmarkIds: [],
     exportSettings: {
       ...defaultShotExportSettings,
+      characterPass: { ...defaultCharacterPassExportSettings },
       depth: { ...defaultShotDepthSettings },
     },
     promptOverrides: {},

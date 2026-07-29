@@ -221,7 +221,9 @@ export function ShotsWorkspace() {
   }, [selectedShot, viewportObjectOverrides]);
   const shotSceneProject = useMemo(
     () => shotForViewport
-      ? resolveProjectForShot(project, shotForViewport, { hidePeople: !showPeopleInViewport })
+      ? resolveProjectForShot(project, shotForViewport, {
+        contentMode: showPeopleInViewport ? 'full_scene' : 'clean_plate',
+      })
       : project,
     [project, shotForViewport, showPeopleInViewport],
   );

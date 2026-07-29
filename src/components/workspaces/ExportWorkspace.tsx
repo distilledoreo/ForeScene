@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
-import type { PeopleExportMode } from '../../domain/types';
+import type { CharacterMotionExportFormat, PeopleExportMode } from '../../domain/types';
 import { Archive, Check, Download, FileJson, FolderArchive, Settings, X } from 'lucide-react';
-import { defaultShotDepthSettings, normalizeShotDepthSettings } from '../../domain/defaults';
+import {
+  DEFAULT_CHARACTER_PASS_BACKGROUND,
+  defaultCharacterPassExportSettings,
+  defaultShotDepthSettings,
+  normalizeCharacterPassExportSettings,
+  normalizeShotDepthSettings,
+} from '../../domain/defaults';
 import { getShotDisplayName, getShotPrimaryLabel } from '../../domain/shotIdentity';
 import { getShotExportProgressLabel } from '../../engine/exportNaming';
 import { createShotPackageManifest, selectExportPathPreview } from '../../engine/exportManifest';
@@ -14,6 +20,14 @@ import {
   isPackageExportCancelled,
   PackageExportProgress,
 } from '../../engine/packageExport';
+import {
+  characterPassIncludesGreenMp4,
+  characterPassIncludesPngSequence,
+  resolveCharacterMotionTiming,
+  shotHasVisibleCharactersForPass,
+  shouldWarnCharacterPngSequenceSize,
+} from '../../engine/characterPassExport';
+import { hasRenderableCameraMove } from '../../engine/cameraKeyframes';
 import { getExportSelectionWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../../engine/warnings';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -545,6 +559,181 @@ export function ExportWorkspace() {
                 <option value="both">Both</option>
               </Select>
             </Field>
+            {(() => {
+              const characterPass = normalizeCharacterPassExportSettings(
+                selectedShot.exportSettings.characterPass ?? defaultCharacterPassExportSettings,
+              );
+              const patchCharacterPass = (next: typeof characterPass) => updateShot(selectedShot.id, {
+                exportSettings: {
+                  ...selectedShot.exportSettings,
+                  characterPass: next,
+                },
+              });
+              const hasMove = hasRenderableCameraMove(selectedShot.cameraKeyframes);
+              const timing = resolveCharacterMotionTiming(selectedShot);
+              const hasCharacters = shotHasVisibleCharactersForPass(
+                project,
+                selectedShot,
+                characterPass,
+              );
+              const showGreenField = characterPassIncludesGreenMp4(characterPass.motionFormat);
+              const showSequenceWarn = characterPass.enabled
+                && characterPass.includeMotion
+                && characterPassIncludesPngSequence(characterPass.motionFormat)
+                && hasMove
+                && shouldWarnCharacterPngSequenceSize(
+                  timing.width,
+                  timing.height,
+                  timing.frameCount,
+                );
+              return (
+                <div
+                  className="space-y-2 rounded-xl border border-subtle p-3"
+                  data-export-character-pass
+                >
+                  <p className="text-sm font-medium text-primary">Characters-only pass</p>
+                  <label className="flex items-center gap-2 text-sm text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={characterPass.enabled}
+                      onChange={(event) => patchCharacterPass({
+                        ...characterPass,
+                        enabled: event.target.checked,
+                      })}
+                      className="accent-[var(--accent)]"
+                      data-export-character-pass-enabled
+                    />
+                    Include character-only pass
+                  </label>
+                  {characterPass.enabled && (
+                    <>
+                      {!hasCharacters && (
+                        <p
+                          className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
+                          data-export-character-pass-empty-warning
+                        >
+                          No visible characters in this shot — character outputs will be skipped.
+                        </p>
+                      )}
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Still</p>
+                        <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                          <input
+                            type="checkbox"
+                            checked={characterPass.includeStill}
+                            onChange={(event) => patchCharacterPass({
+                              ...characterPass,
+                              includeStill: event.target.checked,
+                            })}
+                            className="accent-[var(--accent)]"
+                            data-export-character-pass-still
+                          />
+                          Transparent PNG
+                        </label>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Motion</p>
+                        <Field
+                          label="Format"
+                          hint={hasMove
+                            ? undefined
+                            : 'Capture start and end camera keyframes to enable motion export.'}
+                        >
+                          <Select
+                            value={characterPass.motionFormat}
+                            disabled={!hasMove || !characterPass.includeMotion}
+                            onChange={(event) => patchCharacterPass({
+                              ...characterPass,
+                              motionFormat: event.target.value as CharacterMotionExportFormat,
+                            })}
+                            data-export-character-pass-motion-format
+                          >
+                            <option value="green_mp4">Green-screen MP4</option>
+                            <option value="transparent_png_sequence">Transparent PNG sequence</option>
+                            <option value="both">MP4 + PNG sequence</option>
+                          </Select>
+                        </Field>
+                        <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                          <input
+                            type="checkbox"
+                            checked={characterPass.includeMotion}
+                            disabled={!hasMove}
+                            onChange={(event) => patchCharacterPass({
+                              ...characterPass,
+                              includeMotion: event.target.checked,
+                            })}
+                            className="accent-[var(--accent)]"
+                            data-export-character-pass-motion
+                          />
+                          Include motion output
+                        </label>
+                        {showGreenField && characterPass.includeMotion && hasMove && (
+                          <div className="flex items-end gap-2">
+                            <div className="flex-1">
+                              <Field label="Background">
+                                <TextInput
+                                  value={characterPass.backgroundColor}
+                                  onChange={(event) => patchCharacterPass({
+                                    ...characterPass,
+                                    backgroundColor: event.target.value,
+                                  })}
+                                  onBlur={(event) => patchCharacterPass({
+                                    ...characterPass,
+                                    backgroundColor: event.target.value.trim() || DEFAULT_CHARACTER_PASS_BACKGROUND,
+                                  })}
+                                  data-export-character-pass-bg
+                                />
+                              </Field>
+                            </div>
+                            <button
+                              type="button"
+                              className="mb-0.5 rounded-lg border border-subtle px-2 py-2 text-[11px] text-secondary transition hover:text-primary"
+                              onClick={() => patchCharacterPass({
+                                ...characterPass,
+                                backgroundColor: DEFAULT_CHARACTER_PASS_BACKGROUND,
+                              })}
+                              data-export-character-pass-bg-reset
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        )}
+                        {hasMove && characterPass.includeMotion && (
+                          <p
+                            className="text-[11px] text-muted"
+                            data-export-character-pass-timing
+                          >
+                            {timing.frameCount} frames · {timing.width} × {timing.height} · {timing.frameRate} fps
+                          </p>
+                        )}
+                        {showSequenceWarn && (
+                          <p
+                            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
+                            data-export-character-pass-size-warning
+                          >
+                            Transparent PNG sequences at this length can use a lot of browser memory.
+                            Prefer green-screen MP4 when possible, or shorten the move.
+                          </p>
+                        )}
+                      </div>
+                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={characterPass.includeAttachedProps}
+                          onChange={(event) => patchCharacterPass({
+                            ...characterPass,
+                            includeAttachedProps: event.target.checked,
+                          })}
+                          className="accent-[var(--accent)]"
+                          data-export-character-pass-attachments
+                        />
+                        Include character-linked props
+                      </label>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             {(() => {
               const depth = normalizeShotDepthSettings(
                 selectedShot.exportSettings.depth ?? defaultShotDepthSettings,

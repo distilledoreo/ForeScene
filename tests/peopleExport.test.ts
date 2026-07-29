@@ -25,7 +25,7 @@ describe('people output variants', () => {
     prop.stagingRole = 'prop';
     project.scene.objects.push(mannequin, importedPerson, prop);
 
-    const clean = resolveProjectForShot(project, project.shots[0], { hidePeople: true });
+    const clean = resolveProjectForShot(project, project.shots[0], { contentMode: 'clean_plate' });
     const byId = new Map(clean.scene.objects.map((object) => [object.id, object]));
     expect(byId.get(mannequin.id)?.visible).toBe(false);
     expect(byId.get(importedPerson.id)?.visible).toBe(false);

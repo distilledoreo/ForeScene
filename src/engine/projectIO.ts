@@ -2,6 +2,7 @@ import { Euler, LocationProject, PanoReference, ProjectAsset, SceneObject, Shot,
 import { normalizeProductionShotId } from '../domain/shotIdentity';
 import {
   DEFAULT_CAMERA_HEIGHT_METERS,
+  normalizeCharacterPassExportSettings,
   normalizeProjectSettings,
   normalizeProjectWorkflow,
   normalizeShotDepthSettings,
@@ -319,6 +320,7 @@ function normalizeShot(shot: Shot): Shot {
     exportSettings: {
       ...exportSettings,
       peopleExportMode: normalizePeopleExportMode(legacyExportSettings.peopleExportMode),
+      characterPass: normalizeCharacterPassExportSettings(legacyExportSettings.characterPass),
       includeAiResultFrame: legacyExportSettings.includeAiResultFrame ?? legacyExportSettings.includeSkinnedFrame ?? true,
       includeCameraMoveVideo: legacyExportSettings.includeCameraMoveVideo ?? true,
       includeCameraMoveReferenceFrames: legacyExportSettings.includeCameraMoveReferenceFrames ?? true,

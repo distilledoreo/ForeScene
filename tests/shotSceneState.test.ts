@@ -42,7 +42,7 @@ describe('per-shot scene state', () => {
     prop.stagingRole = 'prop';
     project.scene.objects.push(mannequin, importedPerson, prop);
 
-    const resolved = resolveProjectForShot(project, project.shots[0], { hidePeople: true });
+    const resolved = resolveProjectForShot(project, project.shots[0], { contentMode: 'clean_plate' });
     const byId = new Map(resolved.scene.objects.map((object) => [object.id, object]));
 
     expect(byId.get(mannequin.id)?.visible).toBe(false);

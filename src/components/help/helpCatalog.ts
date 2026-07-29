@@ -560,7 +560,7 @@ export const helpSections: readonly HelpSection[] = [
         defaultOpen: true,
         controls: [
           { label: 'Select Shots to Export', description: 'Checks the shots included in the multi-shot ZIP. Settings shown on the right apply only to the active shot, not every checked shot.' },
-          { label: 'Active shot', description: 'The shot whose Width, Height, People output, and content checkboxes are being edited.' },
+          { label: 'Active shot', description: 'The shot whose Width, Height, People output, Characters-only pass, and content checkboxes are being edited.' },
           { label: 'Package readiness', description: 'Reports Ready, Ready with notes, blocking checks, or Needs attention.' },
           { label: 'Checks and notes', description: 'Warns about missing graybox/projectors/panoramas, unavailable projected outputs, missing landmarks, or an aspect-ratio mismatch.' },
           { label: 'Preview tiles', description: 'Shows available AI result, final frame, viewport render, pano crop, linked reference, and canonical reference media.' },
@@ -573,6 +573,7 @@ export const helpSections: readonly HelpSection[] = [
         controls: [
           { label: 'Width / Height', description: 'Final output pixel dimensions for the active shot.' },
           { label: 'People output', description: 'Choose With people, Clean plate, or Both.' },
+          { label: 'Characters-only pass', description: 'Optional transparent stills, green-screen MP4, and/or transparent PNG sequence with character-linked props.' },
           { label: 'Viewport clay render', description: 'Includes the shot rendered with graybox materials.' },
           { label: 'Viewport projected render', description: 'Includes projected style and a clay companion when available.' },
           { label: 'AI result frame', description: 'Includes an already attached AI/final frame; it does not generate a new image.' },
