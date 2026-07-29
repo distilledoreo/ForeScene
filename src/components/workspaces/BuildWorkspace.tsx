@@ -144,6 +144,7 @@ export function BuildWorkspace({
   const [modelImportOpen, setModelImportOpen] = useState(false);
   const [poseableImportOpen, setPoseableImportOpen] = useState(false);
   const [autorigMarkerOpen, setAutorigMarkerOpen] = useState(false);
+  const [dismissedRerigBannerIds, setDismissedRerigBannerIds] = useState<Record<string, true>>({});
   const [setGenerationOpen, setSetGenerationOpen] = useState(false);
   const [frameRequest, setFrameRequest] = useState(0);
   const [frameObjectIds, setFrameObjectIds] = useState<string[]>([]);
@@ -935,14 +936,62 @@ useEffect(() => {
                     </button>
                   </div>
                   {selectedObject.poseableCharacter?.kind === 'autorigged' && (
-                    <button
-                      type="button"
-                      className="w-full rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
-                      data-build-autorig-markers
-                      onClick={() => setAutorigMarkerOpen(true)}
-                    >
-                      Place autorig markers
-                    </button>
+                    <div className="space-y-2">
+                      {(() => {
+                        const source = selectedObject.poseableCharacter;
+                        const rigAsset = project.assets.assets[source.assetId];
+                        const selectedRig = rigAsset?.metadata?.poseableRig;
+                        if (!selectedRig?.requiresRerigging) return null;
+                        if (dismissedRerigBannerIds[selectedRig.id]) return null;
+                        return (
+                          <div
+                            className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2"
+                            data-autorig-rerig-banner
+                          >
+                            <p className="text-[11px] text-amber-100">
+                              This character’s rig needs to be updated.
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                className="rounded-lg bg-accent px-2 py-1 text-[11px] font-semibold text-white"
+                                data-autorig-update-rig
+                                onClick={() => setAutorigMarkerOpen(true)}
+                              >
+                                Update rig
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary"
+                                data-autorig-keep-rigid
+                                onClick={() => setDismissedRerigBannerIds((current) => ({
+                                  ...current,
+                                  [selectedRig.id]: true,
+                                }))}
+                              >
+                                Keep rigid for now
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-muted">
+                              Existing poses are kept and reapplied after updating; the look may change slightly.
+                            </p>
+                          </div>
+                        );
+                      })()}
+                      <button
+                        type="button"
+                        className="w-full rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
+                        data-build-autorig-markers
+                        onClick={() => setAutorigMarkerOpen(true)}
+                      >
+                        {(() => {
+                          const source = selectedObject.poseableCharacter;
+                          const rigAsset = project.assets.assets[source.assetId];
+                          const selectedRig = rigAsset?.metadata?.poseableRig;
+                          return selectedRig?.requiresRerigging ? 'Update character rig' : 'Edit character rig';
+                        })()}
+                      </button>
+                    </div>
                   )}
                   {characterEditMode === 'pose' && (
                     <CharacterPosePanel
@@ -1275,6 +1324,11 @@ useEffect(() => {
             rig={rig}
             sourceAssetId={rig.originalSourceAssetId ?? rig.sourceMeshAssetId}
             assets={project.assets}
+            initialStep={
+              rig.requiresRerigging && (rig.markers?.length ?? 0) > 0
+                ? 'regions'
+                : undefined
+            }
             onSave={(next, options) => {
               updatePoseableRigAsset(rigAsset.id, next);
               const sourceId = next.originalSourceAssetId ?? next.sourceMeshAssetId;
