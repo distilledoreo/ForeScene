@@ -13,12 +13,12 @@ export const DEFAULT_POSEABLE_HEIGHT_METERS = 1.75;
 export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
 export const MAX_POSEABLE_HEIGHT_METERS = 3.5;
 /** Bumped whenever canonical fitting/weighting changes invalidate baked rigs. */
-export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 6;
+export const CURRENT_AUTORIG_RIG_GENERATION_VERSION = 7;
 /**
  * Binder algorithm version. V1 = capsule skinning without region constraints.
- * V2 (later) = region-constrained weights. Independent of rigGenerationVersion.
+ * V2 = region-constrained weights. Independent of rigGenerationVersion.
  */
-export const CURRENT_AUTORIG_BINDER_VERSION = 1;
+export const CURRENT_AUTORIG_BINDER_VERSION = 2;
 
 export function defaultPoseableOrientation(): PoseableCharacterOrientation {
   return {
@@ -177,8 +177,12 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(typeof raw.binderVersion === 'number' && Number.isFinite(raw.binderVersion)
       ? { binderVersion: Math.max(0, Math.floor(raw.binderVersion)) }
       : {}),
-    ...(raw.requiresRerigging === true || (typeof raw.rigGenerationVersion === 'number'
-      && raw.rigGenerationVersion < CURRENT_AUTORIG_RIG_GENERATION_VERSION)
+    ...(raw.requiresRerigging === true
+      || (typeof raw.rigGenerationVersion === 'number'
+        && raw.rigGenerationVersion < CURRENT_AUTORIG_RIG_GENERATION_VERSION)
+      || (typeof raw.binderVersion === 'number'
+        && raw.binderVersion < CURRENT_AUTORIG_BINDER_VERSION)
+      || (raw.skin && typeof raw.binderVersion !== 'number')
       ? { requiresRerigging: true }
       : {}),
     ...(raw.bindMatrices && typeof raw.bindMatrices === 'object' ? { bindMatrices: raw.bindMatrices } : {}),

@@ -5,6 +5,8 @@ import type {
   AutorigBuildTopologyResult,
   AutorigApplyRegionOverridesRequest,
   AutorigApplyRegionOverridesResult,
+  AutorigGenerateWeightsRequest,
+  AutorigGenerateWeightsResult,
   AutorigWorkerProgress,
   AutorigWorkerRequest,
   AutorigWorkerResponse,
@@ -125,6 +127,26 @@ export function runAutorigApplyRegionOverrides(
     jobId: input.jobId ?? createJobId(),
     suggested: input.suggested,
     overrides: input.overrides,
+  };
+  return runAutorigWorkerJob(request, onProgress);
+}
+
+export function runAutorigGenerateWeights(
+  input: Omit<AutorigGenerateWeightsRequest, 'kind' | 'jobId'> & { jobId?: string },
+  onProgress?: (progress: AutorigWorkerProgress) => void,
+): AutorigWorkerTask<AutorigGenerateWeightsResult> {
+  const request: AutorigGenerateWeightsRequest = {
+    kind: 'generate-weights',
+    jobId: input.jobId ?? createJobId(),
+    positions: input.positions,
+    regionLabels: input.regionLabels,
+    jointPositions: input.jointPositions,
+    triangles: input.triangles,
+    adjacencyOffsets: input.adjacencyOffsets,
+    adjacencyVertices: input.adjacencyVertices,
+    vertexComponent: input.vertexComponent,
+    heightMeters: input.heightMeters,
+    meshSize: input.meshSize,
   };
   return runAutorigWorkerJob(request, onProgress);
 }

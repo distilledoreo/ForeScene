@@ -8,6 +8,7 @@ import {
   ensureAllVerticesLabeled,
   resolveRegionLabels,
 } from '../engine/autorig/regions';
+import { generateRegionConstrainedSkinWeights } from '../engine/autorig/regionConstrainedWeights';
 import type {
   AutorigWorkerRequest,
   AutorigWorkerResponse,
@@ -148,10 +149,54 @@ self.onmessage = (event: MessageEvent<AutorigWorkerRequest>) => {
     }
 
     if (request.kind === 'generate-weights') {
+      progress(request.jobId, 'generating', 0.4, 'Generating rig…');
+      let topology = undefined as ReturnType<typeof buildCanonicalTopologyFromBuffers> | undefined;
+      if (request.triangles && request.adjacencyOffsets && request.adjacencyVertices) {
+        topology = buildCanonicalTopologyFromBuffers({
+          positions: request.positions,
+          triangles: request.triangles,
+        });
+        // Prefer precomputed adjacency when provided (already transferred).
+        if (request.adjacencyOffsets && request.adjacencyVertices) {
+          topology = {
+            ...topology,
+            adjacencyOffsets: request.adjacencyOffsets,
+            adjacencyVertices: request.adjacencyVertices,
+            ...(request.vertexComponent ? { vertexComponent: request.vertexComponent } : {}),
+          };
+        }
+      } else if (request.triangles) {
+        topology = buildCanonicalTopologyFromBuffers({
+          positions: request.positions,
+          triangles: request.triangles,
+        });
+      }
+      if (cancelledJobs.has(request.jobId)) {
+        post({ kind: 'cancelled', jobId: request.jobId });
+        return;
+      }
+      const buffers = generateRegionConstrainedSkinWeights({
+        positions: request.positions,
+        regionLabels: request.regionLabels,
+        jointPositions: request.jointPositions,
+        topology: topology ?? null,
+        heightMeters: request.heightMeters,
+        meshSize: request.meshSize,
+      });
+      if (cancelledJobs.has(request.jobId)) {
+        post({ kind: 'cancelled', jobId: request.jobId });
+        return;
+      }
+      progress(request.jobId, 'checking', 0.9, 'Checking deformation…');
       post({
-        kind: 'error',
+        kind: 'generate-weights',
         jobId: request.jobId,
-        message: 'Region-constrained weight generation is not available yet.',
+        influencesPerVertex: buffers.influencesPerVertex,
+        indices: buffers.indices,
+        weights: buffers.weights,
+        jointOrder: buffers.jointOrder,
+        fallbackVertexCount: buffers.fallbackVertexCount ?? 0,
+        ...(buffers.warnings ? { warnings: buffers.warnings } : {}),
       });
       return;
     }
