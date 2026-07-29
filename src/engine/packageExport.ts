@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { LocationProject, ProjectAsset, Shot } from '../domain/types';
+import { normalizeCharacterPassExportSettings } from '../domain/defaults';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import {
   CAMERA_MOVE_CUBEMAP_FACES,
@@ -18,12 +19,26 @@ import {
   renderPanoCubemapFacesAsBlobs,
   renderPanoPerspectiveCrop,
   renderShotCameraMoveMp4,
+  renderShotCharacterFrame,
+  renderShotCharacterMotion,
   renderShotFrame,
   renderShotProjectedFrame,
   renderViewportClay,
   renderViewportProjected,
 } from './renderers';
 import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
+import {
+  buildCharacterPassMetadata,
+  buildCharacterSequenceMeta,
+  characterMotionMp4Path,
+  characterPassIncludesGreenMp4,
+  characterPassIncludesPngSequence,
+  characterPassMetadataPath,
+  characterSequenceDirPath,
+  characterSequenceFrameFileName,
+  characterStillPath,
+  shotHasVisibleCharactersForPass,
+} from './characterPassExport';
 import { resolveProjectForShot } from './shotSceneState';
 import { interpolateObjectOverrides } from './objectKeyframes';
 import {
@@ -37,6 +52,7 @@ import {
   shouldExportDepthReferenceFrames,
   shouldExportViewportDepth,
 } from './depthRender';
+import { DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
 
 export { downloadBlob };
 
@@ -223,6 +239,30 @@ export function countShotPackageUnits(project: LocationProject, shot: Shot): num
   if (shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) units += 1;
   if (shot.exportSettings.includeMetadata) units += 1;
   if (shot.exportSettings.includePrompt) units += 1;
+
+  const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);
+  if (
+    characterPass.enabled
+    && shotHasVisibleCharactersForPass(project, shot, characterPass)
+  ) {
+    if (characterPass.includeStill) {
+      units += 1;
+      if (shot.exportSettings.includeProjectedViewport && canProject) units += 1;
+    }
+    if (characterPass.includeMotion && hasRenderableCameraMove(shot.cameraKeyframes)) {
+      // Both MP4+PNG from one pass still counts as two progress units (encode + sequence).
+      if (characterPassIncludesGreenMp4(characterPass.motionFormat)) {
+        units += 1;
+        if (shot.exportSettings.includeProjectedCameraMoveVideo && canProject) units += 1;
+      }
+      if (characterPassIncludesPngSequence(characterPass.motionFormat)) {
+        units += 1;
+        if (shot.exportSettings.includeProjectedCameraMoveVideo && canProject) units += 1;
+      }
+    }
+    if (shot.exportSettings.includeMetadata) units += 1; // character_pass.json
+  }
+
   units += 1; // manifest
   return Math.max(1, units);
 }
@@ -422,7 +462,7 @@ async function appendShotPackageToZip(
   const projectForVariant = (variant: (typeof peopleVariants)[number]) => (
     variant === 'with_people'
       ? shotProject
-      : resolveProjectForShot(project, shot, { hidePeople: true })
+      : resolveProjectForShot(project, shot, { contentMode: 'clean_plate' })
   );
   const projectForVariantAtTime = (
     variant: (typeof peopleVariants)[number],
@@ -437,7 +477,7 @@ async function appendShotPackageToZip(
     return resolveProjectForShot(
       project,
       { ...shot, objectOverrides: overrides },
-      { hidePeople: variant === 'clean_plate' },
+      { contentMode: variant === 'clean_plate' ? 'clean_plate' : 'full_scene' },
     );
   };
   const emit = (
@@ -884,6 +924,141 @@ async function appendShotPackageToZip(
     finishUnit('packaging', 'Graybox panorama added');
   }
 
+  const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);
+  if (
+    characterPass.enabled
+    && shotHasVisibleCharactersForPass(project, shot, characterPass)
+  ) {
+    const canProjectCharacters = canUseProjectedAppearance(shotProject);
+
+    if (characterPass.includeStill) {
+      const stillAppearances: Array<'clay' | 'projected'> = ['clay'];
+      if (shot.exportSettings.includeProjectedViewport && canProjectCharacters) {
+        stillAppearances.push('projected');
+      }
+      for (const appearance of stillAppearances) {
+        throwIfAborted(signal);
+        emit(
+          'rendering',
+          `Rendering transparent character still (${appearance})…`,
+          { indeterminate: true },
+        );
+        try {
+          const still = await renderShotCharacterFrame(project, shot, {
+            appearance,
+            includeAttachedProps: characterPass.includeAttachedProps,
+          });
+          await addBlobToZip(zip, characterStillPath(resolvedRootFolder, appearance), still.blob);
+          finishUnit('rendering', `Character still (${appearance}) ready`);
+        } catch (error) {
+          if (isPackageExportCancelled(error)) throw error;
+          throw new ShotPackageError(
+            error instanceof Error
+              ? error.message
+              : `Character still (${appearance}) failed.`,
+          );
+        }
+      }
+    }
+
+    if (
+      characterPass.includeMotion
+      && hasRenderableCameraMove(shot.cameraKeyframes)
+    ) {
+      const motionAppearances: Array<'clay' | 'projected'> = ['clay'];
+      if (shot.exportSettings.includeProjectedCameraMoveVideo && canProjectCharacters) {
+        motionAppearances.push('projected');
+      }
+      for (const appearance of motionAppearances) {
+        const wantsMp4 = characterPassIncludesGreenMp4(characterPass.motionFormat);
+        const wantsPng = characterPassIncludesPngSequence(characterPass.motionFormat);
+        const sequenceDir = characterSequenceDirPath(resolvedRootFolder, appearance);
+
+        throwIfAborted(signal);
+        emit(
+          'encoding',
+          wantsMp4 && wantsPng
+            ? `Encoding character motion (${appearance})…`
+            : wantsMp4
+              ? `Encoding character green-screen MP4 (${appearance})…`
+              : `Rendering transparent character sequence (${appearance})…`,
+          { indeterminate: true },
+        );
+
+        try {
+          const motion = await renderShotCharacterMotion(project, shot, {
+            appearance,
+            motionFormat: characterPass.motionFormat,
+            backgroundColor: characterPass.backgroundColor,
+            includeAttachedProps: characterPass.includeAttachedProps,
+            frameRate: DEFAULT_VIDEO_FRAME_RATE,
+            resolutionPreset: '1080p',
+            signal,
+            onProgress: (progress) => {
+              const info = normalizeCameraMoveProgress(progress);
+              const label = wantsPng && !wantsMp4
+                ? `Rendering transparent character frame ${info.completedFrames ?? 0} of ${info.totalFrames ?? '?'}`
+                : info.message || `Encoding character motion (${appearance})…`;
+              emit('encoding', label, { unitFraction: info.progress });
+            },
+            onPngFrame: wantsPng
+              ? async (frameIndex, blob) => {
+                const framePath = `${sequenceDir}/${characterSequenceFrameFileName(frameIndex + 1)}`;
+                await addBlobToZipStore(zip, framePath, blob);
+              }
+              : undefined,
+          });
+
+          if (wantsPng) {
+            zip.file(
+              `${sequenceDir}/sequence.json`,
+              JSON.stringify(
+                buildCharacterSequenceMeta({
+                  width: motion.width,
+                  height: motion.height,
+                  frameRate: motion.frameRate,
+                  frameCount: motion.frameCount,
+                  durationSeconds: motion.durationSeconds,
+                }),
+                null,
+                2,
+              ),
+            );
+            finishUnit('encoding', `Character PNG sequence (${appearance}) ready`);
+          }
+
+          if (wantsMp4 && motion.mp4) {
+            await addBlobToZipStore(
+              zip,
+              characterMotionMp4Path(resolvedRootFolder, appearance),
+              motion.mp4.blob,
+            );
+            finishUnit('encoding', `Character green-screen MP4 (${appearance}) ready`);
+          } else if (wantsMp4) {
+            finishUnit('encoding', `Character MP4 (${appearance}) skipped`);
+          }
+        } catch (error) {
+          if (isPackageExportCancelled(error)) throw error;
+          throw new ShotPackageError(
+            error instanceof Error
+              ? error.message
+              : `Character motion (${appearance}) failed.`,
+          );
+        }
+      }
+    }
+
+    if (shot.exportSettings.includeMetadata) {
+      throwIfAborted(signal);
+      emit('packaging', 'Writing character pass metadata…');
+      zip.file(
+        characterPassMetadataPath(resolvedRootFolder),
+        JSON.stringify(buildCharacterPassMetadata(project, shot, characterPass), null, 2),
+      );
+      finishUnit('packaging', 'Character pass metadata written');
+    }
+  }
+
   if (shot.exportSettings.includeMetadata) {
     throwIfAborted(signal);
     emit('packaging', 'Writing metadata…');
@@ -950,7 +1125,12 @@ async function appendShotPackageToZip(
 
 function normalizeCameraMoveProgress(
   progress: number | CameraMoveExportProgress,
-): { progress: number; message: string } {
+): {
+  progress: number;
+  message: string;
+  completedFrames?: number;
+  totalFrames?: number;
+} {
   if (typeof progress === 'number') {
     return {
       progress: Math.min(1, Math.max(0, progress)),
@@ -960,6 +1140,8 @@ function normalizeCameraMoveProgress(
   return {
     progress: Math.min(1, Math.max(0, progress.progress)),
     message: progress.message || 'Encoding camera move…',
+    completedFrames: progress.completedFrames,
+    totalFrames: progress.totalFrames,
   };
 }
 
@@ -972,6 +1154,11 @@ function addDataUrl(zip: JSZip, path: string, dataUrl: string) {
 /** Add binary image/video data without materializing an inflated base64 string. */
 async function addBlobToZip(zip: JSZip, path: string, blob: Blob) {
   zip.file(path, await blob.arrayBuffer());
+}
+
+/** STORE compression for already-compressed PNG/MP4 payloads. */
+async function addBlobToZipStore(zip: JSZip, path: string, blob: Blob) {
+  zip.file(path, await blob.arrayBuffer(), { compression: 'STORE' });
 }
 
 async function addProjectAssetToZip(zip: JSZip, path: string, asset: ProjectAsset) {

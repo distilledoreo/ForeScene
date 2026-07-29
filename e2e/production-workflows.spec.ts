@@ -237,6 +237,29 @@ test.describe('@heavy F3 multiple shots + people export modes', () => {
     // Settings are per-shot; value should reflect the mode we set (or be settable).
     await exportPeople.selectOption('both');
     await expect(exportPeople).toHaveValue('both');
+
+    const characterPass = page.locator('[data-export-character-pass]');
+    await expect(characterPass).toBeVisible();
+    await page.locator('[data-export-character-pass-enabled]').check();
+    await expect(page.locator('[data-export-character-pass-still]')).toBeChecked();
+    await expect(page.locator('[data-export-character-pass-attachments]')).toBeChecked();
+    // Motion format defaults to green-screen MP4 when a move exists; without keyframes it stays disabled.
+    const motionFormat = page.locator('[data-export-character-pass-motion-format]');
+    await expect(motionFormat).toBeVisible();
+    if (await motionFormat.isEnabled()) {
+      await expect(motionFormat).toHaveValue('green_mp4');
+      await expect(page.locator('[data-export-character-pass-bg]')).toHaveValue('#00FF00');
+      await motionFormat.selectOption('transparent_png_sequence');
+      await expect(page.locator('[data-export-character-pass-bg]')).toHaveCount(0);
+      await motionFormat.selectOption('both');
+      await expect(page.locator('[data-export-character-pass-bg]')).toBeVisible();
+      await page.locator('[data-export-character-pass-bg]').fill('#112233');
+      await page.locator('[data-export-character-pass-bg-reset]').click();
+      await expect(page.locator('[data-export-character-pass-bg]')).toHaveValue('#00FF00');
+    } else {
+      await expect(motionFormat).toBeDisabled();
+    }
+
     await page.keyboard.press('Escape');
     await dismissOverlays(page);
 

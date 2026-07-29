@@ -246,7 +246,9 @@ export async function renderShotDepthFrame(
     }
     : depth;
   return renderViewportDepth(
-    resolveProjectForShot(project, shot, { hidePeople: options.peopleVariant === 'clean_plate' }),
+    resolveProjectForShot(project, shot, {
+      contentMode: options.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene',
+    }),
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
@@ -264,7 +266,7 @@ export async function resolveShotDepthRangeForExport(
 ): Promise<DepthRangeMeters> {
   const depth = resolveShotDepthSettings(shot);
   await ensureHumanMannequinForProject(project);
-  const shotProject = resolveProjectForShot(project, shot, { hidePeople: false });
+  const shotProject = resolveProjectForShot(project, shot, { contentMode: 'full_scene' });
   const scene = buildScene(shotProject, createFinalRenderSceneOptions());
   try {
     return resolveShotDepthRange({

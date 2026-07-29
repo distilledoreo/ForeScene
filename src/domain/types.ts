@@ -386,6 +386,24 @@ export interface PanoCropSettings {
 
 export type PeopleExportMode = 'with_people' | 'clean_plate' | 'both';
 
+/** Motion deliverable for the optional characters-only export pass. */
+export type CharacterMotionExportFormat =
+  | 'green_mp4'
+  | 'transparent_png_sequence'
+  | 'both';
+
+/** Isolated character-compositing deliverables (separate from People output). */
+export interface CharacterPassExportSettings {
+  enabled: boolean;
+  includeStill: boolean;
+  includeMotion: boolean;
+  motionFormat: CharacterMotionExportFormat;
+  /** Six-digit hex background for green-screen MP4 (e.g. `#00FF00`). */
+  backgroundColor: string;
+  /** Include props whose metadata.characterOwnerId references a person. */
+  includeAttachedProps: boolean;
+}
+
 /** Linear camera-space depth reference for stills, keyframes, and camera-move video. */
 export interface ShotDepthSettings {
   enabled: boolean;
@@ -406,6 +424,8 @@ export interface ShotExportSettings {
   height: number;
   /** Whether shot renders include staged people, a clean plate, or both. */
   peopleExportMode?: PeopleExportMode;
+  /** Optional characters-only compositing pass (stills / green MP4 / PNG sequence). */
+  characterPass?: CharacterPassExportSettings;
   includeViewport: boolean;
   /** Optional projected-style still matching the clay viewport camera. */
   includeProjectedViewport?: boolean;

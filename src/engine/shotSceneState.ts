@@ -9,8 +9,16 @@ import type {
 } from '../domain/types';
 import { cloneHumanPose, humanPosesEqual } from './humanPose';
 
+/** What geometry a shot resolve should keep visible for export / preview. */
+export type SceneContentMode =
+  | 'full_scene'
+  | 'clean_plate'
+  | 'characters_only';
+
 export interface ResolveShotSceneOptions {
-  hidePeople?: boolean;
+  contentMode?: SceneContentMode;
+  /** When contentMode is characters_only, include props linked via metadata.characterOwnerId. */
+  includeCharacterAttachments?: boolean;
 }
 
 export function cloneTransform(transform: Transform): Transform {
@@ -36,6 +44,37 @@ export function getSceneObjectStagingRole(
     return object.stagingRole;
   }
   return object.type === 'human_dummy' ? 'person' : 'set';
+}
+
+/**
+ * Central visibility rule for full-scene / clean-plate / characters-only resolves.
+ * Animated keyframes must call this too so content modes cannot be reversed mid-move.
+ */
+export function isObjectVisibleForContentMode(
+  object: Pick<SceneObject, 'type' | 'stagingRole' | 'metadata'>,
+  requestedVisible: boolean,
+  options: ResolveShotSceneOptions = {},
+): boolean {
+  if (!requestedVisible) return false;
+
+  const role = getSceneObjectStagingRole(object);
+  const contentMode = options.contentMode ?? 'full_scene';
+
+  switch (contentMode) {
+    case 'clean_plate':
+      return role !== 'person';
+    case 'characters_only':
+      return (
+        role === 'person'
+        || (
+          options.includeCharacterAttachments !== false
+          && typeof object.metadata?.characterOwnerId === 'string'
+          && object.metadata.characterOwnerId.length > 0
+        )
+      );
+    default:
+      return true;
+  }
 }
 
 export function canStageObjectPerShot(object: Pick<SceneObject, 'type' | 'stagingRole' | 'locked'>): boolean {
@@ -128,13 +167,12 @@ export function resolveSceneObjectsForShot(
   return project.scene.objects.map((object) => {
     const override = overrides[object.id];
     const stagingRole = getSceneObjectStagingRole(object);
+    const requestedVisible = override?.visible ?? object.visible;
     return {
       ...object,
       stagingRole,
       transform: cloneTransform(override?.transform ?? object.transform),
-      visible: options.hidePeople && stagingRole === 'person'
-        ? false
-        : (override?.visible ?? object.visible),
+      visible: isObjectVisibleForContentMode(object, requestedVisible, options),
       humanPose: cloneHumanPose(override?.humanPose ?? object.humanPose),
     };
   });
@@ -177,12 +215,12 @@ export function resolveProjectForAnimatedCameraMove(
     const endOverride = end[object.id];
     const startVisible = startOverride?.visible ?? object.visible;
     const endVisible = endOverride?.visible ?? object.visible;
-    const hiddenByPeople = Boolean(options.hidePeople && stagingRole === 'person');
+    const requestedVisible = startVisible || endVisible;
     return {
       ...object,
       stagingRole,
       transform: cloneTransform(startOverride?.transform ?? endOverride?.transform ?? object.transform),
-      visible: hiddenByPeople ? false : (startVisible || endVisible),
+      visible: isObjectVisibleForContentMode(object, requestedVisible, options),
       humanPose: cloneHumanPose(
         startOverride?.humanPose ?? endOverride?.humanPose ?? object.humanPose,
       ),
