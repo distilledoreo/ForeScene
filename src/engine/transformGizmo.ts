@@ -185,13 +185,18 @@ export function createTransformGizmoGroup(): THREE.Group {
 }
 
 export function createSelectionOutline(objectMesh: THREE.Object3D): THREE.BoxHelper {
-  const helper = new THREE.BoxHelper(objectMesh, 0x14b8a6);
+  // BoxHelper.update() uses setFromObject, which can throw on incomplete SkinnedMesh
+  // skin attributes. Build the helper against an empty proxy, then write bounds ourselves.
+  const proxy = new THREE.Object3D();
+  const helper = new THREE.BoxHelper(proxy, 0x14b8a6);
   helper.name = 'SelectionOutline';
   helper.renderOrder = 18;
+  helper.userData.selectionTarget = objectMesh;
   const material = helper.material as THREE.LineBasicMaterial;
   material.depthTest = false;
   material.transparent = true;
   material.opacity = 0.9;
+  syncSelectionOutlineToBox(helper, computeObjectBoundsForGizmo(objectMesh));
   return helper;
 }
 
@@ -209,21 +214,92 @@ export function computeGizmoAnchor(box: THREE.Box3, objectType: SceneObjectType)
   return anchor;
 }
 
+function boxIsUsable(box: THREE.Box3): boolean {
+  if (box.isEmpty()) return false;
+  const { min, max } = box;
+  return [min.x, min.y, min.z, max.x, max.y, max.z].every(Number.isFinite);
+}
+
+/**
+ * Bounds for transform gizmos / selection outlines.
+ * Prefer geometry AABBs (not SkinnedMesh bone-space computeBoundingBox), which can
+ * place gizmos off-screen for freshly parented or double-transformed skinned roots.
+ */
+export function computeObjectBoundsForGizmo(
+  objectMesh: THREE.Object3D,
+  object?: Pick<SceneObject, 'type' | 'transform' | 'dimensions'>,
+): THREE.Box3 {
+  objectMesh.updateMatrixWorld(true);
+
+  const geometryBox = new THREE.Box3();
+  objectMesh.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const geometry = mesh.geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) return;
+    geometryBox.union(geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+  });
+  if (boxIsUsable(geometryBox)) return geometryBox;
+
+  try {
+    const fromObject = new THREE.Box3().setFromObject(objectMesh);
+    if (boxIsUsable(fromObject)) return fromObject;
+  } catch {
+    // SkinnedMesh.computeBoundingBox can throw when skin attrs are incomplete.
+  }
+
+  if (object) {
+    const [w, h, d] = object.dimensions;
+    const [x, y, z] = object.transform.position;
+    const fallback = new THREE.Box3(
+      new THREE.Vector3(x - w / 2, y - h / 2, z - d / 2),
+      new THREE.Vector3(x + w / 2, y + h / 2, z + d / 2),
+    );
+    if (boxIsUsable(fallback)) return fallback;
+  }
+
+  const origin = new THREE.Vector3();
+  objectMesh.getWorldPosition(origin);
+  return new THREE.Box3(
+    origin.clone().addScalar(-0.5),
+    origin.clone().addScalar(0.5),
+  );
+}
+
+function syncSelectionOutlineToBox(outline: THREE.BoxHelper, box: THREE.Box3) {
+  if (!boxIsUsable(box)) return;
+  const min = box.min;
+  const max = box.max;
+  const positions = outline.geometry.getAttribute('position') as THREE.BufferAttribute;
+  positions.setXYZ(0, max.x, max.y, max.z);
+  positions.setXYZ(1, min.x, max.y, max.z);
+  positions.setXYZ(2, min.x, min.y, max.z);
+  positions.setXYZ(3, max.x, min.y, max.z);
+  positions.setXYZ(4, max.x, max.y, min.z);
+  positions.setXYZ(5, min.x, max.y, min.z);
+  positions.setXYZ(6, min.x, min.y, min.z);
+  positions.setXYZ(7, max.x, min.y, min.z);
+  positions.needsUpdate = true;
+  outline.geometry.computeBoundingSphere();
+}
+
 export function updateTransformGizmo(
   gizmo: THREE.Group,
   outline: THREE.BoxHelper,
   objectMesh: THREE.Object3D,
   object: SceneObject,
 ) {
-  const box = new THREE.Box3().setFromObject(objectMesh);
+  const box = computeObjectBoundsForGizmo(objectMesh, object);
   const size = box.getSize(new THREE.Vector3());
   const scale = computeGizmoScale(size);
 
   gizmo.position.copy(computeGizmoAnchor(box, object.type));
   gizmo.scale.setScalar(scale);
   gizmo.rotation.set(0, 0, 0);
+  gizmo.visible = true;
 
-  outline.update();
+  syncSelectionOutlineToBox(outline, box);
 }
 
 export function updateGroupTransformGizmo(
@@ -232,13 +308,17 @@ export function updateGroupTransformGizmo(
   objectMeshes: THREE.Object3D[],
 ) {
   const box = new THREE.Box3();
-  objectMeshes.forEach((mesh) => box.union(new THREE.Box3().setFromObject(mesh)));
-  if (box.isEmpty()) return;
+  objectMeshes.forEach((mesh) => box.union(computeObjectBoundsForGizmo(mesh)));
+  if (!boxIsUsable(box)) return;
   const size = box.getSize(new THREE.Vector3());
   gizmo.position.copy(box.getCenter(new THREE.Vector3()));
   gizmo.scale.setScalar(computeGizmoScale(size));
   gizmo.rotation.set(0, 0, 0);
-  outlines.forEach((outline) => outline.update());
+  gizmo.visible = true;
+  outlines.forEach((outline, index) => {
+    const mesh = objectMeshes[index];
+    if (mesh) syncSelectionOutlineToBox(outline, computeObjectBoundsForGizmo(mesh));
+  });
 }
 
 export function findGizmoHit(

@@ -526,7 +526,19 @@ export function SceneViewport({
       : undefined;
     const character = object ? resolvePoseableCharacterForObject(object) : undefined;
 
-    if (!poseActive || !object || !character?.isReady()) {
+    if (!poseActive || !object || !character) {
+      poseJointsRef.current = [];
+      syncPoseJointHandles({
+        group,
+        joints: [],
+        selectedJointId: undefined,
+        visible: false,
+      });
+      return;
+    }
+
+    if (!character.isReady()) {
+      void character.ensureLoaded().catch(() => undefined);
       poseJointsRef.current = [];
       syncPoseJointHandles({
         group,
@@ -554,6 +566,7 @@ export function SceneViewport({
     }
 
     character.bindInstance(instance);
+    instance.updateMatrixWorld(true);
     applyHumanPoseToObject3D(instance, object);
     const joints = character.getJoints(instance).filter((joint) => (
       (HUMAN_POSE_EDITABLE_JOINT_IDS as readonly string[]).includes(joint.id)
@@ -563,7 +576,7 @@ export function SceneViewport({
       group,
       joints,
       selectedJointId: selectedPoseJointIdRef.current,
-      visible: true,
+      visible: joints.length > 0,
     });
   }, []);
 
