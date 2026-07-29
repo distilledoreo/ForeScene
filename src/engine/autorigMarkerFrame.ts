@@ -146,7 +146,11 @@ export function worldToCanvas(position: Vec3, frame: AutorigOrthoFrame): { x: nu
   };
 }
 
-/** Inverse of worldToCanvas; preserves the out-of-plane world component from `current`. */
+/**
+ * Inverse of worldToCanvas.
+ * - Front: edits lateral X and height Y; preserves depth Z from `current`.
+ * - Side: edits depth Z only; preserves X and Y so Front placements stay intact.
+ */
 export function canvasToWorld(
   x: number,
   y: number,
@@ -162,7 +166,8 @@ export function canvasToWorld(
   const xWorld = frame.horizMin + nx * worldW;
   const yWorld = frame.vertMin + ny * worldH;
   if (frame.view === 'front') return [xWorld, yWorld, current[2]];
-  return [current[0], yWorld, xWorld];
+  // Side view is depth-only: horizontal canvas maps to world Z.
+  return [current[0], current[1], xWorld];
 }
 
 /**

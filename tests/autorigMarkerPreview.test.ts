@@ -62,18 +62,37 @@ describe('autorig marker orthographic frame (shared mesh + markers)', () => {
         expect(pt.y).toBeGreaterThanOrEqual(0);
         expect(pt.y).toBeLessThanOrEqual(480);
         const back = canvasToWorld(pt.x, pt.y, frame, world);
-        // In-plane axes round-trip; out-of-plane component preserved from current.
+        // In-plane editable axes round-trip; locked axes preserved from current.
         if (view === 'front') {
           expect(back[0]).toBeCloseTo(world[0], 5);
           expect(back[1]).toBeCloseTo(world[1], 5);
           expect(back[2]).toBe(world[2]);
         } else {
+          // Side edits depth Z only; X/Y stay on the pre-drag marker.
           expect(back[2]).toBeCloseTo(world[2], 5);
-          expect(back[1]).toBeCloseTo(world[1], 5);
+          expect(back[1]).toBe(world[1]);
           expect(back[0]).toBe(world[0]);
         }
       }
     }
+  });
+
+  it('side view canvas mapping only changes world depth Z', () => {
+    const frameSide = computeAutorigOrthoFrame({
+      bounds,
+      view: 'side',
+      canvasWidth: 640,
+      canvasHeight: 480,
+      paddingFraction: 0,
+    });
+    const current: [number, number, number] = [0.25, 1.2, -0.05];
+    const origin = worldToCanvas(current, frameSide);
+    // Drag right (deeper Z) and down (would have been lower Y in the old behaviour).
+    const moved = canvasToWorld(origin.x + 40, origin.y + 50, frameSide, current);
+    expect(moved[0]).toBe(current[0]);
+    expect(moved[1]).toBe(current[1]);
+    expect(moved[2]).not.toBeCloseTo(current[2], 3);
+    expect(moved[2]).toBeGreaterThan(current[2]);
   });
 
   it('front uses X horizontal and side uses Z horizontal; both use Y vertical', () => {

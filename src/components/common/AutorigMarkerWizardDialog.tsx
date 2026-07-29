@@ -468,6 +468,7 @@ export function AutorigMarkerWizardDialog({
         <p className="text-sm text-secondary">
           Markers are placed for you — drag any that are off onto the matching joint
           (blue = left, amber = right, green = midline), then click Rig character.
+          {' '}Front adjusts left/right and height; Side adjusts depth only so the two views do not fight.
         </p>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -540,12 +541,13 @@ export function AutorigMarkerWizardDialog({
                 preDragMarkersRef.current = undefined;
                 dragRef.current = undefined;
                 setIsDragging(false);
-                // Snap the dragged marker to the mesh mid-depth once per drag (not per move).
-                if (meshSource) {
+                // Front: snap Z through mesh thickness so markers sit mid-body after X/Y placement.
+                // Side is depth-only — do not re-center X here or it undoes Front lateral work.
+                if (meshSource && view === 'front') {
                   setMarkers((currentMarkers) => centerAutorigMarkersDepth(
                     currentMarkers,
                     meshSource,
-                    view,
+                    'front',
                     draggedJointId,
                   ).markers);
                 }

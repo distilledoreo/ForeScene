@@ -254,7 +254,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Approx. height (m)', description: 'Scales the character to an approximate real-world height.' },
           { label: 'Rest pose hint', description: 'Records whether the source is roughly an A-pose or T-pose for later marker suggestions.' },
           { label: 'Import character', description: 'Writes the unmodified source asset, a poseable_rig shell, and a Person scene object, then opens marker placement.' },
-          { label: 'Place autorig markers', description: 'Guided Front/Side editor: markers are pre-placed on the mesh — drag any that are off, optionally preview deformation, then Rig character. Reopens from a selected autorigged character.' },
+          { label: 'Place autorig markers', description: 'Guided Front/Side editor: Front sets left/right and height; Side sets depth only. Markers are pre-placed — drag any that are off, optionally preview deformation, then Rig character. Reopens from a selected autorigged character.' },
         ],
         notes: [
           'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',
