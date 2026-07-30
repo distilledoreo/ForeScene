@@ -144,7 +144,7 @@ describe('agent browser API (store-backed)', () => {
     expect(result.plan?.packageType).toBe(expected.packageType);
   });
 
-  it('setControlMode toggles writeAccess for the session', async () => {
+  it('disableWrites demotes write access; UI store escalates', async () => {
     useAgentControlStore.setState({ controlMode: 'read-only' });
     useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
       await mutation();
@@ -164,7 +164,9 @@ describe('agent browser API (store-backed)', () => {
     });
     const api = createForeSceneBrowserApi();
     expect(api.getStatus().writeAccess).toBe(false);
-    api.setControlMode('read-write');
+    // Public API cannot escalate.
+    expect(Object.prototype.hasOwnProperty.call(api, 'setControlMode')).toBe(false);
+    useAgentControlStore.getState().setControlMode('read-write');
     expect(api.getStatus().writeAccess).toBe(true);
     const apply = await api.applyPlan({
       version: 1,
@@ -172,7 +174,7 @@ describe('agent browser API (store-backed)', () => {
     });
     expect(apply.ok).toBe(true);
     expect(useProjectStore.getState().project.name).toBe('Applied Name');
-    api.setControlMode('read-only');
+    api.disableWrites();
     expect(api.getStatus().writeAccess).toBe(false);
     useProjectSafetyStore.getState().setRunDestructiveProjectMutation(undefined);
   });

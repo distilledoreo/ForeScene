@@ -15,7 +15,10 @@ export const AGENT_PROFILE_DIR = path.resolve(REPO_ROOT, '.forescene-agent/brows
 export interface AgentBrowserOptions {
   url?: string;
   headless?: boolean;
+  /** Session-only write seed (`sessionStorage`). Requires explicit CLI `--write`. */
   writeAccess?: boolean;
+  /** Persist write seed in profile localStorage (`--persist-write`). */
+  persistWrite?: boolean;
   viewport?: { width: number; height: number };
 }
 
@@ -82,12 +85,22 @@ export async function waitForAgentReady(page: Page, timeoutMs = 60_000): Promise
   }, { timeout: timeoutMs });
 }
 
+/** Ready + persistence / graybox / package export idle. */
+export async function waitForAgentIdle(page: Page, timeoutMs = 60_000): Promise<void> {
+  await waitForAgentReady(page, timeoutMs);
+  await page.evaluate(async (timeout) => {
+    await window.foreScene!.waitForIdle({ timeoutMs: timeout });
+  }, timeoutMs);
+}
+
 export async function openAgentBrowser(
   options: AgentBrowserOptions = {},
 ): Promise<AgentBrowserSession> {
   const url = await resolveForeSceneUrl(options.url);
   const headless = options.headless ?? false;
   const viewport = options.viewport ?? { width: 1600, height: 1000 };
+  const persistWrite = options.persistWrite === true;
+  const writeAccess = options.writeAccess === true || persistWrite;
 
   await mkdir(AGENT_PROFILE_DIR, { recursive: true });
 
@@ -96,28 +109,44 @@ export async function openAgentBrowser(
     viewport,
   });
 
-  await context.addInitScript(() => {
-    try {
-      window.localStorage.setItem('forescene-splash-seen', '1');
-    } catch {
-      // ignore
-    }
-  });
-
-  if (options.writeAccess) {
-    await context.addInitScript(() => {
+  await context.addInitScript(
+    ({ splash, write, persist }) => {
       try {
-        window.localStorage.setItem('forescene-agent-control', 'read-write');
+        window.localStorage.setItem('forescene-splash-seen', splash);
       } catch {
         // ignore
       }
-    });
-  }
+      try {
+        // Always clear stale persisted write unless this launch opts into --persist-write.
+        if (persist) {
+          window.localStorage.setItem('forescene-agent-control', 'read-write');
+        } else {
+          window.localStorage.removeItem('forescene-agent-control');
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        if (write && !persist) {
+          window.sessionStorage.setItem('forescene-agent-control-session', 'read-write');
+        } else {
+          window.sessionStorage.removeItem('forescene-agent-control-session');
+        }
+      } catch {
+        // ignore
+      }
+    },
+    {
+      splash: '1',
+      write: writeAccess,
+      persist: persistWrite,
+    },
+  );
 
   const page = context.pages()[0] ?? await context.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await dismissOnboarding(page);
-  await waitForAgentReady(page);
+  await waitForAgentIdle(page);
 
   return {
     context,

@@ -34,7 +34,6 @@ import {
   type AgentInspectionContext,
 } from './inspection';
 import type {
-  AgentControlMode,
   AgentEntityTarget,
   AgentExportPlanRequest,
   AgentExportPlanResult,
@@ -270,14 +269,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       };
     },
 
-    setControlMode(mode: AgentControlMode): ForeSceneAgentStatus {
-      if (mode !== 'off' && mode !== 'read-only' && mode !== 'read-write') {
-        throw new AgentApiError(
-          AGENT_DIAGNOSTIC_CODES.invalidArgument,
-          'controlMode must be off, read-only, or read-write.',
-        );
-      }
-      useAgentControlStore.getState().setControlMode(mode);
+    disableWrites(): ForeSceneAgentStatus {
+      const current = useAgentControlStore.getState().controlMode;
+      // Never escalate — only demote to read-only (or keep off).
+      useAgentControlStore.getState().setControlMode(current === 'off' ? 'off' : 'read-only');
       return getForeSceneAgentStatus();
     },
 

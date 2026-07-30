@@ -18,6 +18,7 @@ import {
   formatPlanBlockingErrors,
   planHasBlockingErrors,
 } from '../exportPlan';
+import { awaitAgentNotBusy } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -73,36 +74,6 @@ function requireWriteAccess(): AgentDiagnostic[] | null {
   return null;
 }
 
-function busyDiagnostics(): AgentDiagnostic[] {
-  const safety = useProjectSafetyStore.getState();
-  const projectState = useProjectStore.getState();
-  if (safety.criticalWrite) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'A critical project write is already in progress.',
-      ),
-    ];
-  }
-  if (projectState.isRenderingGraybox) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'Graybox rendering is in progress.',
-      ),
-    ];
-  }
-  if (projectState.isExportingPackage || abortController) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'Package export is already in progress.',
-      ),
-    ];
-  }
-  return [];
-}
-
 function resolveShots(
   project: LocationProject,
   shotIds: string[] | undefined,
@@ -152,8 +123,20 @@ export async function exportAgentPackage(
   const writeBlocked = requireWriteAccess();
   if (writeBlocked) return { ok: false, diagnostics: writeBlocked };
 
-  const busy = busyDiagnostics();
-  if (busy.length > 0) return { ok: false, diagnostics: busy };
+  if (abortController || useProjectStore.getState().isExportingPackage) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.busy,
+          'Package export is already in progress.',
+        ),
+      ],
+    };
+  }
+
+  const stillBusy = await awaitAgentNotBusy();
+  if (stillBusy) return { ok: false, diagnostics: stillBusy };
 
   const flushProject = useProjectSafetyStore.getState().flushProject;
   if (!flushProject) {
@@ -227,6 +210,7 @@ export async function exportAgentPackage(
     };
   }
 
+  const shouldDownload = input.download !== false;
   const controller = new AbortController();
   abortController = controller;
   latestProgress = {
@@ -250,13 +234,12 @@ export async function exportAgentPackage(
       },
     });
 
-    if (input.download !== false) {
+    if (shouldDownload) {
       downloadBlob(result.blob, result.fileName);
-    }
-
-    for (const shot of shots) {
-      store.updateShot(shot.id, { status: 'exported' });
-      store.markFinalPackageExported(shot.id);
+      for (const shot of shots) {
+        store.updateShot(shot.id, { status: 'exported' });
+        store.markFinalPackageExported(shot.id);
+      }
     }
 
     latestProgress = {
@@ -264,7 +247,7 @@ export async function exportAgentPackage(
       progress: 1,
       currentShot: shots.length,
       totalShots: shots.length,
-      message: 'Package downloaded',
+      message: shouldDownload ? 'Package downloaded' : 'Package built',
       indeterminate: false,
     };
 

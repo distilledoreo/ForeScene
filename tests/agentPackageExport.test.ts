@@ -71,7 +71,22 @@ describe('agent package export control', () => {
     expect(result.manifestPaths).toEqual(['manifest.json']);
     expect(downloadBlob).toHaveBeenCalled();
     expect(getAgentPackageExportProgress()?.phase).toBe('complete');
+    expect(getAgentPackageExportProgress()?.message).toBe('Package downloaded');
     expect(useProjectStore.getState().isExportingPackage).toBe(false);
+  });
+
+  it('build-only export does not download or mark shots exported', async () => {
+    useAgentControlStore.setState({ controlMode: 'read-write' });
+    const project = useProjectStore.getState().project;
+    const shotStatuses = project.shots.map((shot) => shot.status);
+    const { downloadBlob } = await import('../src/engine/packageExport');
+    vi.mocked(downloadBlob).mockClear();
+
+    const result = await exportAgentPackage({ download: false });
+    expect(result.ok).toBe(true);
+    expect(downloadBlob).not.toHaveBeenCalled();
+    expect(result.progress?.message).toBe('Package built');
+    expect(useProjectStore.getState().project.shots.map((shot) => shot.status)).toEqual(shotStatuses);
   });
 
   it('cancel without an active export returns a diagnostic', () => {

@@ -8,6 +8,7 @@ import type { LocationProject, Workspace } from '../../domain/types';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
+import { awaitAgentNotBusy, collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -28,36 +29,6 @@ import { projectFingerprint, type AgentSelectionState } from './planDiff';
 import type { AgentPlanApplyResult } from './protocol';
 
 export { clearAgentHistory };
-
-function busyDiagnostics(): AgentDiagnostic[] {
-  const safety = useProjectSafetyStore.getState();
-  const projectState = useProjectStore.getState();
-  if (safety.criticalWrite) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'A critical project write is already in progress.',
-      ),
-    ];
-  }
-  if (projectState.isRenderingGraybox) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'Graybox rendering is in progress.',
-      ),
-    ];
-  }
-  if (projectState.isExportingPackage) {
-    return [
-      agentError(
-        AGENT_DIAGNOSTIC_CODES.busy,
-        'Package export is in progress.',
-      ),
-    ];
-  }
-  return [];
-}
 
 function requireWriteAccess(operation: string): AgentDiagnostic[] | null {
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
@@ -125,9 +96,9 @@ export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResu
     return { ok: false, diagnostics: writeBlocked };
   }
 
-  const busy = busyDiagnostics();
-  if (busy.length > 0) {
-    return { ok: false, diagnostics: busy };
+  const stillBusy = await awaitAgentNotBusy();
+  if (stillBusy) {
+    return { ok: false, diagnostics: stillBusy };
   }
 
   const source = readLiveSource();
@@ -179,6 +150,12 @@ export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResu
 
   let verifiedRevisionId: string | undefined;
   try {
+    // Re-check busy once more immediately before the protected write.
+    const busyNow = collectAgentBusyDiagnostics();
+    if (busyNow.length > 0) {
+      return { ok: false, diagnostics: busyNow };
+    }
+
     const verified = await runDestructive(reason, () => {
       const live = useProjectStore.getState().project;
       if (projectFingerprint(live) !== prepared.baseFingerprint) {
@@ -191,6 +168,15 @@ export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResu
     });
     verifiedRevisionId = verified?.revision.id;
   } catch (error) {
+    // Mutation may have committed before persistence threw — restore pre-plan state.
+    const live = useProjectStore.getState().project;
+    if (projectFingerprint(live) !== projectFingerprint(projectBefore)) {
+      restoreAgentSelectionToStore({
+        project: structuredClone(projectBefore),
+        selection: selectionBefore,
+        activePanoId: activePanoIdBefore,
+      });
+    }
     if (error instanceof AgentTransactionError) {
       return {
         ok: false,
@@ -232,9 +218,9 @@ export async function undoLastAgentPlan(): Promise<AgentPlanApplyResult> {
     return { ok: false, diagnostics: writeBlocked };
   }
 
-  const busy = busyDiagnostics();
-  if (busy.length > 0) {
-    return { ok: false, diagnostics: busy };
+  const stillBusy = await awaitAgentNotBusy();
+  if (stillBusy) {
+    return { ok: false, diagnostics: stillBusy };
   }
 
   const entry = peekAgentHistory();
@@ -280,8 +266,21 @@ export async function undoLastAgentPlan(): Promise<AgentPlanApplyResult> {
     ? `Undo agent plan: ${entry.description}`
     : `Undo agent plan ${entry.planId}`;
 
+  const projectAfter = structuredClone(useProjectStore.getState().project);
+  const selectionAfter: AgentSelectionState = {
+    selectedObjectIds: [...useProjectStore.getState().selectedObjectIds],
+    selectedShotId: useProjectStore.getState().selectedShotId,
+    workspace: useProjectStore.getState().workspace as Workspace,
+  };
+  const activePanoIdAfter = useProjectStore.getState().activePanoId;
+
   let verifiedRevisionId: string | undefined;
   try {
+    const busyNow = collectAgentBusyDiagnostics();
+    if (busyNow.length > 0) {
+      return { ok: false, diagnostics: busyNow };
+    }
+
     const verified = await runDestructive(reason, () => {
       const current = useProjectStore.getState().project;
       if (projectFingerprint(current) !== entry.projectAfterFingerprint) {
@@ -298,6 +297,15 @@ export async function undoLastAgentPlan(): Promise<AgentPlanApplyResult> {
     });
     verifiedRevisionId = verified?.revision.id;
   } catch (error) {
+    // Undo mutation may have applied before persistence threw — restore post-plan state.
+    const current = useProjectStore.getState().project;
+    if (projectFingerprint(current) !== projectFingerprint(projectAfter)) {
+      restoreAgentSelectionToStore({
+        project: structuredClone(projectAfter),
+        selection: selectionAfter,
+        activePanoId: activePanoIdAfter,
+      });
+    }
     if (error instanceof AgentTransactionError) {
       return {
         ok: false,

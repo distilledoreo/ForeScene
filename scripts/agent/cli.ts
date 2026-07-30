@@ -9,11 +9,13 @@
  *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
  *   npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
  *   npm run agent:package -- --write --output artifacts/package.zip
+ *
+ * Write commands require explicit `--write` (session) or `--persist-write` (profile).
  */
 
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { openAgentBrowser, waitForAgentReady, type AgentBrowserSession } from './browser';
+import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 
@@ -32,6 +34,7 @@ function parseArgs(argv: string[]) {
     url: undefined as string | undefined,
     headless: false,
     writeAccess: false,
+    persistWrite: false,
     workspace: undefined as string | undefined,
     output: undefined as string | undefined,
     screenshot: undefined as string | undefined,
@@ -47,6 +50,9 @@ function parseArgs(argv: string[]) {
     } else if (token === '--headless') {
       args.headless = true;
     } else if (token === '--write') {
+      args.writeAccess = true;
+    } else if (token === '--persist-write') {
+      args.persistWrite = true;
       args.writeAccess = true;
     } else if (token === '--workspace') {
       args.workspace = argv[++index];
@@ -65,11 +71,20 @@ function parseArgs(argv: string[]) {
   return args;
 }
 
+function requireExplicitWrite(command: string, writeAccess: boolean): void {
+  if (!writeAccess) {
+    throw new Error(
+      `${command} requires --write (session) or --persist-write (trusted profile).`,
+    );
+  }
+}
+
 async function withSession<T>(
   options: {
     url?: string;
     headless: boolean;
     writeAccess: boolean;
+    persistWrite: boolean;
   },
   run: (session: AgentBrowserSession) => Promise<T>,
 ): Promise<T> {
@@ -77,6 +92,7 @@ async function withSession<T>(
     url: options.url,
     headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
     writeAccess: options.writeAccess,
+    persistWrite: options.persistWrite,
   });
   try {
     return await run(session);
@@ -88,7 +104,12 @@ async function withSession<T>(
 async function previewOrApply(
   command: 'preview' | 'apply',
   planPath: string,
-  options: { url?: string; headless: boolean; writeAccess: boolean },
+  options: {
+    url?: string;
+    headless: boolean;
+    writeAccess: boolean;
+    persistWrite: boolean;
+  },
 ) {
   const raw = await readFile(path.resolve(planPath), 'utf8');
   const plan = JSON.parse(raw) as unknown;
@@ -96,11 +117,16 @@ async function previewOrApply(
     url: options.url,
     headless: options.headless,
     writeAccess: options.writeAccess,
+    persistWrite: options.persistWrite,
   }, async (session) => {
+    if (command === 'apply') {
+      await waitForAgentIdle(session.page);
+    }
     const result = await session.page.evaluate(async ({ commandName, planJson }) => {
       const api = window.foreScene;
       if (!api) throw new Error('window.foreScene is not available');
       if (commandName === 'preview') return api.previewPlan(planJson);
+      await api.waitForIdle({ timeoutMs: 60_000 });
       return api.applyPlan(planJson);
     }, { commandName: command, planJson: plan });
     printJson(result);
@@ -114,13 +140,14 @@ async function runScreenshot(options: {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
+  persistWrite: boolean;
   workspace?: string;
   output: string;
 }) {
   await withSession(options, async (session) => {
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
-      await waitForAgentReady(session.page);
+      await waitForAgentIdle(session.page);
     }
     const screenshot = await captureSceneScreenshot(session.page, options.output);
     printJson({
@@ -136,13 +163,14 @@ async function runVerify(options: {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
+  persistWrite: boolean;
   workspace?: string;
   output?: string;
 }) {
   await withSession(options, async (session) => {
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
-      await waitForAgentReady(session.page);
+      await waitForAgentIdle(session.page);
     }
     const inspection = await inspectViaBrowser(session.page);
     let screenshot: string | undefined;
@@ -164,6 +192,7 @@ async function runPipeline(options: {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
+  persistWrite: boolean;
   plan: string;
   screenshot?: string;
   workspace?: string;
@@ -174,7 +203,8 @@ async function runPipeline(options: {
   await withSession({
     url: options.url,
     headless: options.headless,
-    writeAccess: true,
+    writeAccess: options.writeAccess,
+    persistWrite: options.persistWrite,
   }, async (session) => {
     const inspection = await inspectViaBrowser(session.page);
     const preview = await session.page.evaluate(async (planJson) => (
@@ -186,18 +216,18 @@ async function runPipeline(options: {
       return;
     }
 
-    const applied = await session.page.evaluate(async (planJson) => (
-      window.foreScene!.applyPlan(planJson)
-    ), plan);
+    await waitForAgentIdle(session.page);
+    const applied = await session.page.evaluate(async (planJson) => {
+      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      return window.foreScene!.applyPlan(planJson);
+    }, plan);
     if (!applied.ok) {
       printJson({ ok: false, stage: 'apply', applied });
       process.exitCode = 1;
       return;
     }
 
-    await session.page.evaluate(async () => {
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
-    });
+    await waitForAgentIdle(session.page);
 
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
@@ -225,27 +255,30 @@ async function runPackage(options: {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
+  persistWrite: boolean;
   output?: string;
   shotIds: string[];
 }) {
   await withSession({
     url: options.url,
     headless: options.headless,
-    writeAccess: true,
+    writeAccess: options.writeAccess,
+    persistWrite: options.persistWrite,
   }, async (session) => {
-    await waitForAgentReady(session.page);
+    await waitForAgentIdle(session.page);
     printErr('[agent] starting package export…');
 
     const downloadPromise = options.output
       ? session.page.waitForEvent('download', { timeout: 300_000 })
       : null;
 
-    const result = await session.page.evaluate(async (input) => (
-      window.foreScene!.exportPackage({
+    const result = await session.page.evaluate(async (input) => {
+      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      return window.foreScene!.exportPackage({
         shotIds: input.shotIds.length > 0 ? input.shotIds : undefined,
         download: true,
-      })
-    ), { shotIds: options.shotIds });
+      });
+    }, { shotIds: options.shotIds });
 
     let savedPath: string | undefined;
     if (downloadPromise && result.ok) {
@@ -274,6 +307,7 @@ async function main() {
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
     }, async (session) => {
       printErr(`[agent] connected ${session.url}`);
       printJson(await inspectViaBrowser(session.page));
@@ -283,10 +317,14 @@ async function main() {
 
   if (args.command === 'preview' || args.command === 'apply') {
     if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
+    if (args.command === 'apply') {
+      requireExplicitWrite('apply', args.writeAccess);
+    }
     await previewOrApply(args.command, args.plan, {
       url: args.url,
       headless: args.headless,
-      writeAccess: args.writeAccess || args.command === 'apply',
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
     });
     return;
   }
@@ -297,6 +335,7 @@ async function main() {
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
       workspace: args.workspace,
       output: args.output,
     });
@@ -308,6 +347,7 @@ async function main() {
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
       workspace: args.workspace,
       output: args.output ?? args.screenshot,
     });
@@ -316,10 +356,12 @@ async function main() {
 
   if (args.command === 'run') {
     if (!args.plan) throw new Error('--plan is required for run');
+    requireExplicitWrite('run', args.writeAccess);
     await runPipeline({
       url: args.url,
       headless: args.headless,
-      writeAccess: true,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
       plan: args.plan,
       screenshot: args.screenshot ?? args.output,
       workspace: args.workspace ?? 'shots',
@@ -328,10 +370,12 @@ async function main() {
   }
 
   if (args.command === 'package') {
+    requireExplicitWrite('package', args.writeAccess);
     await runPackage({
       url: args.url,
       headless: args.headless,
-      writeAccess: true,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
       output: args.output,
       shotIds: args.shotIds,
     });

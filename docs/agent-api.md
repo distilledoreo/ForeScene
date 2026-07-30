@@ -34,17 +34,26 @@ JSON is written to stdout. Diagnostics and progress go to stderr.
 
 ## Permission model
 
+Agent control mode is an **accidental-write guard**, not a security boundary against hostile page scripts (those already own the origin).
+
 | Mode | Inspection | Mutations / package export |
 |------|------------|----------------------------|
 | `off` | blocked | blocked |
 | `read-only` (default) | allowed | blocked (`write_access_required`) |
 | `read-write` | allowed | allowed |
 
-Write access is session-oriented:
+**Escalation** (grant writes) is deliberate only:
 
-- Enabling write access from the UI does **not** persist across reloads.
-- A dedicated CLI profile may seed `localStorage['forescene-agent-control'] = 'read-write'` before launch.
-- The header shows **Agent control active** with a **Stop** button that immediately returns to read-only and clears the CLI seed.
+- Project menu → **Enable Agent Writes**, or Agent Console toggle (UI → Zustand store)
+- CLI `--write` → sessionStorage seed for this tab only
+- CLI `--persist-write` → localStorage seed for a trusted persistent profile
+
+**Demotion** is available to every caller:
+
+- Header **Stop**, Project menu **Disable Agent Writes**, Agent Console toggle
+- `window.foreScene.disableWrites()` (never grants `read-write`)
+
+CLI launches always clear a stale localStorage write seed unless `--persist-write` is present. `apply` / `run` / `package` refuse to start without an explicit `--write` or `--persist-write`.
 
 ## Status shape
 
@@ -99,19 +108,19 @@ Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale proj
 
 ## Apply and undo
 
-`applyPlan` requires read-write mode. It:
+`applyPlan` / `undoLastPlan` require read-write mode. They wait for persistence idle (`criticalWrite` / graybox / package export) before committing, then:
 
-1. Prepares the plan on a clone (same path as preview)
-2. Confirms the live fingerprint is unchanged
-3. Calls `runDestructiveProjectMutation()` (pre-change recovery snapshot)
-4. Replaces project + selection/workspace in one Zustand `setState`
-5. Records an in-memory history entry for `undoLastPlan()`
+1. Prepare the plan on a clone (same path as preview)
+2. Confirm the live fingerprint is unchanged
+3. Call `runDestructiveProjectMutation()` (pre-change recovery snapshot)
+4. Replace project + selection/workspace in one Zustand `setState`
+5. Record an in-memory history entry for `undoLastPlan()`
+
+If persistence throws after the live commit, the catch path restores the exact pre-plan project and selection (no history entry).
 
 `undoLastPlan()` restores the preceding project only when the current fingerprint still matches the applied result. Manual edits after apply refuse undo.
 
 `listPlanHistory()` returns in-memory `{ planId, description }` entries for the Agent Console.
-
-Enable writes from the Project menu (**Enable Agent Writes**) or CLI `--write`. The header badge **Stop** button immediately returns to read-only.
 
 ## Shot staging
 
@@ -143,7 +152,9 @@ window.foreScene.getPackageExportProgress();
 window.foreScene.cancelPackageExport();
 ```
 
-Flow matches Export workspace: flush verified revision → `createExportPlan` → reject blocking errors → `buildMultiShotPackage` → optional `downloadBlob`. Requires read-write. Concurrent package export / graybox / critical writes return `busy`.
+Flow matches Export workspace: wait idle → flush verified revision → `createExportPlan` → reject blocking errors → `buildMultiShotPackage` → optional `downloadBlob`. Requires read-write.
+
+`download: false` is build-only: returns the package metadata without downloading and without marking shots exported.
 
 ```bash
 npm run agent:package -- --write --output artifacts/package.zip
@@ -152,7 +163,7 @@ npm run agent:package -- --write --shot <shotId> --output artifacts/one-shot.zip
 
 ## Agent Console
 
-Project menu → **Agent Console** opens an in-app dialog that calls the same `window.foreScene` methods (preview / apply / undo / export / cancel / control mode). There is no second mutation path.
+Project menu → **Agent Console** opens an in-app dialog that calls the same `window.foreScene` methods (preview / apply / undo / export / cancel). Enabling writes uses the UI store path; disabling uses `disableWrites()`.
 
 ## Visual CLI
 

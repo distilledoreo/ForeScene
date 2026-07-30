@@ -15,7 +15,17 @@ npm run agent:package -- --write --output artifacts/package.zip
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
-`apply` / `run` / `package` require `--write` (or an already seeded CLI profile) and commit through Project Safety / Export package control.
+`apply` / `run` / `package` **require** explicit `--write` or `--persist-write` and refuse to start without it.
+
+## Write authorization
+
+| Flag | Effect |
+|------|--------|
+| _(none)_ | Clears any stale localStorage write seed; stays read-only |
+| `--write` | Session-only write seed (`sessionStorage`); cleared when the tab closes |
+| `--persist-write` | Trusted profile seed (`localStorage`); survives reloads until Stop / demotion |
+
+Without one of those flags, `npm run agent:apply -- --plan plan.json` errors at the CLI and does not enable writes.
 
 ## Defaults
 
@@ -35,15 +45,10 @@ await page.waitForFunction(() => {
   const status = window.foreScene?.getStatus();
   return status?.ready && status.projectLoaded && status.persistence?.ready;
 });
+await page.evaluate(() => window.foreScene!.waitForIdle({ timeoutMs: 60_000 }));
 ```
 
-## Write access for CLI profiles
-
-```bash
-npm run agent:apply -- --write --plan plans/conversation.preview.json
-```
-
-This seeds `localStorage['forescene-agent-control'] = 'read-write'` in the persistent profile before the app boots. Normal browser profiles never set that key and stay read-only.
+`openAgentBrowser` / CLI write paths wait for idle before apply, undo, and package so initial autosave cannot return `busy`.
 
 ## `agent:run`
 

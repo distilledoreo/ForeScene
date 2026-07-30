@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Copy, Play, RotateCcw, Square, Terminal } from 'lucide-react';
 import { Modal } from './Modal';
 import { Field, TextArea } from './Field';
+import { useAgentControlStore } from '../../state/useAgentControlStore';
 import type {
   AgentPackageExportProgressSnapshot,
   AgentPlanHistoryEntry,
@@ -122,10 +123,27 @@ export function AgentConsoleDialog({
   };
 
   const handleToggleWrites = async () => {
-    await withApi((api) => {
-      const next = api.getStatus().controlMode === 'read-write' ? 'read-only' : 'read-write';
-      return api.setControlMode(next);
-    });
+    const api = window.foreScene;
+    if (!api) {
+      setError('window.foreScene is not available.');
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (api.getStatus().controlMode === 'read-write') {
+        // Public API may only demote — never escalate.
+        api.disableWrites();
+      } else {
+        // Escalation is UI-only (same path as Project menu Enable Agent Writes).
+        useAgentControlStore.getState().setControlMode('read-write');
+      }
+      refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to toggle write access.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleExportPackage = async () => {

@@ -188,6 +188,39 @@ describe('agent transaction apply/undo', () => {
     expect(useProjectStore.getState().project.name).toBe('Manual Edit');
   });
 
+  it('restores pre-plan state when persistence throws after the live commit', async () => {
+    const before = structuredClone(useProjectStore.getState().project);
+    const beforeSelection = [...useProjectStore.getState().selectedObjectIds];
+    const beforeShot = useProjectStore.getState().selectedShotId;
+    const beforeWorkspace = useProjectStore.getState().workspace;
+
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
+      await mutation();
+      throw new Error('Simulated persistence failure after commit');
+    });
+
+    const result = await applyAgentPlan({
+      version: 1,
+      description: 'Should roll back',
+      commands: [
+        {
+          op: 'object.create',
+          object: { type: 'box', name: 'Transient Crate', position: [2, 0, 0] },
+        },
+        { op: 'project.updateInfo', name: 'Should Not Stick' },
+        { op: 'workspace.open', workspace: 'shots' },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.code).toBe('apply_failed');
+    expect(agentHistorySize()).toBe(0);
+    expect(useProjectStore.getState().project).toEqual(before);
+    expect(useProjectStore.getState().selectedObjectIds).toEqual(beforeSelection);
+    expect(useProjectStore.getState().selectedShotId).toBe(beforeShot);
+    expect(useProjectStore.getState().workspace).toBe(beforeWorkspace);
+  });
+
   it('commitPreparedPlanToStore replaces selection in one setState', () => {
     const project = createDefaultProject();
     const actor = createSceneObject('human_dummy', 1);

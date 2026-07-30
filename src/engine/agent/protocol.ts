@@ -388,7 +388,10 @@ export interface AgentPackageExportRequest {
   /** Shot ids to package. Defaults to every shot (Export workspace default). */
   shotIds?: string[];
   packageType?: ExportPackageType;
-  /** When true (default), trigger a browser download of the ZIP. */
+  /**
+   * When true (default), download the ZIP and mark shots exported.
+   * When false, build only — no download and no shot status / workflow updates.
+   */
   download?: boolean;
 }
 
@@ -438,8 +441,11 @@ export interface ForeSceneBrowserApi {
   listLandmarks(): AgentLandmarkSummary[];
   createExportPlan(input?: AgentExportPlanRequest): AgentExportPlanResult;
 
-  /** Enable or disable agent write access for this browser session. */
-  setControlMode(mode: AgentControlMode): ForeSceneAgentStatus;
+  /**
+   * Demote agent write access (`read-write` → `read-only`, or to `off`).
+   * Escalation to read-write is UI / CLI-bootstrap only — this never grants writes.
+   */
+  disableWrites(): ForeSceneAgentStatus;
 
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
