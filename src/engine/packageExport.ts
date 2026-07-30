@@ -7,7 +7,8 @@ import {
   DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE,
 } from './cameraMoveCubemap';
 import { buildShotMetadata, createShotPackageManifest } from './exportManifest';
-import { assignShotPackageRootFolders, getShotExportProgressLabel, getShotPackageBaseName } from './exportNaming';
+import { createExportPlan, getPlannedShot, type ExportPlan } from './exportPlan';
+import { getShotExportProgressLabel, getShotPackageBaseName } from './exportNaming';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { preparePanoExportDataUrl } from './panoImage';
 import { stitchCubemapFaceBlobsCrossAsync } from './cubemapStitch';
@@ -80,6 +81,8 @@ export interface PackageExportProgress {
 export interface PackageExportOptions {
   onProgress?: (progress: PackageExportProgress) => void;
   signal?: AbortSignal;
+  /** Optional precomputed plan; when omitted, packaging builds one. */
+  plan?: ExportPlan;
 }
 
 export interface ShotPackageResult {
@@ -177,94 +180,9 @@ function createProgressTracker(args: {
 
 /** Discrete work units for one shot — used to weight multi-shot progress. */
 export function countShotPackageUnits(project: LocationProject, shot: Shot): number {
-  let units = 0;
-  const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
-  const canonicalPano = project.panoRefs.find((pano) => pano.isCanonical);
-  const grayboxPano = project.panoRefs.find((pano) => pano.type === 'graybox_render');
-  const canonicalAsset = canonicalPano ? project.assets.assets[canonicalPano.imageAssetId] : undefined;
-  const grayboxAsset = grayboxPano ? project.assets.assets[grayboxPano.imageAssetId] : undefined;
-  const linkedPanoAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
-  const aiResultAssetId = shot.assets.aiResultFrameAssetId ?? shot.assets.finalBaseFrameAssetId;
-  const canProject = canUseProjectedAppearance(project);
-  const peopleVariants = getPeopleRenderVariants(shot.exportSettings.peopleExportMode);
-  const clayMoveFrames = shot.exportSettings.includeCameraMoveReferenceFrames
-    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
-    : [];
-  const projectedMoveFrames = (
-    shot.exportSettings.includeProjectedCameraMoveReferenceFrames && canProject
-  )
-    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
-    : [];
-  const depthMoveFrames = shouldExportDepthReferenceFrames(
-    shot.exportSettings.depth,
-    true,
-  )
-    ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
-    : [];
-  const hasCubemap = Boolean(
-    shot.exportSettings.includeFullPano
-    && ((canonicalPano && canonicalAsset) || (linkedPano && linkedPanoAsset)),
-  );
-
-  if (shot.exportSettings.includeViewport) units += peopleVariants.length;
-  if (shot.exportSettings.includeProjectedViewport && canProject) units += peopleVariants.length;
-  if (shouldExportViewportDepth(shot.exportSettings.depth)) units += peopleVariants.length;
-  if (shouldExportCameraMoveDepth(
-    shot.exportSettings.depth,
-    hasRenderableCameraMove(shot.cameraKeyframes),
-  )) {
-    units += peopleVariants.length;
-  }
-  units += depthMoveFrames.length * peopleVariants.length;
-  if (shot.exportSettings.includeAiResultFrame && aiResultAssetId) units += 1;
-  if (shot.exportSettings.includeCameraMoveVideo) {
-    if (shot.assets.cameraMoveVideoAssetId || hasRenderableCameraMove(shot.cameraKeyframes)) {
-      units += hasRenderableCameraMove(shot.cameraKeyframes)
-        ? peopleVariants.length
-        : peopleVariants.filter((variant) => variant === 'with_people').length;
-    }
-  }
-  if (
-    shot.exportSettings.includeProjectedCameraMoveVideo
-    && canProject
-    && hasRenderableCameraMove(shot.cameraKeyframes)
-  ) {
-    units += peopleVariants.length;
-  }
-  units += clayMoveFrames.length * peopleVariants.length;
-  units += projectedMoveFrames.length * peopleVariants.length;
-  if (hasCubemap) units += CAMERA_MOVE_CUBEMAP_FACES.length + 1; // faces + stitch
-  if (shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop && linkedPanoAsset) units += 1;
-  if (shot.exportSettings.includeFullPano && canonicalAsset && canonicalPano) units += 1;
-  if (shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) units += 1;
-  if (shot.exportSettings.includeMetadata) units += 1;
-  if (shot.exportSettings.includePrompt) units += 1;
-
-  const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);
-  if (
-    characterPass.enabled
-    && shotHasVisibleCharactersForPass(project, shot, characterPass)
-  ) {
-    if (characterPass.includeStill) {
-      units += 1;
-      if (shot.exportSettings.includeProjectedViewport && canProject) units += 1;
-    }
-    if (characterPass.includeMotion && hasRenderableCameraMove(shot.cameraKeyframes)) {
-      // Both MP4+PNG from one pass still counts as two progress units (encode + sequence).
-      if (characterPassIncludesGreenMp4(characterPass.motionFormat)) {
-        units += 1;
-        if (shot.exportSettings.includeProjectedCameraMoveVideo && canProject) units += 1;
-      }
-      if (characterPassIncludesPngSequence(characterPass.motionFormat)) {
-        units += 1;
-        if (shot.exportSettings.includeProjectedCameraMoveVideo && canProject) units += 1;
-      }
-    }
-    if (shot.exportSettings.includeMetadata) units += 1; // character_pass.json
-  }
-
-  units += 1; // manifest
-  return Math.max(1, units);
+  const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+  const shotPlan = getPlannedShot(plan, shot.id);
+  return Math.max(1, shotPlan?.workUnits ?? 1);
 }
 
 export async function buildShotPackage(
@@ -277,7 +195,9 @@ export async function buildShotPackage(
   }
 
   throwIfAborted(options.signal);
-  const totalUnits = countShotPackageUnits(project, shot) + 1; // + compress
+  const plan = options.plan ?? createExportPlan(project, [shot], { packageType: 'current-shot' });
+  const shotPlan = getPlannedShot(plan, shot.id);
+  const totalUnits = (shotPlan?.workUnits ?? countShotPackageUnits(project, shot)) + 1; // + compress
   const tracker = createProgressTracker({
     shots: [shot],
     totalUnits,
@@ -294,7 +214,7 @@ export async function buildShotPackage(
   });
 
   const zip = new JSZip();
-  const rootFolder = getShotPackageBaseName(shot);
+  const rootFolder = shotPlan?.rootFolder ?? getShotPackageBaseName(shot);
   const manifestPaths = await appendShotPackageToZip(zip, project, shot, {
     shotIndex: 0,
     tracker,
@@ -318,7 +238,7 @@ export async function buildShotPackage(
 
   return {
     blob,
-    fileName: `${rootFolder}_package.zip`,
+    fileName: plan.archiveFileName || `${rootFolder}_package.zip`,
     manifestPaths,
   };
 }
@@ -340,7 +260,8 @@ export async function buildMultiShotPackage(
   }
 
   throwIfAborted(options.signal);
-  const shotUnits = shots.reduce((sum, shot) => sum + countShotPackageUnits(project, shot), 0);
+  const plan = options.plan ?? createExportPlan(project, shots, { packageType: 'selected-shots' });
+  const shotUnits = plan.estimatedWorkUnits;
   const tracker = createProgressTracker({
     shots,
     totalUnits: shotUnits + 1,
@@ -359,7 +280,7 @@ export async function buildMultiShotPackage(
   const zip = new JSZip();
   const manifestPaths: string[] = [];
   const folderByShotId = new Map(
-    assignShotPackageRootFolders(shots).map((assignment) => [assignment.shotId, assignment.rootFolder]),
+    plan.shots.map((shotPlan) => [shotPlan.shotId, shotPlan.rootFolder]),
   );
   for (let shotIndex = 0; shotIndex < shots.length; shotIndex += 1) {
     const shot = shots[shotIndex];
@@ -373,11 +294,6 @@ export async function buildMultiShotPackage(
     manifestPaths.push(...paths);
   }
 
-  const safeName = (project.name || 'forescene')
-    .replace(/[^\w\-]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    || 'forescene';
   const blob = await compressZip(zip, {
     tracker,
     shotIndex: shots.length - 1,
@@ -395,7 +311,7 @@ export async function buildMultiShotPackage(
 
   return {
     blob,
-    fileName: `${safeName}_${shots.length}_shots_package.zip`,
+    fileName: plan.archiveFileName,
     manifestPaths,
   };
 }

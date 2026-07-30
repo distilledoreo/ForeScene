@@ -13,6 +13,7 @@ import {
   PackageExportProgress,
 } from '../../engine/packageExport';
 import { countExportOverrideLeaves } from '../../engine/exportConfiguration';
+import { countProducedArtifacts, createExportPlan } from '../../engine/exportPlan';
 import { getExportSelectionWarnings, getShotWarnings } from '../../engine/warnings';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -78,6 +79,10 @@ export function ExportWorkspace() {
   );
   const selectionWarnings = useMemo(
     () => getExportSelectionWarnings(project, selectedShots),
+    [project, selectedShots],
+  );
+  const exportPlan = useMemo(
+    () => createExportPlan(project, selectedShots),
     [project, selectedShots],
   );
   const primaryAction = useMemo(
@@ -360,6 +365,41 @@ export function ExportWorkspace() {
             </div>
 
             <div className="mt-3 shrink-0 space-y-2">
+              {selectedShots.length > 0 && (
+                <div
+                  data-export-plan-summary
+                  className="rounded-lg border border-subtle bg-surface-muted/50 px-3 py-2 text-[11px] text-secondary"
+                >
+                  <div className="font-semibold text-primary">
+                    {exportPlan.summary.shotCount} shot{exportPlan.summary.shotCount === 1 ? '' : 's'} selected
+                  </div>
+                  <ul className="mt-1 space-y-0.5 text-muted">
+                    <li>
+                      {countProducedArtifacts(exportPlan, 'clay-viewport')} clay ·{' '}
+                      {countProducedArtifacts(exportPlan, 'projected-viewport')} projected ·{' '}
+                      {countProducedArtifacts(exportPlan, 'depth-viewport')} depth stills
+                    </li>
+                    <li>
+                      Estimated output · {exportPlan.estimatedFileCount} files
+                      {exportPlan.summary.overrideShotCount > 0
+                        ? ` · ${exportPlan.summary.overrideShotCount} with shot overrides`
+                        : ''}
+                    </li>
+                    {exportPlan.summary.warningCount > 0 && (
+                      <li className="text-amber-700 dark:text-amber-300">
+                        {exportPlan.summary.warningCount} preflight warning
+                        {exportPlan.summary.warningCount === 1 ? '' : 's'}
+                      </li>
+                    )}
+                    {exportPlan.summary.errorCount > 0 && (
+                      <li className="text-red-600 dark:text-red-300">
+                        {exportPlan.summary.errorCount} blocking error
+                        {exportPlan.summary.errorCount === 1 ? '' : 's'}
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
               {manifest && (
                 <div data-export-manifest-preview className="max-h-8 space-y-0.5 overflow-hidden opacity-70">
                   <div className="text-[10px] font-medium text-secondary">
