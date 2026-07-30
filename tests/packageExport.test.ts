@@ -17,6 +17,11 @@ import {
   PackageExportProgress,
   resolveClayCameraMovePackageSource,
 } from '../src/engine/packageExport';
+import {
+  createExportPlan,
+  listPlannedFiles,
+  planHasBlockingErrors,
+} from '../src/engine/exportPlan';
 import { type BlobImageRenderResult, renderPanoCubemapFacesAsBlobs, renderShotCameraMoveMp4 } from '../src/engine/renderers';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 
@@ -480,5 +485,77 @@ describe('package export', () => {
   it('counts at least one package unit per shot', () => {
     const project = withGrayboxAndShot();
     expect(countShotPackageUnits(project, project.shots[0])).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps ZIP file paths aligned with the precomputed export plan', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    const result = await buildShotPackage(project, shot, { plan });
+    const planned = listPlannedFiles(plan).map((file) => file.path).sort();
+    const zipFilePaths = (await zipPaths(result.blob))
+      .filter((path) => !path.endsWith('/'))
+      .sort();
+
+    expect(zipFilePaths).toEqual(planned);
+    expect(result.fileName).toBe(plan.archiveFileName);
+  });
+
+  it('does not claim missing-asset deliverables in the plan or ZIP', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    const brokenAssetId = 'missing-registry-asset';
+    const brokenPano = createPanoReference({
+      name: 'Broken graybox',
+      assetId: brokenAssetId,
+      type: 'graybox_render',
+      origin: project.scene.panoOrigin,
+      width: 4,
+      height: 2,
+      isCanonical: false,
+    });
+    // Replace the healthy graybox/canonical with a record that has no registry asset.
+    project.panoRefs = [brokenPano];
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeGrayboxPano: true,
+      includeFullPano: true,
+      includeAiResultFrame: true,
+    };
+    shot.assets.aiResultFrameAssetId = 'missing-ai-asset';
+
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    expect(plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'global-graybox')?.disposition).toBe('omit');
+    expect(plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'global-reference')?.disposition).toBe('omit');
+    expect(plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'cubemap')?.disposition).toBe('omit');
+    expect(plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'ai-result-frame')?.disposition).toBe('omit');
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('global_graybox.png'))).toBe(false);
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('global_reference.png'))).toBe(false);
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('ai_result_frame.png'))).toBe(false);
+
+    const result = await buildShotPackage(project, shot, { plan });
+    const zipFilePaths = (await zipPaths(result.blob)).filter((path) => !path.endsWith('/'));
+    expect(zipFilePaths.sort()).toEqual(listPlannedFiles(plan).map((file) => file.path).sort());
+    expect(zipFilePaths.some((path) => path.includes('global_graybox.png'))).toBe(false);
+    expect(zipFilePaths.some((path) => path.includes('global_reference.png'))).toBe(false);
+    expect(zipFilePaths.some((path) => path.includes('ai_result_frame.png'))).toBe(false);
+  });
+
+  it('rejects packaging when the verified plan has blocking errors', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    plan.issues.push({
+      id: 'forced-blocking-error',
+      code: 'forced-blocking-error',
+      severity: 'error',
+      message: 'Forced blocking error for packaging gate.',
+      shotId: shot.id,
+    });
+    expect(planHasBlockingErrors(plan)).toBe(true);
+    await expect(buildShotPackage(project, shot, { plan })).rejects.toMatchObject({
+      name: 'ShotPackageError',
+      message: expect.stringContaining('Forced blocking error'),
+    });
   });
 });

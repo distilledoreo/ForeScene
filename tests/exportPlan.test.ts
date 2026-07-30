@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createCameraKeyframe,
   createDefaultProject,
+  createPanoReference,
   createSceneObject,
   defaultShotExportSettings,
   normalizeShotExportSettings,
@@ -159,5 +160,64 @@ describe('export plan', () => {
     expect(plan.packageFormat).toBe('legacy-v1');
     expect(plan.requestedPackageFormat).toBe('forescene-v2');
     expect(plan.issues.some((issue) => issue.code === 'package-format-v2-unsupported')).toBe(true);
+  });
+
+  it('omits panorama and AI artifacts when the registry asset is missing', () => {
+    const project = cloneProject();
+    const shot = project.shots[0]!;
+    const missingAssetId = 'asset-missing-from-registry';
+    const pano = createPanoReference({
+      name: 'Broken canonical',
+      assetId: missingAssetId,
+      type: 'ai_global_reference',
+      origin: project.scene.panoOrigin,
+      width: 4,
+      height: 2,
+      isCanonical: true,
+    });
+    project.panoRefs.push(pano);
+    shot.linkedPanoId = pano.id;
+    shot.panoCrop = {
+      panoId: pano.id,
+      yawDegrees: 0,
+      pitchDegrees: 0,
+      rollDegrees: 0,
+      fovDegrees: 60,
+      aspectRatio: 16 / 9,
+      width: 1920,
+      height: 1080,
+    };
+    shot.assets.aiResultFrameAssetId = 'ai-missing-asset';
+    shot.exportSettings = normalizeShotExportSettings({
+      ...defaultShotExportSettings,
+      includeViewport: false,
+      includePanoCrop: true,
+      includeFullPano: true,
+      includeGrayboxPano: false,
+      includeAiResultFrame: true,
+      includeCameraMoveVideo: false,
+      includeMetadata: false,
+      includePrompt: false,
+    });
+
+    const plan = createExportPlan(project, [shot]);
+    const byKind = Object.fromEntries(
+      plan.shots[0]!.artifacts.map((artifact) => [artifact.kind, artifact]),
+    );
+
+    expect(byKind['pano-crop']?.disposition).toBe('omit');
+    expect(byKind['pano-crop']?.omissionCode).toBe('missing-pano-crop-asset');
+    expect(byKind['global-reference']?.disposition).toBe('omit');
+    expect(byKind['global-reference']?.omissionCode).toBe('missing-canonical-pano-asset');
+    expect(byKind.cubemap?.disposition).toBe('omit');
+    expect(byKind.cubemap?.omissionCode).toBe('missing-full-pano-asset');
+    expect(byKind['ai-result-frame']?.disposition).toBe('omit');
+    expect(byKind['ai-result-frame']?.omissionCode).toBe('missing-ai-result-asset');
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('pano_crop.png'))).toBe(false);
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('global_reference.png'))).toBe(false);
+    expect(listPlannedFiles(plan).some((file) => file.path.includes('ai_result_frame.png'))).toBe(false);
+    expect(plan.issues.some((issue) => issue.code === 'pano-crop-missing-asset')).toBe(true);
+    expect(plan.issues.some((issue) => issue.code === 'global-reference-missing-asset')).toBe(true);
+    expect(plan.issues.some((issue) => issue.code === 'ai-result-missing-asset')).toBe(true);
   });
 });

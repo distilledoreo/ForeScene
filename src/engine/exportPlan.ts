@@ -253,7 +253,14 @@ function planShotArtifacts(
   const depthMoveFrames = shouldExportDepthReferenceFrames(settings.depth, true)
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
-  const hasCubemapSource = Boolean(settings.includeFullPano && (canonical || linkedPano));
+  // Writer requires a real registry asset — a pano record alone is not enough to produce.
+  const hasCubemapSource = Boolean(
+    settings.includeFullPano
+    && ((canonical && canonicalAsset) || (linkedPano && linkedPanoAsset)),
+  );
+  const aiResultAsset = aiResultAssetId
+    ? project.assets.assets[aiResultAssetId]
+    : undefined;
 
   if (settings.includeViewport) {
     const files: PlannedFile[] = [];
@@ -307,14 +314,21 @@ function planShotArtifacts(
   }
 
   if (settings.includePanoCrop) {
-    if (linkedPano && shot.panoCrop) {
+    if (linkedPano && shot.panoCrop && linkedPanoAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'pano-crop',
         [{ path: `${rootFolder}/inputs/pano_crop.png`, kind: 'image', required: true, manifestEntry: true }],
         1,
       ));
-      if (!linkedPanoAsset) {
+    } else {
+      const omissionCode = !linkedPano
+        ? 'missing-linked-pano'
+        : !shot.panoCrop
+          ? 'missing-pano-crop'
+          : 'missing-pano-crop-asset';
+      artifacts.push(omitArtifact(shot.id, 'pano-crop', omissionCode));
+      if (linkedPano && shot.panoCrop && !linkedPanoAsset) {
         issues.push({
           id: `${shot.id}-pano-crop-missing-asset`,
           code: 'pano-crop-missing-asset',
@@ -323,29 +337,28 @@ function planShotArtifacts(
           shotId: shot.id,
         });
       }
-    } else {
-      artifacts.push(omitArtifact(shot.id, 'pano-crop', linkedPano ? 'missing-pano-crop' : 'missing-linked-pano'));
     }
   }
 
   if (settings.includeFullPano) {
-    if (canonical) {
+    if (canonical && canonicalAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'global-reference',
         [{ path: `${rootFolder}/inputs/global_reference.png`, kind: 'image', required: true, manifestEntry: true }],
         1,
       ));
-      if (!canonicalAsset) {
-        issues.push({
-          id: `${shot.id}-global-reference-missing-asset`,
-          code: 'global-reference-missing-asset',
-          severity: 'warning',
-          message: 'Canonical panorama export is enabled, but its image asset is missing.',
-          shotId: shot.id,
-        });
-      }
+    } else if (canonical && !canonicalAsset) {
+      artifacts.push(omitArtifact(shot.id, 'global-reference', 'missing-canonical-pano-asset'));
+      issues.push({
+        id: `${shot.id}-global-reference-missing-asset`,
+        code: 'global-reference-missing-asset',
+        severity: 'warning',
+        message: 'Canonical panorama export is enabled, but its image asset is missing.',
+        shotId: shot.id,
+      });
     }
+
     if (hasCubemapSource) {
       const files: PlannedFile[] = [];
       for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
@@ -359,7 +372,10 @@ function planShotArtifacts(
         CAMERA_MOVE_CUBEMAP_FACES.length + 1,
       ));
     } else {
-      artifacts.push(omitArtifact(shot.id, 'cubemap', 'missing-full-pano-source'));
+      const cubemapOmission = (canonical || linkedPano)
+        ? 'missing-full-pano-asset'
+        : 'missing-full-pano-source';
+      artifacts.push(omitArtifact(shot.id, 'cubemap', cubemapOmission));
       if (!canonical) {
         artifacts.push(omitArtifact(shot.id, 'global-reference', 'missing-canonical-pano'));
       }
@@ -367,35 +383,44 @@ function planShotArtifacts(
   }
 
   if (settings.includeGrayboxPano) {
-    if (graybox) {
+    if (graybox && grayboxAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'global-graybox',
         [{ path: `${rootFolder}/inputs/global_graybox.png`, kind: 'image', required: false, manifestEntry: true }],
         1,
       ));
-      if (!grayboxAsset) {
-        issues.push({
-          id: `${shot.id}-graybox-missing-asset`,
-          code: 'graybox-missing-asset',
-          severity: 'warning',
-          message: 'Graybox panorama export is enabled, but its image asset is missing.',
-          shotId: shot.id,
-        });
-      }
+    } else if (graybox && !grayboxAsset) {
+      artifacts.push(omitArtifact(shot.id, 'global-graybox', 'missing-graybox-pano-asset'));
+      issues.push({
+        id: `${shot.id}-graybox-missing-asset`,
+        code: 'graybox-missing-asset',
+        severity: 'warning',
+        message: 'Graybox panorama export is enabled, but its image asset is missing.',
+        shotId: shot.id,
+      });
     } else {
       artifacts.push(omitArtifact(shot.id, 'global-graybox', 'missing-graybox-pano'));
     }
   }
 
   if (settings.includeAiResultFrame) {
-    if (aiResultAssetId) {
+    if (aiResultAssetId && aiResultAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'ai-result-frame',
         [{ path: `${rootFolder}/outputs/ai_result_frame.png`, kind: 'image', required: false, manifestEntry: true }],
         1,
       ));
+    } else if (aiResultAssetId && !aiResultAsset) {
+      artifacts.push(omitArtifact(shot.id, 'ai-result-frame', 'missing-ai-result-asset'));
+      issues.push({
+        id: `${shot.id}-ai-result-missing-asset`,
+        code: 'ai-result-missing-asset',
+        severity: 'warning',
+        message: 'AI result frame export is enabled, but the referenced asset is missing from the project registry.',
+        shotId: shot.id,
+      });
     } else {
       artifacts.push(omitArtifact(shot.id, 'ai-result-frame', 'ai-result-not-attached'));
     }
@@ -934,6 +959,14 @@ export function createLegacyShotManifest(shotPlan: PlannedShotExport): ShotPacka
 
 export function planHasBlockingErrors(plan: ExportPlan): boolean {
   return plan.issues.some((issue) => issue.severity === 'error');
+}
+
+/** Human-readable blocking messages for export failure UI / thrown errors. */
+export function formatPlanBlockingErrors(plan: ExportPlan): string {
+  return plan.issues
+    .filter((issue) => issue.severity === 'error')
+    .map((issue) => issue.message)
+    .join('\n');
 }
 
 export function getPlanIssuesForShot(plan: ExportPlan, shotId: string): ExportPlanIssue[] {

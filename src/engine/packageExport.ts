@@ -7,7 +7,13 @@ import {
   DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE,
 } from './cameraMoveCubemap';
 import { buildShotMetadata, createShotPackageManifest } from './exportManifest';
-import { createExportPlan, getPlannedShot, type ExportPlan } from './exportPlan';
+import {
+  createExportPlan,
+  formatPlanBlockingErrors,
+  getPlannedShot,
+  planHasBlockingErrors,
+  type ExportPlan,
+} from './exportPlan';
 import { getShotExportProgressLabel, getShotPackageBaseName } from './exportNaming';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
 import { preparePanoExportDataUrl } from './panoImage';
@@ -196,6 +202,9 @@ export async function buildShotPackage(
 
   throwIfAborted(options.signal);
   const plan = options.plan ?? createExportPlan(project, [shot], { packageType: 'current-shot' });
+  if (planHasBlockingErrors(plan)) {
+    throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
+  }
   const shotPlan = getPlannedShot(plan, shot.id);
   const totalUnits = (shotPlan?.workUnits ?? countShotPackageUnits(project, shot)) + 1; // + compress
   const tracker = createProgressTracker({
@@ -261,6 +270,9 @@ export async function buildMultiShotPackage(
 
   throwIfAborted(options.signal);
   const plan = options.plan ?? createExportPlan(project, shots, { packageType: 'selected-shots' });
+  if (planHasBlockingErrors(plan)) {
+    throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
+  }
   const shotUnits = plan.estimatedWorkUnits;
   const tracker = createProgressTracker({
     shots,

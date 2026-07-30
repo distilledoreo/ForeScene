@@ -672,6 +672,11 @@ describe('ui revamp fidelity surfaces', () => {
     expect(exportWorkspace).toContain('getShotWarnings');
     expect(exportWorkspace).toContain('data-export-progress-panel');
     expect(exportWorkspace).toContain('abortRef.current?.abort()');
+    expect(exportWorkspace).toContain('planHasBlockingErrors');
+    expect(exportWorkspace).toContain('verifiedPlan');
+    expect(exportWorkspace).toContain('plan: verifiedPlan');
+    expect(exportWorkspace).toContain('data-export-plan-blocking-errors');
+    expect(exportWorkspace).toContain('exportBlocked');
     expect(exportWorkspace).not.toContain('WarningPopover');
     expect(exportSettingsPanel).toContain('shouldShowMissingLandmarkPromptNote');
     expect(exportSettingsPanel).toContain('data-export-prompt-landmark-note');
