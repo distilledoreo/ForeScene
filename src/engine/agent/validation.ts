@@ -228,8 +228,16 @@ function parseCommand(
       return parseObjectDuplicate(record, path, refNames, errors, warnings);
     case 'shot.create':
       return parseShotCreate(record, path, refNames, errors, warnings);
+    case 'shot.rename':
+      return parseShotRename(record, path, errors, warnings);
+    case 'shot.updateDescription':
+      return parseShotUpdateDescription(record, path, errors, warnings);
     case 'shot.updateCamera':
       return parseShotUpdateCamera(record, path, errors, warnings);
+    case 'shot.select':
+      return parseShotSelect(record, path, errors);
+    case 'shot.copyStagingToNext':
+      return parseShotCopyStagingToNext(record, path, errors);
     case 'shot.stageObject':
       return parseShotStageObject(record, path, errors, warnings);
     case 'shot.clearStaging':
@@ -434,6 +442,84 @@ function parseShotCreate(
   const command: ForeSceneAgentCommand = { op: 'shot.create', shot: shotPayload };
   if (ref !== undefined) command.ref = ref;
   return command;
+}
+
+function parseShotRename(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const name = readOptionalString(record.name, `${path}.name`, errors, warnings);
+  if (!shot || name === undefined) {
+    if (shot && name === undefined) {
+      errors.push(agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'shot.rename requires a nonempty name.',
+        { path: `${path}.name` },
+      ));
+    }
+    return undefined;
+  }
+  return { op: 'shot.rename', shot, name };
+}
+
+function parseShotUpdateDescription(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (record.description === undefined) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'shot.updateDescription requires description.',
+      { path: `${path}.description` },
+    ));
+    return undefined;
+  }
+  if (typeof record.description !== 'string') {
+    errors.push(agentError(
+      'description_type',
+      'description must be a string.',
+      { path: `${path}.description` },
+    ));
+    return undefined;
+  }
+  if (record.description.length > AGENT_PLAN_LIMITS.maxDescriptionLength) {
+    errors.push(agentError(
+      'description_limit',
+      `description exceeds ${AGENT_PLAN_LIMITS.maxDescriptionLength} characters.`,
+      { path: `${path}.description` },
+    ));
+    return undefined;
+  }
+  if (!shot) return undefined;
+  // Allow empty string to clear description.
+  void warnings;
+  return { op: 'shot.updateDescription', shot, description: record.description };
+}
+
+function parseShotSelect(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  return { op: 'shot.select', shot };
+}
+
+function parseShotCopyStagingToNext(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  return { op: 'shot.copyStagingToNext', shot };
 }
 
 function parseShotUpdateCamera(

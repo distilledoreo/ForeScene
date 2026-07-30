@@ -227,9 +227,27 @@ export type ForeSceneAgentCommand =
       };
     }
   | {
+      op: 'shot.rename';
+      shot: AgentEntityTarget;
+      name: string;
+    }
+  | {
+      op: 'shot.updateDescription';
+      shot: AgentEntityTarget;
+      description: string;
+    }
+  | {
       op: 'shot.updateCamera';
       shot: AgentEntityTarget;
       camera: Partial<CameraData>;
+    }
+  | {
+      op: 'shot.select';
+      shot: AgentEntityTarget;
+    }
+  | {
+      op: 'shot.copyStagingToNext';
+      shot: AgentEntityTarget;
     }
   | {
       op: 'shot.stageObject';

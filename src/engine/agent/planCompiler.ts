@@ -32,6 +32,7 @@ import {
   withShotPanoLink,
 } from '../sync';
 import { normalizeWorkspace } from '../workflow';
+import { copyStagingToNextShot } from '../sequenceStoryboard';
 import { touchProject } from '../../state/slices/touchProject';
 import { AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 import {
@@ -257,8 +258,16 @@ function applyCommand(
       return applyObjectDuplicate(ctx, command, refs, diff, path);
     case 'shot.create':
       return applyShotCreate(ctx, command, refs, diff, path);
+    case 'shot.rename':
+      return applyShotRename(ctx, command, refs, diff, path);
+    case 'shot.updateDescription':
+      return applyShotUpdateDescription(ctx, command, refs, diff, path);
     case 'shot.updateCamera':
       return applyShotUpdateCamera(ctx, command, refs, diff, path);
+    case 'shot.select':
+      return applyShotSelect(ctx, command, refs, path);
+    case 'shot.copyStagingToNext':
+      return applyShotCopyStagingToNext(ctx, command, refs, diff, path);
     case 'shot.stageObject':
       return applyShotStageObject(ctx, command, refs, diff, path);
     case 'shot.clearStaging':
@@ -587,6 +596,149 @@ function applyShotCreate(
   if (command.ref) {
     refs[command.ref] = { kind: 'shot', id: shot.id, ref: command.ref, name: shot.name };
   }
+  return { ok: true, warnings: [] };
+}
+
+function applyShotRename(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.rename' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  ctx.project = touchProject({
+    ...ctx.project,
+    shots: ctx.project.shots.map((shot) => (
+      shot.id === resolved.id
+        ? { ...shot, name: command.name, updatedAt: new Date().toISOString() }
+        : shot
+    )),
+  });
+  if (refs) {
+    for (const entity of Object.values(refs)) {
+      if (entity.kind === 'shot' && entity.id === resolved.id) entity.name = command.name;
+    }
+  }
+  if (!diff.shotsCreated.includes(resolved.id)) diff.shotsUpdated.push(resolved.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotUpdateDescription(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.updateDescription' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  ctx.project = touchProject({
+    ...ctx.project,
+    shots: ctx.project.shots.map((shot) => (
+      shot.id === resolved.id
+        ? { ...shot, description: command.description, updatedAt: new Date().toISOString() }
+        : shot
+    )),
+  });
+  if (!diff.shotsCreated.includes(resolved.id)) diff.shotsUpdated.push(resolved.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotSelect(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.select' }>,
+  refs: Record<string, AgentEntityReference>,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const shot = ctx.project.shots.find((item) => item.id === resolved.id);
+  if (!shot) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${resolved.id}".`, { path }),
+      ],
+      warnings: [],
+    };
+  }
+  ctx.selectedShotId = shot.id;
+  if (shot.linkedPanoId) ctx.activePanoId = shot.linkedPanoId;
+  return { ok: true, warnings: [] };
+}
+
+function applyShotCopyStagingToNext(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.copyStagingToNext' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const index = ctx.project.shots.findIndex((shot) => shot.id === resolved.id);
+  if (index < 0 || index >= ctx.project.shots.length - 1) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'shot.copyStagingToNext requires a following shot in the sequence.',
+          { path },
+        ),
+      ],
+      warnings: [],
+    };
+  }
+  const nextId = ctx.project.shots[index + 1]!.id;
+  const nextShots = copyStagingToNextShot(ctx.project.shots, resolved.id).map((shot) => (
+    shot.id === nextId
+      ? { ...shot, updatedAt: new Date().toISOString() }
+      : shot
+  ));
+  ctx.project = touchProject({
+    ...ctx.project,
+    shots: nextShots,
+  });
+  if (!diff.shotsCreated.includes(nextId)) diff.shotsUpdated.push(nextId);
   return { ok: true, warnings: [] };
 }
 

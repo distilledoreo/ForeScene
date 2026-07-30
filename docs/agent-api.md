@@ -8,14 +8,15 @@ Playwright hosts and observes the browser. The Agent API performs exact project 
 
 **Milestone 1 — read-only vertical slice** ✓  
 **Milestone 2 — plan validation and preview** ✓  
-**Milestone 3 — atomic apply + undo** ✓
+**Milestone 3 — atomic apply + undo** ✓  
+**Milestone 4 — shot staging commands** ✓  
+**Milestone 5 — visual CLI (screenshot / run)** ✓
 
 Available now:
 
-- Inspection APIs from milestone 1
-- `previewPlan(plan)` — parse, resolve refs, apply on a `structuredClone`, return summary/diff
-- `applyPlan(plan)` / `undoLastPlan()` — protected atomic commit via `runDestructiveProjectMutation`
-- `npm run agent:inspect` / `agent:preview` / `agent:apply`
+- Inspection, preview, atomic apply/undo
+- Shot staging: `shot.stageObject`, `shot.clearStaging`, `shot.copyStagingToNext`, rename/description/select/camera
+- `npm run agent:screenshot` / `agent:verify` / `agent:run`
 
 ## Quick start
 
@@ -101,10 +102,28 @@ Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale proj
 
 Enable writes from the Project menu (**Enable Agent Writes**) or CLI `--write`. The header badge **Stop** button immediately returns to read-only.
 
+## Shot staging
+
+Supported shot commands:
+
+- `shot.create` / `shot.rename` / `shot.updateDescription` / `shot.updateCamera`
+- `shot.select` / `shot.copyStagingToNext`
+- `shot.stageObject` (transform, visible, humanPose, posePreset)
+- `shot.clearStaging` (`clearPoseOnly` keeps transform/visibility)
+
+Staging never mutates Build scene objects. Absolute overrides are idempotent.
+
+## Visual CLI
+
+```bash
+npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
+npm run agent:run -- --plan plans/conversation.preview.json --screenshot artifacts/conversation.png --write
+```
+
 ## Deferred / not in this milestone
 
 - Landmark create/update/delete commands
 - Export configuration writes
 - Package download control
-- Viewport capture runtime services
+- Selected-keyframe transient staging
 - In-app Agent Console

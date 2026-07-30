@@ -7,14 +7,14 @@ The Agent CLI uses Playwright (not raw CDP) to connect to a running ForeScene in
 ```bash
 npm run agent:inspect
 npm run agent:preview -- --plan plans/example.json
-npm run agent:apply -- --plan plans/example.json
-npm run agent:screenshot
-npm run agent:verify
+npm run agent:apply -- --plan plans/example.json --write
+npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
+npm run agent:verify -- --workspace build --output artifacts/verify.png
+npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
-`apply` requires `--write` (or an already seeded CLI profile) and commits through Project Safety.  
-`screenshot` / `verify` remain stubs.
+`apply` / `run` require `--write` (or an already seeded CLI profile) and commit through Project Safety.
 
 ## Defaults
 
@@ -32,17 +32,40 @@ npm run agent:verify
 ```ts
 await page.waitForFunction(() => {
   const status = window.foreScene?.getStatus();
-  return status?.ready && status.projectLoaded;
+  return status?.ready && status.projectLoaded && status.persistence?.ready;
 });
 ```
 
 ## Write access for CLI profiles
 
 ```bash
-npm run agent:inspect -- --write
+npm run agent:apply -- --write --plan plans/conversation.preview.json
 ```
 
 This seeds `localStorage['forescene-agent-control'] = 'read-write'` in the persistent profile before the app boots. Normal browser profiles never set that key and stay read-only.
+
+## `agent:run`
+
+```bash
+npm run agent:run -- \
+  --plan plans/conversation.preview.json \
+  --screenshot artifacts/conversation.png \
+  --workspace shots \
+  --write
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "planId": "...",
+  "verifiedRevisionId": "...",
+  "affectedObjects": 2,
+  "affectedShots": 1,
+  "screenshot": "artifacts/conversation.png"
+}
+```
 
 ## Origin consistency
 
@@ -50,10 +73,4 @@ A project opened under port 3000 is a different browser storage origin than port
 
 ## Visual verification
 
-Screenshots remain normal Playwright:
-
-```ts
-await page.locator('[data-testid="scene-viewport"]').screenshot({ path: outputPath });
-```
-
-(`agent:screenshot` will wrap this in a later milestone.)
+Screenshots target `[data-testid="scene-viewport"]` when present, otherwise the page viewport.

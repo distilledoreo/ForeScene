@@ -5,13 +5,16 @@
  * Usage:
  *   npm run agent:inspect
  *   npm run agent:preview -- --plan plans/example.json
- *   npm run agent:apply -- --plan plans/example.json
+ *   npm run agent:apply -- --plan plans/example.json --write
+ *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
+ *   npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
  */
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { openAgentBrowser } from './browser';
+import { openAgentBrowser, waitForAgentReady, type AgentBrowserSession } from './browser';
 import { inspectViaBrowser } from './inspect';
+import { captureSceneScreenshot, openWorkspace } from './screenshot';
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -28,6 +31,9 @@ function parseArgs(argv: string[]) {
     url: undefined as string | undefined,
     headless: false,
     writeAccess: false,
+    workspace: undefined as string | undefined,
+    output: undefined as string | undefined,
+    screenshot: undefined as string | undefined,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -40,12 +46,38 @@ function parseArgs(argv: string[]) {
       args.headless = true;
     } else if (token === '--write') {
       args.writeAccess = true;
+    } else if (token === '--workspace') {
+      args.workspace = argv[++index];
+    } else if (token === '--output') {
+      args.output = argv[++index];
+    } else if (token === '--screenshot') {
+      args.screenshot = argv[++index];
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }
   }
 
   return args;
+}
+
+async function withSession<T>(
+  options: {
+    url?: string;
+    headless: boolean;
+    writeAccess: boolean;
+  },
+  run: (session: AgentBrowserSession) => Promise<T>,
+): Promise<T> {
+  const session = await openAgentBrowser({
+    url: options.url,
+    headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+    writeAccess: options.writeAccess,
+  });
+  try {
+    return await run(session);
+  } finally {
+    await session.close();
+  }
 }
 
 async function previewOrApply(
@@ -55,12 +87,11 @@ async function previewOrApply(
 ) {
   const raw = await readFile(path.resolve(planPath), 'utf8');
   const plan = JSON.parse(raw) as unknown;
-  const session = await openAgentBrowser({
+  await withSession({
     url: options.url,
     headless: options.headless,
     writeAccess: options.writeAccess,
-  });
-  try {
+  }, async (session) => {
     const result = await session.page.evaluate(async ({ commandName, planJson }) => {
       const api = window.foreScene;
       if (!api) throw new Error('window.foreScene is not available');
@@ -71,9 +102,118 @@ async function previewOrApply(
     if (!result || typeof result !== 'object' || !('ok' in result) || !(result as { ok: boolean }).ok) {
       process.exitCode = 1;
     }
-  } finally {
-    await session.close();
-  }
+  });
+}
+
+async function runScreenshot(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  workspace?: string;
+  output: string;
+}) {
+  await withSession(options, async (session) => {
+    if (options.workspace) {
+      await openWorkspace(session.page, options.workspace);
+      await waitForAgentReady(session.page);
+    }
+    const screenshot = await captureSceneScreenshot(session.page, options.output);
+    printJson({
+      ok: true,
+      screenshot,
+      workspace: options.workspace,
+      status: await session.page.evaluate(() => window.foreScene!.getStatus()),
+    });
+  });
+}
+
+async function runVerify(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  workspace?: string;
+  output?: string;
+}) {
+  await withSession(options, async (session) => {
+    if (options.workspace) {
+      await openWorkspace(session.page, options.workspace);
+      await waitForAgentReady(session.page);
+    }
+    const inspection = await inspectViaBrowser(session.page);
+    let screenshot: string | undefined;
+    if (options.output) {
+      screenshot = await captureSceneScreenshot(session.page, options.output);
+    }
+    printJson({
+      ok: true,
+      project: inspection.project,
+      objectCount: (inspection.objects as unknown[]).length,
+      shotCount: (inspection.shots as unknown[]).length,
+      screenshot,
+      status: inspection.status,
+    });
+  });
+}
+
+async function runPipeline(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  plan: string;
+  screenshot?: string;
+  workspace?: string;
+}) {
+  const raw = await readFile(path.resolve(options.plan), 'utf8');
+  const plan = JSON.parse(raw) as unknown;
+
+  await withSession({
+    url: options.url,
+    headless: options.headless,
+    writeAccess: true,
+  }, async (session) => {
+    const inspection = await inspectViaBrowser(session.page);
+    const preview = await session.page.evaluate(async (planJson) => (
+      window.foreScene!.previewPlan(planJson)
+    ), plan);
+    if (!preview.ok) {
+      printJson({ ok: false, stage: 'preview', preview });
+      process.exitCode = 1;
+      return;
+    }
+
+    const applied = await session.page.evaluate(async (planJson) => (
+      window.foreScene!.applyPlan(planJson)
+    ), plan);
+    if (!applied.ok) {
+      printJson({ ok: false, stage: 'apply', applied });
+      process.exitCode = 1;
+      return;
+    }
+
+    await session.page.evaluate(async () => {
+      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+    });
+
+    if (options.workspace) {
+      await openWorkspace(session.page, options.workspace);
+    }
+
+    let screenshot: string | undefined;
+    if (options.screenshot) {
+      screenshot = await captureSceneScreenshot(session.page, options.screenshot);
+    }
+
+    printJson({
+      ok: true,
+      planId: applied.planId,
+      verifiedRevisionId: applied.verifiedRevisionId,
+      affectedObjects: applied.summary?.affectedObjectIds.length ?? 0,
+      affectedShots: applied.summary?.affectedShotIds.length ?? 0,
+      screenshot,
+      inspectedProjectId: (inspection.project as { id?: string }).id,
+      previewSummary: preview.summary,
+    });
+  });
 }
 
 async function main() {
@@ -81,43 +221,60 @@ async function main() {
   printErr(`[agent] command=${args.command}`);
 
   if (args.command === 'inspect') {
-    const session = await openAgentBrowser({
+    await withSession({
       url: args.url,
-      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+      headless: args.headless,
       writeAccess: args.writeAccess,
-    });
-    try {
+    }, async (session) => {
       printErr(`[agent] connected ${session.url}`);
-      const payload = await inspectViaBrowser(session.page);
-      printJson(payload);
-    } finally {
-      await session.close();
-    }
+      printJson(await inspectViaBrowser(session.page));
+    });
     return;
   }
 
   if (args.command === 'preview' || args.command === 'apply') {
-    if (!args.plan) {
-      throw new Error(`--plan is required for ${args.command}`);
-    }
+    if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
     await previewOrApply(args.command, args.plan, {
-      ...args,
-      // Preview is read-only over a clone; apply still needs write access.
+      url: args.url,
+      headless: args.headless,
       writeAccess: args.writeAccess || args.command === 'apply',
     });
     return;
   }
 
-  if (args.command === 'screenshot' || args.command === 'verify') {
-    printJson({
-      ok: false,
-      diagnostics: [{
-        code: 'not_implemented',
-        severity: 'error',
-        message: `${args.command} lands in a later Agent API milestone.`,
-      }],
+  if (args.command === 'screenshot') {
+    if (!args.output) throw new Error('--output is required for screenshot');
+    await runScreenshot({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      workspace: args.workspace,
+      output: args.output,
     });
-    process.exitCode = 1;
+    return;
+  }
+
+  if (args.command === 'verify') {
+    await runVerify({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      workspace: args.workspace,
+      output: args.output ?? args.screenshot,
+    });
+    return;
+  }
+
+  if (args.command === 'run') {
+    if (!args.plan) throw new Error('--plan is required for run');
+    await runPipeline({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: true,
+      plan: args.plan,
+      screenshot: args.screenshot ?? args.output,
+      workspace: args.workspace ?? 'shots',
+    });
     return;
   }
 
