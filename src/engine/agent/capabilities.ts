@@ -20,7 +20,7 @@ export const AGENT_INSPECT_COMMANDS = [
   'export.plan',
 ] as const;
 
-/** Mutation commands reserved for later milestones (reported but not executable yet). */
+/** Mutation / plan commands available when write access is enabled. */
 export const AGENT_MUTATE_COMMANDS = [
   'project.updateInfo',
   'object.create',
@@ -41,15 +41,19 @@ export const AGENT_MUTATE_COMMANDS = [
   'shot.stageObject',
   'shot.clearObjectPose',
   'shot.clearObjectStaging',
-] as const;
-
-export const AGENT_DEFERRED_COMMANDS = [
   'landmark.create',
   'landmark.update',
   'landmark.delete',
+  'landmark.linkObject',
   'export.sceneDefaults.patch',
   'export.shotOverrides.patch',
+  'export.shotOverrides.reset',
+  'export.shotOverrides.copy',
+  'export.shotOverrides.promote',
   'export.package',
+] as const;
+
+export const AGENT_DEFERRED_COMMANDS = [
   'file.import',
   'viewport.capture',
 ] as const;
@@ -64,7 +68,7 @@ export function buildAgentCapabilities(
     controlMode,
     inspection: controlMode !== 'off',
     mutations: writeAccess,
-    packageExport: false,
+    packageExport: true,
     projectReplacement: false,
     commands: {
       inspect: [...AGENT_INSPECT_COMMANDS],

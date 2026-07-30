@@ -8,9 +8,10 @@
  *   npm run agent:apply -- --plan plans/example.json --write
  *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
  *   npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
+ *   npm run agent:package -- --write --output artifacts/package.zip
  */
 
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentReady, type AgentBrowserSession } from './browser';
 import { inspectViaBrowser } from './inspect';
@@ -34,6 +35,7 @@ function parseArgs(argv: string[]) {
     workspace: undefined as string | undefined,
     output: undefined as string | undefined,
     screenshot: undefined as string | undefined,
+    shotIds: [] as string[],
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -52,6 +54,9 @@ function parseArgs(argv: string[]) {
       args.output = argv[++index];
     } else if (token === '--screenshot') {
       args.screenshot = argv[++index];
+    } else if (token === '--shot') {
+      const shotId = argv[++index];
+      if (shotId) args.shotIds.push(shotId);
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }
@@ -216,6 +221,50 @@ async function runPipeline(options: {
   });
 }
 
+async function runPackage(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  output?: string;
+  shotIds: string[];
+}) {
+  await withSession({
+    url: options.url,
+    headless: options.headless,
+    writeAccess: true,
+  }, async (session) => {
+    await waitForAgentReady(session.page);
+    printErr('[agent] starting package export…');
+
+    const downloadPromise = options.output
+      ? session.page.waitForEvent('download', { timeout: 300_000 })
+      : null;
+
+    const result = await session.page.evaluate(async (input) => (
+      window.foreScene!.exportPackage({
+        shotIds: input.shotIds.length > 0 ? input.shotIds : undefined,
+        download: true,
+      })
+    ), { shotIds: options.shotIds });
+
+    let savedPath: string | undefined;
+    if (downloadPromise && result.ok) {
+      const download = await downloadPromise;
+      const target = path.resolve(options.output!);
+      await mkdir(path.dirname(target), { recursive: true });
+      await download.saveAs(target);
+      savedPath = target;
+      printErr(`[agent] saved package ${target}`);
+    }
+
+    printJson({
+      ...result,
+      savedPath,
+    });
+    if (!result.ok) process.exitCode = 1;
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   printErr(`[agent] command=${args.command}`);
@@ -274,6 +323,17 @@ async function main() {
       plan: args.plan,
       screenshot: args.screenshot ?? args.output,
       workspace: args.workspace ?? 'shots',
+    });
+    return;
+  }
+
+  if (args.command === 'package') {
+    await runPackage({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: true,
+      output: args.output,
+      shotIds: args.shotIds,
     });
     return;
   }

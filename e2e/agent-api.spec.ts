@@ -34,6 +34,7 @@ test.describe('Agent API @smoke', () => {
     expect(inspection.shots.length).toBe(inspection.project.shotCount);
     expect(inspection.capabilities.inspection).toBe(true);
     expect(inspection.capabilities.mutations).toBe(false);
+    expect(inspection.capabilities.packageExport).toBe(true);
     expect(inspection.exportPlan.ok).toBe(true);
     expect(inspection.exportPlan.summary?.shotCount).toBe(inspection.shots.length);
 
@@ -166,5 +167,12 @@ test.describe('Agent API @smoke', () => {
 
     await page.locator('[data-agent-control-stop]').click();
     await expect(page.locator('[data-agent-control-badge="active"]')).toHaveCount(0);
+
+    // Agent Console consumes the same window.foreScene surface.
+    await page.locator('[data-brand-menu-trigger]').click();
+    await page.locator('[data-agent-console-open]').click();
+    await expect(page.locator('[data-agent-console]')).toBeVisible();
+    await page.locator('[data-agent-console-preview]').click();
+    await expect(page.locator('[data-agent-console-result]')).toContainText('"ok"');
   });
 });

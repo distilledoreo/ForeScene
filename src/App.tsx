@@ -46,6 +46,7 @@ const PanoViewerWorkspace = lazy(() => import('./components/workspaces/PanoViewe
 const HelpWorkspace = lazy(() => import('./components/workspaces/HelpWorkspace').then((m) => ({ default: m.HelpWorkspace })));
 const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance').then((m) => ({ default: m.WorkflowGuidance })));
 const ProjectSafetyDialog = lazy(() => import('./components/common/ProjectSafetyDialog').then((m) => ({ default: m.ProjectSafetyDialog })));
+const AgentConsoleDialog = lazy(() => import('./components/common/AgentConsoleDialog').then((m) => ({ default: m.AgentConsoleDialog })));
 
 const workspaceItems: Array<{ id: Workspace; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'build', label: 'Build', icon: Boxes },
@@ -74,6 +75,7 @@ export default function App() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
+  const [agentConsoleOpen, setAgentConsoleOpen] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
@@ -113,6 +115,7 @@ export default function App() {
     closeProjectOverlays: () => {
       setHelpOpen(false);
       setProjectSafetyOpen(false);
+      setAgentConsoleOpen(false);
     },
   });
 
@@ -322,6 +325,15 @@ export default function App() {
                           setProjectMenuOpen(false);
                         }}
                       />
+                      <ProjectMenuButton
+                        icon={<Terminal className="h-4 w-4" />}
+                        label="Agent Console"
+                        onClick={() => {
+                          setAgentConsoleOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-agent-console-open
+                      />
                       {agentControlMode !== 'read-write' ? (
                         <ProjectMenuButton
                           icon={<Terminal className="h-4 w-4" />}
@@ -526,6 +538,15 @@ export default function App() {
             onRemoveProjectHistory={removeLocalProjectHistory}
             onApplyRepair={applyProjectHealthRepair}
             onExportBackup={saveProject}
+          />
+        </Suspense>
+      )}
+
+      {agentConsoleOpen && (
+        <Suspense fallback={null}>
+          <AgentConsoleDialog
+            open={agentConsoleOpen}
+            onClose={() => setAgentConsoleOpen(false)}
           />
         </Suspense>
       )}

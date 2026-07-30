@@ -4,7 +4,13 @@
  * Builds a fresh normalized plan only when there are no errors.
  */
 
-import type { CameraData, HumanPose, SceneObjectType, StagingRole, Transform, Workspace } from '../../domain/types';
+import type { CameraData, ExportSettingsOverride, HumanPose, SceneObjectType, StagingRole, Transform, Workspace } from '../../domain/types';
+import {
+  CHARACTER_PASS_OVERRIDE_KEYS,
+  DEPTH_OVERRIDE_KEYS,
+  EXPORT_SETTING_TOP_LEVEL_KEYS,
+  type ExportSettingFieldPath,
+} from '../exportConfiguration';
 import { HUMAN_POSE_PRESETS } from '../humanPosePresets';
 import {
   AGENT_CREATABLE_OBJECT_TYPES,
@@ -242,6 +248,24 @@ function parseCommand(
       return parseShotStageObject(record, path, errors, warnings);
     case 'shot.clearStaging':
       return parseShotClearStaging(record, path, errors, warnings);
+    case 'landmark.create':
+      return parseLandmarkCreate(record, path, refNames, errors, warnings);
+    case 'landmark.update':
+      return parseLandmarkUpdate(record, path, errors, warnings);
+    case 'landmark.delete':
+      return parseLandmarkDelete(record, path, errors);
+    case 'landmark.linkObject':
+      return parseLandmarkLinkObject(record, path, errors);
+    case 'export.sceneDefaults.patch':
+      return parseExportSceneDefaultsPatch(record, path, errors, warnings);
+    case 'export.shotOverrides.patch':
+      return parseExportShotOverridesPatch(record, path, errors, warnings);
+    case 'export.shotOverrides.reset':
+      return parseExportShotOverridesReset(record, path, errors, warnings);
+    case 'export.shotOverrides.copy':
+      return parseExportShotOverridesCopy(record, path, errors);
+    case 'export.shotOverrides.promote':
+      return parseExportShotOverridesPromote(record, path, errors);
     case 'workspace.open':
       return parseWorkspaceOpen(record, path, errors);
     case 'selection.set':
@@ -633,6 +657,260 @@ function parseShotClearStaging(
   return command;
 }
 
+function parseLandmarkCreate(
+  record: Record<string, unknown>,
+  path: string,
+  refNames: Set<string>,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const ref = readOptionalRef(record.ref, `${path}.ref`, refNames, errors);
+  if (!record.landmark || typeof record.landmark !== 'object' || Array.isArray(record.landmark)) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'landmark.create requires a landmark object.',
+      { path: `${path}.landmark` },
+    ));
+    return undefined;
+  }
+  const landmarkRecord = record.landmark as Record<string, unknown>;
+  const name = readOptionalString(landmarkRecord.name, `${path}.landmark.name`, errors, warnings);
+  const displayName = readOptionalString(
+    landmarkRecord.displayName,
+    `${path}.landmark.displayName`,
+    errors,
+    warnings,
+  );
+  const description = readOptionalString(
+    landmarkRecord.description,
+    `${path}.landmark.description`,
+    errors,
+    warnings,
+  );
+  const position = readOptionalVec3(landmarkRecord.position, `${path}.landmark.position`, errors, true);
+  const linkedObjectId = readOptionalString(
+    landmarkRecord.linkedObjectId,
+    `${path}.landmark.linkedObjectId`,
+    errors,
+    warnings,
+  );
+  let visible: boolean | undefined;
+  if (landmarkRecord.visible !== undefined) {
+    if (typeof landmarkRecord.visible !== 'boolean') {
+      errors.push(agentError('visible_type', 'visible must be a boolean.', { path: `${path}.landmark.visible` }));
+    } else {
+      visible = landmarkRecord.visible;
+    }
+  }
+  let promptCritical: boolean | undefined;
+  if (landmarkRecord.promptCritical !== undefined) {
+    if (typeof landmarkRecord.promptCritical !== 'boolean') {
+      errors.push(agentError(
+        'prompt_critical_type',
+        'promptCritical must be a boolean.',
+        { path: `${path}.landmark.promptCritical` },
+      ));
+    } else {
+      promptCritical = landmarkRecord.promptCritical;
+    }
+  }
+  const tags = parseOptionalStringArray(landmarkRecord.tags, `${path}.landmark.tags`, errors);
+  const landmark: Extract<ForeSceneAgentCommand, { op: 'landmark.create' }>['landmark'] = {};
+  if (name !== undefined) landmark.name = name;
+  if (displayName !== undefined) landmark.displayName = displayName;
+  if (description !== undefined) landmark.description = description;
+  if (position) landmark.position = position;
+  if (linkedObjectId !== undefined) landmark.linkedObjectId = linkedObjectId;
+  if (visible !== undefined) landmark.visible = visible;
+  if (promptCritical !== undefined) landmark.promptCritical = promptCritical;
+  if (tags) landmark.tags = tags;
+  const command: ForeSceneAgentCommand = { op: 'landmark.create', landmark };
+  if (ref !== undefined) command.ref = ref;
+  return command;
+}
+
+function parseLandmarkUpdate(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const landmark = parseEntityTarget(record.landmark, `${path}.landmark`, errors);
+  if (!landmark) return undefined;
+  if (!record.updates || typeof record.updates !== 'object' || Array.isArray(record.updates)) {
+    errors.push(agentError('updates_missing', 'updates must be an object.', { path: `${path}.updates` }));
+    return undefined;
+  }
+  const updatesRecord = record.updates as Record<string, unknown>;
+  const updates: Extract<ForeSceneAgentCommand, { op: 'landmark.update' }>['updates'] = {};
+  const name = readOptionalString(updatesRecord.name, `${path}.updates.name`, errors, warnings);
+  const displayName = readOptionalString(
+    updatesRecord.displayName,
+    `${path}.updates.displayName`,
+    errors,
+    warnings,
+  );
+  const description = readOptionalString(
+    updatesRecord.description,
+    `${path}.updates.description`,
+    errors,
+    warnings,
+  );
+  const position = readOptionalVec3(updatesRecord.position, `${path}.updates.position`, errors, true);
+  if (name !== undefined) updates.name = name;
+  if (displayName !== undefined) updates.displayName = displayName;
+  if (description !== undefined) updates.description = description;
+  if (position) updates.position = position;
+  if (updatesRecord.linkedObjectId === null) {
+    updates.linkedObjectId = null;
+  } else if (updatesRecord.linkedObjectId !== undefined) {
+    const linkedObjectId = readOptionalString(
+      updatesRecord.linkedObjectId,
+      `${path}.updates.linkedObjectId`,
+      errors,
+      warnings,
+    );
+    if (linkedObjectId !== undefined) updates.linkedObjectId = linkedObjectId;
+  }
+  if (updatesRecord.visible !== undefined) {
+    if (typeof updatesRecord.visible !== 'boolean') {
+      errors.push(agentError('visible_type', 'visible must be a boolean.', { path: `${path}.updates.visible` }));
+    } else {
+      updates.visible = updatesRecord.visible;
+    }
+  }
+  if (updatesRecord.promptCritical !== undefined) {
+    if (typeof updatesRecord.promptCritical !== 'boolean') {
+      errors.push(agentError(
+        'prompt_critical_type',
+        'promptCritical must be a boolean.',
+        { path: `${path}.updates.promptCritical` },
+      ));
+    } else {
+      updates.promptCritical = updatesRecord.promptCritical;
+    }
+  }
+  const tags = parseOptionalStringArray(updatesRecord.tags, `${path}.updates.tags`, errors);
+  if (tags) updates.tags = tags;
+  if (Object.keys(updates).length === 0) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'landmark.update requires at least one supported field.',
+      { path: `${path}.updates` },
+    ));
+    return undefined;
+  }
+  return { op: 'landmark.update', landmark, updates };
+}
+
+function parseLandmarkDelete(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const landmark = parseEntityTarget(record.landmark, `${path}.landmark`, errors);
+  if (!landmark) return undefined;
+  return { op: 'landmark.delete', landmark };
+}
+
+function parseLandmarkLinkObject(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const landmark = parseEntityTarget(record.landmark, `${path}.landmark`, errors);
+  if (!landmark) return undefined;
+  if (record.object === null) {
+    return { op: 'landmark.linkObject', landmark, object: null };
+  }
+  const object = parseEntityTarget(record.object, `${path}.object`, errors);
+  if (!object) return undefined;
+  return { op: 'landmark.linkObject', landmark, object };
+}
+
+function parseExportSceneDefaultsPatch(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const patch = parseExportSettingsOverride(record.patch, `${path}.patch`, errors, warnings);
+  if (!patch) return undefined;
+  return { op: 'export.sceneDefaults.patch', patch };
+}
+
+function parseExportShotOverridesPatch(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const patch = parseExportSettingsOverride(record.patch, `${path}.patch`, errors, warnings);
+  if (!shot || !patch) return undefined;
+  return { op: 'export.shotOverrides.patch', shot, patch };
+}
+
+function parseExportShotOverridesReset(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  if (record.field === undefined) {
+    return { op: 'export.shotOverrides.reset', shot };
+  }
+  if (typeof record.field !== 'string' || !isExportSettingFieldPath(record.field)) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'field must be a known export setting path when provided.',
+      { path: `${path}.field` },
+    ));
+    warnings.push(agentWarning(
+      'export_field_hint',
+      `Supported fields include: ${EXPORT_SETTING_TOP_LEVEL_KEYS.slice(0, 6).join(', ')}, characterPass.*, depth.*`,
+      { path: `${path}.field` },
+    ));
+    return undefined;
+  }
+  return { op: 'export.shotOverrides.reset', shot, field: record.field };
+}
+
+function parseExportShotOverridesCopy(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const fromShot = parseEntityTarget(record.fromShot, `${path}.fromShot`, errors);
+  if (!Array.isArray(record.toShots) || record.toShots.length === 0) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'toShots must be a nonempty array of shot targets.',
+      { path: `${path}.toShots` },
+    ));
+    return undefined;
+  }
+  const toShots: AgentEntityTarget[] = [];
+  for (let index = 0; index < record.toShots.length; index += 1) {
+    const target = parseEntityTarget(record.toShots[index], `${path}.toShots[${index}]`, errors);
+    if (target) toShots.push(target);
+  }
+  if (!fromShot || toShots.length !== record.toShots.length) return undefined;
+  return { op: 'export.shotOverrides.copy', fromShot, toShots };
+}
+
+function parseExportShotOverridesPromote(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  return { op: 'export.shotOverrides.promote', shot };
+}
+
 function parseWorkspaceOpen(
   record: Record<string, unknown>,
   path: string,
@@ -998,6 +1276,222 @@ function parseOptionalHumanPose(
   };
   if (typeof record.presetId === 'string') pose.presetId = record.presetId;
   return pose;
+}
+
+function parseOptionalStringArray(
+  value: unknown,
+  path: string,
+  errors: AgentDiagnostic[],
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push(agentError('string_array_type', `${path} must be an array of strings.`, { path }));
+    return undefined;
+  }
+  const tags: string[] = [];
+  value.forEach((entry, index) => {
+    if (typeof entry !== 'string') {
+      errors.push(agentError(
+        'string_array_entry',
+        `${path} entries must be strings.`,
+        { path: `${path}[${index}]` },
+      ));
+      return;
+    }
+    const trimmed = entry.trim();
+    if (trimmed) tags.push(trimmed);
+  });
+  return tags;
+}
+
+const EXPORT_FIELD_PATHS = new Set<string>([
+  ...EXPORT_SETTING_TOP_LEVEL_KEYS,
+  ...CHARACTER_PASS_OVERRIDE_KEYS.map((key) => `characterPass.${key}`),
+  ...DEPTH_OVERRIDE_KEYS.map((key) => `depth.${key}`),
+]);
+
+function isExportSettingFieldPath(value: string): value is ExportSettingFieldPath {
+  return EXPORT_FIELD_PATHS.has(value);
+}
+
+function parseExportSettingsOverride(
+  raw: unknown,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ExportSettingsOverride | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'patch must be an object.',
+      { path },
+    ));
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const patch: ExportSettingsOverride = {};
+  const topLevel = new Set<string>(EXPORT_SETTING_TOP_LEVEL_KEYS);
+
+  for (const key of Object.keys(record)) {
+    if (key === 'characterPass' || key === 'depth') continue;
+    if (!topLevel.has(key)) {
+      warnings.push(agentWarning(
+        'unknown_export_field',
+        `Ignoring unsupported export field "${key}".`,
+        { path: `${path}.${key}` },
+      ));
+    }
+  }
+
+  for (const key of EXPORT_SETTING_TOP_LEVEL_KEYS) {
+    if (record[key] === undefined) continue;
+    const value = record[key];
+    if (key === 'width' || key === 'height') {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+        errors.push(agentError(
+          'export_dimension',
+          `${key} must be a positive finite number.`,
+          { path: `${path}.${key}` },
+        ));
+      } else {
+        patch[key] = Math.round(value);
+      }
+      continue;
+    }
+    if (key === 'peopleExportMode') {
+      if (value !== 'with_people' && value !== 'clean_plate' && value !== 'both') {
+        errors.push(agentError(
+          'people_export_mode',
+          'peopleExportMode must be with_people, clean_plate, or both.',
+          { path: `${path}.peopleExportMode` },
+        ));
+      } else {
+        patch.peopleExportMode = value;
+      }
+      continue;
+    }
+    if (typeof value !== 'boolean') {
+      errors.push(agentError(
+        'export_boolean',
+        `${key} must be a boolean.`,
+        { path: `${path}.${key}` },
+      ));
+    } else {
+      patch[key] = value;
+    }
+  }
+
+  if (record.characterPass !== undefined) {
+    if (!record.characterPass || typeof record.characterPass !== 'object' || Array.isArray(record.characterPass)) {
+      errors.push(agentError(
+        'character_pass_type',
+        'characterPass must be an object.',
+        { path: `${path}.characterPass` },
+      ));
+    } else {
+      const nested = record.characterPass as Record<string, unknown>;
+      const characterPass: NonNullable<ExportSettingsOverride['characterPass']> = {};
+      for (const key of CHARACTER_PASS_OVERRIDE_KEYS) {
+        if (nested[key] === undefined) continue;
+        const value = nested[key];
+        if (key === 'motionFormat') {
+          if (value !== 'green_mp4' && value !== 'transparent_png_sequence' && value !== 'both') {
+            errors.push(agentError(
+              'motion_format',
+              'characterPass.motionFormat must be green_mp4, transparent_png_sequence, or both.',
+              { path: `${path}.characterPass.motionFormat` },
+            ));
+          } else {
+            characterPass.motionFormat = value;
+          }
+          continue;
+        }
+        if (key === 'backgroundColor') {
+          if (typeof value !== 'string' || !value.trim()) {
+            errors.push(agentError(
+              'background_color',
+              'characterPass.backgroundColor must be a nonempty string.',
+              { path: `${path}.characterPass.backgroundColor` },
+            ));
+          } else {
+            characterPass.backgroundColor = value.trim();
+          }
+          continue;
+        }
+        if (typeof value !== 'boolean') {
+          errors.push(agentError(
+            'character_pass_boolean',
+            `characterPass.${key} must be a boolean.`,
+            { path: `${path}.characterPass.${key}` },
+          ));
+        } else {
+          characterPass[key] = value;
+        }
+      }
+      if (Object.keys(characterPass).length > 0) patch.characterPass = characterPass;
+    }
+  }
+
+  if (record.depth !== undefined) {
+    if (!record.depth || typeof record.depth !== 'object' || Array.isArray(record.depth)) {
+      errors.push(agentError(
+        'depth_type',
+        'depth must be an object.',
+        { path: `${path}.depth` },
+      ));
+    } else {
+      const nested = record.depth as Record<string, unknown>;
+      const depth: NonNullable<ExportSettingsOverride['depth']> = {};
+      for (const key of DEPTH_OVERRIDE_KEYS) {
+        if (nested[key] === undefined) continue;
+        const value = nested[key];
+        if (key === 'rangeMode') {
+          if (value !== 'auto' && value !== 'manual') {
+            errors.push(agentError(
+              'depth_range_mode',
+              'depth.rangeMode must be auto or manual.',
+              { path: `${path}.depth.rangeMode` },
+            ));
+          } else {
+            depth.rangeMode = value;
+          }
+          continue;
+        }
+        if (key === 'nearMeters' || key === 'farMeters') {
+          if (typeof value !== 'number' || !Number.isFinite(value)) {
+            errors.push(agentError(
+              'depth_meters',
+              `depth.${key} must be a finite number.`,
+              { path: `${path}.depth.${key}` },
+            ));
+          } else {
+            depth[key] = value;
+          }
+          continue;
+        }
+        if (typeof value !== 'boolean') {
+          errors.push(agentError(
+            'depth_boolean',
+            `depth.${key} must be a boolean.`,
+            { path: `${path}.depth.${key}` },
+          ));
+        } else {
+          depth[key] = value;
+        }
+      }
+      if (Object.keys(depth).length > 0) patch.depth = depth;
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'patch must include at least one supported export field.',
+      { path },
+    ));
+    return undefined;
+  }
+  return patch;
 }
 
 function readOptionalRef(

@@ -39,7 +39,7 @@ export const AGENT_STAGING_ROLES = ['set', 'prop', 'person'] as const;
 
 export const AGENT_WORKSPACES = ['build', 'reference', 'shots', 'export'] as const;
 
-/** Commands executable by the pure plan compiler in this milestone. */
+/** Commands executable by the pure plan compiler. */
 export const AGENT_EXECUTABLE_OPS = [
   'project.updateInfo',
   'object.create',
@@ -54,6 +54,15 @@ export const AGENT_EXECUTABLE_OPS = [
   'shot.copyStagingToNext',
   'shot.stageObject',
   'shot.clearStaging',
+  'landmark.create',
+  'landmark.update',
+  'landmark.delete',
+  'landmark.linkObject',
+  'export.sceneDefaults.patch',
+  'export.shotOverrides.patch',
+  'export.shotOverrides.reset',
+  'export.shotOverrides.copy',
+  'export.shotOverrides.promote',
   'workspace.open',
   'selection.set',
 ] as const;

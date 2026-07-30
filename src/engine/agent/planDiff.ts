@@ -15,14 +15,17 @@ export function projectFingerprint(project: LocationProject): string {
   // Include structural tokens so same-millisecond edits still invalidate undo.
   const objectIds = project.scene.objects.map((object) => object.id).join(',');
   const shotIds = project.shots.map((shot) => shot.id).join(',');
+  const landmarkIds = project.landmarks.map((landmark) => landmark.id).join(',');
   return [
     project.id,
     project.updatedAt,
     project.name,
     String(project.scene.objects.length),
     String(project.shots.length),
+    String(project.landmarks.length),
     objectIds,
     shotIds,
+    landmarkIds,
   ].join('|');
 }
 
@@ -33,9 +36,13 @@ export function emptyPlanDiff(): AgentPlanDiff {
     objectsDeleted: [],
     shotsCreated: [],
     shotsUpdated: [],
+    landmarksCreated: [],
+    landmarksUpdated: [],
+    landmarksDeleted: [],
     selectionChanged: false,
     workspaceChanged: false,
     projectInfoChanged: false,
+    exportConfigurationChanged: false,
   };
 }
 
@@ -54,11 +61,16 @@ export function buildPlanSummary(params: {
     ...params.diff.shotsCreated,
     ...params.diff.shotsUpdated,
   ]);
+  const affectedLandmarkIds = unique([
+    ...params.diff.landmarksCreated,
+    ...params.diff.landmarksUpdated,
+    ...params.diff.landmarksDeleted,
+  ]);
   return {
     commandCount: params.commandCount,
     affectedObjectIds,
     affectedShotIds,
-    affectedLandmarkIds: [],
+    affectedLandmarkIds,
     createdRefs: { ...params.refs },
     description: params.description,
   };

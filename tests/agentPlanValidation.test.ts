@@ -81,7 +81,7 @@ describe('agent plan validation', () => {
       version: 1,
       commands: [
         { op: 'object.create', object: { type: 'box' } },
-        { op: 'landmark.create', landmark: {} },
+        { op: 'file.import', path: 'x.glb' },
       ],
     });
     expect(unsupported.plan).toBeUndefined();

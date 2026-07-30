@@ -49,3 +49,10 @@ export function clearAgentHistory(): void {
 export function agentHistorySize(): number {
   return history.length;
 }
+
+export function listAgentHistory(): Array<{ planId: string; description?: string }> {
+  return history.map((entry) => ({
+    planId: entry.planId,
+    description: entry.description,
+  }));
+}

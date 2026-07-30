@@ -4,19 +4,30 @@
  */
 
 import {
+  createLandmark,
   createOriginShot,
   createSceneObject,
   createShot,
 } from '../../domain/defaults';
 import type {
   CameraData,
+  Landmark,
   LocationProject,
   SceneObject,
   Shot,
+  ShotExportSettings,
   Transform,
   Vec3,
   Workspace,
 } from '../../domain/types';
+import {
+  copyShotExportOverrides,
+  patchSceneExportDefaults,
+  promoteShotExportToSceneDefaults,
+  resetShotExportField,
+  resetShotExportOverrides,
+  setShotExportOverride,
+} from '../exportConfiguration';
 import { applyHumanPosePreset } from '../humanPosePresets';
 import { duplicateSceneObject } from '../sandboxCore';
 import {
@@ -55,7 +66,7 @@ import type {
   ForeSceneAgentCommand,
   ForeSceneAgentPlan,
 } from './protocol';
-import { resolveObjectTarget, resolveShotTarget } from './targetResolver';
+import { resolveLandmarkTarget, resolveObjectTarget, resolveShotTarget } from './targetResolver';
 import { parseForeSceneAgentPlan } from './validation';
 
 export interface AgentPlanExecutionContext {
@@ -272,6 +283,24 @@ function applyCommand(
       return applyShotStageObject(ctx, command, refs, diff, path);
     case 'shot.clearStaging':
       return applyShotClearStaging(ctx, command, refs, diff, path);
+    case 'landmark.create':
+      return applyLandmarkCreate(ctx, command, refs, diff, path);
+    case 'landmark.update':
+      return applyLandmarkUpdate(ctx, command, refs, diff, path);
+    case 'landmark.delete':
+      return applyLandmarkDelete(ctx, command, refs, diff, path);
+    case 'landmark.linkObject':
+      return applyLandmarkLinkObject(ctx, command, refs, diff, path);
+    case 'export.sceneDefaults.patch':
+      return applyExportSceneDefaultsPatch(ctx, command, diff);
+    case 'export.shotOverrides.patch':
+      return applyExportShotOverridesPatch(ctx, command, refs, diff, path);
+    case 'export.shotOverrides.reset':
+      return applyExportShotOverridesReset(ctx, command, refs, diff, path);
+    case 'export.shotOverrides.copy':
+      return applyExportShotOverridesCopy(ctx, command, refs, diff, path);
+    case 'export.shotOverrides.promote':
+      return applyExportShotOverridesPromote(ctx, command, refs, diff, path);
     case 'workspace.open':
       return applyWorkspaceOpen(ctx, command);
     case 'selection.set':
@@ -947,6 +976,379 @@ function applyShotClearStaging(
   if (!diff.shotsCreated.includes(updated.id)) {
     diff.shotsUpdated.push(updated.id);
   }
+  return { ok: true, warnings: [] };
+}
+
+function applyLandmarkCreate(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'landmark.create' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const index = ctx.project.landmarks.length + 1;
+  let landmark = createLandmark(index, command.landmark.position ?? [0, 1.2, 0]);
+  if (command.landmark.name) landmark = { ...landmark, name: command.landmark.name };
+  if (command.landmark.displayName) {
+    landmark = { ...landmark, displayName: command.landmark.displayName };
+  } else if (command.landmark.name) {
+    landmark = { ...landmark, displayName: command.landmark.name };
+  }
+  if (command.landmark.description !== undefined) {
+    landmark = { ...landmark, description: command.landmark.description };
+  }
+  if (command.landmark.visible !== undefined) {
+    landmark = { ...landmark, visible: command.landmark.visible };
+  }
+  if (command.landmark.promptCritical !== undefined) {
+    landmark = { ...landmark, promptCritical: command.landmark.promptCritical };
+  }
+  if (command.landmark.tags) {
+    landmark = { ...landmark, tags: [...command.landmark.tags] };
+  }
+  if (command.landmark.linkedObjectId) {
+    const objectExists = ctx.project.scene.objects.some(
+      (object) => object.id === command.landmark.linkedObjectId,
+    );
+    if (!objectExists) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            `No object with id "${command.landmark.linkedObjectId}" to link.`,
+            { path: `${path}.landmark.linkedObjectId` },
+          ),
+        ],
+        warnings: [],
+      };
+    }
+    landmark = { ...landmark, linkedObjectId: command.landmark.linkedObjectId };
+  }
+
+  ctx.project = touchProject({
+    ...ctx.project,
+    landmarks: [...ctx.project.landmarks, landmark],
+  });
+  diff.landmarksCreated.push(landmark.id);
+  if (command.ref) {
+    refs[command.ref] = {
+      kind: 'landmark',
+      id: landmark.id,
+      ref: command.ref,
+      name: landmark.displayName || landmark.name,
+    };
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyLandmarkUpdate(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'landmark.update' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveLandmarkTarget(ctx.project, command.landmark, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const current = ctx.project.landmarks.find((landmark) => landmark.id === resolved.id);
+  if (!current) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.targetNotFound,
+          `No landmark with id "${resolved.id}".`,
+          { path },
+        ),
+      ],
+      warnings: [],
+    };
+  }
+
+  const updates = command.updates;
+  if (updates.linkedObjectId) {
+    const objectExists = ctx.project.scene.objects.some(
+      (object) => object.id === updates.linkedObjectId,
+    );
+    if (!objectExists) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            `No object with id "${updates.linkedObjectId}" to link.`,
+            { path: `${path}.updates.linkedObjectId` },
+          ),
+        ],
+        warnings: [],
+      };
+    }
+  }
+
+  const next: Landmark = {
+    ...current,
+    ...(updates.name !== undefined ? { name: updates.name } : {}),
+    ...(updates.displayName !== undefined ? { displayName: updates.displayName } : {}),
+    ...(updates.description !== undefined ? { description: updates.description } : {}),
+    ...(updates.position !== undefined ? { position: updates.position } : {}),
+    ...(updates.visible !== undefined ? { visible: updates.visible } : {}),
+    ...(updates.promptCritical !== undefined ? { promptCritical: updates.promptCritical } : {}),
+    ...(updates.tags !== undefined ? { tags: [...updates.tags] } : {}),
+  };
+  if (updates.linkedObjectId === null) {
+    delete next.linkedObjectId;
+  } else if (updates.linkedObjectId !== undefined) {
+    next.linkedObjectId = updates.linkedObjectId;
+  }
+
+  ctx.project = touchProject({
+    ...ctx.project,
+    landmarks: ctx.project.landmarks.map((landmark) => (
+      landmark.id === next.id ? next : landmark
+    )),
+  });
+  if (!diff.landmarksCreated.includes(next.id)) {
+    diff.landmarksUpdated.push(next.id);
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyLandmarkDelete(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'landmark.delete' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveLandmarkTarget(ctx.project, command.landmark, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const landmarkId = resolved.id;
+  ctx.project = touchProject({
+    ...ctx.project,
+    landmarks: ctx.project.landmarks.filter((landmark) => landmark.id !== landmarkId),
+    shots: ctx.project.shots.map((shot) => (
+      shot.landmarkIds.includes(landmarkId)
+        ? {
+            ...shot,
+            landmarkIds: shot.landmarkIds.filter((id) => id !== landmarkId),
+            updatedAt: new Date().toISOString(),
+          }
+        : shot
+    )),
+  });
+  diff.landmarksDeleted.push(landmarkId);
+  for (const [refName, reference] of Object.entries(refs)) {
+    if (reference.kind === 'landmark' && reference.id === landmarkId) {
+      delete refs[refName];
+    }
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyLandmarkLinkObject(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'landmark.linkObject' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const landmarkResolved = resolveLandmarkTarget(ctx.project, command.landmark, refs);
+  if (!landmarkResolved.ok) {
+    return {
+      ok: false,
+      diagnostics: landmarkResolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+
+  let linkedObjectId: string | undefined;
+  if (command.object !== null) {
+    const objectResolved = resolveObjectTarget(ctx.project, command.object, refs);
+    if (!objectResolved.ok) {
+      return {
+        ok: false,
+        diagnostics: objectResolved.diagnostics.map((item) => ({
+          ...item,
+          path: item.path ? `${path}.${item.path}` : path,
+        })),
+        warnings: [],
+      };
+    }
+    linkedObjectId = objectResolved.id;
+  }
+
+  ctx.project = touchProject({
+    ...ctx.project,
+    landmarks: ctx.project.landmarks.map((landmark) => {
+      if (landmark.id !== landmarkResolved.id) return landmark;
+      if (linkedObjectId === undefined) {
+        const next = { ...landmark };
+        delete next.linkedObjectId;
+        return next;
+      }
+      return { ...landmark, linkedObjectId };
+    }),
+  });
+  if (!diff.landmarksCreated.includes(landmarkResolved.id)) {
+    diff.landmarksUpdated.push(landmarkResolved.id);
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyExportSceneDefaultsPatch(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'export.sceneDefaults.patch' }>,
+  diff: AgentPlanDiff,
+): ApplyResult {
+  // Override-shaped patches are sparse; patchSceneExportDefaults merges leaf-wise.
+  ctx.project = touchProject(patchSceneExportDefaults(
+    ctx.project,
+    command.patch as Partial<ShotExportSettings>,
+  ));
+  diff.exportConfigurationChanged = true;
+  return { ok: true, warnings: [] };
+}
+
+function applyExportShotOverridesPatch(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'export.shotOverrides.patch' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  ctx.project = touchProject(setShotExportOverride(ctx.project, resolved.id, command.patch));
+  diff.exportConfigurationChanged = true;
+  if (!diff.shotsCreated.includes(resolved.id)) {
+    diff.shotsUpdated.push(resolved.id);
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyExportShotOverridesReset(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'export.shotOverrides.reset' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  ctx.project = touchProject(
+    command.field
+      ? resetShotExportField(ctx.project, resolved.id, command.field)
+      : resetShotExportOverrides(ctx.project, resolved.id),
+  );
+  diff.exportConfigurationChanged = true;
+  if (!diff.shotsCreated.includes(resolved.id)) {
+    diff.shotsUpdated.push(resolved.id);
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyExportShotOverridesCopy(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'export.shotOverrides.copy' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const fromResolved = resolveShotTarget(ctx.project, command.fromShot, refs);
+  if (!fromResolved.ok) {
+    return {
+      ok: false,
+      diagnostics: fromResolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const toIds: string[] = [];
+  for (let index = 0; index < command.toShots.length; index += 1) {
+    const target = command.toShots[index]!;
+    const resolved = resolveShotTarget(ctx.project, target, refs);
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        diagnostics: resolved.diagnostics.map((item) => ({
+          ...item,
+          path: item.path ? `${path}.toShots[${index}].${item.path}` : `${path}.toShots[${index}]`,
+        })),
+        warnings: [],
+      };
+    }
+    toIds.push(resolved.id);
+  }
+  ctx.project = touchProject(copyShotExportOverrides(ctx.project, fromResolved.id, toIds));
+  diff.exportConfigurationChanged = true;
+  for (const id of toIds) {
+    if (!diff.shotsCreated.includes(id)) diff.shotsUpdated.push(id);
+  }
+  return { ok: true, warnings: [] };
+}
+
+function applyExportShotOverridesPromote(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'export.shotOverrides.promote' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  ctx.project = touchProject(promoteShotExportToSceneDefaults(ctx.project, resolved.id));
+  diff.exportConfigurationChanged = true;
   return { ok: true, warnings: [] };
 }
 

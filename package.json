@@ -22,6 +22,7 @@
     "agent:screenshot": "tsx scripts/agent/cli.ts screenshot",
     "agent:verify": "tsx scripts/agent/cli.ts verify",
     "agent:run": "tsx scripts/agent/cli.ts run",
+    "agent:package": "tsx scripts/agent/cli.ts package",
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",

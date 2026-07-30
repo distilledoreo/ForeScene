@@ -11,10 +11,11 @@ npm run agent:apply -- --plan plans/example.json --write
 npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
 npm run agent:verify -- --workspace build --output artifacts/verify.png
 npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
+npm run agent:package -- --write --output artifacts/package.zip
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
-`apply` / `run` require `--write` (or an already seeded CLI profile) and commit through Project Safety.
+`apply` / `run` / `package` require `--write` (or an already seeded CLI profile) and commit through Project Safety / Export package control.
 
 ## Defaults
 
@@ -67,6 +68,15 @@ Returns:
 }
 ```
 
+## `agent:package`
+
+```bash
+npm run agent:package -- --write --output artifacts/package.zip
+npm run agent:package -- --write --shot <shotId> --output artifacts/one-shot.zip
+```
+
+Calls `window.foreScene.exportPackage()` and, when `--output` is set, captures the browser download via Playwright.
+
 ## Origin consistency
 
 A project opened under port 3000 is a different browser storage origin than port 4173. Keep the Agent CLI on one URL (prefer the Vite dev server on 3000).
@@ -74,3 +84,7 @@ A project opened under port 3000 is a different browser storage origin than port
 ## Visual verification
 
 Screenshots target `[data-testid="scene-viewport"]` when present, otherwise the page viewport.
+
+## Agent Console
+
+The in-app **Agent Console** (Project menu) is the same API surface. Prefer the CLI for automation; use the Console for interactive paste/preview/apply while debugging plans.

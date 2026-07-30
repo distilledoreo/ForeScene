@@ -5,6 +5,7 @@
 
 import type {
   CameraData,
+  ExportSettingsOverride,
   HumanPose,
   SceneObjectType,
   StagingRole,
@@ -16,6 +17,8 @@ import type {
   ExportPlan,
   ExportPlanSummary,
 } from '../exportPlan';
+import type { ExportSettingFieldPath } from '../exportConfiguration';
+import type { PackageExportPhase } from '../packageExport';
 import type { AgentDiagnostic } from './diagnostics';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
@@ -264,7 +267,65 @@ export type ForeSceneAgentCommand =
       object?: AgentEntityTarget;
       clearPoseOnly?: boolean;
     }
-  | { op: 'landmark.create'; ref?: string; landmark: Record<string, unknown> }
+  | {
+      op: 'landmark.create';
+      ref?: string;
+      landmark: {
+        name?: string;
+        displayName?: string;
+        position?: [number, number, number];
+        description?: string;
+        linkedObjectId?: string;
+        visible?: boolean;
+        promptCritical?: boolean;
+        tags?: string[];
+      };
+    }
+  | {
+      op: 'landmark.update';
+      landmark: AgentEntityTarget;
+      updates: {
+        name?: string;
+        displayName?: string;
+        position?: [number, number, number];
+        description?: string;
+        linkedObjectId?: string | null;
+        visible?: boolean;
+        promptCritical?: boolean;
+        tags?: string[];
+      };
+    }
+  | { op: 'landmark.delete'; landmark: AgentEntityTarget }
+  | {
+      op: 'landmark.linkObject';
+      landmark: AgentEntityTarget;
+      /** Pass null to unlink. */
+      object: AgentEntityTarget | null;
+    }
+  | {
+      op: 'export.sceneDefaults.patch';
+      patch: ExportSettingsOverride;
+    }
+  | {
+      op: 'export.shotOverrides.patch';
+      shot: AgentEntityTarget;
+      patch: ExportSettingsOverride;
+    }
+  | {
+      op: 'export.shotOverrides.reset';
+      shot: AgentEntityTarget;
+      /** Omit to clear every override on the shot. */
+      field?: ExportSettingFieldPath;
+    }
+  | {
+      op: 'export.shotOverrides.copy';
+      fromShot: AgentEntityTarget;
+      toShots: AgentEntityTarget[];
+    }
+  | {
+      op: 'export.shotOverrides.promote';
+      shot: AgentEntityTarget;
+    }
   | { op: 'workspace.open'; workspace: Workspace }
   | { op: 'selection.set'; objectIds?: string[]; shotId?: string | null };
 
@@ -285,9 +346,13 @@ export interface AgentPlanDiff {
   objectsDeleted: string[];
   shotsCreated: string[];
   shotsUpdated: string[];
+  landmarksCreated: string[];
+  landmarksUpdated: string[];
+  landmarksDeleted: string[];
   selectionChanged: boolean;
   workspaceChanged: boolean;
   projectInfoChanged: boolean;
+  exportConfigurationChanged: boolean;
 }
 
 export interface AgentPlanApplyResult {
@@ -319,6 +384,40 @@ export interface AgentCaptureResult {
   diagnostics: AgentDiagnostic[];
 }
 
+export interface AgentPackageExportRequest {
+  /** Shot ids to package. Defaults to every shot (Export workspace default). */
+  shotIds?: string[];
+  packageType?: ExportPackageType;
+  /** When true (default), trigger a browser download of the ZIP. */
+  download?: boolean;
+}
+
+export interface AgentPackageExportProgressSnapshot {
+  phase: PackageExportPhase | 'idle' | 'failed' | 'cancelled';
+  progress: number;
+  currentShot: number;
+  totalShots: number;
+  shotId?: string;
+  shotName?: string;
+  message: string;
+  indeterminate?: boolean;
+  error?: string;
+}
+
+export interface AgentPackageExportResult {
+  ok: boolean;
+  fileName?: string;
+  manifestPaths?: string[];
+  shotIds?: string[];
+  diagnostics: AgentDiagnostic[];
+  progress?: AgentPackageExportProgressSnapshot;
+}
+
+export interface AgentPlanHistoryEntry {
+  planId: string;
+  description?: string;
+}
+
 export interface ForeSceneRuntimeServices {
   focusObjects?: (ids: string[]) => Promise<void>;
   focusShot?: (shotId: string) => Promise<void>;
@@ -345,5 +444,11 @@ export interface ForeSceneBrowserApi {
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
+  listPlanHistory(): AgentPlanHistoryEntry[];
   waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus>;
+
+  /** Package selected shots (same engine path as Export workspace). Requires write access. */
+  exportPackage(input?: AgentPackageExportRequest): Promise<AgentPackageExportResult>;
+  getPackageExportProgress(): AgentPackageExportProgressSnapshot | null;
+  cancelPackageExport(): AgentPackageExportResult;
 }

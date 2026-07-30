@@ -12,6 +12,12 @@ import { useProjectStore } from '../../state/useProjectStore';
 import { buildAgentCapabilities } from './capabilities';
 import { previewAgentPlan } from './planCompiler';
 import { applyAgentPlan, undoLastAgentPlan } from './transaction';
+import { listAgentHistory } from './history';
+import {
+  cancelAgentPackageExport,
+  exportAgentPackage,
+  getAgentPackageExportProgress,
+} from './packageExportControl';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -34,7 +40,10 @@ import type {
   AgentExportPlanResult,
   AgentObjectInspection,
   AgentObjectQuery,
+  AgentPackageExportRequest,
+  AgentPackageExportResult,
   AgentPlanApplyResult,
+  AgentPlanHistoryEntry,
   AgentPlanPreviewResult,
   AgentProjectInspection,
   AgentShotInspection,
@@ -310,6 +319,26 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     async undoLastPlan(): Promise<AgentPlanApplyResult> {
       return undoLastAgentPlan();
+    },
+
+    listPlanHistory(): AgentPlanHistoryEntry[] {
+      return listAgentHistory();
+    },
+
+    async exportPackage(input: AgentPackageExportRequest = {}): Promise<AgentPackageExportResult> {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        return { ok: false, diagnostics: blocked };
+      }
+      return exportAgentPackage(input);
+    },
+
+    getPackageExportProgress() {
+      return getAgentPackageExportProgress();
+    },
+
+    cancelPackageExport(): AgentPackageExportResult {
+      return cancelAgentPackageExport();
     },
 
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {
