@@ -69,6 +69,13 @@ export interface ProjectSliceState {
   updatePanoReference: (id: string, updates: Partial<PanoReference>) => void;
   addCamera: (options?: { navigateToShots?: boolean }) => Shot;
   updateShot: (id: string, updates: Partial<Shot>, options?: { cameraHistory?: ShotCameraHistoryMode }) => void;
+  setSceneExportDefaults: (defaults: import('../../domain/types').ShotExportSettings) => void;
+  patchSceneExportDefaults: (patch: Partial<import('../../domain/types').ShotExportSettings>) => void;
+  setShotExportOverride: (shotId: string, patch: import('../../domain/types').ExportSettingsOverride) => void;
+  resetShotExportField: (shotId: string, path: import('../../engine/exportConfiguration').ExportSettingFieldPath) => void;
+  resetShotExportOverrides: (shotId: string) => void;
+  copyShotExportOverrides: (fromShotId: string, toShotIds: string[]) => void;
+  promoteShotExportToSceneDefaults: (shotId: string) => void;
   removeShot: (id: string) => void;
   reorderShots: (shotId: string, targetIndex: number) => void;
   copyStagingToNextShot: (sourceShotId: string) => void;

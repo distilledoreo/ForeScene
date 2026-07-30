@@ -3,11 +3,14 @@ import {
   CameraKeyframe,
   CharacterMotionExportFormat,
   CharacterPassExportSettings,
+  ExportPackageFormat,
+  ExportProfileId,
   Landmark,
   LocationProject,
   PanoCropSettings,
   PanoReference,
   ProjectAsset,
+  ProjectExportConfiguration,
   SceneObject,
   SceneObjectType,
   ProjectedStyleSettings,
@@ -19,6 +22,7 @@ import {
   ShotObjectOverrides,
   Transform,
   Vec3,
+  EXPORT_CONFIGURATION_SCHEMA_VERSION,
 } from './types';
 import { createId } from '../utils/ids';
 import { DEFAULT_SHOT_NEAR_CLIP_METERS } from '../engine/cameraClipping';
@@ -241,6 +245,75 @@ export const defaultShotExportSettings: ShotExportSettings = {
   depth: { ...defaultShotDepthSettings },
 };
 
+function normalizePeopleExportMode(value: unknown): NonNullable<ShotExportSettings['peopleExportMode']> {
+  if (value === 'clean_plate' || value === 'both') return value;
+  return 'with_people';
+}
+
+/** Fully normalize resolved shot export settings (including nested character/depth). */
+export function normalizeShotExportSettings(
+  settings?: Partial<ShotExportSettings> | null,
+): ShotExportSettings {
+  const width = Number(settings?.width);
+  const height = Number(settings?.height);
+  return {
+    width: Number.isFinite(width) && width > 0 ? Math.round(width) : defaultShotExportSettings.width,
+    height: Number.isFinite(height) && height > 0 ? Math.round(height) : defaultShotExportSettings.height,
+    peopleExportMode: normalizePeopleExportMode(settings?.peopleExportMode),
+    characterPass: normalizeCharacterPassExportSettings(settings?.characterPass),
+    includeViewport: settings?.includeViewport !== false,
+    includeProjectedViewport: settings?.includeProjectedViewport !== false,
+    includeProjectedCameraMoveReferenceFrames:
+      settings?.includeProjectedCameraMoveReferenceFrames !== false,
+    includeProjectedCameraMoveVideo: settings?.includeProjectedCameraMoveVideo !== false,
+    includeAiResultFrame: settings?.includeAiResultFrame !== false,
+    includePanoCrop: settings?.includePanoCrop !== false,
+    includeFullPano: settings?.includeFullPano !== false,
+    includeGrayboxPano: settings?.includeGrayboxPano !== false,
+    includeCameraMoveVideo: settings?.includeCameraMoveVideo !== false,
+    includeCameraMoveReferenceFrames: settings?.includeCameraMoveReferenceFrames !== false,
+    includeMetadata: settings?.includeMetadata !== false,
+    includePrompt: settings?.includePrompt !== false,
+    depth: normalizeShotDepthSettings(settings?.depth),
+  };
+}
+
+export function createDefaultExportConfiguration(
+  defaults: ShotExportSettings = defaultShotExportSettings,
+): ProjectExportConfiguration {
+  return {
+    schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
+    activeProfileId: 'custom',
+    defaults: normalizeShotExportSettings(defaults),
+    // Preserve current package layout until the v2 writer ships.
+    packageFormat: 'legacy-v1' satisfies ExportPackageFormat,
+  };
+}
+
+export function normalizeProjectExportConfiguration(
+  config?: Partial<ProjectExportConfiguration> | null,
+): ProjectExportConfiguration {
+  const base = createDefaultExportConfiguration();
+  if (!config) return base;
+  const profileIds = new Set<ExportProfileId>([
+    'ai-generation',
+    'full-production',
+    'character-compositing',
+    'custom',
+  ]);
+  const packageFormats = new Set<ExportPackageFormat>(['forescene-v2', 'legacy-v1']);
+  return {
+    schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
+    activeProfileId: typeof config.activeProfileId === 'string' && profileIds.has(config.activeProfileId)
+      ? config.activeProfileId
+      : 'custom',
+    defaults: normalizeShotExportSettings(config.defaults ?? base.defaults),
+    packageFormat: typeof config.packageFormat === 'string' && packageFormats.has(config.packageFormat)
+      ? config.packageFormat
+      : 'legacy-v1',
+  };
+}
+
 export function createTransform(position: Vec3 = [0, 0, 0]): Transform {
   return {
     position,
@@ -312,7 +385,7 @@ export function createCameraData(position: Vec3, target: Vec3, fovDegrees = 55):
 }
 
 export function createOriginShot(
-  project: Pick<LocationProject, 'scene' | 'settings'>,
+  project: Pick<LocationProject, 'scene' | 'settings' | 'exportConfiguration'>,
   index = 1,
 ): Shot {
   const origin = project.scene.panoOrigin;
@@ -322,7 +395,11 @@ export function createOriginShot(
     project.settings.defaultShotFovDegrees,
   );
   camera.aspectRatio = DEFAULT_CAMERA_ASPECT_RATIO;
-  const shot = createShot({ index, camera });
+  const shot = createShot({
+    index,
+    camera,
+    exportDefaults: project.exportConfiguration?.defaults,
+  });
   shot.name = `Camera ${String(index).padStart(3, '0')}`;
   return shot;
 }
@@ -332,9 +409,14 @@ export function createShot(params: {
   camera: CameraData;
   linkedPanoId?: string;
   panoCrop?: PanoCropSettings;
+  /** Scene export defaults to inherit; new shots start with empty overrides. */
+  exportDefaults?: ShotExportSettings;
 }): Shot {
   const shotNumber = String(params.index).padStart(3, '0');
   const now = nowIso();
+  const exportSettings = normalizeShotExportSettings(
+    params.exportDefaults ?? defaultShotExportSettings,
+  );
   return {
     id: createId('shot'),
     shotNumber,
@@ -346,11 +428,8 @@ export function createShot(params: {
     linkedPanoId: params.linkedPanoId,
     panoCrop: params.panoCrop,
     landmarkIds: [],
-    exportSettings: {
-      ...defaultShotExportSettings,
-      characterPass: { ...defaultCharacterPassExportSettings },
-      depth: { ...defaultShotDepthSettings },
-    },
+    exportSettings,
+    exportOverrides: {},
     promptOverrides: {},
     status: 'planned',
     assets: {},
@@ -500,6 +579,7 @@ export function createDefaultProject(): LocationProject {
     panoRotation: [0, 0, 0] as Vec3,
   };
 
+  const exportConfiguration = createDefaultExportConfiguration();
   return {
     schemaVersion: '1.0',
     productVersion: '0.1.0',
@@ -525,9 +605,10 @@ export function createDefaultProject(): LocationProject {
         description: 'Foreground human scale figure that should face the camera.',
       },
     ],
-    shots: [createOriginShot({ scene, settings })],
+    shots: [createOriginShot({ scene, settings, exportConfiguration })],
     assets: { assets: {} },
     settings,
     workflow: { ...defaultProjectWorkflow },
+    exportConfiguration,
   };
 }

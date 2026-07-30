@@ -23,6 +23,17 @@ import {
   normalizeProjectSettings,
   normalizeProjectedStyleSettings,
 } from '../../domain/defaults';
+import {
+  copyShotExportOverrides as copyShotExportOverridesOp,
+  ensureProjectExportConfiguration,
+  patchSceneExportDefaults as patchSceneExportDefaultsOp,
+  promoteShotExportToSceneDefaults as promoteShotExportToSceneDefaultsOp,
+  resetShotExportField as resetShotExportFieldOp,
+  resetShotExportOverrides as resetShotExportOverridesOp,
+  setSceneExportDefaults as setSceneExportDefaultsOp,
+  setShotExportOverride as setShotExportOverrideOp,
+  syncShotExportFromResolved,
+} from '../../engine/exportConfiguration';
 import { initialContinuityProject as initialProject } from './initialProject';
 import {
   isCaptureOriginNearPano,
@@ -114,6 +125,7 @@ export const createProjectSlice: StateCreator<
         index: state.project.shots.length + 1,
         camera,
         linkedPanoId: linkedPano?.id,
+        exportDefaults: state.project.exportConfiguration?.defaults,
       }),
       linkedPano,
     );
@@ -139,7 +151,9 @@ export const createProjectSlice: StateCreator<
   project: initialProject,
 
   setProject: (project) => {
-    const linkedProject = pruneUnreferencedProjectAssets(linkAllShotsToCanonicalPano(project));
+    const linkedProject = pruneUnreferencedProjectAssets(
+      linkAllShotsToCanonicalPano(ensureProjectExportConfiguration(project)),
+    );
     const canonical = linkedProject.panoRefs.find((pano) => pano.isCanonical) ?? linkedProject.panoRefs[0];
     const firstShot = linkedProject.shots[0];
     const cleared = clearBuildHistory();
@@ -916,18 +930,87 @@ export const createProjectSlice: StateCreator<
       }
     }
 
+    const { exportSettings: nextExportSettings, exportOverrides: nextExportOverrides, ...restUpdates } = updates;
+    let nextProject: LocationProject = {
+      ...state.project,
+      shots: state.project.shots.map((current) => {
+        if (current.id !== id) return current;
+        const updated = { ...current, ...restUpdates, updatedAt: new Date().toISOString() };
+        return withShotPanoLink(state.project, updated);
+      }),
+    };
+
+    if (nextExportSettings) {
+      nextProject = syncShotExportFromResolved(
+        ensureProjectExportConfiguration(nextProject),
+        id,
+        nextExportSettings,
+      );
+    } else if (nextExportOverrides) {
+      nextProject = setShotExportOverrideOp(
+        ensureProjectExportConfiguration(nextProject),
+        id,
+        nextExportOverrides,
+      );
+    }
+
     return {
       ...historyPatch,
-      project: touchProject(pruneUnreferencedProjectAssets({
-        ...state.project,
-        shots: state.project.shots.map((current) => {
-          if (current.id !== id) return current;
-          const updated = { ...current, ...updates, updatedAt: new Date().toISOString() };
-          return withShotPanoLink(state.project, updated);
-        }),
-      })),
+      project: touchProject(pruneUnreferencedProjectAssets(nextProject)),
     };
   }),
+
+  setSceneExportDefaults: (defaults) => set((state) => ({
+    project: touchProject(setSceneExportDefaultsOp(
+      ensureProjectExportConfiguration(state.project),
+      defaults,
+    )),
+  })),
+
+  patchSceneExportDefaults: (patch) => set((state) => ({
+    project: touchProject(patchSceneExportDefaultsOp(
+      ensureProjectExportConfiguration(state.project),
+      patch,
+    )),
+  })),
+
+  setShotExportOverride: (shotId, patch) => set((state) => ({
+    project: touchProject(setShotExportOverrideOp(
+      ensureProjectExportConfiguration(state.project),
+      shotId,
+      patch,
+    )),
+  })),
+
+  resetShotExportField: (shotId, path) => set((state) => ({
+    project: touchProject(resetShotExportFieldOp(
+      ensureProjectExportConfiguration(state.project),
+      shotId,
+      path,
+    )),
+  })),
+
+  resetShotExportOverrides: (shotId) => set((state) => ({
+    project: touchProject(resetShotExportOverridesOp(
+      ensureProjectExportConfiguration(state.project),
+      shotId,
+    )),
+  })),
+
+  copyShotExportOverrides: (fromShotId, toShotIds) => set((state) => ({
+    project: touchProject(copyShotExportOverridesOp(
+      ensureProjectExportConfiguration(state.project),
+      fromShotId,
+      toShotIds,
+    )),
+  })),
+
+  promoteShotExportToSceneDefaults: (shotId) => set((state) => ({
+    project: touchProject(promoteShotExportToSceneDefaultsOp(
+      ensureProjectExportConfiguration(state.project),
+      shotId,
+    )),
+  })),
 
   removeShot: (id) => set((state) => {
     if (state.project.shots.length <= 1) return state;
