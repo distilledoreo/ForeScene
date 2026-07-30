@@ -183,12 +183,15 @@ export interface AgentExportPlanResult {
   diagnostics: AgentDiagnostic[];
 }
 
-/** Plan envelope — validated in a later milestone; typed here for the API surface. */
+/** Plan envelope — validated by `parseForeSceneAgentPlan`. */
 export interface ForeSceneAgentPlan {
   version: 1;
   planId?: string;
   description?: string;
+  /** Reserved numeric revision token (prefer expectedFingerprint). */
   expectedRevision?: number;
+  /** Reject prepare/apply when the live project fingerprint no longer matches. */
+  expectedFingerprint?: string;
   commands: ForeSceneAgentCommand[];
 }
 
@@ -251,8 +254,22 @@ export interface AgentPlanPreviewResult {
   ok: boolean;
   planId?: string;
   summary?: AgentPlanSummary;
+  diff?: AgentPlanDiff;
+  fingerprint?: string;
+  baseProjectUpdatedAt?: string;
   warnings: AgentDiagnostic[];
   diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentPlanDiff {
+  objectsCreated: string[];
+  objectsUpdated: string[];
+  objectsDeleted: string[];
+  shotsCreated: string[];
+  shotsUpdated: string[];
+  selectionChanged: boolean;
+  workspaceChanged: boolean;
+  projectInfoChanged: boolean;
 }
 
 export interface AgentPlanApplyResult {

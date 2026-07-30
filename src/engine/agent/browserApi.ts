@@ -10,6 +10,7 @@ import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { buildAgentCapabilities } from './capabilities';
+import { previewAgentPlan } from './planCompiler';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -272,20 +273,36 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return getForeSceneAgentStatus();
     },
 
-    async previewPlan(_plan: unknown): Promise<AgentPlanPreviewResult> {
-      const status = getForeSceneAgentStatus();
-      if (!status.writeAccess) {
+    async previewPlan(plan: unknown): Promise<AgentPlanPreviewResult> {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        return { ok: false, warnings: [], diagnostics: blocked };
+      }
+      const projectState = useProjectStore.getState();
+      // Preview mutates only a structuredClone inside prepareAgentPlan.
+      const liveProject = projectState.project;
+      const result = previewAgentPlan(plan, {
+        project: liveProject,
+        workspace: projectState.workspace,
+        selectedObjectIds: projectState.selectedObjectIds,
+        selectedShotId: projectState.selectedShotId,
+        activePanoId: projectState.activePanoId,
+        gridSnap: projectState.gridSnap,
+      });
+      // Prove the live store project was not replaced.
+      if (useProjectStore.getState().project !== liveProject) {
         return {
           ok: false,
           warnings: [],
-          diagnostics: [writeAccessRequiredDiagnostic('previewPlan')],
+          diagnostics: [
+            agentError(
+              'preview_isolation',
+              'Preview unexpectedly mutated the live project store.',
+            ),
+          ],
         };
       }
-      return {
-        ok: false,
-        warnings: [],
-        diagnostics: [notImplementedDiagnostic('previewPlan')],
-      };
+      return result;
     },
 
     async applyPlan(_plan: unknown): Promise<AgentPlanApplyResult> {

@@ -58,7 +58,7 @@ async function previewOrApply(
   const session = await openAgentBrowser({
     url: options.url,
     headless: options.headless,
-    writeAccess: options.writeAccess || command === 'apply' || command === 'preview',
+    writeAccess: options.writeAccess,
   });
   try {
     const result = await session.page.evaluate(async ({ commandName, planJson }) => {
@@ -100,7 +100,11 @@ async function main() {
     if (!args.plan) {
       throw new Error(`--plan is required for ${args.command}`);
     }
-    await previewOrApply(args.command, args.plan, args);
+    await previewOrApply(args.command, args.plan, {
+      ...args,
+      // Preview is read-only over a clone; apply still needs write access.
+      writeAccess: args.writeAccess || args.command === 'apply',
+    });
     return;
   }
 

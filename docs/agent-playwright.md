@@ -12,7 +12,9 @@ npm run agent:screenshot
 npm run agent:verify
 ```
 
-`preview` / `apply` require a later milestone (currently return `write_access_required` or `not_implemented`). `screenshot` / `verify` are stubs.
+`preview` prepares a plan without mutating the live project (read-only mode is enough).  
+`apply` still requires write access and is not implemented until the atomic-commit milestone.  
+`screenshot` / `verify` remain stubs.
 
 ## Defaults
 

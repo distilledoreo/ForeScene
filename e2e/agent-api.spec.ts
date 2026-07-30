@@ -44,6 +44,29 @@ test.describe('Agent API @smoke', () => {
     expect(apply.ok).toBe(false);
     expect(apply.diagnostics[0]?.code).toBe('write_access_required');
 
+    const preview = await page.evaluate(async () => window.foreScene!.previewPlan({
+      version: 1,
+      description: 'Preview create',
+      commands: [
+        {
+          op: 'object.create',
+          ref: 'actorA',
+          object: { type: 'human_dummy', name: 'Actor A', position: [-1.2, 0, 0] },
+        },
+        {
+          op: 'object.update',
+          object: { ref: 'actorA' },
+          updates: { visible: true },
+        },
+      ],
+    }));
+    expect(preview.ok).toBe(true);
+    expect(preview.summary?.createdRefs.actorA?.name).toBe('Actor A');
+    expect(preview.diff?.objectsCreated).toHaveLength(1);
+
+    const objectCountAfterPreview = await page.evaluate(() => window.foreScene!.inspectProject().objectCount);
+    expect(objectCountAfterPreview).toBe(inspection.project.objectCount);
+
     // Strict Mode remount must not leave a stale API object: identity stays callable.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await enterStudio(page);

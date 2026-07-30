@@ -6,17 +6,16 @@ Playwright hosts and observes the browser. The Agent API performs exact project 
 
 ## Status
 
-**Milestone 1 — read-only vertical slice**
+**Milestone 1 — read-only vertical slice** ✓  
+**Milestone 2 — plan validation and preview** ✓
 
 Available now:
 
-- `getStatus()` / `getCapabilities()`
-- `inspectProject()` / `listObjects()` / `inspectObject()`
-- `listShots()` / `inspectShot()` / `listLandmarks()`
-- `createExportPlan()`
-- `setControlMode()`
-- `waitForIdle()`
-- Mutation stubs (`previewPlan`, `applyPlan`, `undoLastPlan`) that return `write_access_required` unless write access is enabled (then `not_implemented`)
+- Inspection APIs from milestone 1
+- `previewPlan(plan)` — parse, resolve refs, apply on a `structuredClone`, return summary/diff
+- `npm run agent:preview -- --plan path/to/plan.json`
+
+Mutations (`applyPlan` / `undoLastPlan`) still require write access and return `not_implemented` until the atomic-commit milestone.
 
 ## Quick start
 
@@ -73,12 +72,26 @@ Write access is session-oriented:
 
 When `shotIds` is omitted, every shot is planned (matching the Export workspace default selection).
 
+## Preview
+
+`previewPlan` works in read-only mode. It never writes the live project.
+
+Supported commands in this milestone:
+
+- `project.updateInfo`
+- `object.create` / `object.update` / `object.delete` / `object.duplicate`
+- `shot.create` / `shot.updateCamera` / `shot.stageObject` / `shot.clearStaging`
+- `workspace.open` / `selection.set`
+
+Plan-local `ref` values bind created entities so later commands can target them. Ambiguous name queries return `ambiguous_target` with candidate ids and abort the whole plan.
+
+Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale projects.
+
 ## Deferred / not in this milestone
 
-- Plan validation, preview diffs, and atomic commits
-- Object / shot / landmark mutations
+- Atomic `applyPlan` / `undoLastPlan` commits
+- Landmark create/update/delete commands
+- Export configuration writes
 - Package download control
 - Viewport capture runtime services
 - In-app Agent Console
-
-See the architecture notes in the PR description for the full roadmap.

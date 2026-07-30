@@ -121,9 +121,11 @@ describe('agent browser API (store-backed)', () => {
     expect(apply.ok).toBe(false);
     expect(apply.diagnostics[0]!.code).toBe('write_access_required');
 
-    const preview = await api.previewPlan({ version: 1, commands: [] });
-    expect(preview.ok).toBe(false);
-    expect(preview.diagnostics[0]!.code).toBe('write_access_required');
+    const preview = await api.previewPlan({
+      version: 1,
+      commands: [{ op: 'workspace.open', workspace: 'build' }],
+    });
+    expect(preview.ok).toBe(true);
   });
 
   it('createExportPlan matches the engine planner summary', () => {
@@ -147,8 +149,11 @@ describe('agent browser API (store-backed)', () => {
     expect(api.getStatus().writeAccess).toBe(false);
     api.setControlMode('read-write');
     expect(api.getStatus().writeAccess).toBe(true);
-    const preview = await api.previewPlan({ version: 1, commands: [] });
-    expect(preview.diagnostics[0]!.code).toBe('not_implemented');
+    const apply = await api.applyPlan({
+      version: 1,
+      commands: [{ op: 'workspace.open', workspace: 'build' }],
+    });
+    expect(apply.diagnostics[0]!.code).toBe('not_implemented');
     api.setControlMode('read-only');
     expect(api.getStatus().writeAccess).toBe(false);
   });
