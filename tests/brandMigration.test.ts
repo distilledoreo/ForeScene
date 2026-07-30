@@ -6,6 +6,9 @@ import {
   projectDownloadFileName,
   readMigratedPreference,
 } from '../src/config/brand';
+import { createDefaultProject } from '../src/domain/defaults';
+import { createProjectPackage, readProjectFile, validateProjectPackage } from '../src/engine/projectIO';
+import JSZip from 'jszip';
 
 /** Minimal localStorage so preference migration can be exercised outside a browser. */
 function installFakeStorage(seed: Record<string, string> = {}) {
@@ -68,9 +71,10 @@ describe('ForeScene preference migration', () => {
 });
 
 describe('ForeScene project backup file naming', () => {
-  it('accepts ForeScene, legacy PanoRef, and zip backups regardless of case', () => {
+  it('accepts .fsp, transitional, legacy PanoRef, and zip backups regardless of case', () => {
+    expect(isProjectBackupFileName('set.fsp')).toBe(true);
+    expect(isProjectBackupFileName('SET.FSP')).toBe(true);
     expect(isProjectBackupFileName('set.forescene-project')).toBe(true);
-    expect(isProjectBackupFileName('SET.ForeScene-Project')).toBe(true);
     expect(isProjectBackupFileName('set.panoref-project')).toBe(true);
     expect(isProjectBackupFileName('set.zip')).toBe(true);
   });
@@ -79,18 +83,28 @@ describe('ForeScene project backup file naming', () => {
     expect(isProjectBackupFileName('set.json')).toBe(false);
   });
 
-  it('offers both project extensions in the import picker', () => {
+  it('offers .fsp and legacy extensions in the import picker', () => {
     const accept = projectBackupAcceptAttribute();
+    expect(accept).toContain('.fsp');
     expect(accept).toContain('.forescene-project');
     expect(accept).toContain('.panoref-project');
     expect(accept).toContain('.json');
     expect(accept).toContain('.zip');
   });
 
-  it('names downloads after ForeScene', () => {
-    expect(projectDownloadFileName('Courtyard Set', 'forescene-project'))
-      .toBe('courtyard_set_forescene.forescene-project');
-    expect(projectDownloadFileName('Courtyard Set', 'json'))
-      .toBe('courtyard_set_forescene.json');
+  it('names every download as a consistent .fsp backup', () => {
+    expect(projectDownloadFileName('Courtyard Set')).toBe('courtyard_set_forescene.fsp');
+  });
+
+  it('always packages asset-free projects as ZIP .fsp backups', async () => {
+    const project = createDefaultProject();
+    project.name = 'Empty Set';
+    const blob = await createProjectPackage(project);
+    expect(blob.type).not.toBe('application/json');
+    await validateProjectPackage(blob);
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    expect(zip.file('project.json')).toBeTruthy();
+    const reopened = await readProjectFile(new File([blob], 'empty_set_forescene.fsp'));
+    expect(reopened.name).toBe('Empty Set');
   });
 });

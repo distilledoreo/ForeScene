@@ -42,7 +42,7 @@ export const helpSections: readonly HelpSection[] = [
         defaultOpen: true,
         controls: [
           { label: 'Skip intro', description: 'Dismisses the opening video. Clicking the video, pressing Escape, Enter, or Space also dismisses it. The choice is remembered in this browser.' },
-          { label: 'Open ForeScene studio', description: 'Opens the complete Build → Reference → Shots → Export workflow: sets, characters, shots, continuity tools, and export handoffs.' },
+          { label: 'Open ForeScene', description: 'Opens the complete Build → Reference → Shots → Export workflow: sets, characters, shots, continuity tools, and export handoffs.' },
           { label: 'Just view a 360 pano', description: 'Opens the independent panorama viewer. This mode does not modify the current ForeScene project.' },
           { label: 'Switch modes later', description: 'Open the top-left brand menu and choose Simple 360 Viewer or Open ForeScene.' },
         ],
@@ -663,9 +663,9 @@ export const helpSections: readonly HelpSection[] = [
         summary: 'Backups preserve the project document and referenced local binary media.',
         defaultOpen: true,
         controls: [
-          { label: 'Import Project Backup', description: 'Validates and opens .json, .zip, .forescene-project, or legacy .panoref-project backups.' },
-          { label: 'Export Project Backup', description: 'Downloads a verified editable backup as project_name_forescene.forescene-project.' },
-          { label: 'Legacy backups', description: 'Older .panoref-project packages remain importable indefinitely.' },
+          { label: 'Import Project Backup', description: 'Validates and opens .fsp backups, plus legacy .forescene-project, .panoref-project, .zip, or .json files.' },
+          { label: 'Export Project Backup', description: 'Downloads a verified editable backup as project_name_forescene.fsp (always a ZIP containing project.json and any binary media).' },
+          { label: 'Legacy backups', description: 'Older .panoref-project and transitional .forescene-project packages remain importable indefinitely.' },
           { label: 'New Project confirmation', description: 'Explains that the current project is replaced in the editor while remaining available through local recovery.' },
           { label: 'Project import status', description: 'Reports success, validation errors, blocked writes, or recovery-related restrictions.' },
         ],
@@ -675,7 +675,7 @@ export const helpSections: readonly HelpSection[] = [
         title: 'Interchange formats and legacy compatibility',
         summary: 'New exports use ForeScene names; older PanoRef / Continuity Stage identifiers remain readable.',
         controls: [
-          { label: 'Project backup', description: 'New: .forescene-project. Legacy import: .panoref-project, .zip, .json.' },
+          { label: 'Project backup', description: 'New: .fsp (ZIP). Legacy import: .forescene-project, .panoref-project, .zip, .json.' },
           { label: 'Poseable rig package', description: 'New: .fsrig with forescene-poseable-rig v2. Legacy import: .panorig with panoref-poseable-rig v1.' },
           { label: 'Scene bundle', description: 'Extension stays .panoscene. Manifest may be forescene-scene.json or legacy panoref-scene.json.' },
           { label: 'Local browser storage', description: 'IndexedDB database names and asset URI prefixes keep historical panoref-* identifiers so existing projects and recovery history keep opening.' },

@@ -16,7 +16,7 @@ async function enterStudio(page: Page) {
 
   // Mode chooser appears when appMode is null after splash.
   const modeChooser = page.locator('[data-mode-chooser]');
-  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene/i });
   if (await modeChooser.isVisible().catch(() => false)) {
     await studio.click();
   } else {

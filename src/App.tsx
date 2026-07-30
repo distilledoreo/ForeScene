@@ -352,7 +352,7 @@ export default function App() {
               ref={fileRef}
               type="file"
               accept={projectBackupAcceptAttribute()}
-              aria-label="Open project JSON"
+              aria-label="Open project backup"
               data-project-import-input
               className="hidden"
               onChange={(event) => void importProject(event.target.files?.[0])}

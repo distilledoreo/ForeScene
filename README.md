@@ -26,7 +26,7 @@ ForeScene is a **handoff tool**. It produces control frames, camera truth, and p
 
 | Purpose | ForeScene | Also accepted (import) |
 | --- | --- | --- |
-| Project backup | `<project_name>_forescene.forescene-project` | `.panoref-project`, `.zip`, `.json` |
+| Project backup | `<project_name>_forescene.fsp` (ZIP with `project.json` + binaries) | `.forescene-project`, `.panoref-project`, `.zip`, `.json` |
 | Character rig | `.fsrig` — `forescene-poseable-rig` v2 | `.panorig` — `panoref-poseable-rig` v1 |
 | Scene bundle | `.panoscene` containing `forescene-scene.json` | `.panoscene` containing `panoref-scene.json` |
 | Geometry import | `.glb`, embedded `.gltf` | `.fbx`, `.obj`, `.stl`, `.ply` |
@@ -40,7 +40,7 @@ The rebrand from PanoRef / Continuity Stage to ForeScene is user-facing. On-disk
 
 - The npm package is `forescene`. The GitHub repository may still be `distilledoreo/PanoRef`; renaming it is a separate cutover step and has not happened yet.
 - Local preferences moved to `forescene-app-mode`, `forescene-splash-seen`, and `forescene-theme`, migrating from the `panoref-*` keys on first run. The studio app mode was previously stored as `continuity` and migrates to `studio`.
-- Older `.panoref-project` backups and `.panorig` rigs stay importable indefinitely, as do `.panoscene` bundles whose manifest is still named `panoref-scene.json`.
+- Older `.panoref-project` / transitional `.forescene-project` backups and `.panorig` rigs stay importable indefinitely, as do `.panoscene` bundles whose manifest is still named `panoref-scene.json`. New backups always download as `.fsp`.
 - IndexedDB database names (`panoref-model-assets`, `panoref-project-assets`, `panoref-project-revisions`, `panoref-autorig-drafts`), the `panoref-idb:` asset URI scheme, and the `application/vnd.panoref.graybox-mesh` packed-mesh type are persisted values kept verbatim so existing local data keeps opening. They are legacy names, not deprecated formats.
 - "Continuity" remains the domain term for compare, landmarks, and handoff packages — it is no longer a product name.
 
@@ -57,7 +57,7 @@ The dev server starts at `http://localhost:3000`. If that port is already occupi
 
 ## Workflow
 
-After the intro splash, pick a mode: **Open ForeScene studio** (full pipeline) or **Just view a 360 pano** (import, look around, **Download current view**). Switch anytime from the brand menu. The choice is stored in `localStorage` as `forescene-app-mode`.
+After the intro splash, pick a mode: **Open ForeScene** (full pipeline) or **Just view a 360 pano** (import, look around, **Download current view**). Switch anytime from the brand menu. The choice is stored in `localStorage` as `forescene-app-mode`.
 
 In studio mode, the top stage rail tracks progress across Build → Reference → Shots → Export. It guides without locking you in — every workspace remains available at any time.
 
@@ -202,7 +202,7 @@ Existing Build actions remain: `V` or `Esc` for Select, `O` for Origin, `G` for 
 
 Saved projects use ordered schema migrations (current schema `1.0`, product version `0.1.0`). Older `0.1` / `0.2` files migrate on load.
 
-Projects **autosave** to verified local revisions with recovery snapshots before destructive changes. Use the brand menu for New Project, Import/Export Project Backup, Package Export, and Project Safety & Recovery. Rename the project from the brand menu name field. Exporting a backup downloads `<project_name>_forescene.forescene-project`, a ZIP containing `project.json` plus the binary mesh assets it references.
+Projects **autosave** to verified local revisions with recovery snapshots before destructive changes. Use the brand menu for New Project, Import/Export Project Backup, Package Export, and Project Safety & Recovery. Rename the project from the brand menu name field. Exporting a backup always downloads `<project_name>_forescene.fsp`, a ZIP containing `project.json` plus any binary mesh or media assets it references.
 
 Top-level fields include:
 

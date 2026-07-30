@@ -36,7 +36,7 @@ try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const chooser = page.locator('[data-mode-chooser]');
   if (await chooser.isVisible().catch(() => false)) {
-    await page.getByRole('button', { name: /Open ForeScene studio/i }).click();
+    await page.getByRole('button', { name: /Open ForeScene/i }).click();
   }
   await dismissOverlays();
   await workspaceTab('Build').click();

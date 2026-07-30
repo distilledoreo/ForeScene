@@ -53,7 +53,7 @@ try {
   await waitFor(client, 'document.title === "ForeScene"', 'app shell');
 
   // Select the visible production mode explicitly; do not click a Build control behind the chooser.
-  await clickOptionalButton(client, 'Open ForeScene studio', 4000, { exact: true });
+  await clickOptionalButton(client, 'Open ForeScene', 4000, { exact: true });
 
   await waitFor(
     client,

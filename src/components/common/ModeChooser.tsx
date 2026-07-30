@@ -22,15 +22,13 @@ export function ModeChooser({ visible }: { visible: boolean }) {
       <div className="w-full max-w-xl space-y-6 rounded-[var(--radius-card)] border border-subtle bg-surface-raised p-6 shadow-soft">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold text-primary">What do you want to do?</h1>
-          <p className="text-sm text-secondary">
-            {BRAND.tagline} Or just look around a 360 pano and download the view.
-          </p>
+          <p className="text-sm text-secondary">{BRAND.modeChooserIntro}</p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <ModeCard
             icon={<Boxes className="h-7 w-7" />}
-            title="Open ForeScene studio"
-            description="Build sets, stage characters, design shots, and export production-ready handoffs."
+            title="Open ForeScene"
+            description="Sets, characters, shots, continuity tools, and production-ready handoffs."
             onClick={() => choose('studio')}
             dataMode="studio"
           />

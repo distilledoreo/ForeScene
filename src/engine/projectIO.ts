@@ -1,5 +1,5 @@
 import { Euler, LocationProject, PanoReference, ProjectAsset, SceneObject, Shot, Transform, Vec3 } from '../domain/types';
-import { BRAND, isProjectBackupFileName, projectDownloadFileName } from '../config/brand';
+import { isProjectBackupFileName, projectDownloadFileName } from '../config/brand';
 import { normalizeProductionShotId } from '../domain/shotIdentity';
 import {
   DEFAULT_CAMERA_HEIGHT_METERS,
@@ -355,9 +355,7 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
   const binaryAssets = Object.values(portable.assets.assets).filter((asset) => asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX));
   const storedProjectAssets = Object.values(portable.assets.assets)
     .filter((asset) => isRasterOrVideoAsset(asset) && portableStorageKey(asset));
-  if (binaryAssets.length === 0 && storedProjectAssets.length === 0) {
-    return new Blob([serializeProject(portable)], { type: 'application/json' });
-  }
+  // Always emit a ZIP `.fsp` package — even asset-free projects — so downloads use one extension.
   const zip = new JSZip();
   zip.file(PROJECT_MANIFEST, serializeProject(portable));
   const integrity: ProjectPackageIntegrity = { version: 1, entries: {} };
@@ -446,7 +444,7 @@ function importedPayloadKey(projectId: string, importNamespace: string, kind: 'a
 }
 
 async function inspectProjectFile(file: File): Promise<ValidatedProjectFileContents> {
-  // Packaged backups (.forescene-project / legacy .panoref-project / .zip) carry
+  // Packaged backups (.fsp / legacy .forescene-project / .panoref-project / .zip) carry
   // binaries; anything else is read as a plain project JSON manifest.
   if (!isProjectBackupFileName(file.name)) {
     const project = parseProject(await file.text());
@@ -595,10 +593,7 @@ export async function downloadProject(project: LocationProject) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = projectDownloadFileName(
-    project.name,
-    blob.type === 'application/json' ? 'json' : BRAND.projectExtension.replace(/^\./, ''),
-  );
+  link.download = projectDownloadFileName(project.name);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

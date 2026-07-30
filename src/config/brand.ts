@@ -11,9 +11,14 @@ export const BRAND = {
   /** One-line product positioning for onboarding and Help. */
   tagline:
     'ForeScene is a local-first previsualization and continuity workspace for AI-assisted video production. Build sets, stage characters, design shots, and export production-ready handoffs.',
+  /** Shorter mode-chooser intro; card copy covers the rest. */
+  modeChooserIntro:
+    'Build sets, stage characters, design shots, and prepare production handoffs—or open the standalone 360 viewer.',
   shortDescription: 'local-first previsualization, continuity, and AI-video handoff',
-  projectExtension: '.forescene-project',
-  legacyProjectExtension: '.panoref-project',
+  /** Canonical portable project backup extension (always a ZIP package). */
+  projectExtension: '.fsp',
+  /** Pre-rebrand and transitional backup extensions still accepted on import. */
+  legacyProjectExtensions: ['.panoref-project', '.forescene-project'] as const,
   /** Filename stem inserted before the extension on new project downloads. */
   projectDownloadSuffix: 'forescene',
   legacyProjectDownloadSuffix: 'continuity_stage',
@@ -67,13 +72,11 @@ export function writePreference(key: string, value: string): void {
   }
 }
 
+/** True when the filename is a ZIP-style portable backup (not plain .json). */
 export function isProjectBackupFileName(name: string): boolean {
   const lower = name.toLowerCase();
-  return (
-    lower.endsWith(BRAND.projectExtension)
-    || lower.endsWith(BRAND.legacyProjectExtension)
-    || lower.endsWith('.zip')
-  );
+  if (lower.endsWith(BRAND.projectExtension) || lower.endsWith('.zip')) return true;
+  return BRAND.legacyProjectExtensions.some((ext) => lower.endsWith(ext));
 }
 
 export function projectBackupAcceptAttribute(): string {
@@ -81,13 +84,14 @@ export function projectBackupAcceptAttribute(): string {
     '.json',
     '.zip',
     BRAND.projectExtension,
-    BRAND.legacyProjectExtension,
+    ...BRAND.legacyProjectExtensions,
     'application/json',
     'application/zip',
   ].join(',');
 }
 
-export function projectDownloadFileName(projectName: string, extensionWithoutDot: string): string {
+/** Download basename for a new ForeScene project backup (always `.fsp`). */
+export function projectDownloadFileName(projectName: string): string {
   const stem = projectName.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
-  return `${stem}_${BRAND.projectDownloadSuffix}.${extensionWithoutDot}`;
+  return `${stem}_${BRAND.projectDownloadSuffix}${BRAND.projectExtension}`;
 }

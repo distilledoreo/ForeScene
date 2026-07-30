@@ -17,7 +17,7 @@ export async function enterStudio(page: Page) {
 
   // Mode chooser appears when appMode is null after splash.
   const modeChooser = page.locator('[data-mode-chooser]');
-  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene/i });
   if (await modeChooser.isVisible().catch(() => false)) {
     await studio.click();
   } else {
@@ -151,7 +151,7 @@ export async function reloadAndAwaitRecovery(page: Page) {
   const modeChooser = page.locator('[data-mode-chooser]');
   if (await modeChooser.isVisible().catch(() => false)) {
     // Fallback: if recovery did not auto-enter studio mode, choose it so we can still assert.
-    await page.getByRole('button', { name: /Open ForeScene studio/i }).click();
+    await page.getByRole('button', { name: /Open ForeScene/i }).click();
   }
 
   const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
