@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "Add a continuity landmark and tighten export defaults",
+  "commands": [
+    {
+      "op": "landmark.create",
+      "ref": "gate",
+      "landmark": {
+        "name": "main_gate",
+        "displayName": "Main Gate",
+        "position": [0, 1.6, 4],
+        "description": "Primary architectural anchor for prompt continuity."
+      }
+    },
+    {
+      "op": "export.sceneDefaults.patch",
+      "patch": {
+        "includeViewport": true,
+        "includePrompt": true,
+        "includeMetadata": true,
+        "width": 1280,
+        "height": 720
+      }
+    },
+    {
+      "op": "workspace.open",
+      "workspace": "export"
+    }
+  ]
+}
