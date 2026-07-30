@@ -265,6 +265,7 @@ export function PoseableCharacterImportDialog({
           type="file"
           accept={POSEABLE_CHARACTER_IMPORT_ACCEPT}
           className="hidden"
+          data-poseable-import-mesh-input
           onChange={(event) => void onFileChosen(event.target.files)}
         />
         <input

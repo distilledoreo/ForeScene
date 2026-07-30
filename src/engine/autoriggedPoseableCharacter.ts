@@ -23,8 +23,11 @@ import {
 import { degreesToRadians } from './sync';
 import {
   applySkinBuffersToRig,
+  assertSkinWeightBuffersCompatible,
+  cloneSkinWeightBuffers,
   generateDeterministicSkinWeights,
   writeSkinWeightBinaryAsset,
+  type SkinWeightBuffers,
 } from './autorigSkinWeights';
 import {
   cloneSkinnedPrototypeInstance,
@@ -392,6 +395,11 @@ export async function generateSkinWeightsForRigAsset(params: {
   assets?: AssetRegistry;
   /** Hard body-part overrides from the Body Parts wizard step. */
   regionOverrides?: Uint8Array | null;
+  /**
+   * When provided, persist these exact buffers instead of regenerating Binder
+   * weights. Used so Pose & Fix weight-only auto-repairs survive Apply.
+   */
+  skinBuffers?: SkinWeightBuffers;
 }): Promise<{ rig: PoseableRigAsset; skinAsset: ProjectAsset; regionAsset?: ProjectAsset }> {
   // Near-planar T-pose marker sets are valid; do not refuse weight generation on global Z spread.
   await ensureTemplateLoaded(params.sourceAssetId, params.assets);
@@ -429,22 +437,28 @@ export async function generateSkinWeightsForRigAsset(params: {
     // Fall through to Binder V1 if region classification fails.
   }
 
-  const buffers = regionLabels
-    ? generateRegionConstrainedSkinWeights({
-      positions,
-      regionLabels,
-      jointPositions,
-      topology,
-      heightMeters: params.rig.generationSettings?.approximateHeightMeters,
-      meshSize: canonical.size,
-    })
-    : generateDeterministicSkinWeights({
-      positions,
-      jointPositions,
-      heightMeters: params.rig.generationSettings?.approximateHeightMeters,
-      meshSize: canonical.size,
-      topologyIndices: extractCanonicalTopology(canonical.root),
-    });
+  const vertexCount = Math.floor(positions.length / 3);
+  if (params.skinBuffers) {
+    assertSkinWeightBuffersCompatible(params.skinBuffers, { vertexCount });
+  }
+  const buffers = params.skinBuffers
+    ? cloneSkinWeightBuffers(params.skinBuffers)
+    : regionLabels
+      ? generateRegionConstrainedSkinWeights({
+        positions,
+        regionLabels,
+        jointPositions,
+        topology,
+        heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+        meshSize: canonical.size,
+      })
+      : generateDeterministicSkinWeights({
+        positions,
+        jointPositions,
+        heightMeters: params.rig.generationSettings?.approximateHeightMeters,
+        meshSize: canonical.size,
+        topologyIndices: extractCanonicalTopology(canonical.root),
+      });
 
   const written = await writeSkinWeightBinaryAsset(buffers);
   const skinAsset: ProjectAsset = {
@@ -458,6 +472,7 @@ export async function generateSkinWeightsForRigAsset(params: {
       poseableSkin: true,
       byteLength: written.byteLength,
       binderVersion: regionLabels ? CURRENT_AUTORIG_BINDER_VERSION : 1,
+      ...(params.skinBuffers ? { previewRepaired: true } : {}),
       ...(buffers.warnings?.length ? { warnings: buffers.warnings } : {}),
     },
   };

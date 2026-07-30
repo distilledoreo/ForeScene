@@ -8,6 +8,8 @@ import {
   proposeDeformationRepairs,
   runHighConfidenceDeformationAutoRepair,
   scoreDeformationAnomalies,
+  selectDeformationAutoRepairPoseIds,
+  shouldExpandAutoRepairWithWalking,
   validateAndApplyRepairs,
 } from '../src/engine/autorig/deformationAutoRepair';
 import { AUTORIG_REGION_CODE } from '../src/engine/autorig/regions';
@@ -431,5 +433,50 @@ describe('deformationAutoRepair', () => {
     expect(overrides[0]).toBe(0);
     expect(overrides[1]).toBe(AUTORIG_REGION_CODE.torso);
     expect(overrides[2]).toBe(0);
+  });
+
+  it('selects elbows-bent + sitting always, arms-raised for smaller meshes, walking on demand', () => {
+    expect(selectDeformationAutoRepairPoseIds({ vertexCount: 10_000 })).toEqual([
+      'elbows-bent',
+      'sitting',
+      'arms-raised',
+    ]);
+    expect(selectDeformationAutoRepairPoseIds({ vertexCount: 90_000 })).toEqual([
+      'elbows-bent',
+      'sitting',
+    ]);
+    expect(selectDeformationAutoRepairPoseIds({
+      vertexCount: 10_000,
+      includeWalking: true,
+    })).toEqual([
+      'elbows-bent',
+      'sitting',
+      'arms-raised',
+      'walking',
+    ]);
+    expect(selectDeformationAutoRepairPoseIds({
+      vertexCount: 90_000,
+      includeWalking: true,
+    })).toEqual([
+      'elbows-bent',
+      'sitting',
+      'walking',
+    ]);
+  });
+
+  it('expands with walking when outliers land on leg regions', () => {
+    const labels = Uint8Array.from([
+      AUTORIG_REGION_CODE.leftArm,
+      AUTORIG_REGION_CODE.leftLeg,
+      AUTORIG_REGION_CODE.torso,
+    ]);
+    expect(shouldExpandAutoRepairWithWalking({
+      regionLabels: labels,
+      outliers: [{ vertexIndex: 0 }],
+    })).toBe(false);
+    expect(shouldExpandAutoRepairWithWalking({
+      regionLabels: labels,
+      outliers: [{ vertexIndex: 1 }],
+    })).toBe(true);
   });
 });

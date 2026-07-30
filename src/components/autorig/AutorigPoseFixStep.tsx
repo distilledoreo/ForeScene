@@ -20,6 +20,7 @@ export function AutorigPoseFixStep({
   onViewChange,
   meshReady,
   preparing,
+  checkingDeformation,
   updating,
   activeTestPose,
   onSelectPose,
@@ -50,6 +51,8 @@ export function AutorigPoseFixStep({
   onViewChange: (view: 'front' | 'side' | 'perspective') => void;
   meshReady: boolean;
   preparing?: boolean;
+  /** Silent auto-repair is evaluating — Fix painting stays disabled. */
+  checkingDeformation?: boolean;
   updating?: boolean;
   activeTestPose: string;
   onSelectPose: (poseId: string, pose: HumanPose | undefined) => void;
@@ -78,6 +81,7 @@ export function AutorigPoseFixStep({
   issues?: AutorigDeformationIssue[];
 }) {
   const visibleIssues = (issues ?? []).filter((issue) => issue.severity === 'warning' || issue.severity === 'blocking');
+  const fixLocked = Boolean(checkingDeformation);
 
   return (
     <div className="space-y-3" data-autorig-pose-fix-step>
@@ -85,7 +89,16 @@ export function AutorigPoseFixStep({
         Try example poses. Turn on Fix deformation and stroke across a problem area — PanoRef expands to the surrounding surface and updates the rig.
       </p>
 
-      {prepareNotice && !updating && (
+      {checkingDeformation && (
+        <div
+          className="rounded-xl border border-subtle bg-surface-muted/60 px-3 py-2"
+          data-autorig-checking-deformation
+        >
+          <p className="text-xs text-secondary">Checking deformation…</p>
+        </div>
+      )}
+
+      {prepareNotice && !updating && !checkingDeformation && (
         <div
           className="rounded-xl border border-subtle bg-surface-muted/60 px-3 py-2"
           data-autorig-prepare-notice
@@ -141,17 +154,18 @@ export function AutorigPoseFixStep({
           ))}
       </div>
 
-      <label className="flex items-center gap-2 text-xs font-semibold text-secondary" data-autorig-fix-toggle>
+      <label className={`flex items-center gap-2 text-xs font-semibold text-secondary ${fixLocked ? 'opacity-60' : ''}`} data-autorig-fix-toggle>
         <input
           type="checkbox"
-          checked={fixEnabled}
+          checked={fixEnabled && !fixLocked}
+          disabled={fixLocked}
           onChange={(event) => onFixEnabledChange(event.target.checked)}
           data-autorig-fix-deformation
         />
         Fix deformation
       </label>
 
-      {fixEnabled && (
+      {fixEnabled && !fixLocked && (
         <AutorigFixToolbar
           tool={tool}
           onToolChange={onToolChange}
@@ -181,7 +195,7 @@ export function AutorigPoseFixStep({
           {visibleIssues.map((issue) => (
             <div key={issue.id} className="space-y-1">
               <p className="text-xs text-amber-100">{issue.message}</p>
-              {issue.region && !fixEnabled && (
+              {issue.region && !fixEnabled && !fixLocked && (
                 <button
                   type="button"
                   className="text-[11px] font-semibold text-accent underline"

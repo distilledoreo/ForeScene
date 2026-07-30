@@ -77,6 +77,72 @@ export interface SkinWeightBuffers {
   warnings?: string[];
 }
 
+/** Deep-copy skin buffers so callers can persist or mutate without aliasing. */
+export function cloneSkinWeightBuffers(buffers: SkinWeightBuffers): SkinWeightBuffers {
+  return {
+    influencesPerVertex: buffers.influencesPerVertex,
+    indices: new Uint16Array(buffers.indices),
+    weights: new Float32Array(buffers.weights),
+    jointOrder: buffers.jointOrder.slice(),
+    fallbackVertexCount: buffers.fallbackVertexCount,
+    ...(buffers.warnings ? { warnings: buffers.warnings.slice() } : {}),
+  };
+}
+
+const VALID_HUMAN_JOINT_IDS = new Set<string>(HUMAN_JOINT_IDS);
+
+/**
+ * Reject supplied skin buffers that cannot safely bind to the current mesh/rig.
+ * Used at the Apply persistence boundary before accepting Pose & Fix preview repairs.
+ */
+export function assertSkinWeightBuffersCompatible(
+  buffers: SkinWeightBuffers,
+  expected: {
+    vertexCount: number;
+    influencesPerVertex?: number;
+  },
+): void {
+  const ipv = buffers.influencesPerVertex;
+  const expectedIpv = expected.influencesPerVertex ?? INFLUENCES_PER_VERTEX;
+  if (!Number.isInteger(ipv) || ipv <= 0) {
+    throw new Error(`Skin buffers must use a positive influencesPerVertex (got ${ipv}).`);
+  }
+  if (ipv !== expectedIpv) {
+    throw new Error(
+      `Skin buffers influencesPerVertex ${ipv} does not match expected ${expectedIpv}.`,
+    );
+  }
+  if (buffers.indices.length !== buffers.weights.length) {
+    throw new Error(
+      `Skin buffer indices length (${buffers.indices.length}) must match weights (${buffers.weights.length}).`,
+    );
+  }
+  const expectedLength = expected.vertexCount * ipv;
+  if (buffers.indices.length !== expectedLength) {
+    throw new Error(
+      `Skin buffers cover ${buffers.indices.length / ipv} vertices but mesh has ${expected.vertexCount}.`,
+    );
+  }
+  if (!buffers.jointOrder.length) {
+    throw new Error('Skin buffers require a non-empty jointOrder.');
+  }
+  for (let i = 0; i < buffers.jointOrder.length; i += 1) {
+    const jointId = buffers.jointOrder[i];
+    if (!jointId || !VALID_HUMAN_JOINT_IDS.has(jointId)) {
+      throw new Error(`Skin buffers jointOrder[${i}] is not a valid human joint id.`);
+    }
+  }
+  const jointCount = buffers.jointOrder.length;
+  for (let i = 0; i < buffers.indices.length; i += 1) {
+    const jointIndex = buffers.indices[i]!;
+    if (jointIndex < 0 || jointIndex >= jointCount) {
+      throw new Error(
+        `Skin buffer index ${jointIndex} at slot ${i} is outside jointOrder bounds (0..${jointCount - 1}).`,
+      );
+    }
+  }
+}
+
 /** Preferred child tips so hands run through the palm and feet through the toes. */
 const SEGMENT_CHILD_OVERRIDE: Partial<Record<HumanJointId, HumanJointId>> = {
   leftHand: 'leftHandEnd',
