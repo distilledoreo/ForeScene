@@ -8,7 +8,7 @@ test.describe('Agent API @smoke', () => {
 
     await page.waitForFunction(() => {
       const status = window.foreScene?.getStatus();
-      return Boolean(status?.ready && status.projectLoaded);
+      return Boolean(status?.ready && status.projectLoaded && status.persistence?.ready);
     });
 
     const status = await page.evaluate(() => window.foreScene!.getStatus());
@@ -47,7 +47,10 @@ test.describe('Agent API @smoke', () => {
     // Strict Mode remount must not leave a stale API object: identity stays callable.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await enterStudio(page);
-    await page.waitForFunction(() => Boolean(window.foreScene?.getStatus()?.ready));
+    await page.waitForFunction(() => Boolean(
+      window.foreScene?.getStatus()?.ready
+      && window.foreScene?.getStatus()?.persistence?.ready,
+    ));
     const afterReload = await page.evaluate(() => window.foreScene!.getStatus());
     expect(afterReload.ready).toBe(true);
     expect(afterReload.projectLoaded).toBe(true);

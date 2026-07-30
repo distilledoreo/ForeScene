@@ -74,7 +74,11 @@ async function dismissOnboarding(page: Page): Promise<void> {
 export async function waitForAgentReady(page: Page, timeoutMs = 60_000): Promise<void> {
   await page.waitForFunction(() => {
     const status = window.foreScene?.getStatus();
-    return Boolean(status?.ready && status.projectLoaded);
+    return Boolean(
+      status?.ready
+      && status.projectLoaded
+      && status.persistence?.ready,
+    );
   }, { timeout: timeoutMs });
 }
 
