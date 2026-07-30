@@ -1,5 +1,6 @@
 import React from 'react';
 import { Boxes, Globe } from 'lucide-react';
+import { BRAND } from '../../config/brand';
 import { AppMode, useAppModeStore } from '../../state/useAppModeStore';
 
 export function ModeChooser({ visible }: { visible: boolean }) {
@@ -22,16 +23,16 @@ export function ModeChooser({ visible }: { visible: boolean }) {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold text-primary">What do you want to do?</h1>
           <p className="text-sm text-secondary">
-            Continuity Stage builds location packages for AI video. Or just look around a 360 pano and download the view.
+            {BRAND.tagline} Or just look around a 360 pano and download the view.
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <ModeCard
             icon={<Boxes className="h-7 w-7" />}
-            title="Build continuity packages"
-            description="Graybox set → reference → land shots → export handoff ZIPs."
-            onClick={() => choose('continuity')}
-            dataMode="continuity"
+            title="Open ForeScene studio"
+            description="Build sets, stage characters, design shots, and export production-ready handoffs."
+            onClick={() => choose('studio')}
+            dataMode="studio"
           />
           <ModeCard
             icon={<Globe className="h-7 w-7" />}

@@ -58,7 +58,7 @@ import { VIDEO_RESOLUTION_PRESETS } from '../../engine/videoPresets';
 import { getCameraMoveReferenceFrames } from '../../engine/cameraKeyframes';
 import { isShotFramingAccepted } from '../../engine/workflow';
 import { getPanoMatchQuality, resolveShotLinkedPano } from '../../engine/sync';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { Field, IconButton, Panel, Select, TextArea, TextInput } from '../common/Field';
@@ -162,7 +162,7 @@ export function ShotsWorkspace() {
     redoShotCamera,
     reorderShots,
     copyStagingToNextShot,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     selectedShotId: state.selectedShotId,
     addCamera: state.addCamera,
@@ -183,7 +183,7 @@ export function ShotsWorkspace() {
     copyStagingToNextShot: state.copyStagingToNextShot,
   })));
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
-  const shotCameraHistoryRestoreGeneration = useContinuityStore(
+  const shotCameraHistoryRestoreGeneration = useProjectStore(
     (state) => state.shotCameraHistoryRestoreGeneration,
   );
   const {
@@ -511,7 +511,7 @@ export function ShotsWorkspace() {
     handledRestoreGenerationRef.current = shotCameraHistoryRestoreGeneration;
 
     // Read latest shot after store restore (camera + cameraKeyframes).
-    const restoredShot = useContinuityStore.getState().project.shots.find(
+    const restoredShot = useProjectStore.getState().project.shots.find(
       (item) => item.id === selectedShotId,
     );
     if (!restoredShot) return;
@@ -651,7 +651,7 @@ export function ShotsWorkspace() {
 
   const handleShotFovWheelBatchEnd = useCallback((shotId: string, camera: CameraData) => {
     try {
-      const state = useContinuityStore.getState();
+      const state = useProjectStore.getState();
       const shot = state.project.shots.find((item) => item.id === shotId);
       if (!shot) return;
       const nextCamera = buildShotFovWheelBatchCommit(shot.camera, camera);
@@ -897,8 +897,8 @@ export function ShotsWorkspace() {
     clearViewportObjectInspection();
     stopCameraMovePreview();
     setStagedObjectId(undefined);
-    const shot = useContinuityStore.getState().project.shots.find((item) => item.id === selectedShotId)
-      ?? useContinuityStore.getState().project.shots[0];
+    const shot = useProjectStore.getState().project.shots.find((item) => item.id === selectedShotId)
+      ?? useProjectStore.getState().project.shots[0];
     // Duration, authoring machine, thumbs — owned by camera-move controller.
     handleShotSwitchVideoChrome(shot);
     // Intentionally only selectedShotId — stable chrome reset per shot switch.
@@ -1019,7 +1019,7 @@ export function ShotsWorkspace() {
             onRotateObject={stagingMode ? rotateStagedObject : undefined}
             minHeightClassName="min-h-0"
             parentFinalizeShotFovWheelBatchRef={finalizeShotFovWheelBatchRef}
-            onOcclusionStatusChange={(status) => useContinuityStore.getState().setProjectedOcclusionStatus(status)}
+            onOcclusionStatusChange={(status) => useProjectStore.getState().setProjectedOcclusionStatus(status)}
           />
         </div>
 

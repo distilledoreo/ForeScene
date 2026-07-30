@@ -6,6 +6,7 @@ import {
   SceneObject,
   Vec3,
 } from '../domain/types';
+import { BRAND } from '../config/brand';
 import { createTransform } from '../domain/defaults';
 import { createId } from '../utils/ids';
 import { encodeBinaryGrayboxMesh, MODEL_ASSET_URI_PREFIX } from './importedMesh';
@@ -35,7 +36,9 @@ export const IMPORT_WARNING_BYTES = 50 * 1024 * 1024;
 export const IMPORT_WARNING_TRIANGLES = 500_000;
 export const IMPORT_WARNING_OBJECTS = 250;
 export const MAX_SEPARATE_IMPORT_OBJECTS = 2000;
-export const SCENE_BUNDLE_MANIFEST = 'panoref-scene.json';
+export const SCENE_BUNDLE_MANIFEST = BRAND.sceneManifest;
+/** Pre-rebrand bundles shipped a PanoRef-named manifest; they stay importable. */
+export const LEGACY_SCENE_BUNDLE_MANIFEST = BRAND.legacySceneManifest;
 
 const MAX_BUNDLE_ENTRIES = 64;
 const MAX_MANIFEST_BYTES = 64 * 1024;
@@ -208,13 +211,13 @@ export function createModelImportPlan(files: readonly File[]): ModelImportPlan {
 export function nativeExportGuidance(extension: string): string {
   const ext = extension.toLowerCase();
   if (ext === 'blend') {
-    return 'PanoRef cannot read Blender project files directly. In Blender, export the entire scene as a GLB and import that GLB.';
+    return `${BRAND.name} cannot read Blender project files directly. In Blender, export the entire scene as a GLB and import that GLB.`;
   }
   if (ext === 'ma' || ext === 'mb') {
-    return 'PanoRef cannot read Maya scene files directly. In Maya, use Export All to create an FBX and import that FBX.';
+    return `${BRAND.name} cannot read Maya scene files directly. In Maya, use Export All to create an FBX and import that FBX.`;
   }
   if (['uproject', 'umap', 'uasset'].includes(ext)) {
-    return 'PanoRef cannot read Unreal project or asset files directly. Export the current level as GLB and import that GLB.';
+    return `${BRAND.name} cannot read Unreal project or asset files directly. Export the current level as GLB and import that GLB.`;
   }
   return 'This file type is not supported for direct import. Export a GLB or FBX from your DCC and import that.';
 }
@@ -1188,13 +1191,13 @@ async function readSceneBundle(file: File): Promise<{ file: File; manifest: Scen
   try {
     zip = await JSZip.loadAsync(await file.arrayBuffer());
   } catch {
-    throw new Error(`${file.name} is not a valid PanoRef scene bundle.`);
+    throw new Error(`${file.name} is not a valid ${BRAND.name} scene bundle.`);
   }
   const entries = Object.keys(zip.files);
   if (entries.length > MAX_BUNDLE_ENTRIES) {
     throw new Error(`Scene bundle contains more than ${MAX_BUNDLE_ENTRIES} entries.`);
   }
-  const manifestEntry = zip.file(SCENE_BUNDLE_MANIFEST);
+  const manifestEntry = zip.file(SCENE_BUNDLE_MANIFEST) ?? zip.file(LEGACY_SCENE_BUNDLE_MANIFEST);
   if (!manifestEntry) throw new Error(`Scene bundle is missing ${SCENE_BUNDLE_MANIFEST}.`);
   const manifestSizes = zipEntrySizes(manifestEntry);
   if (manifestSizes.uncompressed > MAX_MANIFEST_BYTES) {

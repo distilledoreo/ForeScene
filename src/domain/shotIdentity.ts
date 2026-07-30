@@ -7,7 +7,7 @@ export function normalizeProductionShotId(value?: string | null): string | undef
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Primary label: production ID when set, otherwise the PanoRef sequence label. */
+/** Primary label: production ID when set, otherwise the ForeScene sequence label. */
 export function getShotPrimaryLabel(shot: Shot): string {
   return shot.productionShotId ?? `Shot ${shot.shotNumber}`;
 }

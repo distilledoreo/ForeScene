@@ -1,5 +1,5 @@
 /**
- * Central registry of storage and performance budget figures for Continuity Stage.
+ * Central registry of storage and performance budget figures for ForeScene.
  *
  * Every numeric limit is labeled with one of:
  * - MeasuredBaseline — observed on documented hardware/fixtures (not a guarantee)
@@ -135,7 +135,7 @@ export const PERFORMANCE_BUDGETS = {
   } satisfies BudgetFigure,
 
   browserQuotaBehavior: {
-    value: 'Browser IndexedDB/localStorage quotas vary; PanoRef surfaces save failures without claiming success.',
+    value: 'Browser IndexedDB/localStorage quotas vary; ForeScene surfaces save failures without claiming success.',
     classification: 'MeasuredBaseline',
     notes: 'No single hard quota is assumed. Failure messaging is required behavior.',
   } satisfies BudgetFigure<string>,

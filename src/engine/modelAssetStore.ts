@@ -1,4 +1,5 @@
-const DATABASE_NAME = 'panoref-model-assets';
+/** Legacy PanoRef database name preserved so existing local model assets keep opening. */
+const LEGACY_DATABASE_NAME = 'panoref-model-assets';
 const STORE_NAME = 'mesh-binaries';
 const DATABASE_VERSION = 1;
 
@@ -12,7 +13,7 @@ function cloneBuffer(buffer: ArrayBuffer): ArrayBuffer {
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
     };

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
-const appUrl = process.env.CONTINUITY_STAGE_URL ?? 'http://127.0.0.1:3004';
+const appUrl = process.env.FORESCENE_URL ?? process.env.CONTINUITY_STAGE_URL ?? 'http://127.0.0.1:3004';
 const chromePath = process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const debugPort = Number(process.env.CHROME_DEBUG_PORT ?? 9332);
 const profileDir = resolve(repoRoot, '.tmp-stamp-chrome-profile');

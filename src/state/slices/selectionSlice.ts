@@ -3,7 +3,7 @@ import { panoViewFromCamera } from '../../engine/sync';
 import {
   toggleSelectedId,
 } from '../../engine/buildSelectionMath';
-import type { ContinuityStoreSlices, SelectionSliceState } from './types';
+import type { ProjectStoreSlices, SelectionSliceState } from './types';
 import { initialContinuityProject } from './initialProject';
 
 /**
@@ -12,7 +12,7 @@ import { initialContinuityProject } from './initialProject';
  * May read project (and other domains) via get(); document mutations stay in project/session slices.
  */
 export const createSelectionSlice: StateCreator<
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   [],
   [],
   SelectionSliceState

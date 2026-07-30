@@ -13,7 +13,7 @@ import {
   resolveWorkspaceObjective,
 } from '../../engine/workflow';
 import { Workspace } from '../../domain/types';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { AlignmentRetryContent, GrayboxReferencePromptBuilder } from './GrayboxReferenceGuide';
 import { Modal } from './Modal';
 import { countStyledPanoramas } from '../../engine/panoProjectionCore';
@@ -102,7 +102,7 @@ export function WorkflowGuidance() {
     markObjectiveSeen,
     markAlignmentIntroSeen,
     updateProjectInfo,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     workspace: state.workspace,
     selectedShotId: state.selectedShotId,
@@ -409,7 +409,7 @@ export function WorkflowGuidance() {
 }
 
 export function ObjectiveHelpButton() {
-  const requestObjectiveModal = useContinuityStore((state) => state.requestObjectiveModal);
+  const requestObjectiveModal = useProjectStore((state) => state.requestObjectiveModal);
 
   return (
     <button

@@ -3,7 +3,7 @@ import type { CameraData } from '../domain/types';
 
 /**
  * Framing / fly-camera local state for the Shots workspace.
- * Store-level land/fly and history remain on useContinuityStore.
+ * Store-level land/fly and history remain on useProjectStore.
  */
 export function useShotCameraController(initialCamera?: CameraData) {
   const draftCameraRef = useRef<CameraData | undefined>(initialCamera);

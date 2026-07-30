@@ -1,6 +1,6 @@
 /**
- * Domain-focused Continuity store slice contracts.
- * The composed store (`useContinuityStore`) implements all slices together.
+ * Domain-focused project store slice contracts.
+ * The composed store (`useProjectStore`) implements all slices together.
  */
 
 import type {
@@ -190,7 +190,7 @@ export interface SessionSliceState {
   setProjectedOcclusionStatus: (status: 'disabled' | 'generating' | 'ready' | 'failed') => void;
 }
 
-export type ContinuityStoreSlices =
+export type ProjectStoreSlices =
   & ProjectSliceState
   & SelectionSliceState
   & HistorySliceState

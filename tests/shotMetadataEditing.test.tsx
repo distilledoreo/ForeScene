@@ -29,7 +29,7 @@ describe('shot metadata editing', () => {
     expect(html).toContain('Production ID');
     expect(html).toContain('Shot title');
     expect(html).toContain('42A · Courtyard entrance');
-    expect(html).toContain('PanoRef shot');
+    expect(html).toContain('ForeScene shot');
   });
 
   it('shows only the production ID until a custom title is set', () => {

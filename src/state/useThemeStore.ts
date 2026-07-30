@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { BRAND, readMigratedPreference, writePreference } from '../config/brand';
 
 type Theme = 'light' | 'dark';
 
@@ -10,7 +11,7 @@ interface ThemeState {
 
 function getInitialTheme(): Theme {
   if (typeof window === 'undefined') return 'light';
-  const stored = window.localStorage.getItem('panoref-theme');
+  const stored = readMigratedPreference(BRAND.prefs.theme, BRAND.legacyPrefs.theme);
   if (stored === 'light' || stored === 'dark') return stored;
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
@@ -18,7 +19,7 @@ function getInitialTheme(): Theme {
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return;
   document.documentElement.classList.toggle('dark', theme === 'dark');
-  window.localStorage.setItem('panoref-theme', theme);
+  writePreference(BRAND.prefs.theme, theme);
 }
 
 const initialTheme = getInitialTheme();

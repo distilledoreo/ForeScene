@@ -15,7 +15,7 @@ import {
   renderShotProjectedFrame,
 } from '../../engine/renderers';
 import { isShotFramingAccepted } from '../../engine/workflow';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 
 export type StillCaptureStatus = 'idle' | 'capturing' | 'exporting' | 'error';
@@ -52,7 +52,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
     landShotFraming,
     attachViewportRenderToShot,
     updateShot,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     addCamera: state.addCamera,
     landShotFraming: state.landShotFraming,
     attachViewportRenderToShot: state.attachViewportRenderToShot,
@@ -163,7 +163,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
   ) => {
     // Use latest project from the store so freshly created shots are not missing
     // from a stale React closure after addCamera.
-    const latestProject = useContinuityStore.getState().project;
+    const latestProject = useProjectStore.getState().project;
     const latestShot = latestProject.shots.find((item) => item.id === shot.id) ?? shot;
     const previewShot = {
       ...latestShot,
@@ -180,7 +180,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
     }
     const shotForNaming = previewShot as typeof latestProject.shots[number];
     const viewportFileName = getViewportStillDownloadName(shotForNaming);
-    const attach = useContinuityStore.getState().attachViewportRenderToShot;
+    const attach = useProjectStore.getState().attachViewportRenderToShot;
     const generationAtStart = options?.captureGeneration ?? captureGenerationRef.current;
 
     const attachStillView = async (
@@ -252,7 +252,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
     }
     const camera = draftCameraRef.current ?? selectedShot.camera;
     const alreadyCaptured = isShotFramingAccepted(
-      useContinuityStore.getState().project,
+      useProjectStore.getState().project,
       selectedShot.id,
     );
 

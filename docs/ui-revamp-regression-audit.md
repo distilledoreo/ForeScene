@@ -91,7 +91,7 @@ None confirmed after `misc-bugfixes`. The main critical-class issues (graybox re
 
 ### High
 
-1. **`setProject` incomplete session reset** — `src/state/useContinuityStore.ts`  
+1. **`setProject` incomplete session reset** — `src/state/useProjectStore.ts`  
    Resets project, selections, `buildMode`, and workflow modal session flags — **does not** set:
    - `panoView` from first shot / defaults
    - `shotCameraFlying: false`

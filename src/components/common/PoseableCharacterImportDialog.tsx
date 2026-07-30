@@ -20,14 +20,14 @@ import {
   type ImportedPoseableRigPackage,
 } from '../../engine/poseableRigPackage';
 import { hydrateAutoriggedCharactersFromAssets } from '../../engine/autoriggedPoseableCharacter';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
 
 const AXIS_OPTIONS: PoseableAxisHint[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
 
 export interface PoseableCharacterImportMeta {
-  /** True when a complete .panorig package was applied during import. */
+  /** True when a complete .fsrig / legacy .panorig package was applied during import. */
   appliedSavedRig: boolean;
 }
 
@@ -42,8 +42,8 @@ export function PoseableCharacterImportDialog({
 }) {
   const meshInputRef = useRef<HTMLInputElement>(null);
   const rigInputRef = useRef<HTMLInputElement>(null);
-  const addPoseableCharacterImport = useContinuityStore((state) => state.addPoseableCharacterImport);
-  const updatePoseableRigAsset = useContinuityStore((state) => state.updatePoseableRigAsset);
+  const addPoseableCharacterImport = useProjectStore((state) => state.addPoseableCharacterImport);
+  const updatePoseableRigAsset = useProjectStore((state) => state.updatePoseableRigAsset);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
@@ -114,7 +114,7 @@ export function PoseableCharacterImportDialog({
     const next = list?.[0];
     if (!next || busy) return;
     if (!isPoseableRigPackageFile(next)) {
-      setError('Attach a Continuity Stage .panorig rig package.');
+      setError('Attach a ForeScene .fsrig rig package (legacy .panorig also works).');
       setRigFile(undefined);
       setRigPackageLabel(undefined);
       return;
@@ -197,7 +197,7 @@ export function PoseableCharacterImportDialog({
             ...(poseHint ? { poseHint } : {}),
           };
           updatePoseableRigAsset(result.rigAsset.id, merged);
-          useContinuityStore.setState((current) => ({
+          useProjectStore.setState((current) => ({
             project: {
               ...current.project,
               assets: {
@@ -213,7 +213,7 @@ export function PoseableCharacterImportDialog({
               },
             },
           }));
-          hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+          hydrateAutoriggedCharactersFromAssets(useProjectStore.getState().project.assets);
           appliedSavedRig = true;
           importWarnings = [
             ...importWarnings,
@@ -226,7 +226,7 @@ export function PoseableCharacterImportDialog({
 
       if (appliedSavedRig) {
         const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
-        await ensureAutoriggedCharactersForProject(useContinuityStore.getState().project);
+        await ensureAutoriggedCharactersForProject(useProjectStore.getState().project);
       }
 
       setWarnings(importWarnings);
@@ -256,8 +256,8 @@ export function PoseableCharacterImportDialog({
       <div className="space-y-4" data-poseable-character-import-dialog>
         <p className="text-sm text-secondary">
           Separate from ordinary graybox import. Accepts one upright A-pose or T-pose humanoid GLB/glTF.
-          Materials and textures are preserved. Optionally attach a previously saved Continuity Stage
-          .panorig rig to skip the wizard when the mesh matches.
+          Materials and textures are preserved. Optionally attach a previously saved ForeScene
+          .fsrig rig to skip the wizard when the mesh matches.
         </p>
 
         <input
@@ -300,7 +300,7 @@ export function PoseableCharacterImportDialog({
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-muted">Saved rig (optional)</div>
               <p className="mt-0.5 text-[11px] text-secondary">
-                Attach a .panorig from a previous Save rig if this is the same mesh.
+                Attach a .fsrig (or legacy .panorig) from a previous Save rig if this is the same mesh.
               </p>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -311,7 +311,7 @@ export function PoseableCharacterImportDialog({
                 className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:border-accent hover:text-accent disabled:opacity-60"
                 data-poseable-import-choose-rig
               >
-                {rigPackageLabel ? 'Change rig…' : 'Attach .panorig'}
+                {rigPackageLabel ? 'Change rig…' : 'Attach .fsrig'}
               </button>
               {rigFile && (
                 <button

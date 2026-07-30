@@ -2,11 +2,11 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { goToWorkspace, workspaceTab } from './workspace-navigation';
 
-async function enterContinuityStage(page: Page) {
+async function enterStudio(page: Page) {
   // Skip splash video so it never blocks pointer events mid-test.
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem('panoref-splash-seen', '1');
+      window.localStorage.setItem('forescene-splash-seen', '1');
     } catch {
       // ignore
     }
@@ -16,21 +16,21 @@ async function enterContinuityStage(page: Page) {
 
   // Mode chooser appears when appMode is null after splash.
   const modeChooser = page.locator('[data-mode-chooser]');
-  const continuity = page.getByRole('button', { name: /Build continuity packages/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
   if (await modeChooser.isVisible().catch(() => false)) {
-    await continuity.click();
+    await studio.click();
   } else {
     // Wait briefly in case chooser is still mounting.
     try {
       await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await continuity.click();
+      await studio.click();
     } catch {
       // Already in a mode from a previous session (should not happen with clean context).
     }
   }
 
   // Ensure any residual splash is gone.
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });
@@ -108,7 +108,7 @@ function multiNodeGltfBuffer() {
  */
 test.describe('@responsive layout and core chrome', () => {
   test('header actions stay in viewport', async ({ page }, testInfo) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     const brand = page.locator('[data-brand-menu-trigger]');
@@ -148,7 +148,7 @@ test.describe('@responsive layout and core chrome', () => {
   });
 
   test('build tray is reachable without overflowing off-screen', async ({ page }, testInfo) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -206,7 +206,7 @@ test.describe('@responsive layout and core chrome', () => {
 
 test.describe('@smoke build interactions', () => {
   test('Build editor shortcuts expose multi-selection and clipboard feedback', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -230,7 +230,7 @@ test.describe('@smoke build interactions', () => {
   });
 
   test('imports a texture-free OBJ through the Build tray', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -257,7 +257,7 @@ test.describe('@smoke build interactions', () => {
   });
 
   test('Help documentation is searchable and returns to the active workspace', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -281,7 +281,7 @@ test.describe('@smoke build interactions', () => {
 
 test.describe('@heavy model import variants', () => {
   test('imports separate multi-node scenes with one report card per source file', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -300,7 +300,7 @@ test.describe('@heavy model import variants', () => {
   });
 
   test('imports the same multi-node scene in combined mode', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -326,7 +326,7 @@ test.describe('@smoke workflow path', () => {
   test(
     '@webkit-gpu Shots workspace mounts camera shell without capture',
     async ({ page }) => {
-      await enterContinuityStage(page);
+      await enterStudio(page);
       await dismissOverlays(page);
       await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
       await expect(page.locator('[data-shots-camera-shell]')).toBeVisible();
@@ -336,7 +336,7 @@ test.describe('@smoke workflow path', () => {
   // GPU-heavy on Linux WebKit (canary only). Still required on Chromium desktop smoke.
   test('@webkit-gpu build graybox, approve reference, open shots and export', async ({ page }) => {
     test.setTimeout(180_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     await workspaceTab(page, 'Build').click();
@@ -397,7 +397,7 @@ test.describe('@smoke workflow path', () => {
 
   test('@webkit-gpu repeated still captures create distinct persisted shot thumbnails', async ({ page }) => {
     test.setTimeout(120_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
@@ -431,7 +431,7 @@ test.describe('@smoke workflow path', () => {
 test.describe('@heavy video authoring', () => {
   test('video progressive capture finishes two poses then next shot', async ({ page }) => {
     test.setTimeout(120_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
@@ -484,7 +484,7 @@ test.describe('@heavy video authoring', () => {
 
   test('video finish then undo resyncs capture state to start-only', async ({ page }) => {
     test.setTimeout(120_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
@@ -531,7 +531,7 @@ test.describe('@heavy video authoring', () => {
 
   test('video timeline opens on third pose, finish, continue, and next shot', async ({ page }) => {
     test.setTimeout(120_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
@@ -607,7 +607,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
       });
     });
 
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     // Build → graybox so a reference set exists.
@@ -686,7 +686,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
 
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -789,7 +789,7 @@ test.describe('@heavy projected optimizer and second capture', () => {
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
 
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     // --- Primary A: graybox + styled reference ---

@@ -14,14 +14,14 @@ import {
   createHistorySlice,
   createWorkflowSlice,
   createSessionSlice,
-  useContinuityStore,
-} from '../src/state/useContinuityStore';
+  useProjectStore,
+} from '../src/state/useProjectStore';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('continuity store domain slices', () => {
-  it('composes real slice creators in useContinuityStore', () => {
-    const storeSrc = readFileSync(join(root, 'src/state/useContinuityStore.ts'), 'utf8');
+  it('composes real slice creators in useProjectStore', () => {
+    const storeSrc = readFileSync(join(root, 'src/state/useProjectStore.ts'), 'utf8');
     expect(storeSrc).toMatch(/createProjectSlice\(/);
     expect(storeSrc).toMatch(/createSelectionSlice\(/);
     expect(storeSrc).toMatch(/createHistorySlice\(/);
@@ -35,7 +35,7 @@ describe('continuity store domain slices', () => {
   });
 
   it('exposes project/selection/history/workflow/session slice keys', () => {
-    const state = useContinuityStore.getState();
+    const state = useProjectStore.getState();
     for (const key of [
       ...PROJECT_SLICE_KEYS,
       ...SELECTION_SLICE_KEYS,
@@ -48,31 +48,31 @@ describe('continuity store domain slices', () => {
   });
 
   it('reorders shots and copies staging via project slice actions', () => {
-    const store = useContinuityStore.getState();
+    const store = useProjectStore.getState();
     const first = store.project.shots[0];
     store.addCamera({ navigateToShots: false });
-    const afterAdd = useContinuityStore.getState();
+    const afterAdd = useProjectStore.getState();
     expect(afterAdd.project.shots.length).toBeGreaterThanOrEqual(2);
     const second = afterAdd.project.shots[1];
     afterAdd.reorderShots(second.id, 0);
-    const reordered = useContinuityStore.getState().project.shots;
+    const reordered = useProjectStore.getState().project.shots;
     expect(reordered[0]?.id).toBe(second.id);
 
     const objectId = afterAdd.project.scene.objects[0]?.id;
     if (objectId) {
-      useContinuityStore.getState().updateShot(reordered[0].id, {
+      useProjectStore.getState().updateShot(reordered[0].id, {
         objectOverrides: {
           [objectId]: {
             visible: false,
           },
         },
       });
-      useContinuityStore.getState().copyStagingToNextShot(reordered[0].id);
-      const next = useContinuityStore.getState().project.shots[1];
+      useProjectStore.getState().copyStagingToNextShot(reordered[0].id);
+      const next = useProjectStore.getState().project.shots[1];
       expect(next?.objectOverrides?.[objectId]?.visible).toBe(false);
     }
     // Keep first shot id selected for other tests that share store.
-    useContinuityStore.getState().selectShot(first.id);
+    useProjectStore.getState().selectShot(first.id);
   });
 
   it('implements session slice without picking from the monolithic factory', () => {
@@ -122,9 +122,9 @@ describe('continuity store domain slices', () => {
       'historyRuntime.ts',
       'workflowSlice.ts',
       'sessionSlice.ts',
-      'useContinuityStore.ts',
+      'useProjectStore.ts',
     ].map((name) => {
-      const path = name === 'useContinuityStore.ts'
+      const path = name === 'useProjectStore.ts'
         ? join(root, 'src/state', name)
         : join(root, 'src/state/slices', name);
       return readFileSync(path, 'utf8');
@@ -137,34 +137,34 @@ describe('continuity store domain slices', () => {
 
   it('history actions record build undo and isolate per-store runtime flags', () => {
     const project = createDefaultProject();
-    useContinuityStore.getState().setProject(project);
-    useContinuityStore.getState().setBuildMode('select');
+    useProjectStore.getState().setProject(project);
+    useProjectStore.getState().setBuildMode('select');
 
-    const beforeCount = useContinuityStore.getState().project.scene.objects.length;
-    useContinuityStore.getState().addObject('box');
-    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
-    expect(useContinuityStore.getState().canUndoBuild()).toBe(true);
+    const beforeCount = useProjectStore.getState().project.scene.objects.length;
+    useProjectStore.getState().addObject('box');
+    expect(useProjectStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
+    expect(useProjectStore.getState().canUndoBuild()).toBe(true);
 
-    expect(useContinuityStore.getState().undoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount);
-    expect(useContinuityStore.getState().canRedoBuild()).toBe(true);
-    expect(useContinuityStore.getState().redoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
+    expect(useProjectStore.getState().undoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects.length).toBe(beforeCount);
+    expect(useProjectStore.getState().canRedoBuild()).toBe(true);
+    expect(useProjectStore.getState().redoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects.length).toBe(beforeCount + 1);
 
-    const shotId = useContinuityStore.getState().project.shots[0]?.id;
+    const shotId = useProjectStore.getState().project.shots[0]?.id;
     expect(shotId).toBeTruthy();
-    useContinuityStore.getState().selectShot(shotId);
-    const originalFov = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees;
-    useContinuityStore.getState().updateShot(shotId!, {
+    useProjectStore.getState().selectShot(shotId);
+    const originalFov = useProjectStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees;
+    useProjectStore.getState().updateShot(shotId!, {
       camera: {
-        ...useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera,
+        ...useProjectStore.getState().project.shots.find((s) => s.id === shotId)!.camera,
         fovDegrees: originalFov + 12,
       },
     });
-    expect(useContinuityStore.getState().canUndoShotCamera()).toBe(true);
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
+    expect(useProjectStore.getState().canUndoShotCamera()).toBe(true);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
     expect(
-      useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees,
+      useProjectStore.getState().project.shots.find((s) => s.id === shotId)!.camera.fovDegrees,
     ).toBe(originalFov);
   });
 
@@ -180,9 +180,9 @@ describe('continuity store domain slices', () => {
 
   it('selection actions own object/shot selection, build mode, and clipboard', () => {
     const project = createDefaultProject();
-    useContinuityStore.getState().setProject(project);
+    useProjectStore.getState().setProject(project);
 
-    const store = useContinuityStore.getState();
+    const store = useProjectStore.getState();
     const objectIds = store.project.scene.objects.map((object) => object.id);
     expect(objectIds.length).toBeGreaterThan(0);
 
@@ -190,38 +190,38 @@ describe('continuity store domain slices', () => {
     expect(store.selectedShotId).toBe(store.project.shots[0]?.id);
 
     store.selectObject(objectIds[0]);
-    expect(useContinuityStore.getState().selectedObjectIds).toEqual([objectIds[0]]);
-    useContinuityStore.getState().selectObject(objectIds[1], 'toggle');
-    expect(useContinuityStore.getState().selectedObjectIds).toEqual([objectIds[0], objectIds[1]]);
+    expect(useProjectStore.getState().selectedObjectIds).toEqual([objectIds[0]]);
+    useProjectStore.getState().selectObject(objectIds[1], 'toggle');
+    expect(useProjectStore.getState().selectedObjectIds).toEqual([objectIds[0], objectIds[1]]);
 
-    useContinuityStore.getState().clearObjectSelection();
-    expect(useContinuityStore.getState().selectedObjectIds).toEqual([]);
+    useProjectStore.getState().clearObjectSelection();
+    expect(useProjectStore.getState().selectedObjectIds).toEqual([]);
 
-    useContinuityStore.getState().selectAllObjects();
-    expect(useContinuityStore.getState().selectedObjectIds.length).toBeGreaterThan(0);
+    useProjectStore.getState().selectAllObjects();
+    expect(useProjectStore.getState().selectedObjectIds.length).toBeGreaterThan(0);
 
-    useContinuityStore.getState().setBuildMode('place');
-    expect(useContinuityStore.getState().buildMode).toBe('place');
-    useContinuityStore.getState().setActivePrimitive('wall');
-    expect(useContinuityStore.getState().activePrimitive).toBe('wall');
-    expect(useContinuityStore.getState().buildMode).toBe('place');
-    expect(useContinuityStore.getState().selectedObjectIds).toEqual([]);
+    useProjectStore.getState().setBuildMode('place');
+    expect(useProjectStore.getState().buildMode).toBe('place');
+    useProjectStore.getState().setActivePrimitive('wall');
+    expect(useProjectStore.getState().activePrimitive).toBe('wall');
+    expect(useProjectStore.getState().buildMode).toBe('place');
+    expect(useProjectStore.getState().selectedObjectIds).toEqual([]);
 
-    useContinuityStore.getState().setGridSnap(false);
-    expect(useContinuityStore.getState().gridSnap).toBe(false);
-    useContinuityStore.getState().setGridSnap(true);
+    useProjectStore.getState().setGridSnap(false);
+    expect(useProjectStore.getState().gridSnap).toBe(false);
+    useProjectStore.getState().setGridSnap(true);
 
-    const shotId = useContinuityStore.getState().project.shots[0]?.id;
+    const shotId = useProjectStore.getState().project.shots[0]?.id;
     expect(shotId).toBeTruthy();
-    useContinuityStore.getState().selectShot(shotId);
-    const afterShot = useContinuityStore.getState();
+    useProjectStore.getState().selectShot(shotId);
+    const afterShot = useProjectStore.getState();
     expect(afterShot.selectedShotId).toBe(shotId);
     expect(afterShot.shotCameraFlying).toBe(true);
 
-    useContinuityStore.getState().setActivePano(undefined);
-    expect(useContinuityStore.getState().activePanoId).toBeUndefined();
+    useProjectStore.getState().setActivePano(undefined);
+    expect(useProjectStore.getState().activePanoId).toBeUndefined();
 
-    useContinuityStore.getState().setBuildMode('select');
+    useProjectStore.getState().setBuildMode('select');
   });
 
   it('implements workflow slice without picking from the monolithic factory', () => {
@@ -236,62 +236,62 @@ describe('continuity store domain slices', () => {
   });
 
   it('workflow actions own workspace, objective/alignment prompts, and progression stamps', () => {
-    const before = useContinuityStore.getState();
+    const before = useProjectStore.getState();
     expect(before.workspace).toBeTruthy();
 
     before.setWorkspace('build');
-    expect(useContinuityStore.getState().workspace).toBe('build');
+    expect(useProjectStore.getState().workspace).toBe('build');
 
     before.setWorkspace('shots');
-    const inShots = useContinuityStore.getState();
+    const inShots = useProjectStore.getState();
     expect(inShots.workspace).toBe('shots');
     expect(inShots.shotCameraFlying).toBe(true);
     expect(inShots.selectedShotId).toBeTruthy();
 
     const objectiveBefore = inShots.objectiveModalRequest;
     inShots.requestObjectiveModal();
-    expect(useContinuityStore.getState().objectiveModalRequest).toBe(objectiveBefore + 1);
+    expect(useProjectStore.getState().objectiveModalRequest).toBe(objectiveBefore + 1);
 
-    const alignmentBefore = useContinuityStore.getState().alignmentIntroRequest;
-    useContinuityStore.getState().requestAlignmentIntro();
-    expect(useContinuityStore.getState().alignmentIntroRequest).toBe(alignmentBefore + 1);
+    const alignmentBefore = useProjectStore.getState().alignmentIntroRequest;
+    useProjectStore.getState().requestAlignmentIntro();
+    expect(useProjectStore.getState().alignmentIntroRequest).toBe(alignmentBefore + 1);
 
-    const retryBefore = useContinuityStore.getState().alignmentRetryModalRequest;
-    useContinuityStore.getState().requestAlignmentRetryModal();
-    expect(useContinuityStore.getState().alignmentRetryModalRequest).toBe(retryBefore + 1);
+    const retryBefore = useProjectStore.getState().alignmentRetryModalRequest;
+    useProjectStore.getState().requestAlignmentRetryModal();
+    expect(useProjectStore.getState().alignmentRetryModalRequest).toBe(retryBefore + 1);
 
-    useContinuityStore.getState().dismissWorkflowAdvance('test-prompt-key');
-    expect(useContinuityStore.getState().dismissedWorkflowAdvanceKeys).toContain('test-prompt-key');
+    useProjectStore.getState().dismissWorkflowAdvance('test-prompt-key');
+    expect(useProjectStore.getState().dismissedWorkflowAdvanceKeys).toContain('test-prompt-key');
 
-    useContinuityStore.getState().markObjectiveSeen('build');
-    expect(useContinuityStore.getState().seenObjectiveWorkspaces).toContain('build');
+    useProjectStore.getState().markObjectiveSeen('build');
+    expect(useProjectStore.getState().seenObjectiveWorkspaces).toContain('build');
 
-    useContinuityStore.getState().approveGrayboxForReference();
-    expect(useContinuityStore.getState().project.workflow.grayboxApprovedForReferenceAt).toBeTruthy();
+    useProjectStore.getState().approveGrayboxForReference();
+    expect(useProjectStore.getState().project.workflow.grayboxApprovedForReferenceAt).toBeTruthy();
 
-    const shotId = useContinuityStore.getState().selectedShotId
-      ?? useContinuityStore.getState().project.shots[0]?.id;
+    const shotId = useProjectStore.getState().selectedShotId
+      ?? useProjectStore.getState().project.shots[0]?.id;
     expect(shotId).toBeTruthy();
-    useContinuityStore.getState().acceptShotFraming(shotId!);
+    useProjectStore.getState().acceptShotFraming(shotId!);
     expect(
-      useContinuityStore.getState().project.workflow.shotFramingAcceptedAtByShotId[shotId!],
+      useProjectStore.getState().project.workflow.shotFramingAcceptedAtByShotId[shotId!],
     ).toBeTruthy();
 
-    useContinuityStore.getState().markAiBriefSent(shotId!);
+    useProjectStore.getState().markAiBriefSent(shotId!);
     expect(
-      useContinuityStore.getState().project.workflow.aiBriefSentAtByShotId[shotId!],
+      useProjectStore.getState().project.workflow.aiBriefSentAtByShotId[shotId!],
     ).toBeTruthy();
 
-    useContinuityStore.getState().markFinalPackageExported(shotId!);
+    useProjectStore.getState().markFinalPackageExported(shotId!);
     expect(
-      useContinuityStore.getState().project.workflow.finalPackageExportedAtByShotId[shotId!],
+      useProjectStore.getState().project.workflow.finalPackageExportedAtByShotId[shotId!],
     ).toBeTruthy();
 
-    useContinuityStore.getState().markAlignmentIntroSeen('pano-test');
-    expect(useContinuityStore.getState().seenAlignmentIntroForPanoId).toBe('pano-test');
+    useProjectStore.getState().markAlignmentIntroSeen('pano-test');
+    expect(useProjectStore.getState().seenAlignmentIntroForPanoId).toBe('pano-test');
 
-    useContinuityStore.getState().resetWorkflowSession();
-    const afterReset = useContinuityStore.getState();
+    useProjectStore.getState().resetWorkflowSession();
+    const afterReset = useProjectStore.getState();
     expect(afterReset.dismissedWorkflowAdvanceKeys).toEqual([]);
     expect(afterReset.seenObjectiveWorkspaces).toEqual([]);
     expect(afterReset.objectiveModalRequest).toBe(0);
@@ -304,41 +304,41 @@ describe('continuity store domain slices', () => {
   });
 
   it('session actions own fly mode, pano view, and land framing acceptance', () => {
-    const before = useContinuityStore.getState();
+    const before = useProjectStore.getState();
     const shotId = before.selectedShotId ?? before.project.shots[0]?.id;
     expect(shotId).toBeTruthy();
 
     before.setPanoView({ yawDegrees: 42, pitchDegrees: -5 });
-    expect(useContinuityStore.getState().panoView.yawDegrees).toBe(42);
-    expect(useContinuityStore.getState().panoView.pitchDegrees).toBe(-5);
+    expect(useProjectStore.getState().panoView.yawDegrees).toBe(42);
+    expect(useProjectStore.getState().panoView.pitchDegrees).toBe(-5);
 
     before.setShotCameraFlying(true, { clearFramingAcceptance: false });
-    expect(useContinuityStore.getState().shotCameraFlying).toBe(true);
+    expect(useProjectStore.getState().shotCameraFlying).toBe(true);
 
     before.setExportingPackage(true);
-    expect(useContinuityStore.getState().isExportingPackage).toBe(true);
+    expect(useProjectStore.getState().isExportingPackage).toBe(true);
     before.setExportingPackage(false);
-    expect(useContinuityStore.getState().isExportingPackage).toBe(false);
+    expect(useProjectStore.getState().isExportingPackage).toBe(false);
 
-    const camera = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!.camera;
-    useContinuityStore.getState().landShotFraming(shotId!, camera, { keepFlying: true });
-    const afterLand = useContinuityStore.getState();
+    const camera = useProjectStore.getState().project.shots.find((s) => s.id === shotId)!.camera;
+    useProjectStore.getState().landShotFraming(shotId!, camera, { keepFlying: true });
+    const afterLand = useProjectStore.getState();
     expect(afterLand.shotCameraFlying).toBe(true);
     expect(afterLand.project.workflow.shotFramingAcceptedAtByShotId[shotId!]).toBeTruthy();
 
     afterLand.lockShotCamera();
-    expect(useContinuityStore.getState().shotCameraFlying).toBe(false);
+    expect(useProjectStore.getState().shotCameraFlying).toBe(false);
 
-    const landed = useContinuityStore.getState();
+    const landed = useProjectStore.getState();
     const projectBeforeNoop = landed.project;
     const updatedAtBefore = projectBeforeNoop.updatedAt;
     landed.landShotFraming(shotId!, camera);
-    const afterNoop = useContinuityStore.getState();
+    const afterNoop = useProjectStore.getState();
     expect(afterNoop.project).toBe(projectBeforeNoop);
     expect(afterNoop.project.updatedAt).toBe(updatedAtBefore);
 
     afterNoop.setProjectedOcclusionStatus('ready');
-    expect(useContinuityStore.getState().projectedOcclusionStatus).toBe('ready');
+    expect(useProjectStore.getState().projectedOcclusionStatus).toBe('ready');
     afterNoop.setProjectedOcclusionStatus('disabled');
   });
 });

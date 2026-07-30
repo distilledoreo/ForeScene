@@ -1,6 +1,6 @@
 # Project Safety & Recovery
 
-This checklist defines the reliability completion bar for PanoRef. A checked
+This checklist defines the reliability completion bar for ForeScene. A checked
 item has implementation and regression coverage; it is not merely planned.
 
 ## Durable project revisions

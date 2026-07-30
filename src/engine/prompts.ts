@@ -118,7 +118,7 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
       ? `Production shot: ${shot.productionShotId.trim()}`
       : 'Production shot: (not set)',
     `Title: ${shot.name}`,
-    `PanoRef order: ${shot.shotNumber}`,
+    `ForeScene order: ${shot.shotNumber}`,
     '',
     `Preserve these landmarks: ${landmarkText}`,
     '',

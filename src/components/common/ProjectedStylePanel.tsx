@@ -12,7 +12,7 @@ import {
   canUseDualProjectorBlend,
   resolveProjectors,
 } from '../../engine/multiOriginProjection';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { Field, Select, TextInput, Toggle } from './Field';
 import { CoverageOptimizerPanel } from './CoverageOptimizerPanel';
 
@@ -32,7 +32,7 @@ export function ProjectedStylePanel({
   onChange: (settings: ProjectedStyleSettings) => void;
   onSetCaptureOrigin?: (origin: LocationProject['scene']['panoOrigin']) => void;
 }) {
-  const occlusionStatus = useContinuityStore((state) => state.projectedOcclusionStatus);
+  const occlusionStatus = useProjectStore((state) => state.projectedOcclusionStatus);
   const settings = normalizeProjectedStyleSettings(project.settings.projectedStyle);
   const eligible = listEligibleProjectedStylePanos(project);
   const allPanos = project.panoRefs;

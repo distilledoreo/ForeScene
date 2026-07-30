@@ -3,7 +3,7 @@ import type { LocationProject } from '../../domain/types';
 import { createOriginShot } from '../../domain/defaults';
 import { getCanonicalPano, linkAllShotsToCanonicalPano, panoViewFromCamera } from '../../engine/sync';
 import { normalizeWorkspace } from '../../engine/workflow';
-import type { ContinuityStoreSlices, WorkflowSliceState } from './types';
+import type { ProjectStoreSlices, WorkflowSliceState } from './types';
 
 function touchProjectUpdatedAt<T extends { updatedAt: string }>(project: T): T {
   return { ...project, updatedAt: new Date().toISOString() };
@@ -21,7 +21,7 @@ function ensureProjectHasCamera(project: LocationProject): LocationProject {
  * Owns its initial state and actions via the Zustand creator closure — not key-picked from the monolith.
  */
 export const createWorkflowSlice: StateCreator<
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   [],
   [],
   WorkflowSliceState

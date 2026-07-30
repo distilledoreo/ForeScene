@@ -1,10 +1,15 @@
 import type { ProjectAsset } from '../domain/types';
 
-const DATABASE_NAME = 'panoref-project-assets';
+/** Legacy PanoRef database name preserved so existing local binary assets keep opening. */
+const LEGACY_DATABASE_NAME = 'panoref-project-assets';
 const STORE_NAME = 'binary-assets';
 const DATABASE_VERSION = 1;
 
-/** Portable manifest references for locally stored image and video payloads. */
+/**
+ * Portable manifest references for locally stored image and video payloads.
+ * Legacy PanoRef URI scheme — the value is written into saved project manifests,
+ * so it stays verbatim across the ForeScene rebrand.
+ */
 export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 
 const memoryBlobs = new Map<string, Blob>();
@@ -28,7 +33,7 @@ export interface ProjectAssetPersistenceFailure {
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
     };

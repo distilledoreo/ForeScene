@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createOriginShot, createPanoAsset, createPanoReference } from '../src/domain/defaults';
 import { linkAllShotsToCanonicalPano } from '../src/engine/sync';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 
 describe('origin camera', () => {
   it('starts new projects with a camera at the pano origin', () => {
@@ -11,15 +11,15 @@ describe('origin camera', () => {
   });
 
   it('adds additional cameras at the origin', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       workspace: 'shots',
       selectedShotId: undefined,
       shotCameraFlying: true,
     });
 
-    const shot = useContinuityStore.getState().addCamera();
-    const project = useContinuityStore.getState().project;
+    const shot = useProjectStore.getState().addCamera();
+    const project = useProjectStore.getState().project;
 
     expect(project.shots).toHaveLength(2);
     expect(shot.name).toBe('Camera 002');

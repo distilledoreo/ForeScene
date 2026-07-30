@@ -23,7 +23,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { HelpSection, HelpTopic } from '../help/helpCatalog';
 import { helpSections } from '../help/helpCatalog';
 import { useAppModeStore } from '../../state/useAppModeStore';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 
 interface HelpWorkspaceProps {
   onClose: () => void;
@@ -120,7 +120,7 @@ function filterHelpSections(query: string): FilteredSection[] {
 export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
   const [query, setQuery] = useState('');
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(() => new Set(initialExpanded));
-  const setWorkspace = useContinuityStore((state) => state.setWorkspace);
+  const setWorkspace = useProjectStore((state) => state.setWorkspace);
   const setAppMode = useAppModeStore((state) => state.setAppMode);
   const normalizedQuery = normalizeSearch(query);
   const filteredSections = useMemo(() => filterHelpSections(query), [query]);
@@ -144,7 +144,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
 
   const openSectionDestination = (section: HelpSection) => {
     if (section.workspace) {
-      setAppMode('continuity');
+      setAppMode('studio');
       setWorkspace(section.workspace);
     } else if (section.mode === 'panoViewer') {
       setAppMode('panoViewer');
@@ -283,7 +283,7 @@ export function HelpWorkspace({ onClose }: HelpWorkspaceProps) {
               <figure className="overflow-hidden rounded-2xl border border-subtle bg-surface-overlay/80 shadow-card">
                 <img
                   src="/docs/workflow-overview.png"
-                  alt="Continuity Stage workflow overview from Build through Export"
+                  alt="ForeScene workflow overview from Build through Export"
                   className="aspect-video w-full object-cover"
                 />
                 <figcaption className="px-4 py-3 text-sm text-secondary">

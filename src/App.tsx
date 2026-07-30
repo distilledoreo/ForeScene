@@ -23,8 +23,9 @@ import {
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
 import type { ProjectSaveStatus } from './engine/projectSafety';
+import { BRAND, projectBackupAcceptAttribute, readMigratedPreference } from './config/brand';
 import { useAppModeStore } from './state/useAppModeStore';
-import { useContinuityStore } from './state/useContinuityStore';
+import { useProjectStore } from './state/useProjectStore';
 import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
 import { useProjectLifecycle } from './hooks/useProjectLifecycle';
@@ -50,8 +51,6 @@ const workspaceItems: Array<{ id: Workspace; label: string; icon: React.Componen
   { id: 'export', label: 'Export', icon: Upload },
 ];
 
-const SPLASH_SEEN_KEY = 'panoref-splash-seen';
-
 function projectSaveStatusLabel(status: ProjectSaveStatus): string {
   switch (status) {
     case 'saved': return 'Saved locally';
@@ -64,11 +63,7 @@ function projectSaveStatusLabel(status: ProjectSaveStatus): string {
 
 function hasSeenSplash(): boolean {
   if (typeof window === 'undefined') return true;
-  try {
-    return window.localStorage.getItem(SPLASH_SEEN_KEY) === '1';
-  } catch {
-    return true;
-  }
+  return readMigratedPreference(BRAND.prefs.splashSeen, BRAND.legacyPrefs.splashSeen) === '1';
 }
 
 export default function App() {
@@ -81,11 +76,11 @@ export default function App() {
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
   const appMode = useAppModeStore((state) => state.appMode);
   const setAppMode = useAppModeStore((state) => state.setAppMode);
-  const project = useContinuityStore((state) => state.project);
-  const workspace = useContinuityStore((state) => state.workspace);
-  const setWorkspace = useContinuityStore((state) => state.setWorkspace);
-  const updateProjectInfo = useContinuityStore((state) => state.updateProjectInfo);
-  const requestObjectiveModal = useContinuityStore((state) => state.requestObjectiveModal);
+  const project = useProjectStore((state) => state.project);
+  const workspace = useProjectStore((state) => state.workspace);
+  const setWorkspace = useProjectStore((state) => state.setWorkspace);
+  const updateProjectInfo = useProjectStore((state) => state.updateProjectInfo);
+  const requestObjectiveModal = useProjectStore((state) => state.requestObjectiveModal);
   const projectSaveStatus = useProjectSafetyStore((state) => state.status);
   const projectSaveMessage = useProjectSafetyStore((state) => state.message);
   const projectLastSavedAt = useProjectSafetyStore((state) => state.lastSavedAt);
@@ -116,7 +111,7 @@ export default function App() {
   });
 
   const isPanoViewer = appMode === 'panoViewer';
-  const isContinuityStage = appMode === 'continuity';
+  const isStudioMode = appMode === 'studio';
   const showModeChooser = splashDone && appMode === null && !helpOpen;
 
   const navigateWorkspace = (nextWorkspace: Workspace) => {
@@ -178,7 +173,7 @@ export default function App() {
             <WorkspaceErrorBoundary workspaceName="360 Viewer">
               <PanoViewerWorkspace />
             </WorkspaceErrorBoundary>
-          ) : isContinuityStage ? (
+          ) : isStudioMode ? (
             <>
               {workspace === 'build' && (
                 <WorkspaceErrorBoundary workspaceName="Build">
@@ -232,7 +227,7 @@ export default function App() {
                   <Boxes className="h-7 w-7 md:h-9 md:w-9" strokeWidth={2.2} />
                 </span>
                 <span className="min-w-0 truncate text-base font-semibold tracking-normal text-primary md:text-xl">
-                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : 'Continuity Stage'}
+                  {helpOpen ? 'Help Center' : isPanoViewer ? '360 Viewer' : BRAND.name}
                 </span>
                 <ChevronDown
                   className={`h-4 w-4 shrink-0 text-secondary transition ${projectMenuOpen ? 'rotate-180 text-accent' : ''}`}
@@ -269,9 +264,9 @@ export default function App() {
                   {isPanoViewer ? (
                     <ProjectMenuButton
                       icon={<Boxes className="h-4 w-4" />}
-                      label="Open Continuity Stage"
+                      label="Open ForeScene"
                       onClick={() => {
-                        setAppMode('continuity');
+                        setAppMode('studio');
                         setHelpOpen(false);
                         setProjectMenuOpen(false);
                       }}
@@ -356,7 +351,7 @@ export default function App() {
             <input
               ref={fileRef}
               type="file"
-              accept=".json,.zip,.panoref-project,application/json,application/zip"
+              accept={projectBackupAcceptAttribute()}
               aria-label="Open project JSON"
               data-project-import-input
               className="hidden"
@@ -398,7 +393,7 @@ export default function App() {
             </div>
           </div>
 
-          {isContinuityStage && !helpOpen && (
+          {isStudioMode && !helpOpen && (
             <>
               <nav className="pointer-events-auto absolute left-1/2 top-5 hidden w-[min(700px,56vw)] -translate-x-1/2 items-start justify-between md:flex">
                 <span className="absolute left-8 right-8 top-[22px] h-px bg-border-subtle/80" aria-hidden />
@@ -501,14 +496,14 @@ export default function App() {
         }}
       >
         <span data-project-new-confirm>
-          This replaces the project currently open in Continuity Stage with a blank scene.
+          This replaces the project currently open in ForeScene with a blank scene.
           Your current work stays available under Project Safety &amp; Recovery
           {project.name ? ` as “${project.name}”` : ''}.
           Export a backup first if you want an offline copy.
         </span>
       </ConfirmDialog>
 
-      {isContinuityStage && !helpOpen && (
+      {isStudioMode && !helpOpen && (
         <Suspense fallback={null}>
           <WorkflowGuidance />
         </Suspense>

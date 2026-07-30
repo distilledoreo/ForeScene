@@ -7,7 +7,7 @@ import { serializeProject, parseProject } from '../src/engine/projectIO';
 import { formatWarningSummary, getExportSelectionWarnings, getProjectWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../src/engine/warnings';
 import { getLatestGrayboxPano, getPanoAsset } from '../src/domain/selectors';
 import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 import { resolveStyledImportMode } from '../src/engine/multiOriginProjection';
 
 describe('project workflow logic', () => {
@@ -792,7 +792,7 @@ describe('project workflow logic', () => {
   it('resets session fly and busy flags when opening a project', () => {
     const incoming = createDefaultProject();
     incoming.name = 'Imported Audit Project';
-    useContinuityStore.setState({
+    useProjectStore.setState({
       shotCameraFlying: true,
       isRenderingGraybox: true,
       isExportingPackage: true,
@@ -802,8 +802,8 @@ describe('project workflow logic', () => {
       panoView: { yawDegrees: 90, pitchDegrees: 12, fovDegrees: 40 },
     });
 
-    useContinuityStore.getState().setProject(incoming);
-    const state = useContinuityStore.getState();
+    useProjectStore.getState().setProject(incoming);
+    const state = useProjectStore.getState();
 
     expect(state.project.name).toBe('Imported Audit Project');
     expect(state.shotCameraFlying).toBe(false);
@@ -818,20 +818,20 @@ describe('project workflow logic', () => {
   it('confirms before leaving Export while a package export is running', () => {
     const confirmMock = vi.fn(() => false);
     vi.stubGlobal('confirm', confirmMock);
-    useContinuityStore.setState({
+    useProjectStore.setState({
       workspace: 'export',
       isExportingPackage: true,
     });
 
-    useContinuityStore.getState().setWorkspace('build');
+    useProjectStore.getState().setWorkspace('build');
     expect(confirmMock).toHaveBeenCalledWith('An export is currently running. Cancel it and leave?');
-    expect(useContinuityStore.getState().workspace).toBe('export');
-    expect(useContinuityStore.getState().isExportingPackage).toBe(true);
+    expect(useProjectStore.getState().workspace).toBe('export');
+    expect(useProjectStore.getState().isExportingPackage).toBe(true);
 
     confirmMock.mockReturnValue(true);
-    useContinuityStore.getState().setWorkspace('shots');
-    expect(useContinuityStore.getState().workspace).toBe('shots');
-    expect(useContinuityStore.getState().isExportingPackage).toBe(false);
+    useProjectStore.getState().setWorkspace('shots');
+    expect(useProjectStore.getState().workspace).toBe('shots');
+    expect(useProjectStore.getState().isExportingPackage).toBe(false);
     vi.unstubAllGlobals();
   });
 
@@ -877,14 +877,14 @@ describe('project workflow logic', () => {
       linkedPanoId: uploaded.id,
     };
 
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       activePanoId: uploaded.id,
       seenAlignmentIntroForPanoId: uploaded.id,
     });
 
-    useContinuityStore.getState().removePanoReference(uploaded.id);
-    const state = useContinuityStore.getState();
+    useProjectStore.getState().removePanoReference(uploaded.id);
+    const state = useProjectStore.getState();
 
     expect(state.project.panoRefs.map((pano) => pano.id)).toEqual([graybox.id]);
     expect(state.project.panoRefs[0]?.isCanonical).toBe(true);
@@ -924,17 +924,17 @@ describe('project workflow logic', () => {
       blendMode: 'primary_only',
     };
 
-    useContinuityStore.setState({ project, activePanoId: first.id });
+    useProjectStore.setState({ project, activePanoId: first.id });
 
     // Same origin → replace
-    const replaceMode = useContinuityStore.getState().importStyledPano({
+    const replaceMode = useProjectStore.getState().importStyledPano({
       name: 'replacement.png',
       dataUrl: 'data:image/png;base64,REPL',
       width: 4096,
       height: 2048,
     });
     expect(replaceMode).toBe('replace');
-    let state = useContinuityStore.getState();
+    let state = useProjectStore.getState();
     const replacement = state.project.panoRefs.find((pano) => pano.isCanonical && pano.type === 'ai_global_reference');
     expect(replacement?.name).toBe('replacement');
     expect(state.project.workflow.referenceAlignmentAcceptedForPanoId).toBeUndefined();
@@ -967,20 +967,20 @@ describe('project workflow logic', () => {
       blendMode: 'primary_only',
       secondaryPanoId: undefined,
     };
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: state.project,
       activePanoId: primary.id,
     });
 
-    expect(resolveStyledImportMode(useContinuityStore.getState().project)).toBe('add_secondary');
-    const addMode = useContinuityStore.getState().importStyledPano({
+    expect(resolveStyledImportMode(useProjectStore.getState().project)).toBe('add_secondary');
+    const addMode = useProjectStore.getState().importStyledPano({
       name: 'second.png',
       dataUrl: 'data:image/png;base64,SEC',
       width: 4096,
       height: 2048,
     });
     expect(addMode).toBe('add_secondary');
-    state = useContinuityStore.getState();
+    state = useProjectStore.getState();
     expect(state.project.panoRefs.find((pano) => pano.id === primary.id)?.isCanonical).toBe(true);
     expect(state.project.workflow.referenceAlignmentAcceptedForPanoId).toBe(primary.id);
     expect(state.project.shots[0]?.linkedPanoId).toBe(primary.id);
@@ -1022,7 +1022,7 @@ describe('project workflow logic', () => {
 
     const frozenOrigin: [number, number, number] = [4.5, 1.6, 2.25];
     const frozenRotation: [number, number, number] = [0, 0.35, 0];
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       activePanoId: primary.id,
       pendingSecondCapturePlan: {
@@ -1033,18 +1033,18 @@ describe('project workflow logic', () => {
       },
     });
 
-    expect(resolveStyledImportMode(useContinuityStore.getState().project, {
-      pendingSecondCapturePlan: useContinuityStore.getState().pendingSecondCapturePlan,
+    expect(resolveStyledImportMode(useProjectStore.getState().project, {
+      pendingSecondCapturePlan: useProjectStore.getState().pendingSecondCapturePlan,
     })).toBe('add_secondary');
 
-    const addMode = useContinuityStore.getState().importStyledPano({
+    const addMode = useProjectStore.getState().importStyledPano({
       name: 'second.png',
       dataUrl: 'data:image/png;base64,SEC',
       width: 4096,
       height: 2048,
     });
     expect(addMode).toBe('add_secondary');
-    const state = useContinuityStore.getState();
+    const state = useProjectStore.getState();
     expect(state.project.panoRefs.find((pano) => pano.id === primary.id)?.isCanonical).toBe(true);
     expect(state.project.settings.projectedStyle!.secondaryPanoId).toBeTruthy();
     expect(state.pendingSecondCapturePlan).toBeUndefined();
@@ -1098,33 +1098,33 @@ describe('project workflow logic', () => {
       secondaryPanoId: b.id,
       blendMode: 'primary_dominant',
     };
-    useContinuityStore.setState({ project, activePanoId: a.id });
-    useContinuityStore.getState().removePanoReference(b.id);
-    const state = useContinuityStore.getState();
+    useProjectStore.setState({ project, activePanoId: a.id });
+    useProjectStore.getState().removePanoReference(b.id);
+    const state = useProjectStore.getState();
     expect(state.project.settings.projectedStyle!.secondaryPanoId).toBeUndefined();
     expect(state.project.settings.projectedStyle!.panoId).toBe(a.id);
   });
 
   it('replaces a shot viewport preview without retaining its superseded asset', () => {
     const project = createDefaultProject();
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedShotId: project.shots[0]?.id,
     });
 
-    const first = useContinuityStore.getState().attachViewportRenderToShot(project.shots[0].id, {
+    const first = useProjectStore.getState().attachViewportRenderToShot(project.shots[0].id, {
       name: 'first_viewport.png',
       dataUrl: 'data:image/png;base64,first',
       width: 1920,
       height: 1080,
     });
-    const second = useContinuityStore.getState().attachViewportRenderToShot(project.shots[0].id, {
+    const second = useProjectStore.getState().attachViewportRenderToShot(project.shots[0].id, {
       name: 'second_viewport.png',
       dataUrl: 'data:image/png;base64,second',
       width: 1920,
       height: 1080,
     });
-    const state = useContinuityStore.getState();
+    const state = useProjectStore.getState();
 
     expect(state.project.shots[0].assets.viewportRenderAssetId).toBe(second.id);
     expect(state.project.assets.assets[first.id]).toBeUndefined();
@@ -1133,26 +1133,26 @@ describe('project workflow logic', () => {
 
   it('reclaims superseded and detached shot media assets', () => {
     const project = createDefaultProject();
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedShotId: project.shots[0]?.id,
     });
     const shotId = project.shots[0].id;
-    const firstVideo = useContinuityStore.getState().attachCameraMoveVideoToShot(shotId, {
+    const firstVideo = useProjectStore.getState().attachCameraMoveVideoToShot(shotId, {
       name: 'first.mp4', dataUrl: 'data:video/mp4;base64,FIRST', mimeType: 'video/mp4', width: 1920, height: 1080,
       durationSeconds: 2, frameRate: 24,
     });
-    const secondVideo = useContinuityStore.getState().attachCameraMoveVideoToShot(shotId, {
+    const secondVideo = useProjectStore.getState().attachCameraMoveVideoToShot(shotId, {
       name: 'second.mp4', dataUrl: 'data:video/mp4;base64,SECOND', mimeType: 'video/mp4', width: 1920, height: 1080,
       durationSeconds: 2, frameRate: 24,
     });
-    const firstAiResult = useContinuityStore.getState().attachAiResultFrameToShot(shotId, {
+    const firstAiResult = useProjectStore.getState().attachAiResultFrameToShot(shotId, {
       name: 'first.png', dataUrl: 'data:image/png;base64,FIRST',
     });
-    const secondAiResult = useContinuityStore.getState().attachAiResultFrameToShot(shotId, {
+    const secondAiResult = useProjectStore.getState().attachAiResultFrameToShot(shotId, {
       name: 'second.png', dataUrl: 'data:image/png;base64,SECOND',
     });
-    let state = useContinuityStore.getState();
+    let state = useProjectStore.getState();
     expect(state.project.assets.assets[firstVideo.id]).toBeUndefined();
     expect(state.project.assets.assets[firstAiResult.id]).toBeUndefined();
     expect(state.project.assets.assets[secondVideo.id]).toBeTruthy();
@@ -1161,13 +1161,13 @@ describe('project workflow logic', () => {
     state.updateShot(shotId, {
       assets: { ...state.project.shots[0].assets, cameraMoveVideoAssetId: undefined },
     });
-    expect(useContinuityStore.getState().project.assets.assets[secondVideo.id]).toBeUndefined();
+    expect(useProjectStore.getState().project.assets.assets[secondVideo.id]).toBeUndefined();
 
-    const detachedShot = useContinuityStore.getState().addCamera({ navigateToShots: false });
-    const detachedAsset = useContinuityStore.getState().attachAiResultFrameToShot(detachedShot.id, {
+    const detachedShot = useProjectStore.getState().addCamera({ navigateToShots: false });
+    const detachedAsset = useProjectStore.getState().attachAiResultFrameToShot(detachedShot.id, {
       name: 'detached.png', dataUrl: 'data:image/png;base64,DETACHED',
     });
-    useContinuityStore.getState().removeShot(detachedShot.id);
-    expect(useContinuityStore.getState().project.assets.assets[detachedAsset.id]).toBeUndefined();
+    useProjectStore.getState().removeShot(detachedShot.id);
+    expect(useProjectStore.getState().project.assets.assets[detachedAsset.id]).toBeUndefined();
   });
 });

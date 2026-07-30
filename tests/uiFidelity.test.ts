@@ -30,7 +30,7 @@ describe('ui revamp fidelity surfaces', () => {
     expect(build).not.toContain('reserveHeader');
   });
 
-  it('declares Continuity Stage favicon assets in the app shell', () => {
+  it('declares ForeScene favicon assets in the app shell', () => {
     const shell = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
     const faviconSvg = readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8');
     const faviconIco = readFileSync(new URL('../public/favicon.ico', import.meta.url));
@@ -389,7 +389,7 @@ describe('ui revamp fidelity surfaces', () => {
     const shots = shotsWorkspace + '\n' + shotsChrome + '\n' + shotSettings;
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     expect(viewport).not.toContain('getBuildInteractionState');
-    expect(viewport).not.toContain('useContinuityStore');
+    expect(viewport).not.toContain('useProjectStore');
     expect(viewport).not.toContain('buildMode');
     expect(viewport).not.toContain('activePrimitive');
     expect(viewport).toContain('placementTypeRef.current');
@@ -491,12 +491,13 @@ describe('ui revamp fidelity surfaces', () => {
     const modeStore = readFileSync(new URL('../src/state/useAppModeStore.ts', import.meta.url), 'utf8');
     const chooser = readFileSync(new URL('../src/components/common/ModeChooser.tsx', import.meta.url), 'utf8');
     const panoViewer = readFileSync(new URL('../src/components/workspaces/PanoViewerWorkspace.tsx', import.meta.url), 'utf8');
-    expect(modeStore).toContain("panoref-app-mode");
-    expect(modeStore).toContain("'continuity' | 'panoViewer'");
+    expect(modeStore).toContain('BRAND.prefs.appMode');
+    expect(modeStore).toContain('BRAND.legacyPrefs.appMode');
+    expect(modeStore).toContain("'studio' | 'panoViewer'");
     expect(app).toContain('ModeChooser');
     expect(app).toContain('PanoViewerWorkspace');
     expect(app).toContain('Simple 360 Viewer');
-    expect(app).toContain('Open Continuity Stage');
+    expect(app).toContain('Open ForeScene');
     expect(app).toContain('data-brand-menu-trigger');
     expect(app).toContain('ChevronDown');
     expect(app).toContain('Open app menu');
@@ -507,8 +508,8 @@ describe('ui revamp fidelity surfaces', () => {
     expect(panoViewer).toContain('downloadDataUrl');
     expect(panoViewer).toContain('data-pano-viewer-workspace');
     expect(panoViewer).toContain('data-pano-viewer-isolated');
-    // Must not mutate Continuity Stage project from simple viewer.
-    expect(panoViewer).not.toContain("from '../../state/useContinuityStore'");
+    // Must not mutate the ForeScene studio project from simple viewer.
+    expect(panoViewer).not.toContain("from '../../state/useProjectStore'");
     expect(panoViewer).not.toContain('importCanonicalPano');
     expect(panoViewer).toContain('useState');
   });
@@ -609,7 +610,7 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).not.toContain("type VideoShutterPhase = 'record' | 'stop' | 'export'");
     expect(shots).not.toMatch(/if \(videoPhase === 'record'\)/);
     // Preview after capture should read latest store project (not stale closure only).
-    expect(shots).toContain('useContinuityStore.getState().project');
+    expect(shots).toContain('useProjectStore.getState().project');
     // Instructional copy is state-aware (no old fly-to-end / end-set guidance).
     expect(shots).not.toContain('Fly to end · press stop');
     expect(shots).not.toContain('End set · export when ready');

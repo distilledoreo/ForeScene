@@ -5,29 +5,29 @@ import { workspaceTab } from './workspace-navigation';
 // Tag taxonomy: @smoke — essential workflow on desktop Chromium PRs.
 // Full-regression is owned by the main/nightly workflows (see AGENTS.md).
 
-async function enterContinuityStage(page: Page) {
+async function enterStudio(page: Page) {
   // Skip splash video so it never blocks pointer events mid-test.
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem('panoref-splash-seen', '1');
+      window.localStorage.setItem('forescene-splash-seen', '1');
     } catch {
       // ignore
     }
   });
   await page.goto('/');
   const modeChooser = page.locator('[data-mode-chooser]');
-  const continuity = page.getByRole('button', { name: /Build continuity packages/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
   if (await modeChooser.isVisible().catch(() => false)) {
-    await continuity.click();
+    await studio.click();
   } else {
     try {
       await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await continuity.click();
+      await studio.click();
     } catch {
       // Already in a mode from a previous session.
     }
   }
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });
@@ -99,7 +99,7 @@ function humanoidProxyGlb(): Buffer {
 
 test.describe('@smoke autorig character workflow', () => {
   test('imports a GLB, opens the marker wizard, applies the rig, and poses it', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);

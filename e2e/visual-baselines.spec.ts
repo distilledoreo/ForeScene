@@ -2,28 +2,28 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { goToWorkspace } from './workspace-navigation';
 
-async function enterContinuityStage(page: Page) {
+async function enterStudio(page: Page) {
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem('panoref-splash-seen', '1');
+      window.localStorage.setItem('forescene-splash-seen', '1');
     } catch {
       // ignore
     }
   });
   await page.goto('/');
   const modeChooser = page.locator('[data-mode-chooser]');
-  const continuity = page.getByRole('button', { name: /Build continuity packages/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
   if (await modeChooser.isVisible().catch(() => false)) {
-    await continuity.click();
+    await studio.click();
   } else {
     try {
       await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await continuity.click();
+      await studio.click();
     } catch {
       // Already in mode.
     }
   }
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });
@@ -49,7 +49,7 @@ async function dismissOverlays(page: Page) {
 
 test.describe('@visual screenshot baselines', () => {
   test('build workspace baseline', async ({ page }, testInfo) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await page.waitForTimeout(400);
     await expect(page).toHaveScreenshot(`build-${testInfo.project.name}.png`, {
@@ -58,7 +58,7 @@ test.describe('@visual screenshot baselines', () => {
   });
 
   test('shots workspace baseline', async ({ page }, testInfo) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);

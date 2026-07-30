@@ -63,7 +63,7 @@ export interface PoseableCharacterImportResult {
   object: SceneObject;
   rig: PoseableRigAsset;
   warnings: string[];
-  /** Oriented/canonical mesh vertex count — used to validate attached .panorig packages. */
+  /** Oriented/canonical mesh vertex count — used to validate attached .fsrig / legacy .panorig packages. */
   vertexCount: number;
 }
 
@@ -77,7 +77,7 @@ export function isPoseableCharacterImportFile(file: File): boolean {
   return (POSEABLE_CHARACTER_IMPORT_EXTENSIONS as readonly string[]).includes(extension);
 }
 
-/** Build a rotation that maps source front/up axes onto Continuity Stage +Z / +Y. */
+/** Build a rotation that maps source front/up axes onto ForeScene +Z / +Y. */
 export { canonicalOrientationQuaternion as orientationQuaternion } from './autorigCanonicalMesh';
 
 function measureObjectSize(root: THREE.Object3D): { size: Vec3; box: THREE.Box3 } {

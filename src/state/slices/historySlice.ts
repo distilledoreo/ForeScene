@@ -10,7 +10,7 @@ import {
   withShotCameraHistoryStacks,
 } from '../../engine/shotCameraHistory';
 import { selectionPivot } from '../../engine/buildSelectionMath';
-import type { ContinuityStoreSlices, HistorySliceState } from './types';
+import type { ProjectStoreSlices, HistorySliceState } from './types';
 import { getHistoryRuntime } from './historyRuntime';
 
 /**
@@ -19,7 +19,7 @@ import { getHistoryRuntime } from './historyRuntime';
  * via getHistoryRuntime(set) — not module-global restore flags or shared timers.
  */
 export const createHistorySlice: StateCreator<
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   [],
   [],
   HistorySliceState

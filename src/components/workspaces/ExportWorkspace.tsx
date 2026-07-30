@@ -29,7 +29,7 @@ import {
 } from '../../engine/characterPassExport';
 import { hasRenderableCameraMove } from '../../engine/cameraKeyframes';
 import { getExportSelectionWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../../engine/warnings';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { Field, IconButton, Select, TextInput } from '../common/Field';
@@ -53,7 +53,7 @@ export function ExportWorkspace() {
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     selectedShotId: state.selectedShotId,
     selectShot: state.selectShot,

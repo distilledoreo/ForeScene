@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultProject } from '../src/domain/defaults';
 import { BUILD_HISTORY_COALESCE_MS } from '../src/engine/buildHistory';
 import { createPlacedSceneObject, duplicateSceneObject, snapBuildPoint } from '../src/engine/sandbox';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 
 describe('sandbox build interactions', () => {
   it('snaps build points on the floor grid without changing height', () => {
@@ -54,7 +54,7 @@ describe('sandbox build interactions', () => {
   });
 
   it('stores placed objects without changing project schema version', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       selectedObjectIds: [],
       gridSnap: true,
@@ -62,8 +62,8 @@ describe('sandbox build interactions', () => {
       activePrimitive: 'box',
     });
 
-    const object = useContinuityStore.getState().placeObject('box', [1.24, 0, 1.26]);
-    const state = useContinuityStore.getState();
+    const object = useProjectStore.getState().placeObject('box', [1.24, 0, 1.26]);
+    const state = useProjectStore.getState();
 
     expect(state.project.schemaVersion).toBe('1.0');
     expect(state.selectedObjectIds).toEqual([]);
@@ -74,16 +74,16 @@ describe('sandbox build interactions', () => {
   it('clears the current selection when arming stamp mode', () => {
     const project = createDefaultProject();
     const selected = project.scene.objects[1];
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedObjectIds: [selected.id],
       buildMode: 'select',
       activePrimitive: 'box',
     });
 
-    useContinuityStore.getState().setActivePrimitive('wall');
+    useProjectStore.getState().setActivePrimitive('wall');
 
-    const state = useContinuityStore.getState();
+    const state = useProjectStore.getState();
     expect(state.buildMode).toBe('place');
     expect(state.activePrimitive).toBe('wall');
     expect(state.selectedObjectIds).toEqual([]);
@@ -92,12 +92,12 @@ describe('sandbox build interactions', () => {
   it('moves unlocked objects to a new ground point when dragged', () => {
     const project = createDefaultProject();
     const object = project.scene.objects[2];
-    useContinuityStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
+    useProjectStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
 
-    useContinuityStore.getState().moveObjectToGroundPoint(object.id, [2.4, 0, -1.8]);
+    useProjectStore.getState().moveObjectToGroundPoint(object.id, [2.4, 0, -1.8]);
 
-    expect(useContinuityStore.getState().project.scene.objects[2].transform.position[0]).toBe(2.5);
-    expect(useContinuityStore.getState().project.scene.objects[2].transform.position[2]).toBe(-2);
+    expect(useProjectStore.getState().project.scene.objects[2].transform.position[0]).toBe(2.5);
+    expect(useProjectStore.getState().project.scene.objects[2].transform.position[2]).toBe(-2);
   });
 
   it('keeps the starter ground slab locked by default', () => {
@@ -115,11 +115,11 @@ describe('sandbox build interactions', () => {
       snapToGrid: true,
     });
     project.scene.objects.push(floor);
-    useContinuityStore.setState({ project, gridSnap: true, selectedObjectIds: [floor.id] });
+    useProjectStore.setState({ project, gridSnap: true, selectedObjectIds: [floor.id] });
 
-    useContinuityStore.getState().moveObjectToGroundPoint(floor.id, [4.2, 0, 2.8]);
+    useProjectStore.getState().moveObjectToGroundPoint(floor.id, [4.2, 0, 2.8]);
 
-    const moved = useContinuityStore.getState().project.scene.objects.at(-1);
+    const moved = useProjectStore.getState().project.scene.objects.at(-1);
     expect(moved?.transform.position).toEqual([4, 0.04, 3]);
   });
 
@@ -127,11 +127,11 @@ describe('sandbox build interactions', () => {
     const project = createDefaultProject();
     const object = project.scene.objects[2];
     const originalY = object.transform.position[1];
-    useContinuityStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
+    useProjectStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
 
-    useContinuityStore.getState().moveObjectPosition(object.id, [2.4, originalY + 1.25, -1.8]);
+    useProjectStore.getState().moveObjectPosition(object.id, [2.4, originalY + 1.25, -1.8]);
 
-    const moved = useContinuityStore.getState().project.scene.objects[2];
+    const moved = useProjectStore.getState().project.scene.objects[2];
     expect(moved.transform.position[0]).toBe(2.5);
     expect(moved.transform.position[1]).toBeCloseTo(originalY + 1.25);
     expect(moved.transform.position[2]).toBe(-2);
@@ -140,7 +140,7 @@ describe('sandbox build interactions', () => {
   it('undoes and redoes placeObject, and batches continuous moves into one undo step', () => {
     const project = createDefaultProject();
     const startCount = project.scene.objects.length;
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       buildHistoryPast: [],
       buildHistoryFuture: [],
@@ -150,39 +150,39 @@ describe('sandbox build interactions', () => {
       gridSnap: true,
     });
 
-    useContinuityStore.getState().placeObject('box', [1, 0, 1]);
-    expect(useContinuityStore.getState().project.scene.objects).toHaveLength(startCount + 1);
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(1);
+    useProjectStore.getState().placeObject('box', [1, 0, 1]);
+    expect(useProjectStore.getState().project.scene.objects).toHaveLength(startCount + 1);
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(1);
 
-    expect(useContinuityStore.getState().undoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects).toHaveLength(startCount);
-    expect(useContinuityStore.getState().buildHistoryFuture).toHaveLength(1);
+    expect(useProjectStore.getState().undoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects).toHaveLength(startCount);
+    expect(useProjectStore.getState().buildHistoryFuture).toHaveLength(1);
 
-    expect(useContinuityStore.getState().redoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects).toHaveLength(startCount + 1);
+    expect(useProjectStore.getState().redoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects).toHaveLength(startCount + 1);
 
-    const placed = useContinuityStore.getState().project.scene.objects.at(-1)!;
-    useContinuityStore.getState().beginBuildHistoryBatch();
-    useContinuityStore.getState().moveObjectPosition(placed.id, [2, placed.transform.position[1], 2]);
-    useContinuityStore.getState().moveObjectPosition(placed.id, [3, placed.transform.position[1], 3]);
-    useContinuityStore.getState().moveObjectPosition(placed.id, [4, placed.transform.position[1], 4]);
-    useContinuityStore.getState().endBuildHistoryBatch();
+    const placed = useProjectStore.getState().project.scene.objects.at(-1)!;
+    useProjectStore.getState().beginBuildHistoryBatch();
+    useProjectStore.getState().moveObjectPosition(placed.id, [2, placed.transform.position[1], 2]);
+    useProjectStore.getState().moveObjectPosition(placed.id, [3, placed.transform.position[1], 3]);
+    useProjectStore.getState().moveObjectPosition(placed.id, [4, placed.transform.position[1], 4]);
+    useProjectStore.getState().endBuildHistoryBatch();
 
     // place + one batch pre-state (not three move steps)
-    expect(useContinuityStore.getState().buildHistoryPast.length).toBeGreaterThanOrEqual(2);
-    const pastLenAfterBatch = useContinuityStore.getState().buildHistoryPast.length;
+    expect(useProjectStore.getState().buildHistoryPast.length).toBeGreaterThanOrEqual(2);
+    const pastLenAfterBatch = useProjectStore.getState().buildHistoryPast.length;
 
-    useContinuityStore.getState().undoBuild();
-    const afterUndoMove = useContinuityStore.getState().project.scene.objects.find((item) => item.id === placed.id);
+    useProjectStore.getState().undoBuild();
+    const afterUndoMove = useProjectStore.getState().project.scene.objects.find((item) => item.id === placed.id);
     expect(afterUndoMove?.transform.position[0]).not.toBe(4);
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(pastLenAfterBatch - 1);
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(pastLenAfterBatch - 1);
   });
 
   it('records step history for discrete updateObject and coalesces rapid field edits', () => {
     vi.useFakeTimers();
     const project = createDefaultProject();
     const object = project.scene.objects[1];
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedObjectIds: [object.id],
       buildHistoryPast: [],
@@ -192,40 +192,40 @@ describe('sandbox build interactions', () => {
       buildHistoryCoalesceActive: false,
     });
 
-    useContinuityStore.getState().updateObject(object.id, {
+    useProjectStore.getState().updateObject(object.id, {
       transform: {
         ...object.transform,
         rotation: [0, 15, 0],
       },
     });
-    useContinuityStore.getState().updateObject(object.id, {
+    useProjectStore.getState().updateObject(object.id, {
       transform: {
         ...object.transform,
         rotation: [0, 30, 0],
       },
     });
-    useContinuityStore.getState().updateObject(object.id, {
+    useProjectStore.getState().updateObject(object.id, {
       transform: {
         ...object.transform,
         rotation: [0, 45, 0],
       },
     });
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(3);
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(3);
 
-    useContinuityStore.setState({
+    useProjectStore.setState({
       buildHistoryPast: [],
       buildHistoryFuture: [],
       buildHistoryCoalesceActive: false,
     });
-    const target = useContinuityStore.getState().project.scene.objects[1];
-    useContinuityStore.getState().updateObject(target.id, { name: 'A' }, { history: 'coalesce' });
-    useContinuityStore.getState().updateObject(target.id, { name: 'AB' }, { history: 'coalesce' });
-    useContinuityStore.getState().updateObject(target.id, { name: 'ABC' }, { history: 'coalesce' });
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(1);
+    const target = useProjectStore.getState().project.scene.objects[1];
+    useProjectStore.getState().updateObject(target.id, { name: 'A' }, { history: 'coalesce' });
+    useProjectStore.getState().updateObject(target.id, { name: 'AB' }, { history: 'coalesce' });
+    useProjectStore.getState().updateObject(target.id, { name: 'ABC' }, { history: 'coalesce' });
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(1);
 
     vi.advanceTimersByTime(BUILD_HISTORY_COALESCE_MS + 10);
-    useContinuityStore.getState().updateObject(target.id, { name: 'ABCD' }, { history: 'coalesce' });
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(2);
+    useProjectStore.getState().updateObject(target.id, { name: 'ABCD' }, { history: 'coalesce' });
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(2);
     vi.useRealTimers();
   });
 
@@ -233,7 +233,7 @@ describe('sandbox build interactions', () => {
     const project = createDefaultProject();
     const origin = [...project.scene.panoOrigin] as [number, number, number];
     const object = project.scene.objects[1];
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       buildHistoryPast: [],
       buildHistoryFuture: [],
@@ -241,18 +241,18 @@ describe('sandbox build interactions', () => {
       buildHistoryBatchCaptured: false,
     });
 
-    useContinuityStore.getState().setPanoOrigin(origin);
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(0);
+    useProjectStore.getState().setPanoOrigin(origin);
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(0);
 
-    useContinuityStore.getState().updateObject(object.id, { name: object.name });
-    expect(useContinuityStore.getState().buildHistoryPast).toHaveLength(0);
+    useProjectStore.getState().updateObject(object.id, { name: object.name });
+    expect(useProjectStore.getState().buildHistoryPast).toHaveLength(0);
   });
 
   it('clears selection when removing the selected object', () => {
     const project = createDefaultProject();
     const object = project.scene.objects[1];
 
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedObjectIds: [object.id],
       buildHistoryPast: [],
@@ -262,17 +262,17 @@ describe('sandbox build interactions', () => {
       buildHistoryCoalesceActive: false,
     });
 
-    useContinuityStore.getState().removeObject(object.id);
+    useProjectStore.getState().removeObject(object.id);
 
-    expect(useContinuityStore.getState().selectedObjectIds).toEqual([]);
+    expect(useProjectStore.getState().selectedObjectIds).toEqual([]);
     expect(
-      useContinuityStore.getState().project.scene.objects.some((item) => item.id === object.id),
+      useProjectStore.getState().project.scene.objects.some((item) => item.id === object.id),
     ).toBe(false);
   });
 
   it('clears build history stacks and runtime flags when opening a project', () => {
     const project = createDefaultProject();
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       buildHistoryPast: [{
         objects: project.scene.objects,
@@ -293,9 +293,9 @@ describe('sandbox build interactions', () => {
 
     const incoming = createDefaultProject();
     incoming.name = 'Fresh Project';
-    useContinuityStore.getState().setProject(incoming);
+    useProjectStore.getState().setProject(incoming);
 
-    const state = useContinuityStore.getState();
+    const state = useProjectStore.getState();
     expect(state.project.name).toBe('Fresh Project');
     expect(state.buildHistoryPast).toEqual([]);
     expect(state.buildHistoryFuture).toEqual([]);
@@ -308,10 +308,10 @@ describe('sandbox build interactions', () => {
     const project = createDefaultProject();
     const object = { ...project.scene.objects[1], locked: true };
     project.scene.objects[1] = object;
-    useContinuityStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
+    useProjectStore.setState({ project, gridSnap: true, selectedObjectIds: [object.id] });
 
-    useContinuityStore.getState().moveObjectToGroundPoint(object.id, [4.2, 0, -2.8]);
+    useProjectStore.getState().moveObjectToGroundPoint(object.id, [4.2, 0, -2.8]);
 
-    expect(useContinuityStore.getState().project.scene.objects[1].transform.position).toEqual(object.transform.position);
+    expect(useProjectStore.getState().project.scene.objects[1].transform.position).toEqual(object.transform.position);
   });
 });

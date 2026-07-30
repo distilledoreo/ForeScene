@@ -18,7 +18,7 @@ import {
   type SetGenerationDetailLevel,
 } from '../../engine/setGenerationProvider';
 import { parseSetBlueprint } from '../../engine/setBlueprintValidation';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { Field, TextArea, TextInput, Select } from './Field';
 import { Modal } from './Modal';
 
@@ -36,7 +36,7 @@ export function SetGenerationDialog({
   onClose: () => void;
   onApply: (compiled: CompiledSetBlueprint) => Promise<void>;
 }) {
-  const currentSettings = useContinuityStore((state) => state.project.settings);
+  const currentSettings = useProjectStore((state) => state.project.settings);
   const [tab, setTab] = useState<DialogTab>('describe');
   const [step, setStep] = useState<DialogStep>('input');
   const [description, setDescription] = useState('');
@@ -391,7 +391,7 @@ export function SetGenerationDialog({
                 </div>
                 {!canGenerateDirectly && (
                   <p className="text-xs text-muted">
-                    PanoRef stays local-first: copy the prompt into any frontier model, then paste the JSON result.
+                    ForeScene stays local-first: copy the prompt into any frontier model, then paste the JSON result.
                     Optional direct generation uses a server-side endpoint when configured.
                   </p>
                 )}

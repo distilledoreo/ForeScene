@@ -18,7 +18,7 @@ import {
   formatBytes,
   importModelJob,
 } from '../../engine/modelImport';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
 
@@ -39,7 +39,7 @@ export function ModelImportDialog({
   onImported?: (objects: SceneObject[]) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const addImportedModels = useContinuityStore((state) => state.addImportedModels);
+  const addImportedModels = useProjectStore((state) => state.addImportedModels);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
@@ -208,7 +208,7 @@ export function ModelImportDialog({
                 <li><span className="font-medium text-primary">Unreal:</span> File → Export All – export selected level or actors as GLB.</li>
               </ul>
               <p className="text-xs leading-relaxed text-secondary">
-                Direct import formats: GLB, embedded glTF, FBX, OBJ, STL, PLY, .panoscene bundles. Materials, textures, cameras, lights, animation, rigs, and morphs are stripped. PanoRef keeps world-space placement, with hierarchy flattened.
+                Direct import formats: GLB, embedded glTF, FBX, OBJ, STL, PLY, .panoscene bundles. Materials, textures, cameras, lights, animation, rigs, and morphs are stripped. ForeScene keeps world-space placement, with hierarchy flattened.
               </p>
             </div>
           </div>

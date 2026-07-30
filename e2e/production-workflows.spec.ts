@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import {
   dismissOverlays,
-  enterContinuityStage,
+  enterStudio,
   exportProjectBackup,
   importProjectBackup,
   multiNodeGltfBuffer,
@@ -90,7 +90,7 @@ async function importMultiNodeGltf(page: Page) {
 test.describe('@heavy F1 save → reload → recover → export', () => {
   test('mutates project, waits for verified save, full reload recovers revision, then exports', async ({ page }) => {
     test.setTimeout(240_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     const projectName = `F1 Recovery ${Date.now()}`;
@@ -134,7 +134,7 @@ test.describe('@heavy F1 save → reload → recover → export', () => {
 test.describe('@heavy F2 import geometry → transform → capture → backup → reopen', () => {
   test('imports multi-node glTF, moves object, captures, reopens from backup', async ({ page }) => {
     test.setTimeout(180_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     await importMultiNodeGltf(page);
@@ -189,7 +189,7 @@ test.describe('@heavy F2 import geometry → transform → capture → backup �
 test.describe('@heavy F3 multiple shots + people export modes', () => {
   test('creates independent shots, sets people mode, surfaces package settings', async ({ page }) => {
     test.setTimeout(180_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
@@ -282,7 +282,7 @@ test.describe('@heavy F4 camera move with object animation (Chromium)', () => {
 
   test('records start/end keyframes (object snapshots), finishes, exports package with motion/manifest', async ({ page }) => {
     test.setTimeout(300_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
 
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');

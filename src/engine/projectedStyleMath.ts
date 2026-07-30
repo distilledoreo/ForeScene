@@ -4,7 +4,7 @@ import { clamp, length, normalize, subtract } from './sync';
 /**
  * Pure projection sampling math shared by tests and the Projected Style shader.
  * Convention: unrotated pano center (u=0.5) faces world +Z; +X is right when looking +Z.
- * Matches equirectUvToDirection / crop atan(x,z) conventions used elsewhere in PanoRef.
+ * Matches equirectUvToDirection / crop atan(x,z) conventions used elsewhere in ForeScene.
  */
 
 export function applyInversePanoYaw(direction: Vec3, yawRadians: number): Vec3 {

@@ -1,6 +1,6 @@
 # SetBlueprint
 
-SetBlueprint is an AI-facing spatial blocking format used to generate Continuity Stage graybox sets. It is intentionally smaller than `LocationProject`: models emit blocking primitives; PanoRef compiles them into a native project with IDs, shots, and settings.
+SetBlueprint is an AI-facing spatial blocking format used to generate ForeScene graybox sets. It is intentionally smaller than `LocationProject`: models emit blocking primitives; ForeScene compiles them into a native project with IDs, shots, and settings.
 
 ## Coordinate system
 
@@ -46,7 +46,7 @@ interface SetBlueprint {
 
 Excluded from blueprint output (native project concerns only):
 
-- Native PanoRef IDs and timestamps
+- Native ForeScene IDs and timestamps
 - Shots and camera keyframes
 - Panorama references and assets
 - Workflow state and export settings

@@ -1,27 +1,22 @@
 import { create } from 'zustand';
+import { BRAND, readMigratedPreference, writePreference } from '../config/brand';
 
-export type AppMode = 'continuity' | 'panoViewer';
-
-const STORAGE_KEY = 'panoref-app-mode';
+export type AppMode = 'studio' | 'panoViewer';
 
 function readStoredMode(): AppMode | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    if (value === 'continuity' || value === 'panoViewer') return value;
-  } catch {
-    // ignore storage failures
+  const value = readMigratedPreference(BRAND.prefs.appMode, BRAND.legacyPrefs.appMode);
+  if (value === 'panoViewer') return 'panoViewer';
+  // Pre-rebrand installs stored the studio mode as 'continuity'.
+  if (value === 'continuity') {
+    writePreference(BRAND.prefs.appMode, 'studio');
+    return 'studio';
   }
+  if (value === 'studio') return 'studio';
   return null;
 }
 
 function writeStoredMode(mode: AppMode) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, mode);
-  } catch {
-    // ignore storage failures
-  }
+  writePreference(BRAND.prefs.appMode, mode);
 }
 
 interface AppModeState {

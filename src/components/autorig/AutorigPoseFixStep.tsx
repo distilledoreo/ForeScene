@@ -86,7 +86,7 @@ export function AutorigPoseFixStep({
   return (
     <div className="space-y-3" data-autorig-pose-fix-step>
       <p className="text-sm text-secondary">
-        Try example poses. Turn on Fix deformation and stroke across a problem area — PanoRef expands to the surrounding surface and updates the rig.
+        Try example poses. Turn on Fix deformation and stroke across a problem area — ForeScene expands to the surrounding surface and updates the rig.
       </p>
 
       {checkingDeformation && (

@@ -9,7 +9,7 @@ import { listProjectRevisionSummaries, recoverLatestProject } from '../src/engin
 import { resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import { resetProjectAssetStoreForTests } from '../src/engine/projectAssetStore';
 import { resetProjectRevisionStoreForTests } from '../src/engine/projectRevisionStore';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 import { trainStationBlueprint } from './fixtures/setBlueprints';
 
 async function resetSafetyStorage() {
@@ -25,7 +25,7 @@ async function createProjectFromBlueprint(
   controller: ProjectPersistenceController,
   compiled: ReturnType<typeof compileSetBlueprint>,
 ) {
-  const current = useContinuityStore.getState().project;
+  const current = useProjectStore.getState().project;
   const next = compiled.project;
   await controller.createSnapshot(
     current,
@@ -36,15 +36,15 @@ async function createProjectFromBlueprint(
     reason: `Created AI-generated set: ${next.name}`,
   });
   controller.ignoreNextProjectChange(next);
-  useContinuityStore.getState().setProject(next);
-  useContinuityStore.getState().clearObjectSelection();
-  useContinuityStore.getState().setWorkspace('build');
+  useProjectStore.getState().setProject(next);
+  useProjectStore.getState().clearObjectSelection();
+  useProjectStore.getState().setWorkspace('build');
 }
 
 describe('createProjectFromBlueprint persistence', () => {
   beforeEach(async () => {
     await resetSafetyStorage();
-    useContinuityStore.getState().setProject(createDefaultProject());
+    useProjectStore.getState().setProject(createDefaultProject());
   });
   afterEach(resetSafetyStorage);
 
@@ -54,7 +54,7 @@ describe('createProjectFromBlueprint persistence', () => {
       debounceMs: 1,
       onStateChange: (state) => states.push(state),
     });
-    const previous = useContinuityStore.getState().project;
+    const previous = useProjectStore.getState().project;
     previous.name = 'Previous Temple';
     controller.start(previous);
     await controller.flush('Initial local save');
@@ -62,7 +62,7 @@ describe('createProjectFromBlueprint persistence', () => {
     const compiled = compileSetBlueprint(trainStationBlueprint);
     await createProjectFromBlueprint(controller, compiled);
 
-    const live = useContinuityStore.getState();
+    const live = useProjectStore.getState();
     expect(live.project.name).toBe(trainStationBlueprint.name);
     expect(live.project.scene.objects).toHaveLength(trainStationBlueprint.objects.length);
     expect(live.selectedObjectIds).toEqual([]);
@@ -88,7 +88,7 @@ describe('createProjectFromBlueprint persistence', () => {
       debounceMs: 1,
       onStateChange: () => undefined,
     });
-    const previous = useContinuityStore.getState().project;
+    const previous = useProjectStore.getState().project;
     previous.name = 'Keep Me';
     controller.start(previous);
     await controller.flush('Initial local save');
@@ -97,7 +97,7 @@ describe('createProjectFromBlueprint persistence', () => {
     const commitSpy = vi.spyOn(controller, 'commitProject').mockRejectedValueOnce(new Error('disk full'));
 
     await expect(createProjectFromBlueprint(controller, compiled)).rejects.toThrow('disk full');
-    expect(useContinuityStore.getState().project.name).toBe('Keep Me');
+    expect(useProjectStore.getState().project.name).toBe('Keep Me');
 
     const recovered = await recoverLatestProject();
     expect(recovered?.project.name).toBe('Keep Me');

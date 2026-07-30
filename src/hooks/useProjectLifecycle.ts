@@ -5,7 +5,7 @@ import { createDefaultProject } from '../domain/defaults';
 import type { CompiledSetBlueprint } from '../engine/setBlueprintCompiler';
 import type { ProjectPersistenceController } from '../engine/projectPersistenceController';
 import { useAppModeStore } from '../state/useAppModeStore';
-import { useContinuityStore } from '../state/useContinuityStore';
+import { useProjectStore } from '../state/useProjectStore';
 import { useProjectSafetyStore } from '../state/useProjectSafetyStore';
 
 let projectIoPromise: Promise<typeof import('../engine/projectIO')> | undefined;
@@ -52,8 +52,8 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
 
   const setAppMode = useAppModeStore((state) => state.setAppMode);
-  const setProject = useContinuityStore((state) => state.setProject);
-  const setWorkspace = useContinuityStore((state) => state.setWorkspace);
+  const setProject = useProjectStore((state) => state.setProject);
+  const setWorkspace = useProjectStore((state) => state.setWorkspace);
   const criticalProjectWrite = useProjectSafetyStore((state) => state.criticalWrite);
   const projectSaveStatus = useProjectSafetyStore((state) => state.status);
   const setPersistenceState = useProjectSafetyStore((state) => state.setPersistenceState);
@@ -75,7 +75,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   /**
-   * Start a blank Continuity Stage project. Snapshots the current autosaved project
+   * Start a blank ForeScene project. Snapshots the current autosaved project
    * so Project Safety can restore it, then swaps in createDefaultProject().
    */
   const startNewProject = async () => {
@@ -91,7 +91,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     try {
       const controller = persistenceControllerRef.current;
       if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-      const current = useContinuityStore.getState().project;
+      const current = useProjectStore.getState().project;
       await controller.createSnapshot(current, `Before starting a new project (from “${current.name}”)`);
       const fresh = createDefaultProject();
       await controller.commitProject(fresh, {
@@ -101,7 +101,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       controller.ignoreNextProjectChange(fresh);
       setProject(fresh);
       setWorkspace('build');
-      setAppMode('continuity');
+      setAppMode('studio');
       closeProjectOverlays();
       setNewProjectConfirmOpen(false);
       setProjectImportStatus({
@@ -126,7 +126,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       const { readProjectFile } = await loadProjectIo();
       const controller = persistenceControllerRef.current;
       if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-      await controller.createSnapshot(useContinuityStore.getState().project, 'Before opening another project');
+      await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another project');
       const importedProject = await readProjectFile(file);
       // The imported package has been validated before this point. Stage its
       // recovery revision before replacing the live Zustand project.
@@ -136,7 +136,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       });
       controller.ignoreNextProjectChange(importedProject);
       setProject(importedProject);
-      setAppMode('continuity');
+      setAppMode('studio');
       setProjectImportStatus({
         tone: 'success',
         message: `Project opened: ${importedProject.name}. Verified locally for recovery.`,
@@ -178,14 +178,14 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const createProjectSnapshot = async (reason: string) => {
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-    await controller.createSnapshot(useContinuityStore.getState().project, reason);
+    await controller.createSnapshot(useProjectStore.getState().project, reason);
   };
 
   const restoreProjectSnapshot = async (revisionId: string) => {
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
     const { restoreProjectRevision } = await loadProjectSafety();
-    const currentProject = useContinuityStore.getState().project;
+    const currentProject = useProjectStore.getState().project;
     const restored = await restoreProjectRevision(currentProject.id, revisionId);
     controller.adoptVerifiedProject(restored.project, {
       revisionId: restored.revision.id,
@@ -202,10 +202,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
 
 
   const openLocalProjectHistory = async (projectId: string, revisionId: string) => {
-    if (projectId === useContinuityStore.getState().project.id) return;
+    if (projectId === useProjectStore.getState().project.id) return;
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-    await controller.createSnapshot(useContinuityStore.getState().project, 'Before opening another local project');
+    await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another local project');
     const { restoreProjectRevision } = await loadProjectSafety();
     const opened = await restoreProjectRevision(projectId, revisionId);
     controller.adoptVerifiedProject(opened.project, {
@@ -215,16 +215,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       recovered: true,
     });
     setProject(opened.project);
-    setAppMode('continuity');
+    setAppMode('studio');
     setProjectImportStatus({ tone: 'success', message: `Opened local project: ${opened.project.name}.` });
   };
 
   const removeLocalProjectHistory = async (projectId: string) => {
-    if (projectId === useContinuityStore.getState().project.id) {
+    if (projectId === useProjectStore.getState().project.id) {
       throw new Error('Open projects cannot be removed. Open another project first.');
     }
     const { removeLocalProjectHistory: removeHistory } = await loadProjectSafety();
-    const result = await removeHistory(projectId, useContinuityStore.getState().project);
+    const result = await removeHistory(projectId, useProjectStore.getState().project);
     setProjectImportStatus({
       tone: 'success',
       message: `Removed ${result.revisionsRemoved} local recovery revision${result.revisionsRemoved === 1 ? '' : 's'}.`,
@@ -234,7 +234,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const applyProjectHealthRepair = async (repairedProject: LocationProject) => {
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-    await controller.createSnapshot(useContinuityStore.getState().project, 'Before repairing project health');
+    await controller.createSnapshot(useProjectStore.getState().project, 'Before repairing project health');
     await controller.commitProject(repairedProject, {
       kind: 'autosave',
       reason: 'Project health safe repair',
@@ -255,7 +255,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     const controller = persistenceControllerRef.current;
     if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
 
-    const current = useContinuityStore.getState().project;
+    const current = useProjectStore.getState().project;
     const next = compiled.project;
     await controller.createSnapshot(
       current,
@@ -267,9 +267,9 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     });
     controller.ignoreNextProjectChange(next);
     setProject(next);
-    useContinuityStore.getState().clearObjectSelection();
+    useProjectStore.getState().clearObjectSelection();
     setWorkspace('build');
-    setAppMode('continuity');
+    setAppMode('studio');
     closeProjectOverlays();
 
     const objectCount = next.scene.objects.length;
@@ -284,7 +284,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     let active = true;
     let unsubscribe: (() => void) | undefined;
     let unsubscribeAssetFailures: (() => void) | undefined;
-    const projectAtStartup = useContinuityStore.getState().project;
+    const projectAtStartup = useProjectStore.getState().project;
 
     void (async () => {
       try {
@@ -303,16 +303,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
         persistenceControllerRef.current = controller;
         setFlushProject((reason) => controller.flushAndLoadActiveRevision(reason));
         setRunDestructiveProjectMutation((reason, mutation) => controller.runDestructiveMutation(
-          useContinuityStore.getState().project,
+          useProjectStore.getState().project,
           reason,
           mutation,
-          () => useContinuityStore.getState().project,
+          () => useProjectStore.getState().project,
         ));
         // IndexedDB is otherwise best-effort browser storage. The Health view
         // reports whether this request was granted; a denial never blocks use.
         void safetyModule.requestPersistentProjectStorage();
 
-        const currentProject = useContinuityStore.getState().project;
+        const currentProject = useProjectStore.getState().project;
         if (recovered && currentProject === projectAtStartup) {
           controller.start(recovered.project, {
             recovered: true,
@@ -320,7 +320,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
             savedAt: recovered.revision.createdAt,
           });
           setProject(recovered.project);
-          setAppMode('continuity');
+          setAppMode('studio');
           setRecovered({
             message: recovered.recoveredPreviousRevision
               ? 'Recovered the previous verified project revision after finding an incomplete save.'
@@ -332,7 +332,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
           controller.start(currentProject);
         }
 
-        unsubscribe = useContinuityStore.subscribe((next, previous) => {
+        unsubscribe = useProjectStore.subscribe((next, previous) => {
           if (next.project !== previous.project) controller.noteProjectChange(next.project, previous.project);
         });
         unsubscribeAssetFailures = assetStoreModule.subscribeProjectAssetPersistenceFailures((event) => {

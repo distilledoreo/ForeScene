@@ -2,28 +2,28 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { goToWorkspace } from './workspace-navigation';
 
-async function enterContinuityStage(page: Page) {
+async function enterStudio(page: Page) {
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem('panoref-splash-seen', '1');
+      window.localStorage.setItem('forescene-splash-seen', '1');
     } catch {
       // ignore
     }
   });
   await page.goto('/');
   const modeChooser = page.locator('[data-mode-chooser]');
-  const continuity = page.getByRole('button', { name: /Build continuity packages/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene studio/i });
   if (await modeChooser.isVisible().catch(() => false)) {
-    await continuity.click();
+    await studio.click();
   } else {
     try {
       await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await continuity.click();
+      await studio.click();
     } catch {
       // Already in mode.
     }
   }
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });
@@ -71,7 +71,7 @@ async function assertInViewport(box: { x: number; y: number; width: number; heig
 
 test.describe('@responsive layout visibility and overflow', () => {
   test('Build workspace: primary controls visible, no horizontal overflow', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     const build = page.locator('header nav button').filter({ hasText: /^\s*Build\s*$/ }).locator('visible=true').first();
     const shots = page.locator('header nav button').filter({ hasText: /^\s*Shots\s*$/ }).locator('visible=true').first();
@@ -81,7 +81,7 @@ test.describe('@responsive layout visibility and overflow', () => {
   });
 
   test('Shots workspace: primary capture chrome required and on-screen', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
@@ -112,7 +112,7 @@ test.describe('@responsive layout visibility and overflow', () => {
   });
 
   test('settings drawer opens and fits onscreen without covering shutter', async ({ page }) => {
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);

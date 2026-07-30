@@ -12,7 +12,7 @@ import {
   shouldFinalizeShotFovWheelBatchOnShotChange,
 } from '../src/engine/shotFovWheelBatch';
 import { focalLengthToVerticalFov, verticalFovToFocalLength } from '../src/engine/focalLength';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 
 function cameraWithFov(fovDegrees: number): CameraData {
   return {
@@ -108,7 +108,7 @@ describe('shot camera store history', () => {
   it('clears per-shot camera history when loading another project', () => {
     const project = createDefaultProject();
     const shotA = project.shots[0].id;
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedShotId: shotA,
       shotCameraHistoryByShotId: {
@@ -121,74 +121,74 @@ describe('shot camera store history', () => {
 
     const replacement = createDefaultProject();
     replacement.name = 'Replacement Project';
-    useContinuityStore.getState().setProject(replacement);
+    useProjectStore.getState().setProject(replacement);
 
-    expect(useContinuityStore.getState().shotCameraHistoryByShotId).toEqual({});
+    expect(useProjectStore.getState().shotCameraHistoryByShotId).toEqual({});
   });
 
   it('undoes only the currently selected shot camera', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       selectedShotId: undefined,
       shotCameraHistoryByShotId: {},
     });
-    const shotA = useContinuityStore.getState().project.shots[0].id;
-    const originalShotAFov = useContinuityStore.getState().project.shots[0].camera.fovDegrees;
-    const shotB = useContinuityStore.getState().addCamera({ navigateToShots: false }).id;
+    const shotA = useProjectStore.getState().project.shots[0].id;
+    const originalShotAFov = useProjectStore.getState().project.shots[0].camera.fovDegrees;
+    const shotB = useProjectStore.getState().addCamera({ navigateToShots: false }).id;
 
-    useContinuityStore.getState().selectShot(shotA);
-    useContinuityStore.getState().updateShot(shotA, { camera: cameraWithFov(55) });
-    useContinuityStore.getState().selectShot(shotB);
+    useProjectStore.getState().selectShot(shotA);
+    useProjectStore.getState().updateShot(shotA, { camera: cameraWithFov(55) });
+    useProjectStore.getState().selectShot(shotB);
 
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(false);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(false);
 
-    useContinuityStore.getState().selectShot(shotA);
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
+    useProjectStore.getState().selectShot(shotA);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
     expect(
-      useContinuityStore.getState().project.shots.find((shot) => shot.id === shotA)?.camera.fovDegrees,
+      useProjectStore.getState().project.shots.find((shot) => shot.id === shotA)?.camera.fovDegrees,
     ).toBe(originalShotAFov);
-    expect(getShotCameraHistoryStacks(useContinuityStore.getState().shotCameraHistoryByShotId, shotB).past).toHaveLength(0);
+    expect(getShotCameraHistoryStacks(useProjectStore.getState().shotCameraHistoryByShotId, shotB).past).toHaveLength(0);
   });
 
   it('restores the undone focal length when undo follows a finalized active wheel batch', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       selectedShotId: undefined,
       shotCameraHistoryByShotId: {},
       shotCameraHistoryBatchDepth: 0,
       shotCameraHistoryBatchCaptured: false,
     });
-    const shotId = useContinuityStore.getState().project.shots[0].id;
+    const shotId = useProjectStore.getState().project.shots[0].id;
     const originalFov = 54.4;
     const zoomedFov = focalLengthToVerticalFov(25, 16 / 9);
 
-    useContinuityStore.getState().selectShot(shotId);
-    useContinuityStore.getState().updateShot(shotId, { camera: cameraWithFov(originalFov) });
+    useProjectStore.getState().selectShot(shotId);
+    useProjectStore.getState().updateShot(shotId, { camera: cameraWithFov(originalFov) });
 
-    useContinuityStore.getState().beginShotCameraHistoryBatch();
-    const stored = useContinuityStore.getState().project.shots.find((shot) => shot.id === shotId)!.camera;
+    useProjectStore.getState().beginShotCameraHistoryBatch();
+    const stored = useProjectStore.getState().project.shots.find((shot) => shot.id === shotId)!.camera;
     const committed = buildShotFovWheelBatchCommit(
       stored,
       { ...stored, fovDegrees: zoomedFov },
     );
-    useContinuityStore.getState().updateShot(shotId, { camera: committed }, { cameraHistory: 'batch' });
-    useContinuityStore.getState().endShotCameraHistoryBatch();
+    useProjectStore.getState().updateShot(shotId, { camera: committed }, { cameraHistory: 'batch' });
+    useProjectStore.getState().endShotCameraHistoryBatch();
 
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
-    const restored = useContinuityStore.getState().project.shots.find((shot) => shot.id === shotId)!.camera;
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
+    const restored = useProjectStore.getState().project.shots.find((shot) => shot.id === shotId)!.camera;
     expect(restored.fovDegrees).toBeCloseTo(originalFov, 5);
     expect(Math.round(verticalFovToFocalLength(restored.fovDegrees, restored.aspectRatio))).toBe(20);
   });
 
   it('undoes camera keyframe sequence edits independently of the live fly pose', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       selectedShotId: undefined,
       shotCameraHistoryByShotId: {},
     });
-    const shotId = useContinuityStore.getState().project.shots[0].id;
-    const baseCamera = useContinuityStore.getState().project.shots[0].camera;
-    useContinuityStore.getState().selectShot(shotId);
+    const shotId = useProjectStore.getState().project.shots[0].id;
+    const baseCamera = useProjectStore.getState().project.shots[0].camera;
+    useProjectStore.getState().selectShot(shotId);
 
     const start = {
       id: 'kf-start',
@@ -209,19 +209,19 @@ describe('shot camera store history', () => {
       camera: { ...baseCamera, position: [2, 1.6, 0] as [number, number, number] },
     };
 
-    useContinuityStore.getState().updateShot(shotId, {
+    useProjectStore.getState().updateShot(shotId, {
       cameraKeyframes: [start, end],
     });
-    useContinuityStore.getState().updateShot(shotId, {
+    useProjectStore.getState().updateShot(shotId, {
       cameraKeyframes: [start, mid, end],
     });
 
-    expect(useContinuityStore.getState().project.shots.find((s) => s.id === shotId)?.cameraKeyframes).toHaveLength(3);
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
-    const afterUndo = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!;
+    expect(useProjectStore.getState().project.shots.find((s) => s.id === shotId)?.cameraKeyframes).toHaveLength(3);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
+    const afterUndo = useProjectStore.getState().project.shots.find((s) => s.id === shotId)!;
     expect(afterUndo.cameraKeyframes.map((k) => k.id)).toEqual(['kf-start', 'kf-end']);
-    expect(useContinuityStore.getState().redoShotCamera()).toBe(true);
-    const afterRedo = useContinuityStore.getState().project.shots.find((s) => s.id === shotId)!;
+    expect(useProjectStore.getState().redoShotCamera()).toBe(true);
+    const afterRedo = useProjectStore.getState().project.shots.find((s) => s.id === shotId)!;
     expect(afterRedo.cameraKeyframes.map((k) => k.id)).toEqual(['kf-start', 'kf-mid', 'kf-end']);
   });
 });

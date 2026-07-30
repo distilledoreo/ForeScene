@@ -56,7 +56,7 @@ import {
 } from '../../engine/shotCameraHistory';
 import { useThemeStore } from '../useThemeStore';
 import type {
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   ProjectSliceState,
   ShotCameraHistoryMode,
 } from './types';
@@ -82,7 +82,7 @@ import { touchProject } from './touchProject';
  * Cross-slice session/selection/history/workflow fields are written via set when project ops require it.
  */
 export const createProjectSlice: StateCreator<
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   [],
   [],
   ProjectSliceState
@@ -888,7 +888,7 @@ export const createProjectSlice: StateCreator<
     const keyframesChanged = updates.cameraKeyframes !== undefined
       && !cameraKeyframesEqual(shot.cameraKeyframes, nextKeyframes);
     let historyPatch: Partial<Pick<
-      ContinuityStoreSlices,
+      ProjectStoreSlices,
       'shotCameraHistoryByShotId' | 'shotCameraHistoryBatchCaptured'
     >> = {};
 
