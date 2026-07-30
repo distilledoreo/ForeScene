@@ -3,6 +3,7 @@ import { createDefaultProject, createSceneObject } from '../src/domain/defaults'
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
+  clearShotObjectPoseOverride,
   filterStagingObjectList,
   getStageableObjectsForShot,
   getSceneObjectStagingRole,
@@ -10,6 +11,7 @@ import {
   STAGING_OBJECT_LIST_LIMIT,
   updateShotObjectOverrides,
 } from '../src/engine/shotSceneState';
+import { applyHumanPosePreset } from '../src/engine/humanPosePresets';
 import type { SceneObject } from '../src/domain/types';
 
 describe('per-shot scene state', () => {
@@ -69,6 +71,68 @@ describe('per-shot scene state', () => {
     shot.objectOverrides = updateShotObjectOverrides(shot, prop, { visible: false });
     expect(shot.objectOverrides[prop.id]?.visible).toBe(false);
     expect(clearShotObjectOverride(shot, prop.id)).toEqual({});
+  });
+
+  it('clears pose overrides without discarding transform or visibility staging', () => {
+    const project = createDefaultProject();
+    const human = createSceneObject('human_dummy', 1);
+    human.humanPose = applyHumanPosePreset('a-pose');
+    project.scene.objects.push(human);
+    const shot = project.shots[0];
+    const stagedTransform = {
+      ...human.transform,
+      position: [3, 0.875, -1] as [number, number, number],
+    };
+
+    shot.objectOverrides = updateShotObjectOverrides(shot, human, {
+      transform: stagedTransform,
+      visible: false,
+      humanPose: applyHumanPosePreset('pointing'),
+    });
+    expect(shot.objectOverrides[human.id]?.humanPose?.presetId).toBe('pointing');
+    expect(shot.objectOverrides[human.id]?.transform?.position).toEqual([3, 0.875, -1]);
+    expect(shot.objectOverrides[human.id]?.visible).toBe(false);
+
+    const poseCleared = clearShotObjectPoseOverride(shot, human.id);
+    expect(poseCleared[human.id]?.humanPose).toBeUndefined();
+    expect(poseCleared[human.id]?.transform?.position).toEqual([3, 0.875, -1]);
+    expect(poseCleared[human.id]?.visible).toBe(false);
+
+    const resolved = resolveProjectForShot(project, { ...shot, objectOverrides: poseCleared });
+    const resolvedHuman = resolved.scene.objects.find((object) => object.id === human.id);
+    expect(resolvedHuman?.humanPose?.presetId).toBe('a-pose');
+    expect(resolvedHuman?.transform.position).toEqual([3, 0.875, -1]);
+    expect(resolvedHuman?.visible).toBe(false);
+    expect(human.humanPose?.presetId).toBe('a-pose');
+  });
+
+  it('stages pose into a transient keyframe inspection map the same way as transforms', () => {
+    const project = createDefaultProject();
+    const human = createSceneObject('human_dummy', 1);
+    human.humanPose = applyHumanPosePreset('a-pose');
+    project.scene.objects.push(human);
+    const shotOverrides = updateShotObjectOverrides(
+      { objectOverrides: {} },
+      human,
+      { transform: { ...human.transform, position: [1, 0.875, 0] } },
+    );
+    // Mimic Stage-with-keyframe-selected: edits land in a sparse inspection map.
+    const inspection = updateShotObjectOverrides(
+      { objectOverrides: shotOverrides },
+      human,
+      { humanPose: applyHumanPosePreset('reaching-left') },
+    );
+    expect(inspection[human.id]?.transform?.position).toEqual([1, 0.875, 0]);
+    expect(inspection[human.id]?.humanPose?.presetId).toBe('reaching-left');
+
+    const resolved = resolveProjectForShot(project, {
+      ...project.shots[0],
+      objectOverrides: inspection,
+    });
+    const resolvedHuman = resolved.scene.objects.find((object) => object.id === human.id);
+    expect(resolvedHuman?.humanPose?.presetId).toBe('reaching-left');
+    expect(resolvedHuman?.transform.position).toEqual([1, 0.875, 0]);
+    expect(human.humanPose?.presetId).toBe('a-pose');
   });
 
   it('keeps objects hidden for a shot in the staging recovery list', () => {
