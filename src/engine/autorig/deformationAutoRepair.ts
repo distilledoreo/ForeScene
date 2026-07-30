@@ -8,7 +8,10 @@
  */
 
 import type { HumanJointId, Vec3 } from '../../domain/types';
-import type { SkinWeightBuffers } from '../autorigSkinWeights';
+import {
+  cloneSkinWeightBuffers,
+  type SkinWeightBuffers,
+} from '../autorigSkinWeights';
 import {
   AUTORIG_REGION_CODE,
   AUTORIG_REGION_ID_BY_CODE,
@@ -130,17 +133,6 @@ function medianOf(values: number[]): number {
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 1) return sorted[mid]!;
   return (sorted[mid - 1]! + sorted[mid]!) * 0.5;
-}
-
-function cloneSkinBuffers(buffers: SkinWeightBuffers): SkinWeightBuffers {
-  return {
-    influencesPerVertex: buffers.influencesPerVertex,
-    indices: new Uint16Array(buffers.indices),
-    weights: new Float32Array(buffers.weights),
-    jointOrder: buffers.jointOrder.slice(),
-    fallbackVertexCount: buffers.fallbackVertexCount,
-    ...(buffers.warnings ? { warnings: buffers.warnings.slice() } : {}),
-  };
 }
 
 function dist3(
@@ -638,7 +630,7 @@ export function blendNeighborhoodWeights(params: {
   // Optional one-ring smooth among repaired verts + outside neighbors.
   const rings = Math.max(0, Math.min(2, params.smoothRings ?? 1));
   if (rings > 0 && params.vertexIndices.length > 0) {
-    const working = cloneSkinBuffers(buffers);
+    const working = cloneSkinWeightBuffers(buffers);
     for (let mi = 0; mi < params.vertexIndices.length; mi += 1) {
       const v = params.vertexIndices[mi]!;
       const base = v * ipv;
@@ -913,7 +905,7 @@ export function applyRepairProposal(
   buffers: SkinWeightBuffers,
 ): { regionLabels: Uint8Array; buffers: SkinWeightBuffers } {
   const nextLabels = new Uint8Array(regionLabels);
-  const nextBuffers = cloneSkinBuffers(buffers);
+  const nextBuffers = cloneSkinWeightBuffers(buffers);
   if (proposal.kind === 'region' && proposal.newRegionCode != null) {
     for (const v of proposal.patch.vertexIndices) {
       nextLabels[v] = proposal.newRegionCode;
@@ -983,7 +975,7 @@ export function validateAndApplyRepairs(params: {
 }): DeformationAutoRepairResult {
   const accept = new Set(params.acceptConfidence ?? ['automatic']);
   let labels = new Uint8Array(params.regionLabels);
-  let buffers = cloneSkinBuffers(params.buffers);
+  let buffers = cloneSkinWeightBuffers(params.buffers);
   let currentScore = params.scoreCurrent;
   const applied: DeformationRepairProposal[] = [];
   const rejected: DeformationRepairProposal[] = [];
@@ -1017,7 +1009,7 @@ export function validateAndApplyRepairs(params: {
     }
 
     const snapshotLabels = new Uint8Array(labels);
-    const snapshotBuffers = cloneSkinBuffers(buffers);
+    const snapshotBuffers = cloneSkinWeightBuffers(buffers);
     const trial = applyRepairProposal(proposal, labels, buffers);
 
     const evaluation = params.evaluateCandidate({
@@ -1039,7 +1031,7 @@ export function validateAndApplyRepairs(params: {
     }
 
     labels = trial.regionLabels;
-    buffers = cloneSkinBuffers(nextBuffers);
+    buffers = cloneSkinWeightBuffers(nextBuffers);
     currentScore = evaluation.score;
     applied.push(proposal);
     for (const v of proposal.patch.vertexIndices) repaired.add(v);
@@ -1085,7 +1077,7 @@ export function runHighConfidenceDeformationAutoRepair(params: {
 }): DeformationAutoRepairResult {
   const opts = { ...DEFORMATION_AUTO_REPAIR_DEFAULTS, ...params.options };
   const labels = new Uint8Array(params.regionLabels);
-  let buffers = cloneSkinBuffers(params.buffers);
+  let buffers = cloneSkinWeightBuffers(params.buffers);
   const frames = params.frames;
   const allSkipped: DeformationRepairProposal[] = [];
   const repaired = new Set<number>();
@@ -1148,9 +1140,9 @@ export function runHighConfidenceDeformationAutoRepair(params: {
   }
 
   const snapshotLabels = new Uint8Array(labels);
-  const snapshotBuffers = cloneSkinBuffers(buffers);
+  const snapshotBuffers = cloneSkinWeightBuffers(buffers);
   let trialLabels = new Uint8Array(labels);
-  let trialBuffers = cloneSkinBuffers(buffers);
+  let trialBuffers = cloneSkinWeightBuffers(buffers);
   let hasRegionRepair = false;
   const regionVerts: number[] = [];
   const weightProposals: DeformationRepairProposal[] = [];
@@ -1246,11 +1238,53 @@ export function runHighConfidenceDeformationAutoRepair(params: {
 /**
  * Poses used for silent deformation auto-repair during prepare.
  * Keep this short — each pose skins every vertex on the main thread.
+ *
+ * Default coverage (small/medium meshes): elbows-bent + sitting + arms-raised.
+ * Large meshes drop arms-raised. Walking is opt-in after a prior scan finds
+ * leg-region uncertainty.
  */
 export const DEFORMATION_AUTO_REPAIR_POSE_IDS = [
   'elbows-bent',
+  'sitting',
   'arms-raised',
 ] as const;
+
+/** Vertex-count threshold above which arms-raised is skipped to limit cost. */
+export const DEFORMATION_AUTO_REPAIR_LARGE_MESH_VERTEX_THRESHOLD = 80_000;
+
+/**
+ * Choose diagnostic poses for automatic repair.
+ * Always includes elbows-bent and a lower-body pose (sitting).
+ * Adds arms-raised for smaller meshes; walking only when requested.
+ */
+export function selectDeformationAutoRepairPoseIds(params: {
+  vertexCount: number;
+  includeWalking?: boolean;
+}): string[] {
+  const poses = ['elbows-bent', 'sitting'];
+  if (params.vertexCount <= DEFORMATION_AUTO_REPAIR_LARGE_MESH_VERTEX_THRESHOLD) {
+    poses.push('arms-raised');
+  }
+  if (params.includeWalking && !poses.includes('walking')) {
+    poses.push('walking');
+  }
+  return poses;
+}
+
+/** True when outliers touch leg regions — expand the scan with Walking. */
+export function shouldExpandAutoRepairWithWalking(params: {
+  regionLabels: Uint8Array;
+  outliers: Array<{ vertexIndex: number }>;
+}): boolean {
+  const { regionLabels, outliers } = params;
+  for (const outlier of outliers) {
+    const code = regionLabels[outlier.vertexIndex];
+    if (code === AUTORIG_REGION_CODE.leftLeg || code === AUTORIG_REGION_CODE.rightLeg) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** User-facing prepare banner after automatic spike cleanup. */
 export function formatDeformationAutoRepairMessage(

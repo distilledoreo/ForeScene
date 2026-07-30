@@ -104,10 +104,12 @@ import {
   type AutorigDeformationIssue,
 } from '../../engine/autorig/deformationValidation';
 import {
-  DEFORMATION_AUTO_REPAIR_POSE_IDS,
+  detectLocalDeformationOutliers,
   formatDeformationAutoRepairMessage,
   overridesFromRepairedLabels,
   runHighConfidenceDeformationAutoRepair,
+  selectDeformationAutoRepairPoseIds,
+  shouldExpandAutoRepairWithWalking,
 } from '../../engine/autorig/deformationAutoRepair';
 import {
   createAutorigPreviewInstance,
@@ -117,7 +119,7 @@ import {
 } from '../../engine/autoriggedPoseableCharacter';
 import { applySemanticPoseToBones, captureBoneRests, updateSkinnedMeshes } from '../../engine/poseableCharacter';
 import { getHumanPosePreset, HUMAN_POSE_PRESETS } from '../../engine/humanPosePresets';
-import type { SkinWeightBuffers } from '../../engine/autorigSkinWeights';
+import { cloneSkinWeightBuffers, type SkinWeightBuffers } from '../../engine/autorigSkinWeights';
 import { Modal } from '../common/Modal';
 import { AutorigWizardProgress } from './AutorigWizardProgress';
 import { AutorigJointStep } from './AutorigJointStep';
@@ -169,6 +171,11 @@ export interface AutorigWizardSaveOptions {
   regionOverrides?: Uint8Array | null;
   suggestedRegions?: Uint8Array | null;
   topologyHash?: string;
+  /**
+   * Final Pose & Fix skin buffers (includes weight-only auto-repairs).
+   * When present, Apply persists these exact buffers instead of regenerating.
+   */
+  skinBuffers?: SkinWeightBuffers;
 }
 
 export function AutorigRigWizardDialog({
@@ -236,6 +243,7 @@ export function AutorigRigWizardDialog({
   const [correctionResult, setCorrectionResult] = useState<AutorigCorrectionResult | null>(null);
   const [prepareNotice, setPrepareNotice] = useState<string | null>(null);
   const [perspectiveYaw, setPerspectiveYaw] = useState(0);
+  const [autoRepairChecking, setAutoRepairChecking] = useState(false);
 
   const paint = useAutorigPaintSession(DEFAULT_BRUSH_RADIUS);
 
@@ -278,7 +286,21 @@ export function AutorigRigWizardDialog({
   const previousResolvedRef = useRef<Uint8Array | null>(null);
   const [sessionVersion, setSessionVersion] = useState(0);
   const autoRepairTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRepairRafRef = useRef<number | null>(null);
   const autoRepairGenerationRef = useRef(0);
+
+  const cancelScheduledAutoRepair = useCallback(() => {
+    autoRepairGenerationRef.current += 1;
+    if (autoRepairTimerRef.current) {
+      clearTimeout(autoRepairTimerRef.current);
+      autoRepairTimerRef.current = null;
+    }
+    if (autoRepairRafRef.current != null) {
+      cancelAnimationFrame(autoRepairRafRef.current);
+      autoRepairRafRef.current = null;
+    }
+    setAutoRepairChecking(false);
+  }, []);
 
   const disposePreviewSession = useCallback(() => {
     const session = previewSessionRef.current;
@@ -342,6 +364,7 @@ export function AutorigRigWizardDialog({
     setPerspectiveYaw(0);
     setPreparing(false);
     setUpdatingDeformation(false);
+    setAutoRepairChecking(false);
     depthCenteredRef.current = false;
     previewSessionRef.current = null;
     previousResolvedRef.current = null;
@@ -438,6 +461,8 @@ export function AutorigRigWizardDialog({
   const rebindAfterEditRef = useRef<(nextResolved: Uint8Array) => void>(() => {});
 
   const commitRegionOverrides = (next: Uint8Array, options?: { skipHistory?: boolean }) => {
+    // Invalidate any deferred auto-repair so stale buffers cannot overwrite this edit.
+    cancelScheduledAutoRepair();
     if (!regionOverrides || !suggestedRegions) {
       setRegionOverrides(next);
       setDirty(true);
@@ -457,6 +482,7 @@ export function AutorigRigWizardDialog({
 
   const undoRegions = () => {
     if (!regionOverrides || !suggestedRegions || regionPast.length === 0) return;
+    cancelScheduledAutoRepair();
     const entry = regionPast[regionPast.length - 1]!;
     const next = new Uint8Array(regionOverrides);
     applyRegionEditDelta(next, entry, 'undo');
@@ -471,6 +497,7 @@ export function AutorigRigWizardDialog({
 
   const redoRegions = () => {
     if (!regionOverrides || !suggestedRegions || regionFuture.length === 0) return;
+    cancelScheduledAutoRepair();
     const entry = regionFuture[0]!;
     const next = new Uint8Array(regionOverrides);
     applyRegionEditDelta(next, entry, 'redo');
@@ -677,9 +704,14 @@ export function AutorigRigWizardDialog({
 
     disposePreviewSession();
     setPrepareNotice(null);
+    // Drop any prior deferred repair; this rebuild owns the next generation.
     if (autoRepairTimerRef.current) {
       clearTimeout(autoRepairTimerRef.current);
       autoRepairTimerRef.current = null;
+    }
+    if (autoRepairRafRef.current != null) {
+      cancelAnimationFrame(autoRepairRafRef.current);
+      autoRepairRafRef.current = null;
     }
     const repairGeneration = autoRepairGenerationRef.current + 1;
     autoRepairGenerationRef.current = repairGeneration;
@@ -732,16 +764,14 @@ export function AutorigRigWizardDialog({
     const overridesAtStart = regionOverrides;
     const labelsAtStart = new Uint8Array(resolvedRegions);
     const vertexCount = Math.floor(restPositions.length / 3);
-    // Large meshes: one diagnostic pose only. Skinning every vertex is expensive.
-    const repairPoseIds = vertexCount > 80_000
-      ? (['elbows-bent'] as const)
-      : DEFORMATION_AUTO_REPAIR_POSE_IDS;
+    const buffersAtStart = cloneSkinWeightBuffers(buffers);
 
     const scheduleRepair = (fn: () => void) => {
       // Double-yield: timeout → rAF → timeout so React can commit the preview first.
       autoRepairTimerRef.current = setTimeout(() => {
         autoRepairTimerRef.current = null;
-        requestAnimationFrame(() => {
+        autoRepairRafRef.current = requestAnimationFrame(() => {
+          autoRepairRafRef.current = null;
           autoRepairTimerRef.current = setTimeout(() => {
             autoRepairTimerRef.current = null;
             fn();
@@ -750,9 +780,13 @@ export function AutorigRigWizardDialog({
       }, 0);
     };
 
+    setAutoRepairChecking(true);
     scheduleRepair(() => {
       const live = previewSessionRef.current;
-      if (!live || autoRepairGenerationRef.current !== repairGeneration) return;
+      if (!live || autoRepairGenerationRef.current !== repairGeneration) {
+        setAutoRepairChecking(false);
+        return;
+      }
 
       const poseSession = (pose: HumanPose | undefined, candidateBuffers?: SkinWeightBuffers) => {
         if (candidateBuffers) applySkinBuffersToPreviewSession(live, candidateBuffers);
@@ -767,9 +801,9 @@ export function AutorigRigWizardDialog({
         live.root.updateMatrixWorld(true);
       };
 
-      try {
+      const buildFramesForPoseIds = (poseIds: readonly string[]) => {
         const frames = [];
-        for (const poseId of repairPoseIds) {
+        for (const poseId of poseIds) {
           const preset = getHumanPosePreset(poseId);
           if (!preset) continue;
           poseSession(preset.pose, live.buffers);
@@ -778,9 +812,43 @@ export function AutorigRigWizardDialog({
             positions: extractCanonicalPosedPositions(live.root, live.meshBindings),
           });
         }
-        // Restore whatever pose the user currently has selected.
         poseSession(activePoseRef.current, live.buffers);
-        if (frames.length === 0) return;
+        return frames;
+      };
+
+      try {
+        let repairPoseIds = selectDeformationAutoRepairPoseIds({ vertexCount });
+        let frames = buildFramesForPoseIds(repairPoseIds);
+        if (frames.length === 0) {
+          setAutoRepairChecking(false);
+          return;
+        }
+
+        // Expand with Walking when the first pass finds leg-region uncertainty.
+        const prelimOutliers = detectLocalDeformationOutliers({
+          restPositions,
+          topology: live.topology,
+          regionLabels: labelsAtStart,
+          buffers: live.buffers,
+          frames,
+        });
+        if (
+          shouldExpandAutoRepairWithWalking({
+            regionLabels: labelsAtStart,
+            outliers: prelimOutliers,
+          })
+        ) {
+          repairPoseIds = selectDeformationAutoRepairPoseIds({
+            vertexCount,
+            includeWalking: true,
+          });
+          frames = buildFramesForPoseIds(repairPoseIds);
+        }
+
+        if (autoRepairGenerationRef.current !== repairGeneration) {
+          setAutoRepairChecking(false);
+          return;
+        }
 
         const repair = runHighConfidenceDeformationAutoRepair({
           restPositions,
@@ -825,8 +893,11 @@ export function AutorigRigWizardDialog({
           },
         });
 
-        if (autoRepairGenerationRef.current !== repairGeneration) return;
-        if (previewSessionRef.current !== live) return;
+        if (autoRepairGenerationRef.current !== repairGeneration || previewSessionRef.current !== live) {
+          // Manual edit or rebuild won the race — leave their buffers alone.
+          setAutoRepairChecking(false);
+          return;
+        }
 
         applySkinBuffersToPreviewSession(live, repair.buffers);
         previousResolvedRef.current = repair.regionLabels;
@@ -862,18 +933,22 @@ export function AutorigRigWizardDialog({
         }
       } catch {
         // Keep the initial Binder V2 preview if deferred diagnostics fail.
-        if (previewSessionRef.current === live) {
-          poseSession(activePoseRef.current, live.buffers);
+        if (
+          previewSessionRef.current === live
+          && autoRepairGenerationRef.current === repairGeneration
+        ) {
+          applySkinBuffersToPreviewSession(live, buffersAtStart);
+          poseSession(activePoseRef.current, buffersAtStart);
+        }
+      } finally {
+        if (autoRepairGenerationRef.current === repairGeneration) {
+          setAutoRepairChecking(false);
         }
       }
     });
 
     return () => {
-      if (autoRepairTimerRef.current) {
-        clearTimeout(autoRepairTimerRef.current);
-        autoRepairTimerRef.current = null;
-      }
-      autoRepairGenerationRef.current += 1;
+      cancelScheduledAutoRepair();
       disposePreviewSession();
     };
   // Paint corrections update in place — only rebuild when structural inputs change.
@@ -891,6 +966,7 @@ export function AutorigRigWizardDialog({
     previewRig,
     height,
     disposePreviewSession,
+    cancelScheduledAutoRepair,
   ]);
 
   const deformationPreview = previewSessionRef.current && sessionVersion > 0
@@ -1345,6 +1421,7 @@ export function AutorigRigWizardDialog({
   }, [deformationPreview, resolvedRegions, regionConfidence, renderMeshLayer]);
 
   const finishBrushStroke = (points: BrushStrokePoint[]) => {
+    cancelScheduledAutoRepair();
     if (!topology || !suggestedRegions || !regionOverrides || !resolvedRegions) {
       setCorrectionResult({ status: 'empty' });
       return;
@@ -1401,6 +1478,7 @@ export function AutorigRigWizardDialog({
   };
 
   const finishLasso = () => {
+    cancelScheduledAutoRepair();
     const points = lassoPointsRef.current;
     setLassoDrawing(false);
     setLassoPoints([]);
@@ -1500,7 +1578,11 @@ export function AutorigRigWizardDialog({
 
   const canContinueJoints = !issues.some((issue) => issue.code === 'missing');
   const hasBlockingPoseIssues = poseIssues.some((issue) => issue.severity === 'blocking');
-  const canApply = canContinueJoints && Boolean(previewBuffers) && !preparing && !hasBlockingPoseIssues;
+  const canApply = canContinueJoints
+    && Boolean(previewBuffers)
+    && !preparing
+    && !autoRepairChecking
+    && !hasBlockingPoseIssues;
 
   const handleContinueToPoseFix = () => {
     setPoseIssues([]);
@@ -1523,10 +1605,13 @@ export function AutorigRigWizardDialog({
 
   const handleApply = () => {
     const nextRig = applyFittedSkeletonToRig(rig, applyFitted);
+    const sessionBuffers = previewSessionRef.current?.buffers ?? previewBuffers;
     onSave(nextRig, {
       regionOverrides,
       suggestedRegions,
       topologyHash: topology?.topologyHash,
+      // Persist the exact Pose & Fix buffers so weight-only repairs survive Apply.
+      ...(sessionBuffers ? { skinBuffers: cloneSkinWeightBuffers(sessionBuffers) } : {}),
     });
     void clearAutorigWizardDraft(rig.id);
     setDirty(false);
@@ -1561,7 +1646,10 @@ export function AutorigRigWizardDialog({
     orbitRef.current = null;
   };
 
-  const showFixOverlay = step === 'pose-fix' && fixEnabled && Boolean(deformationPreview);
+  const showFixOverlay = step === 'pose-fix'
+    && fixEnabled
+    && !autoRepairChecking
+    && Boolean(deformationPreview);
 
   return (
     <Modal
@@ -1816,11 +1904,13 @@ export function AutorigRigWizardDialog({
                 }}
                 meshReady={meshReady}
                 preparing={preparing || (!previewBuffers && meshReady)}
+                checkingDeformation={autoRepairChecking}
                 updating={updatingDeformation}
                 activeTestPose={activeTestPose}
                 onSelectPose={previewTestPose}
                 fixEnabled={fixEnabled}
                 onFixEnabledChange={(value) => {
+                  if (autoRepairChecking) return;
                   setFixEnabled(value);
                   setCorrectionResult(null);
                   if (!value) {

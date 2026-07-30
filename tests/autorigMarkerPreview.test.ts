@@ -251,6 +251,13 @@ describe('autorig preview instance reuses template cache', () => {
     expect(dialog).toMatch(/attachPreviewMeshRef/);
     expect(dialog).toMatch(/if \(isDragging\) return null;/);
     expect(dialog).toMatch(/Do not clear meshBounds here/);
+    // Weight-only auto-repairs must persist through Apply (exact preview buffers).
+    expect(dialog).toMatch(/skinBuffers:\s*cloneSkinWeightBuffers/);
+    expect(source).toMatch(/skinBuffers:\s*options\?\.skinBuffers/);
+    // Manual edits must invalidate deferred auto-repair; Fix stays locked while checking.
+    expect(dialog).toMatch(/cancelScheduledAutoRepair/);
+    expect(dialog).toMatch(/autoRepairChecking/);
+    expect(dialog).toMatch(/selectDeformationAutoRepairPoseIds/);
   });
 });
 

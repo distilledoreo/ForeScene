@@ -1348,6 +1348,7 @@ useEffect(() => {
                 sourceAssetId: sourceId,
                 assets: useContinuityStore.getState().project.assets,
                 regionOverrides: options?.regionOverrides,
+                skinBuffers: options?.skinBuffers,
               }).then(async ({ rig: skinnedRig, skinAsset, regionAsset }) => {
                 const state = useContinuityStore.getState();
                 state.updatePoseableRigAsset(rigAsset.id, skinnedRig);

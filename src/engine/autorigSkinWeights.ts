@@ -77,6 +77,18 @@ export interface SkinWeightBuffers {
   warnings?: string[];
 }
 
+/** Deep-copy skin buffers so callers can persist or mutate without aliasing. */
+export function cloneSkinWeightBuffers(buffers: SkinWeightBuffers): SkinWeightBuffers {
+  return {
+    influencesPerVertex: buffers.influencesPerVertex,
+    indices: new Uint16Array(buffers.indices),
+    weights: new Float32Array(buffers.weights),
+    jointOrder: buffers.jointOrder.slice(),
+    fallbackVertexCount: buffers.fallbackVertexCount,
+    ...(buffers.warnings ? { warnings: buffers.warnings.slice() } : {}),
+  };
+}
+
 /** Preferred child tips so hands run through the palm and feet through the toes. */
 const SEGMENT_CHILD_OVERRIDE: Partial<Record<HumanJointId, HumanJointId>> = {
   leftHand: 'leftHandEnd',
