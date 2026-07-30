@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('startup loading boundaries', () => {
-  it('does not mount Continuity Stage rendering work before a mode is selected', () => {
+  it('does not mount ForeScene studio rendering work before a mode is selected', () => {
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const lifecycle = readFileSync(new URL('../src/hooks/useProjectLifecycle.ts', import.meta.url), 'utf8');
     const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
@@ -21,10 +21,10 @@ describe('startup loading boundaries', () => {
     const splash = readFileSync(new URL('../src/components/common/SplashScreen.tsx', import.meta.url), 'utf8');
     const videoEncode = readFileSync(new URL('../src/engine/videoEncode.ts', import.meta.url), 'utf8');
 
-    expect(app).toContain("const isContinuityStage = appMode === 'continuity';");
-    expect(app).toContain(') : isContinuityStage ? (');
+    expect(app).toContain("const isStudioMode = appMode === 'studio';");
+    expect(app).toContain(') : isStudioMode ? (');
     expect(app).toContain("const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance')");
-    expect(app).toContain('{isContinuityStage && !helpOpen && (');
+    expect(app).toContain('{isStudioMode && !helpOpen && (');
     expect(app).toContain('<Suspense fallback={null}>');
     expect(app).toContain('<WorkflowGuidance />');
     expect(app).toContain('WorkspaceErrorBoundary');

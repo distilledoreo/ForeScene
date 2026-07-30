@@ -1,24 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BRAND, readMigratedPreference, writePreference } from '../../config/brand';
 
-const STORAGE_KEY = 'panoref-splash-seen';
 const FADE_MS = 600;
 
 function hasSeenSplash(): boolean {
   if (typeof window === 'undefined') return true;
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === '1';
-  } catch {
-    return true;
-  }
+  return readMigratedPreference(BRAND.prefs.splashSeen, BRAND.legacyPrefs.splashSeen) === '1';
 }
 
 function markSplashSeen() {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, '1');
-  } catch {
-    // ignore storage failures (private mode, etc.)
-  }
+  writePreference(BRAND.prefs.splashSeen, '1');
 }
 
 export default function SplashScreen({ onDismissed }: { onDismissed?: () => void } = {}) {
@@ -65,12 +56,12 @@ export default function SplashScreen({ onDismissed }: { onDismissed?: () => void
       }`}
       onClick={dismiss}
       role="dialog"
-      aria-label="Continuity Stage splash"
+      aria-label="ForeScene splash"
       style={{ transitionDuration: `${FADE_MS}ms` }}
     >
       <video
         ref={videoRef}
-        src="/continuity-stage.mp4"
+        src={BRAND.splashVideo}
         className="h-full w-full object-contain"
         playsInline
         muted

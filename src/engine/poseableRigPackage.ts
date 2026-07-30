@@ -5,6 +5,7 @@ import type {
   ProjectAsset,
   SceneObject,
 } from '../domain/types';
+import { BRAND } from '../config/brand';
 import { createId } from '../utils/ids';
 import { sanitizeAutorigMarkers } from './autorigMarkers';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
@@ -12,16 +13,26 @@ import { getModelAsset, putModelAsset } from './modelAssetStore';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { downloadBlob } from './fileTransfers';
 
-/** Continuity Stage poseable-rig package (zip). Not a universal DCC interchange format. */
+/** ForeScene poseable-rig package (zip). Not a universal DCC interchange format. */
 export const POSEABLE_RIG_PACKAGE_MIME = 'application/zip';
-export const POSEABLE_RIG_PACKAGE_EXTENSION = '.panorig';
-export const POSEABLE_RIG_PACKAGE_ACCEPT = '.panorig,application/zip';
-export const POSEABLE_RIG_PACKAGE_FORMAT = 'panoref-poseable-rig' as const;
-export const POSEABLE_RIG_PACKAGE_VERSION = 1 as const;
+export const POSEABLE_RIG_PACKAGE_EXTENSION = BRAND.rigExtension;
+export const POSEABLE_RIG_PACKAGE_FORMAT = BRAND.rigFormat;
+export const POSEABLE_RIG_PACKAGE_VERSION = 2 as const;
+
+/** Pre-rebrand PanoRef rig packages stay importable. */
+export const LEGACY_POSEABLE_RIG_PACKAGE_EXTENSION = BRAND.legacyRigExtension;
+export const LEGACY_POSEABLE_RIG_PACKAGE_FORMAT = BRAND.legacyRigFormat;
+export const LEGACY_POSEABLE_RIG_PACKAGE_VERSION = 1 as const;
+
+export const POSEABLE_RIG_PACKAGE_ACCEPT = [
+  POSEABLE_RIG_PACKAGE_EXTENSION,
+  LEGACY_POSEABLE_RIG_PACKAGE_EXTENSION,
+  'application/zip',
+].join(',');
 
 export interface PoseableRigPackageManifest {
-  format: typeof POSEABLE_RIG_PACKAGE_FORMAT;
-  version: typeof POSEABLE_RIG_PACKAGE_VERSION;
+  format: typeof POSEABLE_RIG_PACKAGE_FORMAT | typeof LEGACY_POSEABLE_RIG_PACKAGE_FORMAT;
+  version: typeof POSEABLE_RIG_PACKAGE_VERSION | typeof LEGACY_POSEABLE_RIG_PACKAGE_VERSION;
   exportedAt: string;
   characterName?: string;
   topologyHash?: string;
@@ -53,9 +64,11 @@ export interface ImportedPoseableRigPackage {
 function isPoseableRigPackageManifest(value: unknown): value is PoseableRigPackageManifest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const raw = value as Partial<PoseableRigPackageManifest>;
-  return raw.format === POSEABLE_RIG_PACKAGE_FORMAT
-    && raw.version === POSEABLE_RIG_PACKAGE_VERSION
-    && Boolean(raw.rig && typeof raw.rig === 'object');
+  // Each brand generation pairs its own format id with its own version number;
+  // a mismatched pair is not a package this build knows how to read.
+  const knownFormat = (raw.format === POSEABLE_RIG_PACKAGE_FORMAT && raw.version === POSEABLE_RIG_PACKAGE_VERSION)
+    || (raw.format === LEGACY_POSEABLE_RIG_PACKAGE_FORMAT && raw.version === LEGACY_POSEABLE_RIG_PACKAGE_VERSION);
+  return knownFormat && Boolean(raw.rig && typeof raw.rig === 'object');
 }
 
 async function readAssetBytes(assetId: string | undefined, assets: AssetRegistry): Promise<ArrayBuffer | undefined> {
@@ -163,7 +176,10 @@ export async function parsePoseableRigPackageFile(file: File): Promise<ImportedP
   }
   const manifestJson = JSON.parse(await manifestEntry.async('string')) as unknown;
   if (!isPoseableRigPackageManifest(manifestJson)) {
-    throw new Error('Rig package manifest is not a Continuity Stage .panorig file.');
+    throw new Error(
+      `Rig package manifest is not a ${BRAND.name} ${POSEABLE_RIG_PACKAGE_EXTENSION} file`
+      + ` (legacy ${LEGACY_POSEABLE_RIG_PACKAGE_EXTENSION} packages are also accepted).`,
+    );
   }
 
   const baseRig = normalizePoseableRigAsset(manifestJson.rig);
@@ -334,7 +350,9 @@ export function mergeImportedRigOntoTarget(params: {
 
 export function isPoseableRigPackageFile(file: File): boolean {
   const name = file.name.toLowerCase();
-  return name.endsWith(POSEABLE_RIG_PACKAGE_EXTENSION) || name.endsWith('.zip');
+  return name.endsWith(POSEABLE_RIG_PACKAGE_EXTENSION)
+    || name.endsWith(LEGACY_POSEABLE_RIG_PACKAGE_EXTENSION)
+    || name.endsWith('.zip');
 }
 
 export function resolvePoseableRigForObject(

@@ -84,7 +84,7 @@ describe('Shots composition structure', () => {
       const text = readFileSync(join(root, rel), 'utf8');
       expect(text.length).toBeGreaterThan(20);
     }
-    const store = readFileSync(join(root, 'src/state/useContinuityStore.ts'), 'utf8');
+    const store = readFileSync(join(root, 'src/state/useProjectStore.ts'), 'utf8');
     expect(store).toContain('createProjectSlice');
     expect(store).toContain('createSelectionSlice');
     expect(store).toContain('createHistorySlice');

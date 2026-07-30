@@ -8,7 +8,7 @@ $env:PANOREF_COVERAGE_BENCHMARK_URL='http://127.0.0.1:4173'
 npm run benchmark:coverage-import
 ```
 
-The harness removes starter primitives, imports the model in combined mode through PanoRef's real import UI, renders the graybox reference, runs the fixed-first coverage optimizer with production defaults, captures page errors and heap telemetry, and writes JSON plus a screenshot under `artifacts/coverage-import-benchmark/`.
+The harness removes starter primitives, imports the model in combined mode through ForeScene's real import UI, renders the graybox reference, runs the fixed-first coverage optimizer with production defaults, captures page errors and heap telemetry, and writes JSON plus a screenshot under `artifacts/coverage-import-benchmark/`.
 
 ## 2026-07-19 result
 
@@ -24,4 +24,4 @@ The harness removes starter primitives, imports the model in combined mode throu
 - Browser errors: none
 - Test machine: AMD Ryzen 7 3700X, 31.9 GB RAM, Chrome 150.0.7871.127
 
-This is a complex real production scene and exercises PanoRef's actual import, packed storage, extraction, floor-component filtering, worker transfer, BVH, search, and UI result path. The automated test suite separately runs both complete optimizer modes over a deterministic 101,250-triangle indexed fixture so a geometry-heavy regression is enforced without checking a large copyrighted model into the repository.
+This is a complex real production scene and exercises ForeScene's actual import, packed storage, extraction, floor-component filtering, worker transfer, BVH, search, and UI result path. The automated test suite separately runs both complete optimizer modes over a deterministic 101,250-triangle indexed fixture so a geometry-heavy regression is enforced without checking a large copyrighted model into the repository.

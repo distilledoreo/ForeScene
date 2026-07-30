@@ -8,7 +8,7 @@ import {
   styledImportActionHint,
   styledImportActionLabel,
 } from '../../engine/panoProjectionCore';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { IconButton } from './Field';
 
@@ -29,11 +29,11 @@ export function StyledPanoImportButton({
   onImported?: (mode: 'first' | 'replace' | 'add_secondary') => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const project = useContinuityStore((state) => state.project);
-  const pendingSecondCapturePlan = useContinuityStore(
+  const project = useProjectStore((state) => state.project);
+  const pendingSecondCapturePlan = useProjectStore(
     (state) => state.pendingSecondCapturePlan,
   );
-  const importStyledPano = useContinuityStore((state) => state.importStyledPano);
+  const importStyledPano = useProjectStore((state) => state.importStyledPano);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [error, setError] = useState<string | undefined>();
   const [warning, setWarning] = useState<string | undefined>();

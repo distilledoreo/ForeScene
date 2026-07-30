@@ -2,7 +2,7 @@ import type { StateCreator } from 'zustand';
 import type { CameraData } from '../../domain/types';
 import { cameraDataEqual } from '../../engine/shotCameraHistory';
 import { withShotPanoLink } from '../../engine/sync';
-import type { ContinuityStoreSlices, SessionSliceState } from './types';
+import type { ProjectStoreSlices, SessionSliceState } from './types';
 
 function touchProjectUpdatedAt<T extends { updatedAt: string }>(project: T): T {
   return { ...project, updatedAt: new Date().toISOString() };
@@ -13,7 +13,7 @@ function touchProjectUpdatedAt<T extends { updatedAt: string }>(project: T): T {
  * Owns its initial state and actions via the Zustand creator closure — not key-picked from the monolith.
  */
 export const createSessionSlice: StateCreator<
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   [],
   [],
   SessionSliceState

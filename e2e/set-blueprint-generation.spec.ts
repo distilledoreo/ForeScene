@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 import {
   dismissOverlays,
-  enterContinuityStage,
+  enterStudio,
   reloadAndAwaitRecovery,
   waitForVerifiedSave,
 } from './helpers/app-entry';
@@ -49,7 +49,7 @@ const MINIMAL_BLUEPRINT = {
 test.describe('@smoke set blueprint generation', () => {
   test('paste blueprint JSON, apply, and recover after reload', async ({ page }) => {
     test.setTimeout(120_000);
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
@@ -95,7 +95,7 @@ test.describe('@responsive set generation dialog', () => {
   test('dialog layout scrolls on a phone viewport', async ({ page }, testInfo) => {
     test.skip(!/phone/i.test(testInfo.project.name), 'Phone project only');
 
-    await enterContinuityStage(page);
+    await enterStudio(page);
     await dismissOverlays(page);
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);

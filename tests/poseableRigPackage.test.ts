@@ -6,7 +6,11 @@ import {
   detachPoseableRigForPackage,
   mergeImportedRigOntoTarget,
   parsePoseableRigPackageFile,
+  isPoseableRigPackageFile,
+  LEGACY_POSEABLE_RIG_PACKAGE_FORMAT,
+  LEGACY_POSEABLE_RIG_PACKAGE_VERSION,
   POSEABLE_RIG_PACKAGE_FORMAT,
+  POSEABLE_RIG_PACKAGE_VERSION,
 } from '../src/engine/poseableRigPackage';
 import { putModelAsset } from '../src/engine/modelAssetStore';
 import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
@@ -49,7 +53,7 @@ describe('poseable rig package IO', () => {
     expect(detached.regionMap?.regionAssetId).toBe('package');
   });
 
-  it('round-trips a .panorig zip and remaps binary assets', async () => {
+  it('round-trips a .fsrig zip and remaps binary assets', async () => {
     const skinBytes = new Uint8Array([1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer;
     const regionBytes = new Uint8Array([80, 78, 82, 71, 2, 0, 0, 0, 4, 0, 0, 0, 3, 0, 0, 0, 97, 98, 99, 1, 1, 1, 1, 0, 0, 0, 0]).buffer;
     await putModelAsset('poseable-skin-skin_source', skinBytes);
@@ -79,8 +83,9 @@ describe('poseable rig package IO', () => {
       assets,
       characterName: 'Hero',
     });
-    expect(built.fileName).toBe('hero-rig.panorig');
+    expect(built.fileName).toBe('hero-rig.fsrig');
     expect(built.manifest.format).toBe(POSEABLE_RIG_PACKAGE_FORMAT);
+    expect(built.manifest.version).toBe(2);
     expect(built.manifest.skinFile).toBe('skin.bin');
     expect(built.manifest.regionFile).toBe('region.bin');
 
@@ -114,12 +119,47 @@ describe('poseable rig package IO', () => {
     expect(mismatched.ok).toBe(false);
   });
 
+  it('still imports legacy PanoRef .panorig packages', async () => {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file('manifest.json', JSON.stringify({
+      format: LEGACY_POSEABLE_RIG_PACKAGE_FORMAT,
+      version: LEGACY_POSEABLE_RIG_PACKAGE_VERSION,
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      characterName: 'Legacy Hero',
+      topologyHash: 'topo-legacy',
+      rig: detachPoseableRigForPackage(sampleRig()),
+    }));
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const file = new File([blob], 'legacy-rig.panorig', { type: 'application/zip' });
+
+    expect(isPoseableRigPackageFile(file)).toBe(true);
+    const imported = await parsePoseableRigPackageFile(file);
+    expect(imported.manifest.format).toBe(LEGACY_POSEABLE_RIG_PACKAGE_FORMAT);
+    expect(imported.rig.skeletonJoints).toContain('hips');
+  });
+
+  it('rejects a manifest that mixes a format id with the wrong version', async () => {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file('manifest.json', JSON.stringify({
+      format: POSEABLE_RIG_PACKAGE_FORMAT,
+      version: LEGACY_POSEABLE_RIG_PACKAGE_VERSION,
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      rig: detachPoseableRigForPackage(sampleRig()),
+    }));
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const file = new File([blob], 'mixed.fsrig', { type: 'application/zip' });
+
+    await expect(parsePoseableRigPackageFile(file)).rejects.toThrow(/ForeScene \.fsrig/);
+  });
+
   it('rejects incomplete packages missing binds or skin', () => {
     const incompleteRig = sampleRig({ bindMatrices: undefined, skin: undefined });
     const imported = {
       manifest: {
         format: POSEABLE_RIG_PACKAGE_FORMAT,
-        version: 1 as const,
+        version: POSEABLE_RIG_PACKAGE_VERSION,
         exportedAt: '2026-01-01T00:00:00.000Z',
         topologyHash: 'topo-abc',
         rig: incompleteRig,
@@ -137,7 +177,7 @@ describe('poseable rig package IO', () => {
     const imported = {
       manifest: {
         format: POSEABLE_RIG_PACKAGE_FORMAT,
-        version: 1 as const,
+        version: POSEABLE_RIG_PACKAGE_VERSION,
         exportedAt: '2026-01-01T00:00:00.000Z',
         topologyHash: 'topo-abc',
         rig: sampleRig(),

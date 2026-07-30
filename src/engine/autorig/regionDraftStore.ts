@@ -3,7 +3,8 @@
  * Closing the dialog accidentally must not lose in-progress markers / region edits.
  */
 
-const DATABASE_NAME = 'panoref-autorig-drafts';
+/** Legacy PanoRef database name preserved so in-progress local drafts keep opening. */
+const LEGACY_DATABASE_NAME = 'panoref-autorig-drafts';
 const STORE_NAME = 'wizard-drafts';
 const DATABASE_VERSION = 1;
 
@@ -65,7 +66,7 @@ export function normalizeAutorigWizardDraft(
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) {
         request.result.createObjectStore(STORE_NAME, { keyPath: 'rigId' });

@@ -303,7 +303,7 @@ export function ShotMediaModal({
           </button>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-white">{displayName}</h2>
-            <p className="text-xs text-white/55">PanoRef shot {shot.shotNumber}</p>
+            <p className="text-xs text-white/55">ForeScene shot {shot.shotNumber}</p>
           </div>
         </div>
         <button

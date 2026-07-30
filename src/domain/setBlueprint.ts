@@ -45,7 +45,7 @@ export const SET_BLUEPRINT_LIMITS = {
 /**
  * AI-facing spatial blocking format — intentionally smaller than LocationProject.
  * Excludes native IDs, timestamps, shots, panorama refs, assets, workflow, and
- * product/schema versions that belong to the compiled PanoRef project.
+ * product/schema versions that belong to the compiled ForeScene project.
  */
 export interface SetBlueprint {
   schemaVersion: typeof SET_BLUEPRINT_SCHEMA_VERSION;

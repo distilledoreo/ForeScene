@@ -50,10 +50,10 @@ try {
     downloadPath: downloadDir,
   }));
   await client.send('Page.navigate', { url: appUrl });
-  await waitFor(client, 'document.title === "Continuity Stage"', 'app shell');
+  await waitFor(client, 'document.title === "ForeScene"', 'app shell');
 
   // Select the visible production mode explicitly; do not click a Build control behind the chooser.
-  await clickOptionalButton(client, 'Build continuity packages', 4000, { exact: true });
+  await clickOptionalButton(client, 'Open ForeScene', 4000, { exact: true });
 
   await waitFor(
     client,
@@ -205,8 +205,9 @@ async function assertExecutable(path) {
 }
 
 async function resolveAppUrl() {
-  if (process.env.CONTINUITY_STAGE_URL) {
-    return process.env.CONTINUITY_STAGE_URL;
+  const configured = process.env.FORESCENE_URL ?? process.env.CONTINUITY_STAGE_URL;
+  if (configured) {
+    return configured;
   }
 
   const ports = Array.from({ length: 11 }, (_, index) => 3000 + index);
@@ -216,15 +217,15 @@ async function resolveAppUrl() {
       const response = await fetch(candidate, { signal: AbortSignal.timeout(1500) });
       if (!response.ok) continue;
       const html = await response.text();
-      if (html.includes('Continuity Stage') || html.includes('root')) return candidate;
+      if (html.includes('ForeScene') || html.includes('root')) return candidate;
     } catch {
       // Try the next dev-server port.
     }
   }
 
   throw new Error(
-    'No Continuity Stage dev server found on ports 3000-3010. '
-    + 'Start one with `npm run dev`, or set CONTINUITY_STAGE_URL.',
+    'No ForeScene dev server found on ports 3000-3010. '
+    + 'Start one with `npm run dev`, or set FORESCENE_URL.',
   );
 }
 

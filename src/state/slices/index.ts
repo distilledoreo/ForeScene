@@ -1,11 +1,11 @@
 /**
- * Domain-focused Continuity store slices.
- * Real StateCreator modules compose into `useContinuityStore`.
+ * Domain-focused project store slices.
+ * Real StateCreator modules compose into `useProjectStore`.
  */
 
 export type {
   BuildMode,
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   HistorySliceState,
   ProjectSliceState,
   SelectionSliceState,

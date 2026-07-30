@@ -373,11 +373,11 @@ export async function buildMultiShotPackage(
     manifestPaths.push(...paths);
   }
 
-  const safeName = (project.name || 'continuity')
+  const safeName = (project.name || 'forescene')
     .replace(/[^\w\-]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '')
-    || 'continuity';
+    || 'forescene';
   const blob = await compressZip(zip, {
     tracker,
     shotIndex: shots.length - 1,

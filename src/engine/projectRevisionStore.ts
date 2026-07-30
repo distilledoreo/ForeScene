@@ -7,7 +7,8 @@
  * active-pointer update in one transaction.
  */
 
-const DATABASE_NAME = 'panoref-project-revisions';
+/** Legacy PanoRef database name preserved so existing local revisions keep opening. */
+const LEGACY_DATABASE_NAME = 'panoref-project-revisions';
 const DATABASE_VERSION = 1;
 const REVISIONS_STORE = 'revisions';
 const HEADS_STORE = 'heads';
@@ -63,7 +64,7 @@ function copy<T>(value: T): T {
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(REVISIONS_STORE)) database.createObjectStore(REVISIONS_STORE, { keyPath: 'id' });
@@ -362,7 +363,7 @@ export async function resetProjectRevisionStoreForTests(): Promise<void> {
   nextDeleteFailureForTests = undefined;
   if (typeof indexedDB === 'undefined') return;
   await new Promise<void>((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(DATABASE_NAME);
+    const request = indexedDB.deleteDatabase(LEGACY_DATABASE_NAME);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error ?? new Error('Could not reset project recovery storage.'));
     request.onblocked = () => resolve();

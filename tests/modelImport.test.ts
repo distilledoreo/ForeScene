@@ -15,7 +15,7 @@ import {
   resetImportedMeshCacheForTests,
 } from '../src/engine/importedMesh';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 
 beforeAll(() => {
   if (typeof ProgressEvent !== 'undefined') return;
@@ -45,7 +45,7 @@ describe('model import planning', () => {
     expect(plan.jobs.some((j) => j.file.name === 'extra.glb')).toBe(true);
     const nativeIssue = plan.issues.find((i) => i.fileName === 'courtyard.blend');
     expect(nativeIssue).toBeTruthy();
-    expect(nativeIssue?.message).toContain('PanoRef cannot read Blender');
+    expect(nativeIssue?.message).toContain('ForeScene cannot read Blender');
     expect(nativeIssue?.message).toContain('export the entire scene as a GLB');
   });
 
@@ -64,14 +64,14 @@ describe('model import planning', () => {
   it('reports Maya native files with export guidance', () => {
     const plan = createModelImportPlan([file(['maya'], 'set.ma')]);
     expect(plan.jobs).toHaveLength(0);
-    expect(plan.issues[0].message).toContain('PanoRef cannot read Maya');
+    expect(plan.issues[0].message).toContain('ForeScene cannot read Maya');
     expect(plan.issues[0].message).toContain('Export All');
   });
 
   it('reports Unreal native files with export guidance', () => {
     const plan = createModelImportPlan([file(['unreal'], 'level.umap')]);
     expect(plan.jobs).toHaveLength(0);
-    expect(plan.issues[0].message).toContain('PanoRef cannot read Unreal');
+    expect(plan.issues[0].message).toContain('ForeScene cannot read Unreal');
     expect(plan.issues[0].message).toContain('Export the current level as GLB');
   });
 
@@ -85,9 +85,9 @@ describe('model import planning', () => {
     expect(plan.issues[0].fileName).toBe('scene.blend');
   });
 
-  it('imports a portable native-scene handoff bundle', async () => {
+  async function sceneBundle(manifestName: string) {
     const zip = new JSZip();
-    zip.file('panoref-scene.json', JSON.stringify({
+    zip.file(manifestName, JSON.stringify({
       schemaVersion: 1,
       entry: 'geometry/set.obj',
       geometryOnly: true,
@@ -100,7 +100,11 @@ describe('model import planning', () => {
       'f 1 2 3',
     ].join('\n'));
     const bytes = await zip.generateAsync({ type: 'uint8array' });
-    const bundle = file([bytes], 'set.panoscene');
+    return file([bytes], 'set.panoscene');
+  }
+
+  it('imports a portable native-scene handoff bundle', async () => {
+    const bundle = await sceneBundle('forescene-scene.json');
 
     const result = await importModelJob({ kind: 'bundle', file: bundle }, { mode: 'separate' });
     expect(result.items).toHaveLength(1);
@@ -113,6 +117,18 @@ describe('model import planning', () => {
       importMode: 'separate',
     });
     expect(result.summary.totalObjects).toBe(1);
+  });
+
+  it('still imports bundles carrying the legacy panoref-scene.json manifest', async () => {
+    const bundle = await sceneBundle('panoref-scene.json');
+
+    const result = await importModelJob({ kind: 'bundle', file: bundle }, { mode: 'separate' });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].object.importedModel).toMatchObject({
+      sourceApplication: 'maya',
+      sourceSceneName: 'set.mb',
+      sourceKind: 'scene',
+    });
   });
 });
 
@@ -221,22 +237,22 @@ describe('texture-free model conversion', () => {
       modelAssetId: asset.id,
     };
     const project = createDefaultProject();
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedObjectIds: [],
       buildHistoryPast: [],
       buildHistoryFuture: [],
     });
 
-    useContinuityStore.getState().addImportedModel({ asset, object });
-    expect(useContinuityStore.getState().project.assets.assets[asset.id]).toBe(asset);
-    expect(useContinuityStore.getState().undoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects).not.toContainEqual(object);
-    expect(useContinuityStore.getState().project.assets.assets[asset.id]).toBe(asset);
-    expect(useContinuityStore.getState().redoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects).toContainEqual(object);
+    useProjectStore.getState().addImportedModel({ asset, object });
+    expect(useProjectStore.getState().project.assets.assets[asset.id]).toBe(asset);
+    expect(useProjectStore.getState().undoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects).not.toContainEqual(object);
+    expect(useProjectStore.getState().project.assets.assets[asset.id]).toBe(asset);
+    expect(useProjectStore.getState().redoBuild()).toBe(true);
+    expect(useProjectStore.getState().project.scene.objects).toContainEqual(object);
 
-    const saved = parseProject(serializeProject(useContinuityStore.getState().project));
+    const saved = parseProject(serializeProject(useProjectStore.getState().project));
     expect(saved.assets.assets[asset.id]).toBeTruthy();
     saved.scene.objects = saved.scene.objects.filter((candidate) => candidate.id !== object.id);
     expect(serializeProject(saved)).not.toContain(asset.id);
@@ -549,7 +565,7 @@ describe('atomic store insertion', () => {
   it('adds multiple objects in one history step and selects all', () => {
     const project = createDefaultProject();
     const initialCount = project.scene.objects.length;
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project,
       selectedObjectIds: [],
       buildHistoryPast: [],
@@ -596,17 +612,17 @@ describe('atomic store insertion', () => {
       return { asset, object: obj };
     });
 
-    const store = useContinuityStore.getState();
+    const store = useProjectStore.getState();
     store.addImportedModels(results);
 
-    const after = useContinuityStore.getState();
+    const after = useProjectStore.getState();
     expect(after.project.scene.objects).toHaveLength(initialCount + 3);
     expect(after.selectedObjectIds).toHaveLength(3);
     expect(after.buildHistoryPast).toHaveLength(1);
     // Undo should remove all three at once
     expect(after.undoBuild()).toBe(true);
-    expect(useContinuityStore.getState().project.scene.objects).toHaveLength(initialCount);
-    expect(useContinuityStore.getState().selectedObjectIds).toHaveLength(0);
+    expect(useProjectStore.getState().project.scene.objects).toHaveLength(initialCount);
+    expect(useProjectStore.getState().selectedObjectIds).toHaveLength(0);
   });
 });
 

@@ -24,7 +24,7 @@ describe('workflow guidance UI', () => {
     expect(lifecycle).toContain('const saveProject');
     expect(lifecycle).toContain('loadProjectIo');
     expect(lifecycle).toContain('downloadProject(verified.project)');
-    expect(app).toContain('accept=".json,.zip,.panoref-project,application/json,application/zip"');
+    expect(app).toContain('accept={projectBackupAcceptAttribute()}');
     expect(lifecycle).toContain('Project opened:');
     expect(lifecycle).toContain('Could not open project:');
     expect(app).toContain('data-project-import-status');

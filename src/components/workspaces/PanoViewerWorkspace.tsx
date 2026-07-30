@@ -13,7 +13,7 @@ const DEFAULT_VIEW: PanoViewState = { yawDegrees: 0, pitchDegrees: 0, fovDegrees
 const IDENTITY_ROTATION: Euler = [0, 0, 0];
 
 /**
- * Simple 360 viewer — fully isolated from Continuity Stage project state.
+ * Simple 360 viewer — fully isolated from ForeScene project state.
  * Importing a pano here uses local component state only (no project mutations).
  */
 export function PanoViewerWorkspace() {
@@ -103,7 +103,7 @@ export function PanoViewerWorkspace() {
               <h2 className="text-lg font-semibold text-primary">Import a 360 pano</h2>
               <p className="text-sm text-secondary">
                 Drop in an equirectangular image, look around, then download the current view as a flat PNG.
-                This mode does not change your Continuity Stage project.
+                This mode does not change your ForeScene project.
               </p>
               <p className="text-xs text-muted">Use Import pano in the bottom bar to get started.</p>
             </div>

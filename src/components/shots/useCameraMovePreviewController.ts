@@ -7,7 +7,7 @@ import {
   interpolateCameraKeyframes,
 } from '../../engine/cameraKeyframes';
 import { interpolateObjectOverrides } from '../../engine/objectKeyframes';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import type { useVideoAuthoringController } from '../../hooks/useVideoAuthoringController';
 
 type VideoAuthoringApi = ReturnType<typeof useVideoAuthoringController>;
@@ -154,7 +154,7 @@ export function useCameraMovePreviewController(options: CameraMovePreviewControl
       ?? getCameraMoveDurationSeconds(keyframes);
     const duration = getCameraMoveDurationSeconds(keyframes, durationFallback);
     const startTime = performance.now();
-    const latestProject = useContinuityStore.getState().project;
+    const latestProject = useProjectStore.getState().project;
     const latestShot = latestProject.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     previewAbortRef.current = { cancelled: false };
     setIsPreviewingCameraMove(true);

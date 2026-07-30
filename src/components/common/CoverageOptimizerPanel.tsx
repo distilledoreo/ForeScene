@@ -9,7 +9,7 @@ import {
   type CoverageOptimizationResult,
   type CoverageOptimizationTask,
 } from '../../engine/projectionCoverage';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { Field, Select, TextInput, Toggle } from './Field';
 
 function percent(value: number): string {
@@ -50,7 +50,7 @@ export function CoverageOptimizerPanel({
   primaryPano?: PanoReference;
   onSetCaptureOrigin?: (origin: Vec3) => void;
 }) {
-  const selectedObjectIds = useContinuityStore((state) => state.selectedObjectIds);
+  const selectedObjectIds = useProjectStore((state) => state.selectedObjectIds);
   const [mode, setMode] = useState<CoverageOptimizationMode>('fixed-first');
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'failed'>('idle');
   const [statusMessage, setStatusMessage] = useState('');

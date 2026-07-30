@@ -52,7 +52,7 @@ export function describeSetBlueprintSchema(): string {
  */
 export function buildSetBlueprintSystemPrompt(): string {
   return [
-    'You generate graybox film-set spatial blocking as a SetBlueprint JSON document for PanoRef Continuity Stage.',
+    'You generate graybox film-set spatial blocking as a SetBlueprint JSON document for ForeScene.',
     '',
     'Output rules:',
     '- Respond with JSON only. No markdown fences. No prose before or after the JSON object.',
@@ -60,7 +60,7 @@ export function buildSetBlueprintSystemPrompt(): string {
     `- schemaVersion must be ${SET_BLUEPRINT_SCHEMA_VERSION}.`,
     '- units must be "meters".',
     '- Coordinate system: Y-up. Positive Z is the default forward direction from the capture origin.',
-    '- Do not emit native PanoRef fields (ids, timestamps, shots, camera keyframes, panoRefs, assets, workflow, settings, productVersion, schemaVersion strings for LocationProject).',
+    '- Do not emit native ForeScene fields (ids, timestamps, shots, camera keyframes, panoRefs, assets, workflow, settings, productVersion, schemaVersion strings for LocationProject).',
     '- Do not emit imported_model objects. An LLM cannot manufacture mesh assets.',
     '',
     'Spatial guidance:',

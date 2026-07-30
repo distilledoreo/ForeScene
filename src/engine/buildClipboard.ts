@@ -2,7 +2,7 @@ import { objectDisplayName } from '../domain/defaults';
 import { AssetRegistry, ProjectAsset, SceneObject, SceneObjectType, Vec3 } from '../domain/types';
 import { createId } from '../utils/ids';
 import { snapBuildPoint } from './sandboxCore';
-import { MODEL_ASSET_URI_PREFIX, PANOREF_MESH_MIME } from './importedMeshConstants';
+import { LEGACY_PANOREF_MESH_MIME, MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 
 export const BUILD_CLIPBOARD_KIND = 'panoref/build-objects';
 export const BUILD_CLIPBOARD_VERSION = 2;
@@ -243,7 +243,7 @@ function isValidClipboardAsset(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (value.type !== 'model') return false;
   if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.uri !== 'string') return false;
-  if (typeof value.uri !== 'string' || (!value.uri.startsWith(`data:${PANOREF_MESH_MIME};base64,`) && !value.uri.startsWith(MODEL_ASSET_URI_PREFIX))) return false;
+  if (typeof value.uri !== 'string' || (!value.uri.startsWith(`data:${LEGACY_PANOREF_MESH_MIME};base64,`) && !value.uri.startsWith(MODEL_ASSET_URI_PREFIX))) return false;
   // Basic mime check
   return true;
 }

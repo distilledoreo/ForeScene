@@ -3,7 +3,7 @@
 ## Cursor Cloud specific instructions
 
 ### What this is
-`continuity-stage` is a **local-first, browser-only** React 19 + TypeScript + Vite 6 app (Three.js 3D + 360 panorama tooling). There is **no backend, database, account system, or secrets** — running the single Vite dev server exercises the whole product end to end.
+ForeScene (`forescene` package) is a **local-first, browser-only** React 19 + TypeScript + Vite 6 app for previsualization, continuity, and AI-video handoff (Three.js 3D + 360 panorama tooling). There is **no backend, database, account system, or secrets** — running the single Vite dev server exercises the whole product end to end.
 
 ### Running (see `package.json` scripts / `README.md` for the canonical list)
 - Dev server: `npm run dev` → serves on port **3000** (`--host=0.0.0.0`). This is the whole app.

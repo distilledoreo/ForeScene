@@ -1,6 +1,6 @@
 {
-  "name": "Continuity Stage",
-  "description": "A local-first AI-video location continuity tool for graybox sets, 360 panorama references, synced shots, and AI-ready exports.",
+  "name": "ForeScene",
+  "description": "ForeScene — a local-first previsualization and continuity workspace for AI-assisted video production: graybox sets, 360 panorama references, synced shots, and AI-ready exports.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ContinuityStoreSlices } from './slices/types';
+import type { ProjectStoreSlices } from './slices/types';
 import { createProjectSlice } from './slices/projectSlice';
 import { createSelectionSlice } from './slices/selectionSlice';
 import { createHistorySlice } from './slices/historySlice';
@@ -8,7 +8,7 @@ import { createSessionSlice } from './slices/sessionSlice';
 
 export type {
   BuildMode,
-  ContinuityStoreSlices,
+  ProjectStoreSlices,
   ShotCameraHistoryMode,
 } from './slices/types';
 export type { BuildHistoryMode } from '../engine/buildHistory';
@@ -28,13 +28,13 @@ export {
   createSessionSlice,
 };
 
-type ContinuityStore = ContinuityStoreSlices;
+type ProjectStore = ProjectStoreSlices;
 
 /**
- * Continuity store composed from domain-focused slice creators:
+ * Project store composed from domain-focused slice creators:
  * project / selection / history / workflow / session.
  */
-export const useContinuityStore = create<ContinuityStore>((...args) => ({
+export const useProjectStore = create<ProjectStore>((...args) => ({
   ...createProjectSlice(...args),
   ...createSelectionSlice(...args),
   ...createHistorySlice(...args),

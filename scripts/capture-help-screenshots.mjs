@@ -9,8 +9,8 @@ await mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
 await page.addInitScript(() => {
-  localStorage.setItem('panoref-splash-seen', '1');
-  localStorage.setItem('panoref-app-mode', 'continuity');
+  localStorage.setItem('forescene-splash-seen', '1');
+  localStorage.setItem('forescene-app-mode', 'studio');
 });
 
 const dismissGuidance = async () => {

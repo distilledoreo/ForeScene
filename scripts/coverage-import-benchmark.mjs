@@ -32,11 +32,11 @@ const startedAt = Date.now();
 let importStartedAt;
 let optimizationStartedAt;
 try {
-  await page.addInitScript(() => localStorage.setItem('panoref-splash-seen', '1'));
+  await page.addInitScript(() => localStorage.setItem('forescene-splash-seen', '1'));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const chooser = page.locator('[data-mode-chooser]');
   if (await chooser.isVisible().catch(() => false)) {
-    await page.getByRole('button', { name: /Build continuity packages/i }).click();
+    await page.getByRole('button', { name: /Open ForeScene/i }).click();
   }
   await dismissOverlays();
   await workspaceTab('Build').click();

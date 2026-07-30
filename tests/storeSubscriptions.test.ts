@@ -14,12 +14,12 @@ describe('Zustand workspace subscriptions', () => {
     for (const path of selectiveWorkspaceSources) {
       const source = readFileSync(new URL(path, import.meta.url), 'utf8');
       expect(source).toContain("import { useShallow } from 'zustand/shallow'");
-      expect(source).toContain('useContinuityStore(useShallow((state) => ({');
-      expect(source).not.toContain('useContinuityStore();');
+      expect(source).toContain('useProjectStore(useShallow((state) => ({');
+      expect(source).not.toContain('useProjectStore();');
     }
 
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    expect(app).toContain('useContinuityStore((state) => state.project)');
-    expect(app).not.toContain('useContinuityStore();');
+    expect(app).toContain('useProjectStore((state) => state.project)');
+    expect(app).not.toContain('useProjectStore();');
   });
 });

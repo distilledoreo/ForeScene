@@ -2,16 +2,16 @@ import * as THREE from 'three';
 import { AssetRegistry, ProjectAsset, SceneObject } from '../domain/types';
 import { getRegisteredModelAssetBytes } from './modelAssetStore';
 import {
+  LEGACY_PANOREF_MESH_MIME,
+  LEGACY_PANOREF_MESH_VERSION,
   MAX_PACKED_MESH_BYTES,
   MODEL_ASSET_URI_PREFIX,
-  PANOREF_MESH_MIME,
-  PANOREF_MESH_VERSION,
 } from './importedMeshConstants';
 export {
+  LEGACY_PANOREF_MESH_MIME,
+  LEGACY_PANOREF_MESH_VERSION,
   MAX_PACKED_MESH_BYTES,
   MODEL_ASSET_URI_PREFIX,
-  PANOREF_MESH_MIME,
-  PANOREF_MESH_VERSION,
 } from './importedMeshConstants';
 
 const HEADER_BYTES = 40;
@@ -48,7 +48,7 @@ export function encodeBinaryGrayboxMesh(positions: Float32Array, indices: Uint32
 }
 
 /**
- * Encode exact triangle positions/indices into PanoRef's small synchronous runtime format.
+ * Encode exact triangle positions/indices into ForeScene's small synchronous runtime format.
  * Materials, texture coordinates, animation and hierarchy intentionally do not belong here.
  */
 export function encodePackedGrayboxMesh(
@@ -56,7 +56,7 @@ export function encodePackedGrayboxMesh(
   indices: Uint32Array,
 ): PackedGrayboxMesh {
   const packed = encodePackedBuffer(positions, indices);
-  return { ...packed, uri: `data:${PANOREF_MESH_MIME};base64,${bytesToBase64(new Uint8Array(packed.buffer))}` };
+  return { ...packed, uri: `data:${LEGACY_PANOREF_MESH_MIME};base64,${bytesToBase64(new Uint8Array(packed.buffer))}` };
 }
 
 function encodePackedBuffer(positions: Float32Array, indices: Uint32Array): BinaryPackedGrayboxMesh {
@@ -87,7 +87,7 @@ function encodePackedBuffer(positions: Float32Array, indices: Uint32Array): Bina
   const bytes = new Uint8Array(buffer);
   bytes.set(MAGIC, 0);
   const view = new DataView(buffer);
-  view.setUint16(4, PANOREF_MESH_VERSION, true);
+  view.setUint16(4, LEGACY_PANOREF_MESH_VERSION, true);
   view.setUint16(6, 0, true);
   view.setUint32(8, vertexCount, true);
   view.setUint32(12, indices.length, true);
@@ -191,7 +191,7 @@ function acquireGeometry(asset: ProjectAsset): THREE.BufferGeometry {
 }
 
 function decodeGeometry(asset: ProjectAsset): THREE.BufferGeometry {
-  const prefix = `data:${PANOREF_MESH_MIME};base64,`;
+  const prefix = `data:${LEGACY_PANOREF_MESH_MIME};base64,`;
   if (asset.type !== 'model') {
     throw new Error('Unsupported imported mesh asset encoding.');
   }
@@ -213,7 +213,7 @@ function decodeGeometry(asset: ProjectAsset): THREE.BufferGeometry {
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const version = view.getUint16(4, true);
-  if (version !== 1 && version !== PANOREF_MESH_VERSION) {
+  if (version !== 1 && version !== LEGACY_PANOREF_MESH_VERSION) {
     throw new Error(`Imported mesh asset version ${version} is not supported.`);
   }
   const vertexCount = view.getUint32(8, true);

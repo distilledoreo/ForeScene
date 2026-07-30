@@ -1,6 +1,6 @@
 # Storage and Performance Expectations
 
-This document records **honest** capacity guidance for Continuity Stage (PanoRef).  
+This document records **honest** capacity guidance for ForeScene.  
 Every number is classified as one of:
 
 | Label | Meaning |

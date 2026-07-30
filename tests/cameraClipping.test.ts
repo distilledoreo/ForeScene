@@ -13,7 +13,7 @@ import { applyFlyCameraToPerspectiveCamera } from '../src/engine/renderers';
 import { createFinalRenderSceneOptions } from '../src/engine/finalRenderProfile';
 import { buildScene, disposeScene } from '../src/engine/sceneObjects';
 import { flyCameraFromCamera } from '../src/engine/sync';
-import { useContinuityStore } from '../src/state/useContinuityStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 import type { CameraData } from '../src/domain/types';
 
 describe('clampShotNearClip', () => {
@@ -47,30 +47,30 @@ describe('clampShotNearClip', () => {
 
 describe('shot near clip undo', () => {
   it('creates one camera undo step when near changes', () => {
-    useContinuityStore.setState({
+    useProjectStore.setState({
       project: createDefaultProject(),
       selectedShotId: undefined,
       shotCameraHistoryByShotId: {},
       shotCameraHistoryBatchDepth: 0,
       shotCameraHistoryBatchCaptured: false,
     });
-    const shotId = useContinuityStore.getState().project.shots[0].id;
-    const original = useContinuityStore.getState().project.shots[0].camera;
+    const shotId = useProjectStore.getState().project.shots[0].id;
+    const original = useProjectStore.getState().project.shots[0].camera;
     expect(original.near).toBe(DEFAULT_SHOT_NEAR_CLIP_METERS);
 
-    useContinuityStore.getState().selectShot(shotId);
+    useProjectStore.getState().selectShot(shotId);
     const nextNear = clampShotNearClip(1.5, original.far);
-    useContinuityStore.getState().updateShot(shotId, {
+    useProjectStore.getState().updateShot(shotId, {
       camera: { ...original, near: nextNear },
     });
 
-    expect(useContinuityStore.getState().project.shots[0].camera.near).toBe(1.5);
-    expect(useContinuityStore.getState().undoShotCamera()).toBe(true);
-    expect(useContinuityStore.getState().project.shots[0].camera.near).toBe(
+    expect(useProjectStore.getState().project.shots[0].camera.near).toBe(1.5);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
+    expect(useProjectStore.getState().project.shots[0].camera.near).toBe(
       DEFAULT_SHOT_NEAR_CLIP_METERS,
     );
-    expect(useContinuityStore.getState().redoShotCamera()).toBe(true);
-    expect(useContinuityStore.getState().project.shots[0].camera.near).toBe(1.5);
+    expect(useProjectStore.getState().redoShotCamera()).toBe(true);
+    expect(useProjectStore.getState().project.shots[0].camera.near).toBe(1.5);
   });
 });
 

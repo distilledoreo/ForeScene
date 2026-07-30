@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, LoaderCircle, MapPin, Sparkles, Wrench } from 'lucide-react';
 import { useThemeStore } from '../../state/useThemeStore';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { downloadDataUrl } from '../../engine/fileTransfers';
 import { downloadPanoImage } from '../../engine/panoImage';
 import {
@@ -43,13 +43,13 @@ export function SecondCaptureForkContent({
   /** Hide the small “Reference ready” eyebrow when the parent modal already titles the step. */
   compactIntro?: boolean;
 }) {
-  const project = useContinuityStore((state) => state.project);
-  const setPanoOrigin = useContinuityStore((state) => state.setPanoOrigin);
-  const setPendingSecondCapturePlan = useContinuityStore(
+  const project = useProjectStore((state) => state.project);
+  const setPanoOrigin = useProjectStore((state) => state.setPanoOrigin);
+  const setPendingSecondCapturePlan = useProjectStore(
     (state) => state.setPendingSecondCapturePlan,
   );
-  const setWorkspace = useContinuityStore((state) => state.setWorkspace);
-  const setBuildMode = useContinuityStore((state) => state.setBuildMode);
+  const setWorkspace = useProjectStore((state) => state.setWorkspace);
+  const setBuildMode = useProjectStore((state) => state.setBuildMode);
   const theme = useThemeStore((state) => state.theme);
 
   const [step, setStep] = useState<ForkStep>('choose');

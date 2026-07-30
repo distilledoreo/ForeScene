@@ -2,12 +2,12 @@ import { expect, type Page } from '@playwright/test';
 
 import { workspaceTab } from '../workspace-navigation';
 
-/** Skip splash and enter Continuity Stage from a clean browser context. */
-export async function enterContinuityStage(page: Page) {
+/** Skip splash and enter the ForeScene studio from a clean browser context. */
+export async function enterStudio(page: Page) {
   // Skip splash video so it never blocks pointer events mid-test.
   await page.addInitScript(() => {
     try {
-      window.localStorage.setItem('panoref-splash-seen', '1');
+      window.localStorage.setItem('forescene-splash-seen', '1');
     } catch {
       // ignore
     }
@@ -17,21 +17,21 @@ export async function enterContinuityStage(page: Page) {
 
   // Mode chooser appears when appMode is null after splash.
   const modeChooser = page.locator('[data-mode-chooser]');
-  const continuity = page.getByRole('button', { name: /Build continuity packages/i });
+  const studio = page.getByRole('button', { name: /Open ForeScene/i });
   if (await modeChooser.isVisible().catch(() => false)) {
-    await continuity.click();
+    await studio.click();
   } else {
     // Wait briefly in case chooser is still mounting.
     try {
       await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await continuity.click();
+      await studio.click();
     } catch {
       // Already in a mode from a previous session (should not happen with clean context).
     }
   }
 
   // Ensure any residual splash is gone.
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });
@@ -141,20 +141,20 @@ export async function waitForVerifiedSave(page: Page, timeoutMs = 90_000) {
 
 /**
  * Full browser reload that preserves IndexedDB, then wait for startup recovery
- * to restore Continuity Stage from the latest verified revision.
+ * to restore the ForeScene studio from the latest verified revision.
  */
 export async function reloadAndAwaitRecovery(page: Page) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  // Splash is skipped via enterContinuityStage init script (re-runs on navigation).
-  // Recovery sets continuity mode automatically when a verified revision exists.
+  // Splash is skipped via enterStudio init script (re-runs on navigation).
+  // Recovery sets studio mode automatically when a verified revision exists.
   const modeChooser = page.locator('[data-mode-chooser]');
   if (await modeChooser.isVisible().catch(() => false)) {
-    // Fallback: if recovery did not auto-enter continuity, choose it so we can still assert.
-    await page.getByRole('button', { name: /Build continuity packages/i }).click();
+    // Fallback: if recovery did not auto-enter studio mode, choose it so we can still assert.
+    await page.getByRole('button', { name: /Open ForeScene/i }).click();
   }
 
-  const splash = page.getByRole('dialog', { name: 'Continuity Stage splash' });
+  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
   if (await splash.isVisible().catch(() => false)) {
     await splash.click({ force: true });
     await expect(splash).toBeHidden({ timeout: 5000 });

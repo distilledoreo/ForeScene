@@ -148,7 +148,7 @@ export interface AutorigMarker {
   position: Vec3;
 }
 
-/** Axis choices for aligning an imported poseable character to Continuity Stage space. */
+/** Axis choices for aligning an imported poseable character to ForeScene space. */
 export type PoseableAxisHint = '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
 
 export interface PoseableCharacterOrientation {
@@ -247,7 +247,7 @@ export interface PoseableRigAsset {
   originalSourceAssetId?: string;
   /** Optional derived mesh used for display/skinning (may equal original for 2A). */
   sourceMeshAssetId?: string;
-  /** How the author oriented the character relative to Continuity Stage axes. */
+  /** How the author oriented the character relative to ForeScene axes. */
   orientation?: PoseableCharacterOrientation;
   /** Rest placement applied when the character is first created in the scene. */
   restTransform?: PoseableRestTransform;

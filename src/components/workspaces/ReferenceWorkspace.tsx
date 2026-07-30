@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/shallow';
 import { Check, FileDown, Hand, Settings, Sparkles, Star, Trash2 } from 'lucide-react';
 import type { PanoReference } from '../../domain/types';
 import { STYLED_PANO } from '../../domain/copy';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { preparePanoImport, downloadPanoImage } from '../../engine/panoImage';
 import { downloadDataUrl, readFileAsDataUrl } from '../../engine/fileTransfers';
@@ -59,7 +59,7 @@ export function ReferenceWorkspace() {
     requestAlignmentRetryModal,
     setWorkspace,
     setPendingSecondCapturePlan,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     activePanoId: state.activePanoId,
     panoView: state.panoView,

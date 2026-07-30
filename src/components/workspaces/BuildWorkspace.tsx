@@ -83,7 +83,7 @@ import {
 } from '../../engine/sceneObjects';
 import { getSceneObjectStagingRole } from '../../engine/shotSceneState';
 import { resolveWorkspacePrimaryAction } from '../../engine/workflow';
-import { BuildMode, useContinuityStore } from '../../state/useContinuityStore';
+import { BuildMode, useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useThemeStore } from '../../state/useThemeStore';
 import { ContextualPanel } from '../common/ContextualPanel';
@@ -211,7 +211,7 @@ export function BuildWorkspace({
     buildHistoryPast,
     buildHistoryFuture,
     pendingSecondCapturePlan,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     selectedObjectIds: state.selectedObjectIds,
     buildClipboard: state.buildClipboard,
@@ -438,14 +438,14 @@ export function BuildWorkspace({
       if (externalPayload) {
         payload = externalPayload;
       } else if (systemClipboardSyncedAt && systemClipboardSyncedAt === buildClipboard?.copiedAt) {
-        setClipboardStatus('The system clipboard does not contain Continuity Stage objects.');
+        setClipboardStatus('The system clipboard does not contain ForeScene objects.');
         return;
       }
     } catch {
       // Permission denial is expected in non-secure or restricted contexts; use the app clipboard.
     }
     if (!payload) {
-      setClipboardStatus('No Continuity Stage objects are available to paste.');
+      setClipboardStatus('No ForeScene objects are available to paste.');
       return;
     }
     const pasted = pasteBuildObjects(payload, { inPlace });
@@ -656,7 +656,7 @@ useEffect(() => {
       }
       const merged = mergeImportedRigOntoTarget({ targetRig: resolved.rig, imported });
       updatePoseableRigAsset(resolved.rigAsset.id, merged);
-      useContinuityStore.setState((current) => ({
+      useProjectStore.setState((current) => ({
         project: {
           ...current.project,
           assets: {
@@ -668,7 +668,7 @@ useEffect(() => {
           },
         },
       }));
-      hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+      hydrateAutoriggedCharactersFromAssets(useProjectStore.getState().project.assets);
       setCharacterEditMode('move');
       setRigPackageStatus('Rig imported');
     } catch (error) {
@@ -1346,14 +1346,14 @@ useEffect(() => {
               void generateSkinWeightsForRigAsset({
                 rig: next,
                 sourceAssetId: sourceId,
-                assets: useContinuityStore.getState().project.assets,
+                assets: useProjectStore.getState().project.assets,
                 regionOverrides: options?.regionOverrides,
                 skinBuffers: options?.skinBuffers,
               }).then(async ({ rig: skinnedRig, skinAsset, regionAsset }) => {
-                const state = useContinuityStore.getState();
+                const state = useProjectStore.getState();
                 state.updatePoseableRigAsset(rigAsset.id, skinnedRig);
                 // Register skin (+ optional region-map) binary assets without a separate history step API.
-                useContinuityStore.setState((current) => ({
+                useProjectStore.setState((current) => ({
                   project: {
                     ...current.project,
                     assets: {
@@ -1366,9 +1366,9 @@ useEffect(() => {
                   },
                 }));
                 // Re-hydrate adapter so the next viewport rebuild uses skinned mesh + gizmos.
-                hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+                hydrateAutoriggedCharactersFromAssets(useProjectStore.getState().project.assets);
                 const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
-                await ensureAutoriggedCharactersForProject(useContinuityStore.getState().project);
+                await ensureAutoriggedCharactersForProject(useProjectStore.getState().project);
                 setCharacterEditMode('move');
               }).catch(() => undefined);
             }}
@@ -1640,7 +1640,7 @@ function SelectionToolsChrome({
                   className="rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent disabled:opacity-40"
                   data-build-export-rig
                   disabled={!canShareRig}
-                  title={canShareRig ? 'Save this character’s rig as a .panorig file' : 'Finish rigging before saving'}
+                  title={canShareRig ? 'Save this character’s rig as a .fsrig file' : 'Finish rigging before saving'}
                   onClick={onExportRig}
                 >
                   <span className="inline-flex items-center gap-1">
@@ -1652,7 +1652,7 @@ function SelectionToolsChrome({
                   type="button"
                   className="rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
                   data-build-import-rig
-                  title="Import a previously saved .panorig rig onto this character"
+                  title="Import a previously saved .fsrig (or legacy .panorig) rig onto this character"
                   onClick={onImportRig}
                 >
                   <span className="inline-flex items-center gap-1">

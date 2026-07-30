@@ -56,7 +56,7 @@ import {
 } from '../../engine/keyframePreviewThumbs';
 import { canUseProjectedAppearance } from '../../engine/projectedStyle';
 import { getPeopleRenderVariants, getPeopleVariantPath } from '../../engine/peopleExport';
-import { useContinuityStore } from '../../state/useContinuityStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import type { useVideoAuthoringController } from '../../hooks/useVideoAuthoringController';
 
@@ -171,7 +171,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     attachCameraMoveVideoToShot,
     attachKeyframePreviewToShot,
     setShotCameraFlying,
-  } = useContinuityStore(useShallow((state) => ({
+  } = useProjectStore(useShallow((state) => ({
     project: state.project,
     addCamera: state.addCamera,
     updateShot: state.updateShot,
@@ -286,7 +286,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     if (!selectedShot) return;
     const camera = getEffectiveCamera();
     if (!camera) return;
-    const latest = useContinuityStore.getState().project;
+    const latest = useProjectStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     const nextKeyframes = setTwoPointCameraKeyframe({
       keyframes: latestShot.cameraKeyframes,
@@ -541,11 +541,11 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     const { keyframeId, camera, objectOverrides, shotOverride } = params;
     const selectedShotId = selectedShot?.id;
     const shot = shotOverride
-      ?? useContinuityStore.getState().project.shots.find((item) => item.id === selectedShotId)
+      ?? useProjectStore.getState().project.shots.find((item) => item.id === selectedShotId)
       ?? selectedShot;
     if (!shot) return;
     const generation = keyframeThumbGenerationRef.current;
-    const latestProject = useContinuityStore.getState().project;
+    const latestProject = useProjectStore.getState().project;
     // Prefer explicit keyframe snapshot; fall back to existing keyframe data, then shot-level.
     const keyframe = shot.cameraKeyframes.find((item) => item.id === keyframeId);
     const resolvedOverrides = objectOverrides
@@ -602,7 +602,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
-    const latest = useContinuityStore.getState().project;
+    const latest = useProjectStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     const wasEmpty = latestShot.cameraKeyframes.length === 0;
     const duration = cameraMoveDurationSeconds;
@@ -738,7 +738,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
-    const latest = useContinuityStore.getState().project;
+    const latest = useProjectStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     const beforeIds = new Set(latestShot.cameraKeyframes.map((keyframe) => keyframe.id));
     const nextKeyframes = insertCameraKeyframeInSegment({
@@ -791,7 +791,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     stopCameraMovePreview();
     const camera = getEffectiveCamera();
     if (!camera) return;
-    const latest = useContinuityStore.getState().project;
+    const latest = useProjectStore.getState().project;
     const latestShot = latest.shots.find((item) => item.id === selectedShot.id) ?? selectedShot;
     // Prefer live viewport inspection overrides when the user staged objects after selection.
     const objectSnapshot = viewportObjectOverrides !== undefined
