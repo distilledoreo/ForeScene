@@ -3,11 +3,11 @@ import { isProjectBackupFileName, projectDownloadFileName } from '../config/bran
 import { normalizeProductionShotId } from '../domain/shotIdentity';
 import {
   DEFAULT_CAMERA_HEIGHT_METERS,
-  normalizeCharacterPassExportSettings,
   normalizeProjectSettings,
   normalizeProjectWorkflow,
-  normalizeShotDepthSettings,
+  normalizeShotExportSettings,
 } from '../domain/defaults';
+import { ensureProjectExportConfiguration } from './exportConfiguration';
 import { normalizeHumanPose, normalizePoseableCharacterSource } from './humanPose';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { hydrateAutoriggedCharactersFromAssets } from './autoriggedPoseableCharacter';
@@ -42,7 +42,8 @@ export function serializeProject(project: LocationProject): string {
 }
 
 function createPortableProject(project: LocationProject): LocationProject {
-  const withoutEphemeral = stripEphemeralKeyframePreviewUris(project);
+  const withExportConfig = ensureProjectExportConfiguration(project);
+  const withoutEphemeral = stripEphemeralKeyframePreviewUris(withExportConfig);
   const portable = structuredClone(pruneUnreferencedProjectAssets(withoutEphemeral));
   portable.schemaVersion = CURRENT_SCHEMA_VERSION;
   portable.productVersion = portable.productVersion ?? '0.1.0';
@@ -172,7 +173,7 @@ export function parseProject(json: string): LocationProject {
         assets: normalizeProjectAssets(parsed.assets.assets),
       },
     };
-    const migrated = migrateProjectToCurrent(normalized);
+    const migrated = ensureProjectExportConfiguration(migrateProjectToCurrent(normalized));
     hydrateAutoriggedCharactersFromAssets(migrated.assets);
     return migrated;
   } catch (error) {
@@ -288,11 +289,6 @@ function normalizeShotObjectOverrides(value: unknown): NonNullable<Shot['objectO
   return result;
 }
 
-function normalizePeopleExportMode(value: unknown): Shot['exportSettings']['peopleExportMode'] {
-  if (value === 'clean_plate' || value === 'both') return value;
-  return 'with_people';
-}
-
 function normalizeShot(shot: Shot): Shot {
   const legacyExportSettings = shot.exportSettings as Shot['exportSettings'] & {
     includeContinuityControlView?: boolean;
@@ -318,10 +314,10 @@ function normalizeShot(shot: Shot): Shot {
       objectOverrides: normalizeShotObjectOverrides(keyframe.objectOverrides),
     })),
     objectOverrides: normalizeShotObjectOverrides(shot.objectOverrides),
-    exportSettings: {
+    exportSettings: normalizeShotExportSettings({
       ...exportSettings,
-      peopleExportMode: normalizePeopleExportMode(legacyExportSettings.peopleExportMode),
-      characterPass: normalizeCharacterPassExportSettings(legacyExportSettings.characterPass),
+      peopleExportMode: legacyExportSettings.peopleExportMode,
+      characterPass: legacyExportSettings.characterPass,
       includeAiResultFrame: legacyExportSettings.includeAiResultFrame ?? legacyExportSettings.includeSkinnedFrame ?? true,
       includeCameraMoveVideo: legacyExportSettings.includeCameraMoveVideo ?? true,
       includeCameraMoveReferenceFrames: legacyExportSettings.includeCameraMoveReferenceFrames ?? true,
@@ -330,8 +326,9 @@ function normalizeShot(shot: Shot): Shot {
         legacyExportSettings.includeProjectedCameraMoveReferenceFrames ?? true,
       includeProjectedCameraMoveVideo:
         legacyExportSettings.includeProjectedCameraMoveVideo ?? true,
-      depth: normalizeShotDepthSettings(legacyExportSettings.depth),
-    },
+      depth: legacyExportSettings.depth,
+    }),
+    exportOverrides: shot.exportOverrides,
     assets: {
       ...shot.assets,
       aiResultFrameAssetId: shot.assets.aiResultFrameAssetId ?? legacyAssets.skinnedFrameAssetId ?? shot.assets.finalBaseFrameAssetId,

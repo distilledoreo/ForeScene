@@ -445,6 +445,64 @@ export interface ShotExportSettings {
   depth?: ShotDepthSettings;
 }
 
+/** Built-in export profiles that populate scene defaults (extensible for providers later). */
+export type ExportProfileId =
+  | 'ai-generation'
+  | 'full-production'
+  | 'character-compositing'
+  | 'custom';
+
+/** Package folder layout written by the exporter. */
+export type ExportPackageFormat = 'forescene-v2' | 'legacy-v1';
+
+/** Current version of the project-level export configuration document. */
+export const EXPORT_CONFIGURATION_SCHEMA_VERSION = 2 as const;
+export type ExportConfigurationSchemaVersion = typeof EXPORT_CONFIGURATION_SCHEMA_VERSION;
+
+/**
+ * Sparse per-shot differences from scene export defaults.
+ * Only explicitly customized leaf values are stored; absent keys inherit.
+ * Explicit `false` / `0` values are preserved.
+ */
+export type CharacterPassExportSettingsOverride = {
+  [K in keyof CharacterPassExportSettings]?: CharacterPassExportSettings[K];
+};
+
+export type ShotDepthSettingsOverride = {
+  [K in keyof ShotDepthSettings]?: ShotDepthSettings[K];
+};
+
+export interface ExportSettingsOverride {
+  width?: number;
+  height?: number;
+  peopleExportMode?: PeopleExportMode;
+  characterPass?: CharacterPassExportSettingsOverride;
+  includeViewport?: boolean;
+  includeProjectedViewport?: boolean;
+  includeProjectedCameraMoveReferenceFrames?: boolean;
+  includeProjectedCameraMoveVideo?: boolean;
+  includeAiResultFrame?: boolean;
+  includePanoCrop?: boolean;
+  includeFullPano?: boolean;
+  includeGrayboxPano?: boolean;
+  includeCameraMoveVideo?: boolean;
+  includeCameraMoveReferenceFrames?: boolean;
+  includeMetadata?: boolean;
+  includePrompt?: boolean;
+  depth?: ShotDepthSettingsOverride;
+}
+
+/**
+ * Project-level export configuration: scene defaults inherited by every shot,
+ * plus package/profile metadata. Shot-specific differences live in `Shot.exportOverrides`.
+ */
+export interface ProjectExportConfiguration {
+  schemaVersion: ExportConfigurationSchemaVersion;
+  activeProfileId: ExportProfileId;
+  defaults: ShotExportSettings;
+  packageFormat: ExportPackageFormat;
+}
+
 /** Multi-origin selection after per-projector occlusion and quality scoring. */
 export type ProjectorBlendMode =
   | 'primary_only'
@@ -521,7 +579,17 @@ export interface Shot {
   linkedPanoId?: string;
   panoCrop?: PanoCropSettings;
   landmarkIds: string[];
+  /**
+   * Fully resolved export settings for this shot (scene defaults + overrides).
+   * Always rematerialized from `exportOverrides` against project export defaults
+   * so existing exporters can keep reading `shot.exportSettings` directly.
+   */
   exportSettings: ShotExportSettings;
+  /**
+   * Sparse leaf overrides relative to `project.exportConfiguration.defaults`.
+   * Absent keys inherit; only explicit customizations are stored.
+   */
+  exportOverrides?: ExportSettingsOverride;
   promptOverrides: PromptOverrides;
   status: ShotStatus;
   assets: ShotAssetRefs;
@@ -595,6 +663,11 @@ export interface LocationProject {
   assets: AssetRegistry;
   settings: ProjectSettings;
   workflow: ProjectWorkflow;
+  /**
+   * Scene-level export defaults + package/profile metadata.
+   * Present after load/normalize; older projects migrate into this shape.
+   */
+  exportConfiguration?: ProjectExportConfiguration;
 }
 
 export interface PanoViewState {
