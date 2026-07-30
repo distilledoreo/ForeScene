@@ -13,6 +13,7 @@ import {
   PackageExportProgress,
 } from '../../engine/packageExport';
 import { countExportOverrideLeaves } from '../../engine/exportConfiguration';
+import { countProducedArtifacts, createExportPlan, formatPlanBlockingErrors, planHasBlockingErrors } from '../../engine/exportPlan';
 import { getExportSelectionWarnings, getShotWarnings } from '../../engine/warnings';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -80,6 +81,15 @@ export function ExportWorkspace() {
     () => getExportSelectionWarnings(project, selectedShots),
     [project, selectedShots],
   );
+  const exportPlan = useMemo(
+    () => createExportPlan(project, selectedShots),
+    [project, selectedShots],
+  );
+  const blockingIssues = useMemo(
+    () => exportPlan.issues.filter((issue) => issue.severity === 'error'),
+    [exportPlan],
+  );
+  const exportBlocked = planHasBlockingErrors(exportPlan);
   const primaryAction = useMemo(
     () => resolveWorkspacePrimaryAction({
       project,
@@ -187,12 +197,25 @@ export function ExportWorkspace() {
       const exportProject = verified.project;
       const shotsToExport = exportProject.shots.filter((shot) => selectedShotIds.has(shot.id));
       if (shotsToExport.length === 0) return;
+      const verifiedPlan = createExportPlan(
+        exportProject,
+        shotsToExport,
+        { packageType: shotsToExport.length === 1 ? 'current-shot' : 'selected-shots' },
+      );
+      if (planHasBlockingErrors(verifiedPlan)) {
+        const firstShotId = verifiedPlan.issues.find((issue) => issue.severity === 'error' && issue.shotId)?.shotId;
+        if (firstShotId) selectShot(firstShotId);
+        setExportUiPhase('failed');
+        setExportError(formatPlanBlockingErrors(verifiedPlan) || 'Export blocked by preflight errors.');
+        return;
+      }
       controller = beginExport();
       setExportingShotId(shotsToExport[0]?.id);
       // One download for N shots — avoids browser multi-download blocking.
       const result = await buildMultiShotPackage(exportProject, shotsToExport, {
         signal: controller.signal,
         onProgress: handlePackageProgress,
+        plan: verifiedPlan,
       });
       downloadBlob(result.blob, result.fileName);
       setLastExport(result.manifestPaths);
@@ -243,11 +266,19 @@ export function ExportWorkspace() {
       const exportProject = verified.project;
       const shotToExport = exportProject.shots.find((shot) => shot.id === selectedShot?.id);
       if (!shotToExport) return;
+      const verifiedPlan = createExportPlan(exportProject, [shotToExport], { packageType: 'current-shot' });
+      if (planHasBlockingErrors(verifiedPlan)) {
+        selectShot(shotToExport.id);
+        setExportUiPhase('failed');
+        setExportError(formatPlanBlockingErrors(verifiedPlan) || 'Export blocked by preflight errors.');
+        return;
+      }
       controller = beginExport();
       setExportingShotId(shotToExport.id);
       const result = await buildShotPackage(exportProject, shotToExport, {
         signal: controller.signal,
         onProgress: handlePackageProgress,
+        plan: verifiedPlan,
       });
       downloadBlob(result.blob, result.fileName);
       setLastExport(result.manifestPaths);
@@ -360,6 +391,67 @@ export function ExportWorkspace() {
             </div>
 
             <div className="mt-3 shrink-0 space-y-2">
+              {selectedShots.length > 0 && (
+                <div
+                  data-export-plan-summary
+                  className="rounded-lg border border-subtle bg-surface-muted/50 px-3 py-2 text-[11px] text-secondary"
+                >
+                  <div className="font-semibold text-primary">
+                    {exportPlan.summary.shotCount} shot{exportPlan.summary.shotCount === 1 ? '' : 's'} selected
+                  </div>
+                  <ul className="mt-1 space-y-0.5 text-muted">
+                    <li>
+                      {countProducedArtifacts(exportPlan, 'clay-viewport')} clay ·{' '}
+                      {countProducedArtifacts(exportPlan, 'projected-viewport')} projected ·{' '}
+                      {countProducedArtifacts(exportPlan, 'depth-viewport')} depth stills
+                    </li>
+                    <li>
+                      Estimated output · {exportPlan.estimatedFileCount} files
+                      {exportPlan.summary.overrideShotCount > 0
+                        ? ` · ${exportPlan.summary.overrideShotCount} with shot overrides`
+                        : ''}
+                    </li>
+                    {exportPlan.summary.warningCount > 0 && (
+                      <li className="text-amber-700 dark:text-amber-300">
+                        {exportPlan.summary.warningCount} preflight warning
+                        {exportPlan.summary.warningCount === 1 ? '' : 's'}
+                      </li>
+                    )}
+                    {exportPlan.summary.errorCount > 0 && (
+                      <li className="text-red-600 dark:text-red-300">
+                        {exportPlan.summary.errorCount} blocking error
+                        {exportPlan.summary.errorCount === 1 ? '' : 's'}
+                      </li>
+                    )}
+                  </ul>
+                  {blockingIssues.length > 0 && (
+                    <ul data-export-plan-blocking-errors className="mt-2 space-y-1 border-t border-subtle pt-2">
+                      {blockingIssues.map((issue) => {
+                        const shot = issue.shotId
+                          ? project.shots.find((entry) => entry.id === issue.shotId)
+                          : undefined;
+                        return (
+                          <li key={issue.id} className="text-red-600 dark:text-red-300">
+                            <span>{issue.message}</span>
+                            {shot && (
+                              <>
+                                {' '}
+                                <button
+                                  type="button"
+                                  className="font-medium underline underline-offset-2 hover:text-red-500"
+                                  onClick={() => selectShot(shot.id)}
+                                >
+                                  {getShotPrimaryLabel(shot)}
+                                </button>
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
               {manifest && (
                 <div data-export-manifest-preview className="max-h-8 space-y-0.5 overflow-hidden opacity-70">
                   <div className="text-[10px] font-medium text-secondary">
@@ -501,7 +593,7 @@ export function ExportWorkspace() {
                   ? 'One ZIP with a folder per shot — no multi-download blocking.'
                   : 'Download a continuity ZIP handoff package. No need to import results back.'}
                 onClick={() => void exportSelectedShots()}
-                disabled={isExportingPackage || selectedShotIds.size === 0}
+                disabled={isExportingPackage || selectedShotIds.size === 0 || exportBlocked}
                 highlighted={primaryAction?.id === 'export-final-zip'}
                 layout="inline"
               />
