@@ -12,7 +12,18 @@ export interface AgentSelectionState {
 }
 
 export function projectFingerprint(project: LocationProject): string {
-  return `${project.id}:${project.updatedAt}`;
+  // Include structural tokens so same-millisecond edits still invalidate undo.
+  const objectIds = project.scene.objects.map((object) => object.id).join(',');
+  const shotIds = project.shots.map((shot) => shot.id).join(',');
+  return [
+    project.id,
+    project.updatedAt,
+    project.name,
+    String(project.scene.objects.length),
+    String(project.shots.length),
+    objectIds,
+    shotIds,
+  ].join('|');
 }
 
 export function emptyPlanDiff(): AgentPlanDiff {

@@ -11,11 +11,10 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { buildAgentCapabilities } from './capabilities';
 import { previewAgentPlan } from './planCompiler';
+import { applyAgentPlan, undoLastAgentPlan } from './transaction';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
-  notImplementedDiagnostic,
-  writeAccessRequiredDiagnostic,
 } from './diagnostics';
 import {
   inspectObjectSnapshot,
@@ -305,32 +304,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return result;
     },
 
-    async applyPlan(_plan: unknown): Promise<AgentPlanApplyResult> {
-      const status = getForeSceneAgentStatus();
-      if (!status.writeAccess) {
-        return {
-          ok: false,
-          diagnostics: [writeAccessRequiredDiagnostic('applyPlan')],
-        };
-      }
-      return {
-        ok: false,
-        diagnostics: [notImplementedDiagnostic('applyPlan')],
-      };
+    async applyPlan(plan: unknown): Promise<AgentPlanApplyResult> {
+      return applyAgentPlan(plan);
     },
 
     async undoLastPlan(): Promise<AgentPlanApplyResult> {
-      const status = getForeSceneAgentStatus();
-      if (!status.writeAccess) {
-        return {
-          ok: false,
-          diagnostics: [writeAccessRequiredDiagnostic('undoLastPlan')],
-        };
-      }
-      return {
-        ok: false,
-        diagnostics: [notImplementedDiagnostic('undoLastPlan')],
-      };
+      return undoLastAgentPlan();
     },
 
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {

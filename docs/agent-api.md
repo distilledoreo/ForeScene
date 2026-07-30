@@ -7,15 +7,15 @@ Playwright hosts and observes the browser. The Agent API performs exact project 
 ## Status
 
 **Milestone 1 — read-only vertical slice** ✓  
-**Milestone 2 — plan validation and preview** ✓
+**Milestone 2 — plan validation and preview** ✓  
+**Milestone 3 — atomic apply + undo** ✓
 
 Available now:
 
 - Inspection APIs from milestone 1
 - `previewPlan(plan)` — parse, resolve refs, apply on a `structuredClone`, return summary/diff
-- `npm run agent:preview -- --plan path/to/plan.json`
-
-Mutations (`applyPlan` / `undoLastPlan`) still require write access and return `not_implemented` until the atomic-commit milestone.
+- `applyPlan(plan)` / `undoLastPlan()` — protected atomic commit via `runDestructiveProjectMutation`
+- `npm run agent:inspect` / `agent:preview` / `agent:apply`
 
 ## Quick start
 
@@ -87,9 +87,22 @@ Plan-local `ref` values bind created entities so later commands can target them.
 
 Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale projects.
 
+## Apply and undo
+
+`applyPlan` requires read-write mode. It:
+
+1. Prepares the plan on a clone (same path as preview)
+2. Confirms the live fingerprint is unchanged
+3. Calls `runDestructiveProjectMutation()` (pre-change recovery snapshot)
+4. Replaces project + selection/workspace in one Zustand `setState`
+5. Records an in-memory history entry for `undoLastPlan()`
+
+`undoLastPlan()` restores the preceding project only when the current fingerprint still matches the applied result. Manual edits after apply refuse undo.
+
+Enable writes from the Project menu (**Enable Agent Writes**) or CLI `--write`. The header badge **Stop** button immediately returns to read-only.
+
 ## Deferred / not in this milestone
 
-- Atomic `applyPlan` / `undoLastPlan` commits
 - Landmark create/update/delete commands
 - Export configuration writes
 - Package download control

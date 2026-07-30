@@ -19,6 +19,7 @@ import {
   Save,
   ShieldCheck,
   Sun,
+  Terminal,
   Upload,
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
@@ -321,6 +322,27 @@ export default function App() {
                           setProjectMenuOpen(false);
                         }}
                       />
+                      {agentControlMode !== 'read-write' ? (
+                        <ProjectMenuButton
+                          icon={<Terminal className="h-4 w-4" />}
+                          label="Enable Agent Writes"
+                          onClick={() => {
+                            setAgentControlMode('read-write');
+                            setProjectMenuOpen(false);
+                          }}
+                          data-agent-control-enable
+                        />
+                      ) : (
+                        <ProjectMenuButton
+                          icon={<Terminal className="h-4 w-4" />}
+                          label="Disable Agent Writes"
+                          onClick={() => {
+                            setAgentControlMode('read-only');
+                            setProjectMenuOpen(false);
+                          }}
+                          data-agent-control-disable
+                        />
+                      )}
                       <ProjectMenuButton
                         icon={<FileJson className="h-4 w-4" />}
                         label="Export Project Backup"

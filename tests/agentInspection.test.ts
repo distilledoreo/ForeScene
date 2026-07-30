@@ -16,6 +16,7 @@ import {
 import { createExportPlan } from '../src/engine/exportPlan';
 import { createForeSceneBrowserApi } from '../src/engine/agent/browserApi';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
+import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useProjectStore } from '../src/state/useProjectStore';
 
 describe('agent inspection snapshots', () => {
@@ -145,16 +146,34 @@ describe('agent browser API (store-backed)', () => {
 
   it('setControlMode toggles writeAccess for the session', async () => {
     useAgentControlStore.setState({ controlMode: 'read-only' });
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
+      await mutation();
+      const project = useProjectStore.getState().project;
+      return {
+        project: structuredClone(project),
+        revision: {
+          id: 'rev_test',
+          projectId: project.id,
+          kind: 'autosave',
+          reason: 'test',
+          createdAt: new Date().toISOString(),
+          manifest: '{}',
+          resources: { projectAssetKeys: [], modelAssetKeys: [] },
+        },
+      };
+    });
     const api = createForeSceneBrowserApi();
     expect(api.getStatus().writeAccess).toBe(false);
     api.setControlMode('read-write');
     expect(api.getStatus().writeAccess).toBe(true);
     const apply = await api.applyPlan({
       version: 1,
-      commands: [{ op: 'workspace.open', workspace: 'build' }],
+      commands: [{ op: 'project.updateInfo', name: 'Applied Name' }],
     });
-    expect(apply.diagnostics[0]!.code).toBe('not_implemented');
+    expect(apply.ok).toBe(true);
+    expect(useProjectStore.getState().project.name).toBe('Applied Name');
     api.setControlMode('read-only');
     expect(api.getStatus().writeAccess).toBe(false);
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(undefined);
   });
 });
