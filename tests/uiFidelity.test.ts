@@ -331,6 +331,10 @@ describe('ui revamp fidelity surfaces', () => {
     expect(exportSettingsPanel).toContain('Customize this shot');
     expect(exportSettingsPanel).toContain('Reset to scene settings');
     expect(exportSettingsPanel).toContain('data-export-inheritance-badge');
+    expect(exportSettingsPanel).toContain('draftDimensions');
+    expect(exportSettingsPanel).toContain('data-export-nested-boolean-field');
+    expect(exportSettingsPanel).toContain('characterPass.includeMotion');
+    expect(exportSettingsPanel).toContain('depth.includeViewportStill');
   });
 
   it('uses camera-style bottom chrome without a floating shot dossier', () => {

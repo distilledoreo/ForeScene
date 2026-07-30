@@ -176,6 +176,8 @@ export function ExportSettingsPanel({
   promoteShotExportToSceneDefaults: (shotId: string) => void;
 }) {
   const [context, setContext] = useState<ExportSettingsContext>('scene');
+  /** Local drafts so Custom width/height can be edited before differing from scene defaults. */
+  const [draftDimensions, setDraftDimensions] = useState<{ width?: number; height?: number }>({});
   const sceneDefaults = project.exportConfiguration?.defaults;
   const settings = context === 'scene'
     ? sceneDefaults
@@ -186,6 +188,11 @@ export function ExportSettingsPanel({
     () => [...selectedShotIds].filter((id) => id !== selectedShot?.id),
     [selectedShotIds, selectedShot?.id],
   );
+
+  // Drop drafts when switching context/shot so stale custom editors do not linger.
+  React.useEffect(() => {
+    setDraftDimensions({});
+  }, [context, selectedShot?.id]);
 
   if (!settings || !sceneDefaults) {
     return <p className="text-sm text-secondary">Select a shot to configure export settings.</p>;
@@ -308,32 +315,57 @@ export function ExportSettingsPanel({
       );
     }
     const overridden = isExportFieldOverridden(selectedShot?.exportOverrides, key);
+    const drafting = draftDimensions[key] !== undefined;
+    const showCustom = overridden || drafting;
+    const inputValue = drafting ? draftDimensions[key]! : value;
     return (
-      <div>
+      <div data-export-dimension-field={key}>
         <FieldHeader
           label={label}
           path={key}
           context={context}
           shot={selectedShot}
-          onReset={resetField}
+          onReset={(path) => {
+            setDraftDimensions((current) => {
+              const next = { ...current };
+              delete next[key];
+              return next;
+            });
+            resetField(path);
+          }}
         />
         <div className="space-y-2">
           <Select
-            value={overridden ? 'custom' : 'inherit'}
+            value={showCustom ? 'custom' : 'inherit'}
             onChange={(event) => {
-              if (event.target.value === 'inherit') resetField(key);
-              else patchResolved({ [key]: value });
+              if (event.target.value === 'inherit') {
+                setDraftDimensions((current) => {
+                  const next = { ...current };
+                  delete next[key];
+                  return next;
+                });
+                resetField(key);
+                return;
+              }
+              // Reveal the input immediately; persist only once the value differs.
+              setDraftDimensions((current) => ({ ...current, [key]: value }));
             }}
             data-export-dimension-mode={key}
           >
             <option value="inherit">Use scene setting ({sceneDefaults[key]})</option>
             <option value="custom">Custom value</option>
           </Select>
-          {overridden && (
+          {showCustom && (
             <TextInput
               type="number"
-              value={value}
-              onChange={(event) => patchResolved({ [key]: Number(event.target.value) })}
+              value={inputValue}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                setDraftDimensions((current) => ({ ...current, [key]: next }));
+                if (Number.isFinite(next) && next > 0 && next !== sceneDefaults[key]) {
+                  patchResolved({ [key]: next });
+                }
+              }}
               data-export-dimension={key}
             />
           )}
@@ -341,6 +373,65 @@ export function ExportSettingsPanel({
       </div>
     );
   };
+
+  const nestedBooleanControl = (
+    path: ExportSettingFieldPath,
+    label: string,
+    value: boolean,
+    sceneValue: boolean,
+    onSet: (next: boolean) => void,
+    options: { disabled?: boolean; dataAttr?: string } = {},
+  ) => {
+    if (context === 'scene') {
+      return (
+        <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
+          <input
+            type="checkbox"
+            checked={value}
+            disabled={options.disabled}
+            onChange={(event) => onSet(event.target.checked)}
+            className="accent-[var(--accent)]"
+            data-export-nested-boolean={path}
+            {...(options.dataAttr ? { [options.dataAttr]: true } : {})}
+          />
+          {label}
+        </label>
+      );
+    }
+    const overridden = isExportFieldOverridden(selectedShot?.exportOverrides, path);
+    const selectValue = overridden ? (value ? 'true' : 'false') : 'inherit';
+    return (
+      <div className="space-y-1" data-export-nested-boolean-field={path}>
+        <FieldHeader
+          label={label}
+          path={path}
+          context={context}
+          shot={selectedShot}
+          onReset={resetField}
+        />
+        <Select
+          value={selectValue}
+          disabled={options.disabled}
+          onChange={(event) => {
+            const next = event.target.value as 'inherit' | 'true' | 'false';
+            if (next === 'inherit') resetField(path);
+            else onSet(next === 'true');
+          }}
+          data-export-nested-boolean={path}
+          {...(options.dataAttr ? { [options.dataAttr]: true } : {})}
+        >
+          <option value="inherit">
+            Use scene setting ({sceneValue ? 'Enabled' : 'Disabled'})
+          </option>
+          <option value="true">Enabled</option>
+          <option value="false">Disabled</option>
+        </Select>
+      </div>
+    );
+  };
+
+  const sceneCharacter = normalizeCharacterPassExportSettings(sceneDefaults.characterPass);
+  const sceneDepth = normalizeShotDepthSettings(sceneDefaults.depth);
 
   return (
     <div className="space-y-4" data-export-settings-panel>
@@ -495,27 +586,15 @@ export function ExportSettingsPanel({
 
       <Section title="Character and compositing">
         <div className="space-y-2 rounded-xl border border-subtle p-3" data-export-character-pass>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium text-primary">Characters-only pass</p>
-            {context === 'shot' && (
-              <InheritanceBadge
-                overridden={isExportFieldOverridden(selectedShot?.exportOverrides, 'characterPass.enabled')}
-              />
-            )}
-          </div>
-          <label className="flex items-center gap-2 text-sm text-secondary">
-            <input
-              type="checkbox"
-              checked={characterPass.enabled}
-              onChange={(event) => writeCharacter({
-                ...characterPass,
-                enabled: event.target.checked,
-              })}
-              className="accent-[var(--accent)]"
-              data-export-character-pass-enabled
-            />
-            Include character-only pass
-          </label>
+          <p className="text-sm font-medium text-primary">Characters-only pass</p>
+          {nestedBooleanControl(
+            'characterPass.enabled',
+            'Include character-only pass',
+            characterPass.enabled,
+            sceneCharacter.enabled,
+            (enabled) => writeCharacter({ ...characterPass, enabled }),
+            { dataAttr: 'data-export-character-pass-enabled' },
+          )}
           {characterPass.enabled && (
             <>
               {selectedShot && !hasCharacters && (
@@ -526,62 +605,93 @@ export function ExportSettingsPanel({
                   No visible characters in this shot — character outputs will be skipped.
                 </p>
               )}
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Still</p>
-                <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={characterPass.includeStill}
-                    onChange={(event) => writeCharacter({
-                      ...characterPass,
-                      includeStill: event.target.checked,
-                    })}
-                    className="accent-[var(--accent)]"
-                    data-export-character-pass-still
-                  />
-                  Transparent PNG
-                </label>
+                {nestedBooleanControl(
+                  'characterPass.includeStill',
+                  'Transparent PNG',
+                  characterPass.includeStill,
+                  sceneCharacter.includeStill,
+                  (includeStill) => writeCharacter({ ...characterPass, includeStill }),
+                  { dataAttr: 'data-export-character-pass-still' },
+                )}
               </div>
               <div className="space-y-2">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Motion</p>
-                <Field
-                  label="Format"
-                  hint={hasMove || context === 'scene'
-                    ? undefined
-                    : 'Capture start and end camera keyframes to enable motion export.'}
-                >
-                  <Select
-                    value={characterPass.motionFormat}
-                    disabled={context === 'shot' && (!hasMove || !characterPass.includeMotion)}
-                    onChange={(event) => writeCharacter({
-                      ...characterPass,
-                      motionFormat: event.target.value as CharacterMotionExportFormat,
-                    })}
-                    data-export-character-pass-motion-format
-                  >
-                    <option value="green_mp4">Green-screen MP4</option>
-                    <option value="transparent_png_sequence">Transparent PNG sequence</option>
-                    <option value="both">MP4 + PNG sequence</option>
-                  </Select>
-                </Field>
-                <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={characterPass.includeMotion}
-                    disabled={context === 'shot' && !hasMove}
-                    onChange={(event) => writeCharacter({
-                      ...characterPass,
-                      includeMotion: event.target.checked,
-                    })}
-                    className="accent-[var(--accent)]"
-                    data-export-character-pass-motion
+                {nestedBooleanControl(
+                  'characterPass.includeMotion',
+                  'Include motion output',
+                  characterPass.includeMotion,
+                  sceneCharacter.includeMotion,
+                  (includeMotion) => writeCharacter({ ...characterPass, includeMotion }),
+                  { disabled: context === 'shot' && !hasMove, dataAttr: 'data-export-character-pass-motion' },
+                )}
+                <div>
+                  <FieldHeader
+                    label="Format"
+                    path="characterPass.motionFormat"
+                    context={context}
+                    shot={selectedShot}
+                    onReset={resetField}
                   />
-                  Include motion output
-                </label>
+                  {context === 'scene' ? (
+                    <Select
+                      value={characterPass.motionFormat}
+                      onChange={(event) => writeCharacter({
+                        ...characterPass,
+                        motionFormat: event.target.value as CharacterMotionExportFormat,
+                      })}
+                      data-export-character-pass-motion-format
+                    >
+                      <option value="green_mp4">Green-screen MP4</option>
+                      <option value="transparent_png_sequence">Transparent PNG sequence</option>
+                      <option value="both">MP4 + PNG sequence</option>
+                    </Select>
+                  ) : (
+                    <Select
+                      value={
+                        isExportFieldOverridden(selectedShot?.exportOverrides, 'characterPass.motionFormat')
+                          ? characterPass.motionFormat
+                          : 'inherit'
+                      }
+                      disabled={!hasMove || !characterPass.includeMotion}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (next === 'inherit') resetField('characterPass.motionFormat');
+                        else {
+                          writeCharacter({
+                            ...characterPass,
+                            motionFormat: next as CharacterMotionExportFormat,
+                          });
+                        }
+                      }}
+                      data-export-character-pass-motion-format
+                    >
+                      <option value="inherit">
+                        Use scene setting ({sceneCharacter.motionFormat.replaceAll('_', ' ')})
+                      </option>
+                      <option value="green_mp4">Green-screen MP4</option>
+                      <option value="transparent_png_sequence">Transparent PNG sequence</option>
+                      <option value="both">MP4 + PNG sequence</option>
+                    </Select>
+                  )}
+                  {context === 'shot' && !hasMove && (
+                    <p className="mt-1 text-[11px] text-muted">
+                      Capture start and end camera keyframes to enable motion export.
+                    </p>
+                  )}
+                </div>
                 {showGreenField && characterPass.includeMotion && (hasMove || context === 'scene') && (
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1">
-                      <Field label="Background">
+                  <div>
+                    <FieldHeader
+                      label="Background"
+                      path="characterPass.backgroundColor"
+                      context={context}
+                      shot={selectedShot}
+                      onReset={resetField}
+                    />
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
                         <TextInput
                           value={characterPass.backgroundColor}
                           onChange={(event) => writeCharacter({
@@ -594,19 +704,24 @@ export function ExportSettingsPanel({
                           })}
                           data-export-character-pass-bg
                         />
-                      </Field>
+                      </div>
+                      <button
+                        type="button"
+                        className="mb-0.5 rounded-lg border border-subtle px-2 py-2 text-[11px] text-secondary transition hover:text-primary"
+                        onClick={() => {
+                          if (context === 'shot') resetField('characterPass.backgroundColor');
+                          else {
+                            writeCharacter({
+                              ...characterPass,
+                              backgroundColor: DEFAULT_CHARACTER_PASS_BACKGROUND,
+                            });
+                          }
+                        }}
+                        data-export-character-pass-bg-reset
+                      >
+                        {context === 'shot' ? 'Reset to scene settings' : 'Reset'}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="mb-0.5 rounded-lg border border-subtle px-2 py-2 text-[11px] text-secondary transition hover:text-primary"
-                      onClick={() => writeCharacter({
-                        ...characterPass,
-                        backgroundColor: DEFAULT_CHARACTER_PASS_BACKGROUND,
-                      })}
-                      data-export-character-pass-bg-reset
-                    >
-                      Reset
-                    </button>
                   </div>
                 )}
                 {hasMove && characterPass.includeMotion && timing && (
@@ -624,19 +739,14 @@ export function ExportSettingsPanel({
                   </p>
                 )}
               </div>
-              <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                <input
-                  type="checkbox"
-                  checked={characterPass.includeAttachedProps}
-                  onChange={(event) => writeCharacter({
-                    ...characterPass,
-                    includeAttachedProps: event.target.checked,
-                  })}
-                  className="accent-[var(--accent)]"
-                  data-export-character-pass-attachments
-                />
-                Include character-linked props
-              </label>
+              {nestedBooleanControl(
+                'characterPass.includeAttachedProps',
+                'Include character-linked props',
+                characterPass.includeAttachedProps,
+                sceneCharacter.includeAttachedProps,
+                (includeAttachedProps) => writeCharacter({ ...characterPass, includeAttachedProps }),
+                { dataAttr: 'data-export-character-pass-attachments' },
+              )}
             </>
           )}
         </div>
@@ -668,73 +778,75 @@ export function ExportSettingsPanel({
       <Section title="Technical handoff" defaultOpen={false}>
         {TECHNICAL_TOGGLES.map(({ key, label }) => booleanControl(key, label))}
         <div className="space-y-2 rounded-xl border border-subtle p-3" data-export-depth-settings>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <label className="flex items-center gap-2 text-sm text-secondary">
-              <input
-                type="checkbox"
-                checked={depth.enabled}
-                onChange={(event) => writeDepth({ ...depth, enabled: event.target.checked })}
-                className="accent-[var(--accent)]"
-                data-export-depth-enabled
-              />
-              Depth reference (linear camera depth)
-            </label>
-            {context === 'shot' && (
-              <InheritanceBadge
-                overridden={isExportFieldOverridden(selectedShot?.exportOverrides, 'depth.enabled')}
-              />
-            )}
-          </div>
+          {nestedBooleanControl(
+            'depth.enabled',
+            'Depth reference (linear camera depth)',
+            depth.enabled,
+            sceneDepth.enabled,
+            (enabled) => writeDepth({ ...depth, enabled }),
+            { dataAttr: 'data-export-depth-enabled' },
+          )}
           {depth.enabled && (
             <>
-              <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                <input
-                  type="checkbox"
-                  checked={depth.includeViewportStill}
-                  onChange={(event) => writeDepth({
-                    ...depth,
-                    includeViewportStill: event.target.checked,
-                  })}
-                  className="accent-[var(--accent)]"
-                  data-export-depth-viewport-still
+              {nestedBooleanControl(
+                'depth.includeViewportStill',
+                'Viewport depth still',
+                depth.includeViewportStill,
+                sceneDepth.includeViewportStill,
+                (includeViewportStill) => writeDepth({ ...depth, includeViewportStill }),
+                { dataAttr: 'data-export-depth-viewport-still' },
+              )}
+              {nestedBooleanControl(
+                'depth.includeReferenceFrames',
+                'Camera move depth frames',
+                depth.includeReferenceFrames,
+                sceneDepth.includeReferenceFrames,
+                (includeReferenceFrames) => writeDepth({ ...depth, includeReferenceFrames }),
+                { dataAttr: 'data-export-depth-reference-frames' },
+              )}
+              {nestedBooleanControl(
+                'depth.includeCameraMoveVideo',
+                'Camera move depth MP4',
+                depth.includeCameraMoveVideo,
+                sceneDepth.includeCameraMoveVideo,
+                (includeCameraMoveVideo) => writeDepth({ ...depth, includeCameraMoveVideo }),
+                { dataAttr: 'data-export-depth-camera-move-video' },
+              )}
+              <div>
+                <FieldHeader
+                  label="Depth range / invert"
+                  path="depth.rangeMode"
+                  context={context}
+                  shot={selectedShot}
+                  onReset={resetField}
                 />
-                Viewport depth still
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                <input
-                  type="checkbox"
-                  checked={depth.includeReferenceFrames}
-                  onChange={(event) => writeDepth({
-                    ...depth,
-                    includeReferenceFrames: event.target.checked,
-                  })}
-                  className="accent-[var(--accent)]"
-                  data-export-depth-reference-frames
+                <DepthSettingsPanel
+                  depth={depth}
+                  resolvedRange={{
+                    nearMeters: depth.nearMeters ?? 0.5,
+                    farMeters: depth.farMeters ?? 18.2,
+                  }}
+                  onChange={writeDepth}
+                  compact
                 />
-                Camera move depth frames
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                <input
-                  type="checkbox"
-                  checked={depth.includeCameraMoveVideo}
-                  onChange={(event) => writeDepth({
-                    ...depth,
-                    includeCameraMoveVideo: event.target.checked,
-                  })}
-                  className="accent-[var(--accent)]"
-                  data-export-depth-camera-move-video
-                />
-                Camera move depth MP4
-              </label>
-              <DepthSettingsPanel
-                depth={depth}
-                resolvedRange={{
-                  nearMeters: depth.nearMeters ?? 0.5,
-                  farMeters: depth.farMeters ?? 18.2,
-                }}
-                onChange={writeDepth}
-                compact
-              />
+                {context === 'shot' && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(['depth.invert', 'depth.nearMeters', 'depth.farMeters'] as const).map((path) => (
+                      isExportFieldOverridden(selectedShot?.exportOverrides, path) ? (
+                        <button
+                          key={path}
+                          type="button"
+                          data-export-reset-field={path}
+                          className="rounded-md border border-subtle px-2 py-1 text-[10px] font-medium text-secondary hover:text-accent"
+                          onClick={() => resetField(path)}
+                        >
+                          Reset {path.replace('depth.', '')} to scene
+                        </button>
+                      ) : null
+                    ))}
+                  </div>
+                )}
+              </div>
               <p className="text-[11px] leading-snug text-muted">
                 Depth range is shared across stills, reference frames, and motion.
               </p>
