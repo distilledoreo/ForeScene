@@ -23,6 +23,7 @@ import {
 import { degreesToRadians } from './sync';
 import {
   applySkinBuffersToRig,
+  assertSkinWeightBuffersCompatible,
   cloneSkinWeightBuffers,
   generateDeterministicSkinWeights,
   writeSkinWeightBinaryAsset,
@@ -436,6 +437,10 @@ export async function generateSkinWeightsForRigAsset(params: {
     // Fall through to Binder V1 if region classification fails.
   }
 
+  const vertexCount = Math.floor(positions.length / 3);
+  if (params.skinBuffers) {
+    assertSkinWeightBuffersCompatible(params.skinBuffers, { vertexCount });
+  }
   const buffers = params.skinBuffers
     ? cloneSkinWeightBuffers(params.skinBuffers)
     : regionLabels

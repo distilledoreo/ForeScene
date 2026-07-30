@@ -110,12 +110,14 @@ test.describe('@smoke autorig character workflow', () => {
 
     const importDialog = page.getByRole('dialog', { name: /Import poseable character/i });
     await expect(importDialog).toBeVisible();
-    await importDialog.locator('[data-poseable-import-choose-file]').click();
-    await page.setInputFiles('input[type="file"]', {
+    // Set files on the dialog's mesh input directly (same pattern as graybox import).
+    // Avoid page-wide `input[type="file"]` + choose-button click races that leave confirm disabled.
+    await importDialog.locator('[data-poseable-import-mesh-input]').setInputFiles({
       name: 'proxy.glb',
       mimeType: 'model/gltf-binary',
       buffer: humanoidProxyGlb(),
     });
+    await expect(importDialog.locator('[data-poseable-import-preview-summary]')).toBeVisible({ timeout: 10000 });
     await expect(importDialog.locator('[data-poseable-import-confirm]')).toBeEnabled({ timeout: 10000 });
     await importDialog.locator('[data-poseable-import-confirm]').click();
 
