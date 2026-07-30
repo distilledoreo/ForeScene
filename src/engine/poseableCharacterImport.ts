@@ -63,6 +63,8 @@ export interface PoseableCharacterImportResult {
   object: SceneObject;
   rig: PoseableRigAsset;
   warnings: string[];
+  /** Oriented/canonical mesh vertex count — used to validate attached .panorig packages. */
+  vertexCount: number;
 }
 
 function extensionOf(fileName: string): string {
@@ -154,7 +156,12 @@ function applyOrientationAndHeight(
   root: THREE.Object3D,
   orientation: PoseableCharacterOrientation,
   approximateHeightMeters: number,
-): { restTransform: PoseableRestTransform; dimensions: Vec3; warnings: string[] } {
+): {
+  restTransform: PoseableRestTransform;
+  dimensions: Vec3;
+  warnings: string[];
+  vertexCount: number;
+} {
   const canonical = prepareCanonicalAutorigMesh({
     source: root,
     orientation,
@@ -178,10 +185,18 @@ function applyOrientationAndHeight(
     warnings.push('Oriented height differs from the requested height; check Front / Up axes.');
   }
 
+  let vertexCount = 0;
+  canonical.root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    vertexCount += mesh.geometry.getAttribute('position')?.count ?? 0;
+  });
+
   return {
     restTransform,
     dimensions: [finalSize.x, finalSize.y, finalSize.z],
     warnings,
+    vertexCount,
   };
 }
 
@@ -307,5 +322,6 @@ export async function importPoseableCharacter(
     object,
     rig,
     warnings: [...preview.warnings, ...fitted.warnings],
+    vertexCount: fitted.vertexCount,
   };
 }

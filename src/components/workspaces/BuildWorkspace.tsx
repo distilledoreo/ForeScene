@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import {
   Box,
@@ -15,6 +15,8 @@ import {
   Layers,
   Navigation,
   Lock,
+  PanelRight,
+  PanelRightClose,
   Scissors,
   Mountain,
   Move3D,
@@ -35,6 +37,7 @@ import {
   ZoomIn,
   ZoomOut,
   Sparkles,
+  Download,
 } from 'lucide-react';
 import { Euler, ObjectSurfaceStyle, SceneObject, SceneObjectType, StagingRole, Vec3, type HumanJointId } from '../../domain/types';
 import type { GizmoMode } from '../../engine/transformGizmo';
@@ -93,6 +96,14 @@ import {
   generateSkinWeightsForRigAsset,
   hydrateAutoriggedCharactersFromAssets,
 } from '../../engine/autoriggedPoseableCharacter';
+import {
+  canApplyPoseableRigPackage,
+  exportPoseableRigPackage,
+  mergeImportedRigOntoTarget,
+  parsePoseableRigPackageFile,
+  POSEABLE_RIG_PACKAGE_ACCEPT,
+  resolvePoseableRigForObject,
+} from '../../engine/poseableRigPackage';
 import type { CompiledSetBlueprint } from '../../engine/setBlueprintCompiler';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
@@ -132,6 +143,9 @@ export function BuildWorkspace({
   const [showSceneGuides, setShowSceneGuides] = useState(false);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
   const [characterEditMode, setCharacterEditMode] = useState<'move' | 'pose'>('move');
+  const [selectionToolsDocked, setSelectionToolsDocked] = useState(false);
+  const [rigPackageStatus, setRigPackageStatus] = useState<string | null>(null);
+  const rigImportInputRef = useRef<HTMLInputElement>(null);
   const [selectedPoseJointId, setSelectedPoseJointId] = useState<HumanJointId | undefined>();
   const [grayboxRenderError, setGrayboxRenderError] = useState<string | undefined>();
   const [isRenderingProjected, setIsRenderingProjected] = useState(false);
@@ -603,9 +617,71 @@ useEffect(() => {
     if (selectedObjects.length === 0) setLayersOpen(false);
   }, [selectedObjects.length]);
 
+  useEffect(() => {
+    // Fresh selection should start in Move so transform gizmos are visible.
+    setCharacterEditMode('move');
+    setSelectedPoseJointId(undefined);
+  }, [selectedObject?.id]);
+
+  useEffect(() => {
+    if (!rigPackageStatus) return;
+    const timeout = window.setTimeout(() => setRigPackageStatus(null), 3_500);
+    return () => window.clearTimeout(timeout);
+  }, [rigPackageStatus]);
+
+  const handleExportCharacterRig = useCallback(async () => {
+    const resolved = resolvePoseableRigForObject(selectedObject, project.assets);
+    if (!resolved || !selectedObject) return;
+    try {
+      await exportPoseableRigPackage({
+        rig: resolved.rig,
+        assets: project.assets,
+        characterName: selectedObject.name,
+      });
+      setRigPackageStatus('Rig saved');
+    } catch (error) {
+      setRigPackageStatus(error instanceof Error ? error.message : 'Could not save rig.');
+    }
+  }, [project.assets, selectedObject]);
+
+  const handleImportCharacterRigFile = useCallback(async (file: File | undefined) => {
+    const resolved = resolvePoseableRigForObject(selectedObject, project.assets);
+    if (!resolved || !file) return;
+    try {
+      const imported = await parsePoseableRigPackageFile(file);
+      const check = canApplyPoseableRigPackage({ targetRig: resolved.rig, imported });
+      if (!check.ok) {
+        setRigPackageStatus(check.reason);
+        return;
+      }
+      const merged = mergeImportedRigOntoTarget({ targetRig: resolved.rig, imported });
+      updatePoseableRigAsset(resolved.rigAsset.id, merged);
+      useContinuityStore.setState((current) => ({
+        project: {
+          ...current.project,
+          assets: {
+            assets: {
+              ...current.project.assets.assets,
+              ...(imported.skinAsset ? { [imported.skinAsset.id]: imported.skinAsset } : {}),
+              ...(imported.regionAsset ? { [imported.regionAsset.id]: imported.regionAsset } : {}),
+            },
+          },
+        },
+      }));
+      hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+      setCharacterEditMode('move');
+      setRigPackageStatus('Rig imported');
+    } catch (error) {
+      setRigPackageStatus(error instanceof Error ? error.message : 'Could not import rig.');
+    }
+  }, [project.assets, selectedObject, updatePoseableRigAsset]);
+
+  const selectionToolsVisible = selectedObjects.length > 0 && editingChromeVisible && buildMode !== 'pano_origin';
+
   return (
     <FullBleedLayout>
-      <div className="relative h-full min-h-0">
+      <div className={`relative h-full min-h-0 ${selectionToolsDocked && selectionToolsVisible ? 'flex' : ''}`}>
+        <div className={`relative min-h-0 ${selectionToolsDocked && selectionToolsVisible ? 'min-w-0 flex-1' : 'h-full'}`}>
         <SceneViewport
           project={project}
           selectedObjectIds={selectedObjectIds}
@@ -859,194 +935,76 @@ useEffect(() => {
           </div>
         )}
 
-        {selectedObjects.length > 0 && editingChromeVisible && buildMode !== 'pano_origin' && (
+        {selectionToolsVisible && !selectionToolsDocked && (
           <div
-            className="pointer-events-none absolute right-5 top-[calc(var(--stage-header-safe)+7.5rem)] z-10 sm:top-[calc(var(--stage-header-safe)+4rem)]"
+            className="pointer-events-none absolute right-5 top-[calc(var(--stage-header-safe)+7.5rem)] z-10 max-h-[calc(100%-var(--stage-header-safe)-8.5rem)] sm:top-[calc(var(--stage-header-safe)+4rem)]"
             data-build-selection-tools
           >
-            <ContextualPanel>
-              <div className="flex items-center gap-2">
-                {selectedObjects.length === 1 && selectedObject ? (
-                  <TextInput
-                    value={selectedObject.name}
-                    onChange={(event) => updateObject(selectedObject.id, { name: event.target.value }, { history: 'coalesce' })}
-                    aria-label="Selected object name"
-                    className="h-8 min-w-36 border-subtle bg-surface-muted"
-                  />
-                ) : (
-                  <div className="min-w-36 text-sm font-semibold text-primary" data-build-selection-count>
-                    {selectedObjects.length} objects selected
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setPrecisionOpen(true)}
-                  disabled={selectedObjects.length !== 1}
-                  title="Precision drawer (I)"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-subtle text-secondary transition hover:border-accent hover:text-accent disabled:opacity-35"
-                >
-                  <Ruler className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLayersOpen((open) => !open)}
-                  title="Scene layers"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-subtle text-secondary transition hover:border-accent hover:text-accent"
-                >
-                  <Layers className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="mt-2 flex items-center gap-1">
-                <GizmoModeButton active={gizmoMode === 'translate'} label="Move (T)" onClick={() => setGizmoMode('translate')}>
-                  <Move3D className="h-3.5 w-3.5" />
-                </GizmoModeButton>
-                <GizmoModeButton active={gizmoMode === 'rotate'} label="Rotate (E)" onClick={() => setGizmoMode('rotate')}>
-                  <RotateCw className="h-3.5 w-3.5" />
-                </GizmoModeButton>
-                <GizmoModeButton active={gizmoMode === 'scale'} label="Scale (S)" onClick={() => setGizmoMode('scale')}>
-                  <ZoomIn className="h-3.5 w-3.5" />
-                </GizmoModeButton>
-              </div>
-              {selectedIsPoseable && selectedObject && (
-                <div className="mt-2 space-y-2 border-t border-subtle pt-2" data-build-character-pose>
-                  <div className="flex items-center gap-1" data-character-mode-toggle>
-                    <button
-                      type="button"
-                      data-character-mode-move
-                      className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                        characterEditMode === 'move' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
-                      }`}
-                      onClick={() => {
-                        setCharacterEditMode('move');
-                        setSelectedPoseJointId(undefined);
-                      }}
-                    >
-                      Move Character
-                    </button>
-                    <button
-                      type="button"
-                      data-character-mode-pose
-                      aria-pressed={characterEditMode === 'pose'}
-                      className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                        characterEditMode === 'pose' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
-                      }`}
-                      onClick={() => setCharacterEditMode('pose')}
-                    >
-                      Pose Character
-                    </button>
-                  </div>
-                  {selectedObject.poseableCharacter?.kind === 'autorigged' && (
-                    <div className="space-y-2">
-                      {(() => {
-                        const source = selectedObject.poseableCharacter;
-                        const rigAsset = project.assets.assets[source.assetId];
-                        const selectedRig = rigAsset?.metadata?.poseableRig;
-                        if (!selectedRig?.requiresRerigging) return null;
-                        if (dismissedRerigBannerIds[selectedRig.id]) return null;
-                        return (
-                          <div
-                            className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2"
-                            data-autorig-rerig-banner
-                          >
-                            <p className="text-[11px] text-amber-100">
-                              This character’s rig needs to be updated.
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              <button
-                                type="button"
-                                className="rounded-lg bg-accent px-2 py-1 text-[11px] font-semibold text-white"
-                                data-autorig-update-rig
-                                onClick={() => setAutorigMarkerOpen(true)}
-                              >
-                                Update rig
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary"
-                                data-autorig-keep-rigid
-                                onClick={() => setDismissedRerigBannerIds((current) => ({
-                                  ...current,
-                                  [selectedRig.id]: true,
-                                }))}
-                              >
-                                Keep rigid for now
-                              </button>
-                            </div>
-                            <p className="text-[10px] text-muted">
-                              Existing poses are kept and reapplied after updating; the look may change slightly.
-                            </p>
-                          </div>
-                        );
-                      })()}
-                      <button
-                        type="button"
-                        className="w-full rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
-                        data-build-autorig-markers
-                        onClick={() => setAutorigMarkerOpen(true)}
-                      >
-                        {(() => {
-                          const source = selectedObject.poseableCharacter;
-                          const rigAsset = project.assets.assets[source.assetId];
-                          const selectedRig = rigAsset?.metadata?.poseableRig;
-                          return selectedRig?.requiresRerigging ? 'Update character rig' : 'Edit character rig';
-                        })()}
-                      </button>
-                    </div>
-                  )}
-                  {characterEditMode === 'pose' && (
-                    <CharacterPosePanel
-                      pose={selectedObject.humanPose}
-                      selectedJointId={selectedPoseJointId}
-                      onSelectJoint={setSelectedPoseJointId}
-                      onChangePose={(next, options) => updateObject(
-                        selectedObject.id,
-                        { humanPose: next },
-                        { history: options?.history ?? 'step' },
-                      )}
-                      onPoseEditBatchStart={beginBuildHistoryBatch}
-                      onPoseEditBatchEnd={endBuildHistoryBatch}
-                    />
-                  )}
-                </div>
-              )}
-              <div className="mt-2 flex flex-wrap gap-1">
-                <QuickAction title="Rotate left (Shift+R)" onClick={() => rotateSelected(-15)}><RotateCcw className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Rotate right (R)" onClick={() => rotateSelected(15)}><RotateCw className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Scale down ([)" onClick={() => scaleSelected(0.9)}><ZoomOut className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Scale up (])" onClick={() => scaleSelected(1.1)}><ZoomIn className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Cut (Ctrl/Cmd+X)" onClick={() => void cutSelection()}><Scissors className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Copy (Ctrl/Cmd+C)" onClick={() => void copySelection()}><Copy className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Paste (Ctrl/Cmd+V)" onClick={() => void pasteSelection()}><ClipboardPaste className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title="Duplicate (D or Ctrl/Cmd+D)" onClick={() => duplicateSelectedObjects()}><SquareStack className="h-3.5 w-3.5" /></QuickAction>
-                <QuickAction title={selectionAllLocked ? 'Unlock (L)' : 'Lock (L)'} onClick={() => toggleSelectedLocked()}>
-                  {selectionAllLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-                </QuickAction>
-                <QuickAction title={selectionAllHidden ? 'Show (H)' : 'Hide (H)'} onClick={() => toggleSelectedVisibility()}>
-                  {selectionAllHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </QuickAction>
-                <QuickAction title="Delete" danger onClick={requestDeleteSelection}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
-              </div>
-              {layersOpen && (
-                <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-subtle pt-3">
-                  {project.scene.objects.map((object) => (
-                    <button
-                      key={object.id}
-                      type="button"
-                      onClick={(event) => {
-                        if (event.shiftKey) selectObjectRange(object.id);
-                        else selectObject(object.id, event.ctrlKey || event.metaKey ? 'toggle' : 'replace');
-                      }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition ${
-                        selectedObjectIds.includes(object.id) ? 'bg-accent-soft text-accent' : 'text-secondary hover:bg-surface-muted'
-                      }`}
-                    >
-                      <Box className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{object.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+            <ContextualPanel className="max-h-[inherit] max-w-[min(22rem,calc(100vw-2.5rem))] overflow-y-auto">
+              <SelectionToolsChrome
+                selectedObjects={selectedObjects}
+                selectedObject={selectedObject}
+                selectedObjectIds={selectedObjectIds}
+                selectedIsPoseable={selectedIsPoseable}
+                characterEditMode={characterEditMode}
+                selectedPoseJointId={selectedPoseJointId}
+                gizmoMode={gizmoMode}
+                layersOpen={layersOpen}
+                selectionAllLocked={selectionAllLocked}
+                selectionAllHidden={selectionAllHidden}
+                selectionToolsDocked={selectionToolsDocked}
+                project={project}
+                dismissedRerigBannerIds={dismissedRerigBannerIds}
+                onUpdateObjectName={(id, name) => updateObject(id, { name }, { history: 'coalesce' })}
+                onOpenPrecision={() => setPrecisionOpen(true)}
+                onToggleLayers={() => setLayersOpen((open) => !open)}
+                onSetGizmoMode={setGizmoMode}
+                onSetCharacterEditMode={setCharacterEditMode}
+                onSelectPoseJoint={setSelectedPoseJointId}
+                onChangePose={(id, next, options) => updateObject(id, { humanPose: next }, { history: options?.history ?? 'step' })}
+                onPoseEditBatchStart={beginBuildHistoryBatch}
+                onPoseEditBatchEnd={endBuildHistoryBatch}
+                onOpenAutorig={() => setAutorigMarkerOpen(true)}
+                onDismissRerig={(rigId) => setDismissedRerigBannerIds((current) => ({ ...current, [rigId]: true }))}
+                onExportRig={() => void handleExportCharacterRig()}
+                onImportRig={() => rigImportInputRef.current?.click()}
+                onToggleDock={() => setSelectionToolsDocked((docked) => !docked)}
+                onRotateSelected={rotateSelected}
+                onScaleSelected={scaleSelected}
+                onCut={() => void cutSelection()}
+                onCopy={() => void copySelection()}
+                onPaste={() => void pasteSelection()}
+                onDuplicate={() => duplicateSelectedObjects()}
+                onToggleLocked={toggleSelectedLocked}
+                onToggleVisibility={toggleSelectedVisibility}
+                onDelete={requestDeleteSelection}
+                onSelectObject={selectObject}
+                onSelectObjectRange={selectObjectRange}
+              />
             </ContextualPanel>
+          </div>
+        )}
+
+        <input
+          ref={rigImportInputRef}
+          type="file"
+          accept={POSEABLE_RIG_PACKAGE_ACCEPT}
+          className="hidden"
+          data-build-rig-import-input
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            void handleImportCharacterRigFile(file);
+          }}
+        />
+
+        {rigPackageStatus && (
+          <div
+            role="status"
+            data-build-rig-package-status
+            className="pointer-events-none absolute left-1/2 top-[calc(var(--stage-header-safe)+0.5rem)] z-30 -translate-x-1/2 rounded-full border border-subtle bg-surface-overlay px-4 py-2 text-xs font-medium text-primary shadow-card backdrop-blur"
+          >
+            {rigPackageStatus}
           </div>
         )}
 
@@ -1250,6 +1208,58 @@ useEffect(() => {
             </ContextualPanel>
           </div>
         )}
+        </div>
+
+        {selectionToolsVisible && selectionToolsDocked && (
+          <aside
+            className="pointer-events-auto z-10 mt-[var(--stage-header-safe)] flex h-[calc(100%-var(--stage-header-safe))] w-[min(22rem,100%)] shrink-0 flex-col border-l border-subtle bg-surface-overlay/95 shadow-card backdrop-blur"
+            data-build-selection-tools
+            data-build-selection-docked
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <SelectionToolsChrome
+                selectedObjects={selectedObjects}
+                selectedObject={selectedObject}
+                selectedObjectIds={selectedObjectIds}
+                selectedIsPoseable={selectedIsPoseable}
+                characterEditMode={characterEditMode}
+                selectedPoseJointId={selectedPoseJointId}
+                gizmoMode={gizmoMode}
+                layersOpen={layersOpen}
+                selectionAllLocked={selectionAllLocked}
+                selectionAllHidden={selectionAllHidden}
+                selectionToolsDocked={selectionToolsDocked}
+                project={project}
+                dismissedRerigBannerIds={dismissedRerigBannerIds}
+                onUpdateObjectName={(id, name) => updateObject(id, { name }, { history: 'coalesce' })}
+                onOpenPrecision={() => setPrecisionOpen(true)}
+                onToggleLayers={() => setLayersOpen((open) => !open)}
+                onSetGizmoMode={setGizmoMode}
+                onSetCharacterEditMode={setCharacterEditMode}
+                onSelectPoseJoint={setSelectedPoseJointId}
+                onChangePose={(id, next, options) => updateObject(id, { humanPose: next }, { history: options?.history ?? 'step' })}
+                onPoseEditBatchStart={beginBuildHistoryBatch}
+                onPoseEditBatchEnd={endBuildHistoryBatch}
+                onOpenAutorig={() => setAutorigMarkerOpen(true)}
+                onDismissRerig={(rigId) => setDismissedRerigBannerIds((current) => ({ ...current, [rigId]: true }))}
+                onExportRig={() => void handleExportCharacterRig()}
+                onImportRig={() => rigImportInputRef.current?.click()}
+                onToggleDock={() => setSelectionToolsDocked((docked) => !docked)}
+                onRotateSelected={rotateSelected}
+                onScaleSelected={scaleSelected}
+                onCut={() => void cutSelection()}
+                onCopy={() => void copySelection()}
+                onPaste={() => void pasteSelection()}
+                onDuplicate={() => duplicateSelectedObjects()}
+                onToggleLocked={toggleSelectedLocked}
+                onToggleVisibility={toggleSelectedVisibility}
+                onDelete={requestDeleteSelection}
+                onSelectObject={selectObject}
+                onSelectObjectRange={selectObjectRange}
+              />
+            </div>
+          </aside>
+        )}
       </div>
 
       <PrecisionDrawer
@@ -1301,10 +1311,10 @@ useEffect(() => {
       <PoseableCharacterImportDialog
         open={poseableImportOpen}
         onClose={() => setPoseableImportOpen(false)}
-        onImported={(object) => {
+        onImported={(object, meta) => {
           setBuildMode('select');
           requestFrame([object.id]);
-          if (object.poseableCharacter?.kind === 'autorigged') {
+          if (object.poseableCharacter?.kind === 'autorigged' && !meta?.appliedSavedRig) {
             setAutorigMarkerOpen(true);
           }
         }}
@@ -1338,7 +1348,7 @@ useEffect(() => {
                 sourceAssetId: sourceId,
                 assets: useContinuityStore.getState().project.assets,
                 regionOverrides: options?.regionOverrides,
-              }).then(({ rig: skinnedRig, skinAsset, regionAsset }) => {
+              }).then(async ({ rig: skinnedRig, skinAsset, regionAsset }) => {
                 const state = useContinuityStore.getState();
                 state.updatePoseableRigAsset(rigAsset.id, skinnedRig);
                 // Register skin (+ optional region-map) binary assets without a separate history step API.
@@ -1354,8 +1364,11 @@ useEffect(() => {
                     },
                   },
                 }));
-                // Re-hydrate adapter so the next viewport rebuild uses skinned mesh.
+                // Re-hydrate adapter so the next viewport rebuild uses skinned mesh + gizmos.
                 hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+                const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
+                await ensureAutoriggedCharactersForProject(useContinuityStore.getState().project);
+                setCharacterEditMode('move');
               }).catch(() => undefined);
             }}
           />
@@ -1375,6 +1388,330 @@ useEffect(() => {
         }}
       />
     </FullBleedLayout>
+  );
+}
+
+function SelectionToolsChrome({
+  selectedObjects,
+  selectedObject,
+  selectedObjectIds,
+  selectedIsPoseable,
+  characterEditMode,
+  selectedPoseJointId,
+  gizmoMode,
+  layersOpen,
+  selectionAllLocked,
+  selectionAllHidden,
+  selectionToolsDocked,
+  project,
+  dismissedRerigBannerIds,
+  onUpdateObjectName,
+  onOpenPrecision,
+  onToggleLayers,
+  onSetGizmoMode,
+  onSetCharacterEditMode,
+  onSelectPoseJoint,
+  onChangePose,
+  onPoseEditBatchStart,
+  onPoseEditBatchEnd,
+  onOpenAutorig,
+  onDismissRerig,
+  onExportRig,
+  onImportRig,
+  onToggleDock,
+  onRotateSelected,
+  onScaleSelected,
+  onCut,
+  onCopy,
+  onPaste,
+  onDuplicate,
+  onToggleLocked,
+  onToggleVisibility,
+  onDelete,
+  onSelectObject,
+  onSelectObjectRange,
+}: {
+  selectedObjects: SceneObject[];
+  selectedObject?: SceneObject;
+  selectedObjectIds: string[];
+  selectedIsPoseable: boolean;
+  characterEditMode: 'move' | 'pose';
+  selectedPoseJointId?: HumanJointId;
+  gizmoMode: GizmoMode;
+  layersOpen: boolean;
+  selectionAllLocked: boolean;
+  selectionAllHidden: boolean;
+  selectionToolsDocked: boolean;
+  project: {
+    scene: { objects: SceneObject[] };
+    assets: {
+      assets: Record<string, {
+        metadata?: {
+          poseableRig?: {
+            id: string;
+            requiresRerigging?: boolean;
+            bindMatrices?: unknown;
+            skin?: unknown;
+          };
+        };
+      }>;
+    };
+  };
+  dismissedRerigBannerIds: Record<string, boolean>;
+  onUpdateObjectName: (id: string, name: string) => void;
+  onOpenPrecision: () => void;
+  onToggleLayers: () => void;
+  onSetGizmoMode: (mode: GizmoMode) => void;
+  onSetCharacterEditMode: (mode: 'move' | 'pose') => void;
+  onSelectPoseJoint: (jointId: HumanJointId | undefined) => void;
+  onChangePose: (
+    id: string,
+    pose: NonNullable<SceneObject['humanPose']>,
+    options?: { history?: 'step' | 'batch' },
+  ) => void;
+  onPoseEditBatchStart: () => void;
+  onPoseEditBatchEnd: () => void;
+  onOpenAutorig: () => void;
+  onDismissRerig: (rigId: string) => void;
+  onExportRig: () => void;
+  onImportRig: () => void;
+  onToggleDock: () => void;
+  onRotateSelected: (degrees: number) => void;
+  onScaleSelected: (factor: number) => void;
+  onCut: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onDuplicate: () => void;
+  onToggleLocked: () => void;
+  onToggleVisibility: () => void;
+  onDelete: () => void;
+  onSelectObject: (id: string, mode?: 'replace' | 'toggle') => void;
+  onSelectObjectRange: (id: string) => void;
+}) {
+  const DockIcon = selectionToolsDocked ? PanelRightClose : PanelRight;
+  const resolvedRig = selectedObject
+    ? resolvePoseableRigForObject(selectedObject, project.assets as never)
+    : undefined;
+  const canShareRig = Boolean(resolvedRig?.rig.bindMatrices && resolvedRig.rig.skin);
+
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        {selectedObjects.length === 1 && selectedObject ? (
+          <TextInput
+            value={selectedObject.name}
+            onChange={(event) => onUpdateObjectName(selectedObject.id, event.target.value)}
+            aria-label="Selected object name"
+            className="h-8 min-w-0 flex-1 border-subtle bg-surface-muted"
+          />
+        ) : (
+          <div className="min-w-0 flex-1 text-sm font-semibold text-primary" data-build-selection-count>
+            {selectedObjects.length} objects selected
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onToggleDock}
+          title={selectionToolsDocked ? 'Unpin tools over viewport' : 'Pin tools to the side'}
+          aria-pressed={selectionToolsDocked}
+          data-build-selection-dock-toggle
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${
+            selectionToolsDocked
+              ? 'border-accent bg-accent-soft text-accent'
+              : 'border-subtle text-secondary hover:border-accent hover:text-accent'
+          }`}
+        >
+          <DockIcon className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onOpenPrecision}
+          disabled={selectedObjects.length !== 1}
+          title="Precision drawer (I)"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-subtle text-secondary transition hover:border-accent hover:text-accent disabled:opacity-35"
+        >
+          <Ruler className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onToggleLayers}
+          title="Scene layers"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-subtle text-secondary transition hover:border-accent hover:text-accent"
+        >
+          <Layers className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mt-2 flex items-center gap-1">
+        <GizmoModeButton active={gizmoMode === 'translate'} label="Move (T)" onClick={() => onSetGizmoMode('translate')}>
+          <Move3D className="h-3.5 w-3.5" />
+        </GizmoModeButton>
+        <GizmoModeButton active={gizmoMode === 'rotate'} label="Rotate (E)" onClick={() => onSetGizmoMode('rotate')}>
+          <RotateCw className="h-3.5 w-3.5" />
+        </GizmoModeButton>
+        <GizmoModeButton active={gizmoMode === 'scale'} label="Scale (S)" onClick={() => onSetGizmoMode('scale')}>
+          <ZoomIn className="h-3.5 w-3.5" />
+        </GizmoModeButton>
+      </div>
+      {selectedIsPoseable && selectedObject && (
+        <div className="mt-2 space-y-2 border-t border-subtle pt-2" data-build-character-pose>
+          <div className="flex items-center gap-1" data-character-mode-toggle>
+            <button
+              type="button"
+              data-character-mode-move
+              className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                characterEditMode === 'move' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
+              }`}
+              onClick={() => {
+                onSetCharacterEditMode('move');
+                onSelectPoseJoint(undefined);
+              }}
+            >
+              Move Character
+            </button>
+            <button
+              type="button"
+              data-character-mode-pose
+              aria-pressed={characterEditMode === 'pose'}
+              className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                characterEditMode === 'pose' ? 'bg-accent text-white' : 'bg-surface-muted text-secondary'
+              }`}
+              onClick={() => onSetCharacterEditMode('pose')}
+            >
+              Pose Character
+            </button>
+          </div>
+          {selectedObject.poseableCharacter?.kind === 'autorigged' && (
+            <div className="space-y-2">
+              {(() => {
+                const source = selectedObject.poseableCharacter;
+                const rigAsset = project.assets.assets[source.assetId];
+                const selectedRig = rigAsset?.metadata?.poseableRig;
+                if (!selectedRig?.requiresRerigging) return null;
+                if (dismissedRerigBannerIds[selectedRig.id]) return null;
+                return (
+                  <div
+                    className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2"
+                    data-autorig-rerig-banner
+                  >
+                    <p className="text-[11px] text-amber-100">
+                      This character’s rig needs to be updated.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        className="rounded-lg bg-accent px-2 py-1 text-[11px] font-semibold text-white"
+                        data-autorig-update-rig
+                        onClick={onOpenAutorig}
+                      >
+                        Update rig
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-subtle px-2 py-1 text-[11px] font-semibold text-secondary"
+                        data-autorig-keep-rigid
+                        onClick={() => onDismissRerig(selectedRig.id)}
+                      >
+                        Keep rigid for now
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-muted">
+                      Existing poses are kept and reapplied after updating; the look may change slightly.
+                    </p>
+                  </div>
+                );
+              })()}
+              <button
+                type="button"
+                className="w-full rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
+                data-build-autorig-markers
+                onClick={onOpenAutorig}
+              >
+                {(() => {
+                  const source = selectedObject.poseableCharacter;
+                  const rigAsset = project.assets.assets[source.assetId];
+                  const selectedRig = rigAsset?.metadata?.poseableRig;
+                  return selectedRig?.requiresRerigging ? 'Update character rig' : 'Edit character rig';
+                })()}
+              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  className="rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent disabled:opacity-40"
+                  data-build-export-rig
+                  disabled={!canShareRig}
+                  title={canShareRig ? 'Save this character’s rig as a .panorig file' : 'Finish rigging before saving'}
+                  onClick={onExportRig}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <Download className="h-3.5 w-3.5" />
+                    Save rig
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-subtle px-2 py-1.5 text-[11px] font-semibold text-secondary hover:border-accent hover:text-accent"
+                  data-build-import-rig
+                  title="Import a previously saved .panorig rig onto this character"
+                  onClick={onImportRig}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <Upload className="h-3.5 w-3.5" />
+                    Import rig
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+          {characterEditMode === 'pose' && (
+            <CharacterPosePanel
+              pose={selectedObject.humanPose}
+              selectedJointId={selectedPoseJointId}
+              onSelectJoint={onSelectPoseJoint}
+              onChangePose={(next, options) => onChangePose(selectedObject.id, next, options)}
+              onPoseEditBatchStart={onPoseEditBatchStart}
+              onPoseEditBatchEnd={onPoseEditBatchEnd}
+            />
+          )}
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap gap-1">
+        <QuickAction title="Rotate left (Shift+R)" onClick={() => onRotateSelected(-15)}><RotateCcw className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Rotate right (R)" onClick={() => onRotateSelected(15)}><RotateCw className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Scale down ([)" onClick={() => onScaleSelected(0.9)}><ZoomOut className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Scale up (])" onClick={() => onScaleSelected(1.1)}><ZoomIn className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Cut (Ctrl/Cmd+X)" onClick={onCut}><Scissors className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Copy (Ctrl/Cmd+C)" onClick={onCopy}><Copy className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Paste (Ctrl/Cmd+V)" onClick={onPaste}><ClipboardPaste className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title="Duplicate (D or Ctrl/Cmd+D)" onClick={onDuplicate}><SquareStack className="h-3.5 w-3.5" /></QuickAction>
+        <QuickAction title={selectionAllLocked ? 'Unlock (L)' : 'Lock (L)'} onClick={onToggleLocked}>
+          {selectionAllLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+        </QuickAction>
+        <QuickAction title={selectionAllHidden ? 'Show (H)' : 'Hide (H)'} onClick={onToggleVisibility}>
+          {selectionAllHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        </QuickAction>
+        <QuickAction title="Delete" danger onClick={onDelete}><Trash2 className="h-3.5 w-3.5" /></QuickAction>
+      </div>
+      {layersOpen && (
+        <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-subtle pt-3">
+          {project.scene.objects.map((object) => (
+            <button
+              key={object.id}
+              type="button"
+              onClick={(event) => {
+                if (event.shiftKey) onSelectObjectRange(object.id);
+                else onSelectObject(object.id, event.ctrlKey || event.metaKey ? 'toggle' : 'replace');
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition ${
+                selectedObjectIds.includes(object.id) ? 'bg-accent-soft text-accent' : 'text-secondary hover:bg-surface-muted'
+              }`}
+            >
+              <Box className="h-3 w-3 shrink-0" />
+              <span className="truncate">{object.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

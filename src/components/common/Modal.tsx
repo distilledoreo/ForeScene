@@ -5,6 +5,8 @@ const sizeClasses = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-3xl',
+  /** Wide tooling dialogs (autorig wizard, etc.) */
+  '2xl': 'max-w-5xl',
 } as const;
 
 const FOCUSABLE_SELECTOR = [
@@ -123,9 +125,9 @@ export function Modal({
             </button>
           )}
         </div>
-        <div className={`px-5 py-4 ${scrollBody ? 'min-h-0 overflow-y-auto' : ''}`}>{children}</div>
+        <div className={`px-5 py-4 ${scrollBody ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>{children}</div>
         {footer && (
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-subtle px-5 py-4">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-subtle px-5 py-4">
             {footer}
           </div>
         )}

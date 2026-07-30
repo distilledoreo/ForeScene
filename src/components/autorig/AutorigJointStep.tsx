@@ -78,7 +78,7 @@ export function AutorigJointStep({
 
       <div className="space-y-2" data-autorig-marker-list>
         <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Markers</div>
-        <div className="max-h-64 space-y-1 overflow-y-auto">
+        <div className="max-h-48 space-y-1 overflow-y-auto">
           {REQUIRED_JOINTS.map((jointId) => {
             const present = markers.some((marker) => marker.jointId === jointId);
             return (

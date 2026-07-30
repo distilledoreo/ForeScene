@@ -10,11 +10,26 @@ import {
   importPoseableCharacter,
   loadPoseableCharacterPreview,
 } from '../../engine/poseableCharacterImport';
+import {
+  canApplyPoseableRigPackage,
+  isPoseableRigPackageFile,
+  mergeImportedRigOntoTarget,
+  parsePoseableRigPackageFile,
+  POSEABLE_RIG_PACKAGE_ACCEPT,
+  resolvePoseableRigPackageVertexCount,
+  type ImportedPoseableRigPackage,
+} from '../../engine/poseableRigPackage';
+import { hydrateAutoriggedCharactersFromAssets } from '../../engine/autoriggedPoseableCharacter';
 import { useContinuityStore } from '../../state/useContinuityStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
 
 const AXIS_OPTIONS: PoseableAxisHint[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
+
+export interface PoseableCharacterImportMeta {
+  /** True when a complete .panorig package was applied during import. */
+  appliedSavedRig: boolean;
+}
 
 export function PoseableCharacterImportDialog({
   open,
@@ -23,16 +38,20 @@ export function PoseableCharacterImportDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onImported?: (object: SceneObject) => void;
+  onImported?: (object: SceneObject, meta?: PoseableCharacterImportMeta) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const meshInputRef = useRef<HTMLInputElement>(null);
+  const rigInputRef = useRef<HTMLInputElement>(null);
   const addPoseableCharacterImport = useContinuityStore((state) => state.addPoseableCharacterImport);
+  const updatePoseableRigAsset = useContinuityStore((state) => state.updatePoseableRigAsset);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
   const [error, setError] = useState<string>();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [file, setFile] = useState<File>();
+  const [rigFile, setRigFile] = useState<File>();
+  const [rigPackageLabel, setRigPackageLabel] = useState<string>();
   const [orientation, setOrientation] = useState<PoseableCharacterOrientation>(defaultPoseableOrientation);
   const [heightMeters, setHeightMeters] = useState(DEFAULT_POSEABLE_HEIGHT_METERS);
   const [poseHint, setPoseHint] = useState<'a-pose' | 't-pose'>('a-pose');
@@ -47,6 +66,8 @@ export function PoseableCharacterImportDialog({
       setError(undefined);
       setWarnings([]);
       setFile(undefined);
+      setRigFile(undefined);
+      setRigPackageLabel(undefined);
       setOrientation(defaultPoseableOrientation());
       setHeightMeters(DEFAULT_POSEABLE_HEIGHT_METERS);
       setPoseHint('a-pose');
@@ -55,7 +76,11 @@ export function PoseableCharacterImportDialog({
   }, [open]);
 
   const selectFile = () => {
-    if (!busy) inputRef.current?.click();
+    if (!busy) meshInputRef.current?.click();
+  };
+
+  const selectRigFile = () => {
+    if (!busy) rigInputRef.current?.click();
   };
 
   const onFileChosen = async (list: FileList | null) => {
@@ -85,6 +110,20 @@ export function PoseableCharacterImportDialog({
     }
   };
 
+  const onRigFileChosen = (list: FileList | null) => {
+    const next = list?.[0];
+    if (!next || busy) return;
+    if (!isPoseableRigPackageFile(next)) {
+      setError('Attach a Continuity Stage .panorig rig package.');
+      setRigFile(undefined);
+      setRigPackageLabel(undefined);
+      return;
+    }
+    setError(undefined);
+    setRigFile(next);
+    setRigPackageLabel(next.name);
+  };
+
   const importSelected = async () => {
     if (!file || busy) return;
     setBusy(true);
@@ -102,15 +141,95 @@ export function PoseableCharacterImportDialog({
       if (!runDestructiveProjectMutation) {
         throw new Error('Local recovery is still starting. Please wait before importing a poseable character.');
       }
+
+      let appliedSavedRig = false;
+      let importWarnings = [...result.warnings];
+      let pendingPackage: ImportedPoseableRigPackage | undefined;
+      if (rigFile) {
+        setProgress('Reading saved rig…');
+        pendingPackage = await parsePoseableRigPackageFile(rigFile);
+        const packageVertexCount = await resolvePoseableRigPackageVertexCount(pendingPackage);
+        const importedForCheck: ImportedPoseableRigPackage = {
+          ...pendingPackage,
+          rig: {
+            ...pendingPackage.rig,
+            regionMap: pendingPackage.rig.regionMap ?? (
+              typeof packageVertexCount === 'number'
+                ? {
+                  version: 1,
+                  regionAssetId: 'package',
+                  vertexCount: packageVertexCount,
+                  topologyHash: pendingPackage.manifest.topologyHash ?? 'unknown',
+                  sourceAssetId: 'package',
+                }
+                : undefined
+            ),
+          },
+        };
+        const compatibility = canApplyPoseableRigPackage({
+          targetRig: result.rig,
+          imported: importedForCheck,
+          meshVertexCount: result.vertexCount,
+        });
+        if (!compatibility.ok) {
+          throw new Error(compatibility.reason);
+        }
+        pendingPackage = importedForCheck;
+      }
+
       await runDestructiveProjectMutation('Before importing a poseable character', () => {
         const object = addPoseableCharacterImport({
           sourceAsset: result.sourceAsset,
           rigAsset: result.rigAsset,
           object: result.object,
         });
-        onImported?.(object);
+
+        if (pendingPackage) {
+          const merged = mergeImportedRigOntoTarget({
+            targetRig: result.rig,
+            imported: pendingPackage,
+          });
+          // Keep the import orientation/height the user just chose when the package omits them.
+          merged.orientation = orientation;
+          merged.generationSettings = {
+            ...merged.generationSettings,
+            approximateHeightMeters: heightMeters,
+            ...(poseHint ? { poseHint } : {}),
+          };
+          updatePoseableRigAsset(result.rigAsset.id, merged);
+          useContinuityStore.setState((current) => ({
+            project: {
+              ...current.project,
+              assets: {
+                assets: {
+                  ...current.project.assets.assets,
+                  ...(pendingPackage.skinAsset
+                    ? { [pendingPackage.skinAsset.id]: pendingPackage.skinAsset }
+                    : {}),
+                  ...(pendingPackage.regionAsset
+                    ? { [pendingPackage.regionAsset.id]: pendingPackage.regionAsset }
+                    : {}),
+                },
+              },
+            },
+          }));
+          hydrateAutoriggedCharactersFromAssets(useContinuityStore.getState().project.assets);
+          appliedSavedRig = true;
+          importWarnings = [
+            ...importWarnings,
+            'Attached saved rig — skipping the rigging wizard.',
+          ];
+        }
+
+        onImported?.(object, { appliedSavedRig });
       });
-      setWarnings(result.warnings);
+
+      if (appliedSavedRig) {
+        const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
+        await ensureAutoriggedCharactersForProject(useContinuityStore.getState().project);
+      }
+
+      setWarnings(importWarnings);
       onClose();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -137,16 +256,27 @@ export function PoseableCharacterImportDialog({
       <div className="space-y-4" data-poseable-character-import-dialog>
         <p className="text-sm text-secondary">
           Separate from ordinary graybox import. Accepts one upright A-pose or T-pose humanoid GLB/glTF.
-          Materials and textures are preserved. Skin weights are not generated yet — this step stores the
-          source and orientation so autorigging can be retried later.
+          Materials and textures are preserved. Optionally attach a previously saved Continuity Stage
+          .panorig rig to skip the wizard when the mesh matches.
         </p>
 
         <input
-          ref={inputRef}
+          ref={meshInputRef}
           type="file"
           accept={POSEABLE_CHARACTER_IMPORT_ACCEPT}
           className="hidden"
           onChange={(event) => void onFileChosen(event.target.files)}
+        />
+        <input
+          ref={rigInputRef}
+          type="file"
+          accept={POSEABLE_RIG_PACKAGE_ACCEPT}
+          className="hidden"
+          data-poseable-import-rig-input
+          onChange={(event) => {
+            onRigFileChosen(event.target.files);
+            event.target.value = '';
+          }}
         />
 
         <button
@@ -163,6 +293,47 @@ export function PoseableCharacterImportDialog({
         {previewSummary && (
           <p className="text-xs text-muted" data-poseable-import-preview-summary>{previewSummary}</p>
         )}
+
+        <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-poseable-import-rig-attach>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted">Saved rig (optional)</div>
+              <p className="mt-0.5 text-[11px] text-secondary">
+                Attach a .panorig from a previous Save rig if this is the same mesh.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={selectRigFile}
+                disabled={busy}
+                className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:border-accent hover:text-accent disabled:opacity-60"
+                data-poseable-import-choose-rig
+              >
+                {rigPackageLabel ? 'Change rig…' : 'Attach .panorig'}
+              </button>
+              {rigFile && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRigFile(undefined);
+                    setRigPackageLabel(undefined);
+                  }}
+                  disabled={busy}
+                  className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:bg-surface-muted disabled:opacity-60"
+                  data-poseable-import-clear-rig
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+          {rigPackageLabel && (
+            <p className="truncate text-xs text-primary" data-poseable-import-rig-name>
+              {rigPackageLabel}
+            </p>
+          )}
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="space-y-1 text-xs text-secondary">
@@ -285,7 +456,7 @@ export function PoseableCharacterImportDialog({
             data-poseable-import-confirm
           >
             <UserRound className="h-4 w-4" />
-            Import character
+            {rigFile ? 'Import with rig' : 'Import character'}
           </button>
         </div>
       </div>

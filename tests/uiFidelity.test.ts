@@ -229,7 +229,10 @@ describe('ui revamp fidelity surfaces', () => {
     expect(build).toContain("buildMode === 'pano_origin'");
     expect(build).toContain('|| buildMode === \'pano_origin\'');
     expect(build).toContain("editingChromeVisible && (");
-    expect(build).toContain('{selectedObjects.length > 0 && editingChromeVisible && buildMode !== \'pano_origin\' && (');
+    expect(build).toContain('selectionToolsVisible');
+    expect(build).toContain('data-build-selection-dock-toggle');
+    expect(build).toContain('data-build-selection-docked');
+    expect(build).toContain('mt-[var(--stage-header-safe)]');
     expect(build).toContain('Esc exits');
     expect(build).toContain('tap Free camera to edit');
     expect(build).toContain('handleMovePanoOrigin');

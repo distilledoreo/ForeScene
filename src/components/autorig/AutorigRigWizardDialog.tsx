@@ -1564,12 +1564,66 @@ export function AutorigRigWizardDialog({
   const showFixOverlay = step === 'pose-fix' && fixEnabled && Boolean(deformationPreview);
 
   return (
-    <Modal open={open} onClose={handleClose} title="Rig character" size="xl">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title="Rig character"
+      size="2xl"
+      scrollBody
+      footer={(
+        <div className="flex w-full flex-wrap items-center justify-between gap-2" data-autorig-wizard-footer>
+          <div className="flex flex-wrap gap-2">
+            {step === 'pose-fix' && (
+              <button
+                type="button"
+                className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary"
+                data-autorig-adjust-joints
+                onClick={() => {
+                  setPoseIssues([]);
+                  setFixEnabled(false);
+                  setStep('joints');
+                }}
+              >
+                Adjust joints
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary" onClick={handleClose}>
+              Cancel
+            </button>
+            {step === 'joints' && (
+              <button
+                type="button"
+                className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                data-autorig-continue-joints
+                disabled={!canContinueJoints}
+                onClick={handleContinueToPoseFix}
+              >
+                Continue
+              </button>
+            )}
+            {step === 'pose-fix' && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                data-autorig-apply-skeleton
+                disabled={!canApply}
+                onClick={handleApply}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Apply rig
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    >
       <div className="space-y-3" data-autorig-rig-wizard data-autorig-marker-wizard>
         <AutorigWizardProgress step={step} />
 
-        <div className="grid gap-3 lg:grid-cols-[1fr_16rem]">
-          <div className="relative" style={{ width: CANVAS_W, maxWidth: '100%' }}>
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,16rem)]">
+          <div className="relative min-w-0 w-full" style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}>
             <canvas
               ref={meshCanvasRef}
               width={CANVAS_W}
@@ -1582,7 +1636,7 @@ export function AutorigRigWizardDialog({
                 ref={markerCanvasRef}
                 width={CANVAS_W}
                 height={CANVAS_H}
-                className="relative h-full w-full cursor-crosshair rounded-xl bg-transparent"
+                className="absolute inset-0 h-full w-full cursor-crosshair rounded-xl bg-transparent"
                 data-autorig-marker-canvas
                 onPointerDown={(event) => {
                   const point = eventToCanvasPoint(event);
@@ -1639,7 +1693,7 @@ export function AutorigRigWizardDialog({
                 radius={paint.brushRadius}
                 region={selectedRegion}
                 restoreAutomatic={restoreAutomatic}
-                className="relative h-full w-full rounded-xl bg-transparent"
+                className="absolute inset-0 h-full w-full rounded-xl bg-transparent"
                 onPointerDown={(event) => {
                   if (handleOrbitPointerDown(event)) return;
                   if (event.button !== 0) return;
@@ -1676,7 +1730,7 @@ export function AutorigRigWizardDialog({
                 height={CANVAS_H}
                 points={lassoPoints}
                 drawing={lassoDrawing}
-                className="relative h-full w-full cursor-crosshair rounded-xl bg-transparent"
+                className="absolute inset-0 h-full w-full cursor-crosshair rounded-xl bg-transparent"
                 onPointerDown={(event) => {
                   if (handleOrbitPointerDown(event)) return;
                   if (event.button !== 0) return;
@@ -1708,8 +1762,7 @@ export function AutorigRigWizardDialog({
             )}
             {step === 'pose-fix' && !showFixOverlay && (
               <div
-                className="relative h-full w-full rounded-xl"
-                style={{ width: CANVAS_W, height: CANVAS_H }}
+                className="absolute inset-0 h-full w-full rounded-xl"
                 data-autorig-pose-inspect-layer
                 onContextMenu={(event) => event.preventDefault()}
                 onPointerDown={(event) => {
@@ -1733,7 +1786,7 @@ export function AutorigRigWizardDialog({
             )}
           </div>
 
-          <div>
+          <div className="min-w-0 max-h-[min(60vh,32rem)] overflow-y-auto lg:max-h-none">
             {step === 'joints' && (
               <AutorigJointStep
                 view={jointView}
@@ -1800,53 +1853,6 @@ export function AutorigRigWizardDialog({
                 fallbackCount={previewBuffers?.fallbackVertexCount}
                 issues={poseIssues}
               />
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap justify-between gap-2 border-t border-subtle pt-3">
-          <div className="flex flex-wrap gap-2">
-            {step === 'pose-fix' && (
-              <button
-                type="button"
-                className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary"
-                data-autorig-adjust-joints
-                onClick={() => {
-                  setPoseIssues([]);
-                  setFixEnabled(false);
-                  setStep('joints');
-                }}
-              >
-                Adjust joints
-              </button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary" onClick={handleClose}>
-              Cancel
-            </button>
-            {step === 'joints' && (
-              <button
-                type="button"
-                className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                data-autorig-continue-joints
-                disabled={!canContinueJoints}
-                onClick={handleContinueToPoseFix}
-              >
-                Continue
-              </button>
-            )}
-            {step === 'pose-fix' && (
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                data-autorig-apply-skeleton
-                disabled={!canApply}
-                onClick={handleApply}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Apply rig
-              </button>
             )}
           </div>
         </div>
