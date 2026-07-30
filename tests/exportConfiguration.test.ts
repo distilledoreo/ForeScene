@@ -10,6 +10,7 @@ import type { LocationProject, Shot, ShotExportSettings } from '../src/domain/ty
 import { EXPORT_CONFIGURATION_SCHEMA_VERSION } from '../src/domain/types';
 import {
   copyShotExportOverrides,
+  countExportOverrideLeaves,
   diffExportSettings,
   ensureProjectExportConfiguration,
   getExportFieldInheritanceState,
@@ -134,6 +135,7 @@ describe('export settings resolver', () => {
     });
     expect(isExportSettingsOverrideEmpty(override)).toBe(false);
     expect(isExportSettingsOverrideEmpty({})).toBe(true);
+    expect(countExportOverrideLeaves(override)).toBe(2);
   });
 });
 

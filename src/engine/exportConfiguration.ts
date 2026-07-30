@@ -311,6 +311,26 @@ export function isExportSettingsOverrideEmpty(override?: ExportSettingsOverride 
     && !normalized.depth;
 }
 
+/** Count overridden leaf fields (including nested character/depth leaves). */
+export function countExportOverrideLeaves(override?: ExportSettingsOverride | null): number {
+  const normalized = normalizeExportSettingsOverride(override);
+  let count = 0;
+  for (const key of EXPORT_SETTING_TOP_LEVEL_KEYS) {
+    if (hasOwn(normalized, key)) count += 1;
+  }
+  if (normalized.characterPass) {
+    for (const key of CHARACTER_PASS_OVERRIDE_KEYS) {
+      if (hasOwn(normalized.characterPass, key)) count += 1;
+    }
+  }
+  if (normalized.depth) {
+    for (const key of DEPTH_OVERRIDE_KEYS) {
+      if (hasOwn(normalized.depth, key)) count += 1;
+    }
+  }
+  return count;
+}
+
 export function shotHasExportOverrides(shot: Pick<Shot, 'exportOverrides'>): boolean {
   return !isExportSettingsOverrideEmpty(shot.exportOverrides);
 }

@@ -77,6 +77,7 @@ describe('workflow guidance UI', () => {
     const build = readFileSync(new URL('../src/components/workspaces/BuildWorkspace.tsx', import.meta.url), 'utf8');
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
+    const exportSettingsPanel = readFileSync(new URL('../src/components/export/ExportSettingsPanel.tsx', import.meta.url), 'utf8');
     const shotThumbnail = readFileSync(new URL('../src/components/common/ShotThumbnail.tsx', import.meta.url), 'utf8');
     const shotInfoCard = readFileSync(new URL('../src/components/common/ShotInfoCard.tsx', import.meta.url), 'utf8');
     expect(shots).toContain('data-shots-camera-shell');
@@ -101,7 +102,8 @@ describe('workflow guidance UI', () => {
     expect(build).toContain('primaryTrayItems');
     expect(build).toContain('overflowTrayItems');
     expect(build).toContain('Render 360 Reference');
-    expect(exportWorkspace).toContain('Camera move clay frames');
+    expect(exportSettingsPanel).toContain('Camera reference frames (clay)');
+    expect(exportSettingsPanel).toContain('Scene Export Settings');
     expect(exportWorkspace).toContain('Export Settings');
     expect(exportWorkspace).toContain('getShotPrimaryLabel(shot)');
     expect(exportWorkspace).toContain('Handoff packages');

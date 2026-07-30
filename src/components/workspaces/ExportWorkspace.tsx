@@ -1,15 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
-import type { CharacterMotionExportFormat, PeopleExportMode } from '../../domain/types';
-import { Archive, Check, Download, FileJson, FolderArchive, Settings, X } from 'lucide-react';
-import {
-  DEFAULT_CHARACTER_PASS_BACKGROUND,
-  defaultCharacterPassExportSettings,
-  defaultShotDepthSettings,
-  normalizeCharacterPassExportSettings,
-  normalizeShotDepthSettings,
-} from '../../domain/defaults';
-import { getShotDisplayName, getShotPrimaryLabel } from '../../domain/shotIdentity';
+import { Archive, Check, Download, FolderArchive, Settings, X } from 'lucide-react';
+import { getShotPrimaryLabel } from '../../domain/shotIdentity';
 import { getShotExportProgressLabel } from '../../engine/exportNaming';
 import { createShotPackageManifest, selectExportPathPreview } from '../../engine/exportManifest';
 import { reconcileExportSelectedShotIds } from '../../engine/exportSelection';
@@ -20,24 +12,16 @@ import {
   isPackageExportCancelled,
   PackageExportProgress,
 } from '../../engine/packageExport';
-import {
-  characterPassIncludesGreenMp4,
-  characterPassIncludesPngSequence,
-  resolveCharacterMotionTiming,
-  shotHasVisibleCharactersForPass,
-  shouldWarnCharacterPngSequenceSize,
-} from '../../engine/characterPassExport';
-import { hasRenderableCameraMove } from '../../engine/cameraKeyframes';
-import { getExportSelectionWarnings, getShotWarnings, shouldShowMissingLandmarkPromptNote } from '../../engine/warnings';
+import { countExportOverrideLeaves } from '../../engine/exportConfiguration';
+import { getExportSelectionWarnings, getShotWarnings } from '../../engine/warnings';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
-import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
-import { Field, IconButton, Select, TextInput } from '../common/Field';
 import { PrecisionDrawer } from '../common/PrecisionDrawer';
 import { PrimaryCTA } from '../common/PrimaryCTA';
 import { ShotThumbnail } from '../common/ShotThumbnail';
 import { WarningDetailsButton } from '../common/WarningDetailsButton';
 import { WarningList } from '../common/WarningList';
+import { ExportSettingsPanel } from '../export/ExportSettingsPanel';
 import { resolveWorkspacePrimaryAction } from '../../engine/workflow';
 import { FullBleedLayout } from './WorkspaceShell';
 
@@ -50,6 +34,11 @@ export function ExportWorkspace() {
     selectShot,
     addCamera,
     updateShot,
+    patchSceneExportDefaults,
+    resetShotExportField,
+    resetShotExportOverrides,
+    copyShotExportOverrides,
+    promoteShotExportToSceneDefaults,
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
@@ -59,6 +48,11 @@ export function ExportWorkspace() {
     selectShot: state.selectShot,
     addCamera: state.addCamera,
     updateShot: state.updateShot,
+    patchSceneExportDefaults: state.patchSceneExportDefaults,
+    resetShotExportField: state.resetShotExportField,
+    resetShotExportOverrides: state.resetShotExportOverrides,
+    copyShotExportOverrides: state.copyShotExportOverrides,
+    promoteShotExportToSceneDefaults: state.promoteShotExportToSceneDefaults,
     isExportingPackage: state.isExportingPackage,
     setExportingPackage: state.setExportingPackage,
     markFinalPackageExported: state.markFinalPackageExported,
@@ -329,7 +323,7 @@ export function ExportWorkspace() {
             <header data-export-package-header className="mb-3 shrink-0">
               <h1 className="text-xl font-semibold text-primary">Export Your Shots</h1>
               <p className="mt-0.5 text-sm text-secondary">
-                Handoff packages for your AI and pipeline tools. Each shot is a ZIP — deliverables stay outside this app.
+                Handoff packages for your AI and pipeline tools. One ZIP with a folder per selected shot — deliverables stay outside this app.
               </p>
             </header>
 
@@ -368,6 +362,9 @@ export function ExportWorkspace() {
             <div className="mt-3 shrink-0 space-y-2">
               {manifest && (
                 <div data-export-manifest-preview className="max-h-8 space-y-0.5 overflow-hidden opacity-70">
+                  <div className="text-[10px] font-medium text-secondary">
+                    Active shot manifest sample
+                  </div>
                   {manifestPreviewPaths.map((path) => (
                     <div key={path} className="truncate font-mono text-[10px] text-muted">{path}</div>
                   ))}
@@ -424,6 +421,7 @@ export function ExportWorkspace() {
                 const shotWarnings = getShotWarnings(project, shot);
                 const checked = selectedShotIds.has(shot.id);
                 const active = selectedShotId === shot.id;
+                const overrideCount = countExportOverrideLeaves(shot.exportOverrides);
                 return (
                   <div
                     key={shot.id}
@@ -452,6 +450,14 @@ export function ExportWorkspace() {
                       <span className="min-w-0 flex-1 leading-tight">
                         <span className="block text-xs font-medium text-primary">{getShotPrimaryLabel(shot)}</span>
                         <span className="block truncate text-[11px] text-secondary">{shot.name}</span>
+                        <span
+                          data-export-shot-override-badge={overrideCount > 0 ? 'override' : 'inherited'}
+                          className="mt-0.5 block text-[10px] text-muted"
+                        >
+                          {overrideCount > 0
+                            ? `${overrideCount} shot override${overrideCount === 1 ? '' : 's'}`
+                            : 'Using scene settings'}
+                        </span>
                       </span>
                     </button>
                     {shotWarnings.length > 0 ? (
@@ -514,353 +520,20 @@ export function ExportWorkspace() {
       </div>
 
       <PrecisionDrawer open={settingsOpen} title="Export Settings" onClose={() => setSettingsOpen(false)}>
-        {selectedShot ? (
-          <div className="space-y-4">
-            <p
-              data-export-settings-scope
-              className="rounded-lg border border-subtle bg-surface-muted px-3 py-2 text-xs text-secondary"
-            >
-              Settings apply to the <span className="font-semibold text-primary">active shot</span>
-              {' '}({getShotDisplayName(selectedShot)}) only — not every checked shot in the multi-select list.
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Width">
-                <TextInput
-                  type="number"
-                  value={selectedShot.exportSettings.width}
-                  onChange={(event) => updateShot(selectedShot.id, {
-                    exportSettings: { ...selectedShot.exportSettings, width: Number(event.target.value) },
-                  })}
-                />
-              </Field>
-              <Field label="Height">
-                <TextInput
-                  type="number"
-                  value={selectedShot.exportSettings.height}
-                  onChange={(event) => updateShot(selectedShot.id, {
-                    exportSettings: { ...selectedShot.exportSettings, height: Number(event.target.value) },
-                  })}
-                />
-              </Field>
-            </div>
-            <Field label="People output" hint="Both adds matched with-people and clean-plate images/videos.">
-              <Select
-                value={selectedShot.exportSettings.peopleExportMode ?? 'with_people'}
-                onChange={(event) => updateShot(selectedShot.id, {
-                  exportSettings: {
-                    ...selectedShot.exportSettings,
-                    peopleExportMode: event.target.value as PeopleExportMode,
-                  },
-                })}
-                data-export-people-mode
-              >
-                <option value="with_people">With people</option>
-                <option value="clean_plate">Clean plate</option>
-                <option value="both">Both</option>
-              </Select>
-            </Field>
-            {(() => {
-              const characterPass = normalizeCharacterPassExportSettings(
-                selectedShot.exportSettings.characterPass ?? defaultCharacterPassExportSettings,
-              );
-              const patchCharacterPass = (next: typeof characterPass) => updateShot(selectedShot.id, {
-                exportSettings: {
-                  ...selectedShot.exportSettings,
-                  characterPass: next,
-                },
-              });
-              const hasMove = hasRenderableCameraMove(selectedShot.cameraKeyframes);
-              const timing = resolveCharacterMotionTiming(selectedShot);
-              const hasCharacters = shotHasVisibleCharactersForPass(
-                project,
-                selectedShot,
-                characterPass,
-              );
-              const showGreenField = characterPassIncludesGreenMp4(characterPass.motionFormat);
-              const showSequenceWarn = characterPass.enabled
-                && characterPass.includeMotion
-                && characterPassIncludesPngSequence(characterPass.motionFormat)
-                && hasMove
-                && shouldWarnCharacterPngSequenceSize(
-                  timing.width,
-                  timing.height,
-                  timing.frameCount,
-                );
-              return (
-                <div
-                  className="space-y-2 rounded-xl border border-subtle p-3"
-                  data-export-character-pass
-                >
-                  <p className="text-sm font-medium text-primary">Characters-only pass</p>
-                  <label className="flex items-center gap-2 text-sm text-secondary">
-                    <input
-                      type="checkbox"
-                      checked={characterPass.enabled}
-                      onChange={(event) => patchCharacterPass({
-                        ...characterPass,
-                        enabled: event.target.checked,
-                      })}
-                      className="accent-[var(--accent)]"
-                      data-export-character-pass-enabled
-                    />
-                    Include character-only pass
-                  </label>
-                  {characterPass.enabled && (
-                    <>
-                      {!hasCharacters && (
-                        <p
-                          className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
-                          data-export-character-pass-empty-warning
-                        >
-                          No visible characters in this shot — character outputs will be skipped.
-                        </p>
-                      )}
-                      <div className="space-y-1">
-                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Still</p>
-                        <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                          <input
-                            type="checkbox"
-                            checked={characterPass.includeStill}
-                            onChange={(event) => patchCharacterPass({
-                              ...characterPass,
-                              includeStill: event.target.checked,
-                            })}
-                            className="accent-[var(--accent)]"
-                            data-export-character-pass-still
-                          />
-                          Transparent PNG
-                        </label>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Motion</p>
-                        <Field
-                          label="Format"
-                          hint={hasMove
-                            ? undefined
-                            : 'Capture start and end camera keyframes to enable motion export.'}
-                        >
-                          <Select
-                            value={characterPass.motionFormat}
-                            disabled={!hasMove || !characterPass.includeMotion}
-                            onChange={(event) => patchCharacterPass({
-                              ...characterPass,
-                              motionFormat: event.target.value as CharacterMotionExportFormat,
-                            })}
-                            data-export-character-pass-motion-format
-                          >
-                            <option value="green_mp4">Green-screen MP4</option>
-                            <option value="transparent_png_sequence">Transparent PNG sequence</option>
-                            <option value="both">MP4 + PNG sequence</option>
-                          </Select>
-                        </Field>
-                        <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                          <input
-                            type="checkbox"
-                            checked={characterPass.includeMotion}
-                            disabled={!hasMove}
-                            onChange={(event) => patchCharacterPass({
-                              ...characterPass,
-                              includeMotion: event.target.checked,
-                            })}
-                            className="accent-[var(--accent)]"
-                            data-export-character-pass-motion
-                          />
-                          Include motion output
-                        </label>
-                        {showGreenField && characterPass.includeMotion && hasMove && (
-                          <div className="flex items-end gap-2">
-                            <div className="flex-1">
-                              <Field label="Background">
-                                <TextInput
-                                  value={characterPass.backgroundColor}
-                                  onChange={(event) => patchCharacterPass({
-                                    ...characterPass,
-                                    backgroundColor: event.target.value,
-                                  })}
-                                  onBlur={(event) => patchCharacterPass({
-                                    ...characterPass,
-                                    backgroundColor: event.target.value.trim() || DEFAULT_CHARACTER_PASS_BACKGROUND,
-                                  })}
-                                  data-export-character-pass-bg
-                                />
-                              </Field>
-                            </div>
-                            <button
-                              type="button"
-                              className="mb-0.5 rounded-lg border border-subtle px-2 py-2 text-[11px] text-secondary transition hover:text-primary"
-                              onClick={() => patchCharacterPass({
-                                ...characterPass,
-                                backgroundColor: DEFAULT_CHARACTER_PASS_BACKGROUND,
-                              })}
-                              data-export-character-pass-bg-reset
-                            >
-                              Reset
-                            </button>
-                          </div>
-                        )}
-                        {hasMove && characterPass.includeMotion && (
-                          <p
-                            className="text-[11px] text-muted"
-                            data-export-character-pass-timing
-                          >
-                            {timing.frameCount} frames · {timing.width} × {timing.height} · {timing.frameRate} fps
-                          </p>
-                        )}
-                        {showSequenceWarn && (
-                          <p
-                            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
-                            data-export-character-pass-size-warning
-                          >
-                            Transparent PNG sequences at this length can use a lot of browser memory.
-                            Prefer green-screen MP4 when possible, or shorten the move.
-                          </p>
-                        )}
-                      </div>
-                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                        <input
-                          type="checkbox"
-                          checked={characterPass.includeAttachedProps}
-                          onChange={(event) => patchCharacterPass({
-                            ...characterPass,
-                            includeAttachedProps: event.target.checked,
-                          })}
-                          className="accent-[var(--accent)]"
-                          data-export-character-pass-attachments
-                        />
-                        Include character-linked props
-                      </label>
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-            {(() => {
-              const depth = normalizeShotDepthSettings(
-                selectedShot.exportSettings.depth ?? defaultShotDepthSettings,
-              );
-              const patchDepth = (next: typeof depth) => updateShot(selectedShot.id, {
-                exportSettings: {
-                  ...selectedShot.exportSettings,
-                  depth: next,
-                },
-              });
-              return (
-                <div className="space-y-2 rounded-xl border border-subtle p-3" data-export-depth-settings>
-                  <label className="flex items-center gap-2 text-sm text-secondary">
-                    <input
-                      type="checkbox"
-                      checked={depth.enabled}
-                      onChange={(event) => patchDepth({ ...depth, enabled: event.target.checked })}
-                      className="accent-[var(--accent)]"
-                      data-export-depth-enabled
-                    />
-                    Depth reference (linear camera depth)
-                  </label>
-                  {depth.enabled && (
-                    <>
-                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                        <input
-                          type="checkbox"
-                          checked={depth.includeViewportStill}
-                          onChange={(event) => patchDepth({
-                            ...depth,
-                            includeViewportStill: event.target.checked,
-                          })}
-                          className="accent-[var(--accent)]"
-                          data-export-depth-viewport-still
-                        />
-                        Viewport depth still
-                      </label>
-                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                        <input
-                          type="checkbox"
-                          checked={depth.includeReferenceFrames}
-                          onChange={(event) => patchDepth({
-                            ...depth,
-                            includeReferenceFrames: event.target.checked,
-                          })}
-                          className="accent-[var(--accent)]"
-                          data-export-depth-reference-frames
-                        />
-                        Camera move depth frames
-                      </label>
-                      <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                        <input
-                          type="checkbox"
-                          checked={depth.includeCameraMoveVideo}
-                          onChange={(event) => patchDepth({
-                            ...depth,
-                            includeCameraMoveVideo: event.target.checked,
-                          })}
-                          className="accent-[var(--accent)]"
-                          data-export-depth-camera-move-video
-                        />
-                        Camera move depth MP4
-                      </label>
-                      <DepthSettingsPanel
-                        depth={depth}
-                        resolvedRange={{
-                          nearMeters: depth.nearMeters ?? 0.5,
-                          farMeters: depth.farMeters ?? 18.2,
-                        }}
-                        onChange={patchDepth}
-                        compact
-                      />
-                      <p className="text-[11px] leading-snug text-muted">
-                        Depth range is shared across stills, reference frames, and motion for the whole shot.
-                      </p>
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-            {([
-              ['includeViewport', 'Viewport clay render'],
-              ['includeProjectedViewport', 'Viewport projected render (with clay when available)'],
-              ['includeAiResultFrame', 'AI result frame (if already attached)'],
-              ['includePanoCrop', 'Pano crop'],
-              ['includeFullPano', 'Styled reference pano'],
-              ['includeGrayboxPano', 'Graybox pano'],
-              ['includeCameraMoveVideo', 'Camera move clay MP4'],
-              ['includeProjectedCameraMoveVideo', 'Camera move projected MP4'],
-              ['includeCameraMoveReferenceFrames', 'Camera move clay frames'],
-              ['includeProjectedCameraMoveReferenceFrames', 'Camera move projected frames'],
-              ['includeMetadata', 'Metadata JSON'],
-              ['includePrompt', 'Prompts'],
-            ] as const).map(([key, label]) => (
-              <div key={key} className="space-y-1">
-                <label className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-sm text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(selectedShot.exportSettings[key])}
-                    onChange={(event) => updateShot(selectedShot.id, {
-                      exportSettings: { ...selectedShot.exportSettings, [key]: event.target.checked },
-                    })}
-                    className="accent-[var(--accent)]"
-                  />
-                  {label}
-                </label>
-                {key === 'includePrompt' && shouldShowMissingLandmarkPromptNote(project, selectedShot) && (
-                  <p
-                    data-export-prompt-landmark-note
-                    className="px-1 text-[11px] leading-snug text-muted"
-                  >
-                    No continuity landmarks are pinned for this shot.
-                  </p>
-                )}
-              </div>
-            ))}
-            <IconButton onClick={() => void exportShot()} disabled={isExportingPackage} className="w-full">
-              <FileJson className="h-4 w-4" />
-              Export Final ZIP (current shot)
-            </IconButton>
-            <IconButton onClick={() => addCamera({ navigateToShots: false })} disabled={isExportingPackage} className="w-full">
-              Add Camera
-            </IconButton>
-          </div>
-        ) : (
-          <p className="text-sm text-secondary">Select a shot to configure export settings.</p>
-        )}
+        <ExportSettingsPanel
+          project={project}
+          selectedShot={selectedShot}
+          selectedShotIds={selectedShotIds}
+          isExportingPackage={isExportingPackage}
+          onExportCurrentShot={() => void exportShot()}
+          onAddCamera={() => addCamera({ navigateToShots: false })}
+          patchSceneExportDefaults={patchSceneExportDefaults}
+          updateShotResolvedSettings={(shotId, settings) => updateShot(shotId, { exportSettings: settings })}
+          resetShotExportField={resetShotExportField}
+          resetShotExportOverrides={resetShotExportOverrides}
+          copyShotExportOverrides={copyShotExportOverrides}
+          promoteShotExportToSceneDefaults={promoteShotExportToSceneDefaults}
+        />
       </PrecisionDrawer>
     </FullBleedLayout>
   );
