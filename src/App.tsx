@@ -25,9 +25,11 @@ import type { Workspace } from './domain/types';
 import type { ProjectSaveStatus } from './engine/projectSafety';
 import { BRAND, projectBackupAcceptAttribute, readMigratedPreference } from './config/brand';
 import { useAppModeStore } from './state/useAppModeStore';
+import { useAgentControlStore } from './state/useAgentControlStore';
 import { useProjectStore } from './state/useProjectStore';
 import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
+import { useForeSceneAgentApi } from './hooks/useForeSceneAgentApi';
 import { useProjectLifecycle } from './hooks/useProjectLifecycle';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
@@ -85,6 +87,9 @@ export default function App() {
   const projectSaveMessage = useProjectSafetyStore((state) => state.message);
   const projectLastSavedAt = useProjectSafetyStore((state) => state.lastSavedAt);
   const criticalProjectWrite = useProjectSafetyStore((state) => state.criticalWrite);
+  const agentControlMode = useAgentControlStore((state) => state.controlMode);
+  const setAgentControlMode = useAgentControlStore((state) => state.setControlMode);
+  useForeSceneAgentApi();
 
   const {
     fileRef,
@@ -361,6 +366,26 @@ export default function App() {
               className="pointer-events-auto flex shrink-0 items-center overflow-hidden rounded-2xl border border-subtle/80 bg-surface-overlay/80 shadow-card backdrop-blur-sm md:absolute md:right-7 md:top-3"
               data-header-actions
             >
+              {agentControlMode === 'read-write' && (
+                <div
+                  className="flex h-11 items-center gap-2 border-r border-subtle/70 px-2"
+                  data-agent-control-badge="active"
+                  role="status"
+                >
+                  <span className="hidden text-xs font-medium text-amber-700 dark:text-amber-300 sm:inline">
+                    Agent control active
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-subtle/80 px-2 py-1 text-xs font-medium text-primary hover:border-strong"
+                    data-agent-control-stop
+                    onClick={() => setAgentControlMode('read-only')}
+                    title="Disable agent write access"
+                  >
+                    Stop
+                  </button>
+                </div>
+              )}
               {!isPanoViewer && !helpOpen && (
                 <>
                   <div
