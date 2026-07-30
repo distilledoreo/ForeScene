@@ -107,6 +107,7 @@ describe('ui revamp fidelity surfaces', () => {
     const shortcuts = readFileSync(new URL('../src/engine/buildShortcuts.ts', import.meta.url), 'utf8');
     const reference = readFileSync(new URL('../src/components/workspaces/ReferenceWorkspace.tsx', import.meta.url), 'utf8');
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
+    const exportSettingsPanel = readFileSync(new URL('../src/components/export/ExportSettingsPanel.tsx', import.meta.url), 'utf8');
     const packageExport = readFileSync(new URL('../src/engine/packageExport.ts', import.meta.url), 'utf8');
     const help = readFileSync(new URL('../src/components/workspaces/HelpWorkspace.tsx', import.meta.url), 'utf8');
 
@@ -119,8 +120,9 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shortcuts).not.toContain("'ControlLeft'");
     expect(shortcuts).not.toContain("'ControlRight'");
     expect(reference).toContain('ProjectedStylePanel');
-    expect(exportWorkspace).toContain('includeProjectedViewport');
-    expect(exportWorkspace).toContain('includeProjectedCameraMoveVideo');
+    expect(exportWorkspace).toContain('ExportSettingsPanel');
+    expect(exportSettingsPanel).toContain('includeProjectedViewport');
+    expect(exportSettingsPanel).toContain('includeProjectedCameraMoveVideo');
     expect(packageExport).toContain('viewport_projected.png');
     expect(packageExport).toContain('viewport_projected_motion.mp4');
     expect(packageExport).toContain("appearance: 'projected'");
@@ -320,10 +322,15 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).not.toContain("label={isRenderingFrame ? 'Rendering...' : 'Render Shot Preview'}");
   });
 
-  it('labels export settings as active-shot scope only', () => {
+  it('labels export settings with scene defaults and shot overrides', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
-    expect(exportWorkspace).toContain('data-export-settings-scope');
-    expect(exportWorkspace).toContain('active shot');
+    const exportSettingsPanel = readFileSync(new URL('../src/components/export/ExportSettingsPanel.tsx', import.meta.url), 'utf8');
+    expect(exportWorkspace).toContain('ExportSettingsPanel');
+    expect(exportSettingsPanel).toContain('data-export-settings-scope');
+    expect(exportSettingsPanel).toContain('Scene Export Settings');
+    expect(exportSettingsPanel).toContain('Customize this shot');
+    expect(exportSettingsPanel).toContain('Reset to scene settings');
+    expect(exportSettingsPanel).toContain('data-export-inheritance-badge');
   });
 
   it('uses camera-style bottom chrome without a floating shot dossier', () => {
@@ -649,6 +656,7 @@ describe('ui revamp fidelity surfaces', () => {
 
   it('keeps export multi-select reconciled and add-camera local to export', () => {
     const exportWorkspace = readFileSync(new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url), 'utf8');
+    const exportSettingsPanel = readFileSync(new URL('../src/components/export/ExportSettingsPanel.tsx', import.meta.url), 'utf8');
     const projectSlice = readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8');
     const workflowSlice = readFileSync(new URL('../src/state/slices/workflowSlice.ts', import.meta.url), 'utf8');
     expect(exportWorkspace).toContain('reconcileExportSelectedShotIds');
@@ -661,8 +669,8 @@ describe('ui revamp fidelity surfaces', () => {
     expect(exportWorkspace).toContain('data-export-progress-panel');
     expect(exportWorkspace).toContain('abortRef.current?.abort()');
     expect(exportWorkspace).not.toContain('WarningPopover');
-    expect(exportWorkspace).toContain('shouldShowMissingLandmarkPromptNote');
-    expect(exportWorkspace).toContain('data-export-prompt-landmark-note');
+    expect(exportSettingsPanel).toContain('shouldShowMissingLandmarkPromptNote');
+    expect(exportSettingsPanel).toContain('data-export-prompt-landmark-note');
     expect(exportWorkspace).toContain('Handoff packages');
     expect(workflowSlice).toContain('An export is currently running. Cancel it and leave?');
     expect(projectSlice).toContain('navigateToShots?: boolean');

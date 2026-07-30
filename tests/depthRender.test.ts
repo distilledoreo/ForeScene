@@ -195,13 +195,18 @@ describe('shot depth settings', () => {
       new URL('../src/components/workspaces/ExportWorkspace.tsx', import.meta.url),
       'utf8',
     );
+    const exportSettingsPanel = readFileSync(
+      new URL('../src/components/export/ExportSettingsPanel.tsx', import.meta.url),
+      'utf8',
+    );
     expect(toggle).toContain('Depth');
     expect(toggle).toContain("onChange('depth')");
     expect(panel).toContain('data-depth-range-legend');
     expect(panel).toContain('data-depth-invert');
     expect(shots).toContain('data-shots-depth-settings');
     expect(shots).toContain('DepthSettingsPanel');
-    expect(exportWorkspace).toContain('data-export-depth-camera-move-video');
-    expect(exportWorkspace).toContain('data-export-depth-reference-frames');
+    expect(exportWorkspace).toContain('ExportSettingsPanel');
+    expect(exportSettingsPanel).toContain('data-export-depth-camera-move-video');
+    expect(exportSettingsPanel).toContain('data-export-depth-reference-frames');
   });
 });
