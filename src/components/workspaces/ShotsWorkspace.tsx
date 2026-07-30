@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/shallow';
 import {
+  Bone,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ import {
 import {
   CameraData,
   CameraKeyframeEasing,
+  HumanPose,
   PeopleExportMode,
   SceneObject,
   Shot,
@@ -73,6 +75,7 @@ import { canUseProjectedAppearance } from '../../engine/projectedStyle';
 import {
   canStageObjectPerShot,
   clearShotObjectOverride,
+  clearShotObjectPoseOverride,
   filterStagingObjectList,
   getSceneObjectStagingRole,
   resolveProjectForShot,
@@ -80,9 +83,10 @@ import {
   updateShotObjectOverrides,
   type StagingObjectListScope,
 } from '../../engine/shotSceneState';
+import { isPoseableSceneObject } from '../../engine/humanPose';
 import { resolveKeyframePreviewUri } from '../../domain/shotMedia';
-import type { GizmoMode } from '../../engine/transformGizmo';
 import { AppearanceModeToggle } from '../common/AppearanceModeToggle';
+import { CharacterPosePanel } from '../common/CharacterPosePanel';
 import { DepthSettingsPanel } from '../common/DepthSettingsPanel';
 import { normalizeShotDepthSettings, defaultShotDepthSettings } from '../../domain/defaults';
 import { formatDepthRangeLegend } from '../../engine/depthRender';
@@ -190,7 +194,11 @@ export function ShotsWorkspace() {
     stagingMode,
     setStagingMode,
     stagingGizmoMode,
-    setStagingGizmoMode,
+    stagingPoseEdit,
+    selectedPoseJointId,
+    setSelectedPoseJointId,
+    stagingEditMode,
+    setStagingEditMode,
     stagedObjectId,
     setStagedObjectId,
     showPeopleInViewport,
@@ -230,6 +238,8 @@ export function ShotsWorkspace() {
   const stagedObject = stagedObjectId
     ? shotSceneProject.scene.objects.find((object) => object.id === stagedObjectId)
     : undefined;
+  const stagedObjectPoseable = Boolean(stagedObject && isPoseableSceneObject(stagedObject));
+  const posingStagedCharacter = stagingMode && stagedObjectPoseable && stagingPoseEdit;
   const [stagingListScope, setStagingListScope] = useState<StagingObjectListScope>('people_props');
   const [stagingListQuery, setStagingListQuery] = useState('');
   const stagingObjectList = useMemo(
@@ -741,6 +751,8 @@ export function ShotsWorkspace() {
     }
     setStagingMode(true);
     setStagedObjectId(undefined);
+    setStagingEditMode('translate');
+    setSelectedPoseJointId(undefined);
     setStagingListScope('people_props');
     setStagingListQuery('');
   }, [
@@ -748,6 +760,8 @@ export function ShotsWorkspace() {
     landShotFraming,
     selectedKeyframeId,
     selectedShot,
+    setSelectedPoseJointId,
+    setStagingEditMode,
     shotCameraFlying,
     stopCameraMovePreview,
     viewportObjectOverrides,
@@ -756,19 +770,28 @@ export function ShotsWorkspace() {
   const exitStagingMode = useCallback(() => {
     setStagingMode(false);
     setStagedObjectId(undefined);
+    setStagingEditMode('translate');
+    setSelectedPoseJointId(undefined);
     setStagingListScope('people_props');
     setStagingListQuery('');
     startFlyCamera({ clearFramingAcceptance: false });
-  }, [startFlyCamera]);
+  }, [setSelectedPoseJointId, setStagingEditMode, startFlyCamera]);
 
   const selectStagedObject = useCallback((id?: string) => {
     if (!id) {
       setStagedObjectId(undefined);
+      setSelectedPoseJointId(undefined);
+      setStagingEditMode('translate');
       return;
     }
     const object = shotSceneProject.scene.objects.find((item) => item.id === id);
-    setStagedObjectId(object && canStageObjectPerShot(object) ? id : undefined);
-  }, [shotSceneProject.scene.objects]);
+    const nextId = object && canStageObjectPerShot(object) ? id : undefined;
+    setStagedObjectId(nextId);
+    setSelectedPoseJointId(undefined);
+    if (!nextId || !object || !isPoseableSceneObject(object)) {
+      setStagingEditMode('translate');
+    }
+  }, [setSelectedPoseJointId, setStagingEditMode, shotSceneProject.scene.objects]);
 
   const updateStagedTransform = useCallback((objectId: string, transform: Transform) => {
     if (!selectedShot) return;
@@ -790,6 +813,28 @@ export function ShotsWorkspace() {
     }
     updateShot(selectedShot.id, {
       objectOverrides: updateShotObjectOverrides(selectedShot, baseObject, { transform }),
+    });
+  }, [project.scene.objects, selectedKeyframeId, selectedShot, updateShot]);
+
+  const updateStagedPose = useCallback((objectId: string, humanPose: HumanPose) => {
+    if (!selectedShot) return;
+    const baseObject = project.scene.objects.find((object) => object.id === objectId);
+    if (!baseObject || !canStageObjectPerShot(baseObject) || !isPoseableSceneObject(baseObject)) return;
+    if (selectedKeyframeId) {
+      setViewportObjectOverrides((previous) => {
+        const base = previous !== undefined
+          ? previous
+          : (selectedShot.objectOverrides ?? {});
+        return updateShotObjectOverrides(
+          { objectOverrides: base },
+          baseObject,
+          { humanPose },
+        );
+      });
+      return;
+    }
+    updateShot(selectedShot.id, {
+      objectOverrides: updateShotObjectOverrides(selectedShot, baseObject, { humanPose }),
     });
   }, [project.scene.objects, selectedKeyframeId, selectedShot, updateShot]);
 
@@ -836,6 +881,20 @@ export function ShotsWorkspace() {
     }
     updateShot(selectedShot.id, {
       objectOverrides: clearShotObjectOverride(selectedShot, stagedObjectId),
+    });
+  }, [selectedKeyframeId, selectedShot, stagedObjectId, updateShot]);
+
+  const resetStagedPose = useCallback(() => {
+    if (!selectedShot || !stagedObjectId) return;
+    if (selectedKeyframeId) {
+      setViewportObjectOverrides((previous) => {
+        const base = previous !== undefined ? previous : (selectedShot.objectOverrides ?? {});
+        return clearShotObjectPoseOverride({ objectOverrides: base }, stagedObjectId);
+      });
+      return;
+    }
+    updateShot(selectedShot.id, {
+      objectOverrides: clearShotObjectPoseOverride(selectedShot, stagedObjectId),
     });
   }, [selectedKeyframeId, selectedShot, stagedObjectId, updateShot]);
 
@@ -1011,12 +1070,15 @@ export function ShotsWorkspace() {
             )}
             onDepthRangeChange={setDepthPreviewRange}
             objectEditingActive={stagingMode}
-            showTransformGizmo={stagingMode && Boolean(stagedObjectId)}
+            showTransformGizmo={stagingMode && Boolean(stagedObjectId) && !posingStagedCharacter}
             gizmoMode={stagingGizmoMode}
+            poseEditActive={posingStagedCharacter}
+            selectedPoseJointId={selectedPoseJointId}
+            onSelectPoseJoint={posingStagedCharacter ? setSelectedPoseJointId : undefined}
             snapToGrid={false}
             onSelectObject={stagingMode ? selectStagedObject : undefined}
-            onMoveObjectInSpace={stagingMode ? moveStagedObject : undefined}
-            onRotateObject={stagingMode ? rotateStagedObject : undefined}
+            onMoveObjectInSpace={stagingMode && !posingStagedCharacter ? moveStagedObject : undefined}
+            onRotateObject={stagingMode && !posingStagedCharacter ? rotateStagedObject : undefined}
             minHeightClassName="min-h-0"
             parentFinalizeShotFovWheelBatchRef={finalizeShotFovWheelBatchRef}
             onOcclusionStatusChange={(status) => useProjectStore.getState().setProjectedOcclusionStatus(status)}
@@ -1103,7 +1165,7 @@ export function ShotsWorkspace() {
         </div>
 
         {stagingMode && (
-          <div className="pointer-events-auto absolute left-4 top-[calc(var(--stage-header-safe)+3.25rem)] z-20 w-72 rounded-2xl border border-white/15 bg-black/70 p-3 text-white shadow-soft backdrop-blur-md" data-shots-staging-panel>
+          <div className="pointer-events-auto absolute left-4 top-[calc(var(--stage-header-safe)+3.25rem)] z-20 w-72 max-h-[min(70vh,36rem)] overflow-y-auto rounded-2xl border border-white/15 bg-black/70 p-3 text-white shadow-soft backdrop-blur-md" data-shots-staging-panel>
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold">Per-shot staging</div>
@@ -1112,18 +1174,80 @@ export function ShotsWorkspace() {
                   {captureMode === 'video' ? ' Start/end keyframes freeze poses for video.' : ''}
                 </div>
               </div>
-              <div className="flex gap-1">
-                <button type="button" onClick={() => setStagingGizmoMode('translate')} className={`rounded-lg p-2 ${stagingGizmoMode === 'translate' ? 'bg-white text-black' : 'bg-white/10 text-white'}`} title="Move"><Move3D className="h-4 w-4" /></button>
-                <button type="button" onClick={() => setStagingGizmoMode('rotate')} className={`rounded-lg p-2 ${stagingGizmoMode === 'rotate' ? 'bg-white text-black' : 'bg-white/10 text-white'}`} title="Rotate"><RotateCw className="h-4 w-4" /></button>
+              <div className="flex gap-1" data-shots-staging-edit-modes>
+                <button
+                  type="button"
+                  onClick={() => setStagingEditMode('translate')}
+                  className={`rounded-lg p-2 ${stagingEditMode === 'translate' ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
+                  title="Move"
+                  data-shots-staging-mode-move
+                  aria-pressed={stagingEditMode === 'translate'}
+                >
+                  <Move3D className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStagingEditMode('rotate')}
+                  className={`rounded-lg p-2 ${stagingEditMode === 'rotate' ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
+                  title="Rotate"
+                  data-shots-staging-mode-rotate
+                  aria-pressed={stagingEditMode === 'rotate'}
+                >
+                  <RotateCw className="h-4 w-4" />
+                </button>
+                {stagedObjectPoseable && (
+                  <button
+                    type="button"
+                    onClick={() => setStagingEditMode('pose')}
+                    className={`rounded-lg p-2 ${stagingEditMode === 'pose' ? 'bg-white text-black' : 'bg-white/10 text-white'}`}
+                    title="Pose"
+                    data-shots-staging-mode-pose
+                    aria-pressed={stagingEditMode === 'pose'}
+                  >
+                    <Bone className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
             {stagedObject ? (
               <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
                 <div className="truncate text-xs font-semibold">{stagedObject.name}</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button type="button" onClick={toggleStagedObjectVisibility} className="rounded-lg bg-white/10 px-2 py-2 text-xs hover:bg-white/15">{stagedObject.visible ? 'Hide in shot' : 'Show in shot'}</button>
-                  <button type="button" onClick={resetStagedObject} className="rounded-lg bg-white/10 px-2 py-2 text-xs hover:bg-white/15">Reset to set</button>
-                </div>
+                <button
+                  type="button"
+                  onClick={toggleStagedObjectVisibility}
+                  className="w-full rounded-lg bg-white/10 px-2 py-2 text-xs hover:bg-white/15"
+                >
+                  {stagedObject.visible ? 'Hide in shot' : 'Show in shot'}
+                </button>
+                {stagedObjectPoseable && (
+                  <button
+                    type="button"
+                    onClick={resetStagedPose}
+                    className="w-full rounded-lg bg-white/10 px-2 py-2 text-xs hover:bg-white/15"
+                    data-shots-staging-reset-pose
+                    title="Clear only the pose override; keep position, rotation, and visibility"
+                  >
+                    Reset pose to set
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={resetStagedObject}
+                  className="w-full rounded-lg bg-white/10 px-2 py-2 text-xs hover:bg-white/15"
+                  data-shots-staging-reset-all
+                  title="Clear position, rotation, visibility, and pose overrides for this shot"
+                >
+                  Reset all staging to set
+                </button>
+                {posingStagedCharacter && (
+                  <CharacterPosePanel
+                    pose={stagedObject.humanPose}
+                    selectedJointId={selectedPoseJointId}
+                    onSelectJoint={setSelectedPoseJointId}
+                    onChangePose={(next) => updateStagedPose(stagedObject.id, next)}
+                    className="border-t border-white/10 pt-3 [&_button]:border-white/20 [&_button]:text-white/85 [&_button:hover]:bg-white/10 [&_.text-muted]:text-white/45 [&_.text-secondary]:text-white/70 [&_.bg-surface-muted]:bg-white/10 [&_.bg-accent]:bg-white [&_.bg-accent]:text-black [&_input]:accent-white"
+                  />
+                )}
               </div>
             ) : (
               <p className="mt-3 border-t border-white/10 pt-3 text-xs text-white/60">No object selected.</p>

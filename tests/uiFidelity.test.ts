@@ -656,6 +656,9 @@ describe('ui revamp fidelity surfaces', () => {
     expect(shots).toContain("title={object.visible ? undefined : 'Hidden in this shot'}");
     expect(shots).toContain('aria-label="Hidden in this shot"');
     expect(shots).toContain("object.visible ? '' : 'opacity-55'");
+    expect(shotsWorkspace).toContain('poseEditActive={posingStagedCharacter}');
+    expect(shotsWorkspace).toContain('data-shots-staging-mode-pose');
+    expect(shotsWorkspace).toContain('showTransformGizmo={stagingMode && Boolean(stagedObjectId) && !posingStagedCharacter}');
   });
 
   it('keeps export multi-select reconciled and add-camera local to export', () => {

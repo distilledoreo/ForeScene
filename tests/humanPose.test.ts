@@ -275,6 +275,21 @@ describe('poseable character foundation', () => {
     expect(result?.tip[0]).toBeCloseTo(0.5, 1);
   });
 
+  it('wires Stage pose authoring through ShotsWorkspace without mutating Build', () => {
+    const shots = readFileSync(new URL('../src/components/workspaces/ShotsWorkspace.tsx', import.meta.url), 'utf8');
+    const stagingController = readFileSync(new URL('../src/hooks/useShotStagingController.ts', import.meta.url), 'utf8');
+    expect(shots).toContain('CharacterPosePanel');
+    expect(shots).toContain('poseEditActive={posingStagedCharacter}');
+    expect(shots).toContain('updateStagedPose');
+    expect(shots).toContain('resetStagedPose');
+    expect(shots).toContain('data-shots-staging-mode-pose');
+    expect(shots).toContain('Reset pose to set');
+    expect(shots).toContain('Reset all staging to set');
+    expect(shots).toContain('clearShotObjectPoseOverride');
+    expect(stagingController).toContain("StagingEditMode = 'translate' | 'rotate' | 'pose'");
+    expect(shots).toContain('{ humanPose }');
+  });
+
   it('renames object transform helpers and keyframe recapture label', () => {
     const sceneObjects = readFileSync(new URL('../src/engine/sceneObjects.ts', import.meta.url), 'utf8');
     const keyframeStrip = readFileSync(new URL('../src/components/workspaces/KeyframeStrip.tsx', import.meta.url), 'utf8');

@@ -443,7 +443,7 @@ export const helpSections: readonly HelpSection[] = [
       {
         id: 'shots-staging',
         title: 'Per-shot staging and object animation',
-        summary: 'Shot overrides move, rotate, show, or hide objects without changing the base Build set.',
+        summary: 'Shot overrides move, rotate, pose, show, or hide objects without changing the base Build set.',
         controls: [
           { label: 'Stage / Per-shot staging', description: 'Opens the staging panel. Select an object in the viewfinder or list.' },
           { label: 'People & props', description: 'Default Stage list scope: people and movable props only, so large imported sets stay responsive.' },
@@ -451,10 +451,12 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Search staged objects…', description: 'Filters the Stage list by object name.' },
           { label: 'Move', description: 'Changes the selected object’s shot-specific position.' },
           { label: 'Rotate', description: 'Changes the selected object’s shot-specific rotation.' },
+          { label: 'Pose', description: 'For poseable characters: hides the transform gizmo, enables joint handles, and opens the pose panel. Edits write to this shot’s (or selected keyframe’s) humanPose override only.' },
           { label: 'Hide in shot / Show in shot', description: 'Overrides visibility for this shot only.' },
-          { label: 'Reset to set', description: 'Removes the shot override and returns the object to its Build transform and visibility.' },
+          { label: 'Reset pose to set', description: 'Clears only the pose override so the character returns to its Build pose while keeping position, rotation, and visibility staging.' },
+          { label: 'Reset all staging to set', description: 'Removes the entire shot override—position, rotation, visibility, and pose—and returns the object to its Build state.' },
           { label: 'Copy staging → next', description: 'Copies the current shot’s object overrides—including character poses—to the following shot.' },
-          { label: 'Video object snapshots', description: 'Every video keyframe stores stageable-object overrides, including humanPose for posed characters, so props or characters can animate with the camera path.' },
+          { label: 'Video object snapshots', description: 'Every video keyframe stores stageable-object overrides, including humanPose for posed characters, so props or characters can animate with the camera path. With a keyframe selected, Stage pose edits go into that keyframe’s inspection map until Recapture keyframe commits them.' },
         ],
       },
       {

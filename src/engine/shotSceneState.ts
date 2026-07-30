@@ -272,3 +272,25 @@ export function clearShotObjectOverride(
   delete next[objectId];
   return next;
 }
+
+/**
+ * Clears only the per-shot / keyframe `humanPose` override, leaving transform
+ * and visibility staging intact so adjusting an arm cannot teleport the character.
+ */
+export function clearShotObjectPoseOverride(
+  shot: Pick<Shot, 'objectOverrides'>,
+  objectId: string,
+): ShotObjectOverrides {
+  const existing = shot.objectOverrides?.[objectId];
+  if (!existing || existing.humanPose === undefined) {
+    return shot.objectOverrides ?? {};
+  }
+  const next = { ...(shot.objectOverrides ?? {}) };
+  const { humanPose: _cleared, ...rest } = existing;
+  if (Object.keys(rest).length === 0) {
+    delete next[objectId];
+  } else {
+    next[objectId] = rest;
+  }
+  return next;
+}
