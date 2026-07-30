@@ -85,12 +85,39 @@ test.describe('Agent API @smoke', () => {
           ref: 'actorB',
           object: { type: 'human_dummy', name: 'Actor B', position: [1.2, 0, 0] },
         },
+        {
+          op: 'shot.create',
+          ref: 'mediumShot',
+          shot: {
+            name: 'Two-shot medium',
+            camera: { position: [0, 1.6, 5], target: [0, 1.4, 0], fovDegrees: 40 },
+          },
+        },
+        {
+          op: 'shot.stageObject',
+          shot: { ref: 'mediumShot' },
+          object: { ref: 'actorA' },
+          posePreset: 'standing-neutral',
+          transform: {
+            position: [-1.0, 0.875, 0.2],
+            rotation: [0, 20, 0],
+            scale: [1, 1, 1],
+          },
+        },
         { op: 'project.updateInfo', name: 'Agent E2E Set' },
       ],
     }));
     expect(applied.ok).toBe(true);
     expect(applied.verifiedRevisionId).toBeTruthy();
     expect(applied.summary?.affectedObjectIds.length).toBe(2);
+    expect(applied.summary?.affectedShotIds.length).toBeGreaterThanOrEqual(1);
+
+    const staged = await page.evaluate(() => {
+      const shot = window.foreScene!.listShots().find((item) => item.name === 'Two-shot medium');
+      if (!shot) return null;
+      return window.foreScene!.inspectShot({ id: shot.id });
+    });
+    expect(staged?.overrideObjectCount).toBeGreaterThanOrEqual(1);
 
     await waitForVerifiedSave(page);
 
