@@ -379,7 +379,7 @@ describe('project workflow logic', () => {
       .toContain(`${root}/inputs/pano_crop.png`);
   });
 
-  it('adds an imported AI result frame to the package manifest only after one exists', () => {
+  it('adds an imported AI result frame to the package manifest only after a registry asset exists', () => {
     const project = createDefaultProject();
     const shot = createShot({
       index: 1,
@@ -394,12 +394,25 @@ describe('project workflow logic', () => {
     });
     project.shots.push(shot);
     const root = createShotPackageManifest(project, shot).rootFolder;
+    const aiResultPath = `${root}/outputs/ai_result_frame.png`;
     expect(createShotPackageManifest(project, shot).files.map((file) => file.path))
-      .not.toContain(`${root}/outputs/ai_result_frame.png`);
+      .not.toContain(aiResultPath);
 
+    // Dangling ID is not an existing asset — omit from inventory.
     shot.assets.aiResultFrameAssetId = 'asset_ai_result';
     expect(createShotPackageManifest(project, shot).files.map((file) => file.path))
-      .toContain(`${root}/outputs/ai_result_frame.png`);
+      .not.toContain(aiResultPath);
+
+    const aiResultAsset = createPanoAsset({
+      name: 'ai_result.png',
+      uri: 'data:image/png;base64,AIRESULT',
+      width: 64,
+      height: 36,
+    });
+    aiResultAsset.id = 'asset_ai_result';
+    project.assets.assets[aiResultAsset.id] = aiResultAsset;
+    expect(createShotPackageManifest(project, shot).files.map((file) => file.path))
+      .toContain(aiResultPath);
   });
 
   it('keeps priority export output paths in capped preview lists', () => {
