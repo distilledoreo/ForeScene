@@ -45,9 +45,19 @@ const ALLOWED_WORKSPACES = new Set<string>(AGENT_WORKSPACES);
 const ALLOWED_OPS = new Set<string>(AGENT_EXECUTABLE_OPS);
 const ALLOWED_PRESETS = new Set(HUMAN_POSE_PRESETS.map((preset) => preset.id));
 
-/** Accept architecture-doc alias for the neutral standing pose. */
+/** Accept architecture-doc / previs semantic aliases for pose presets. */
 const POSE_PRESET_ALIASES: Record<string, string> = {
   'standing-neutral': 'neutral',
+  'standing-alert': 'standing-relaxed',
+  'standing-defensive': 'elbows-bent',
+  running: 'walk-contact-left',
+  kneeling: 'crouching',
+  seated: 'sitting',
+  reaching: 'reaching-right',
+  'holding-object': 'holding-waist',
+  'shield-ready': 'elbows-bent',
+  'sword-ready': 'pointing',
+  injured: 'crouching',
 };
 
 export function parseForeSceneAgentPlan(input: unknown): AgentPlanParseResult {
@@ -447,6 +457,8 @@ function parseShotCreate(
   let shotPayload: {
     name?: string;
     description?: string;
+    shotNumber?: string;
+    productionShotId?: string;
     camera?: Partial<CameraData>;
   } = {};
   if (record.shot !== undefined) {
@@ -457,10 +469,19 @@ function parseShotCreate(
     const shotRecord = record.shot as Record<string, unknown>;
     const name = readOptionalString(shotRecord.name, `${path}.shot.name`, errors, warnings);
     const description = readOptionalString(shotRecord.description, `${path}.shot.description`, errors, warnings);
+    const shotNumber = readOptionalString(shotRecord.shotNumber, `${path}.shot.shotNumber`, errors, warnings);
+    const productionShotId = readOptionalString(
+      shotRecord.productionShotId,
+      `${path}.shot.productionShotId`,
+      errors,
+      warnings,
+    );
     const camera = parsePartialCamera(shotRecord.camera, `${path}.shot.camera`, errors);
     shotPayload = {};
     if (name !== undefined) shotPayload.name = name;
     if (description !== undefined) shotPayload.description = description;
+    if (shotNumber !== undefined) shotPayload.shotNumber = shotNumber;
+    if (productionShotId !== undefined) shotPayload.productionShotId = productionShotId;
     if (camera) shotPayload.camera = camera;
   }
   const command: ForeSceneAgentCommand = { op: 'shot.create', shot: shotPayload };

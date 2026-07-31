@@ -93,3 +93,32 @@ Screenshots target `[data-testid="scene-viewport"]` when present, otherwise the 
 ## Agent Console
 
 The in-app **Agent Console** (Project menu) is the same API surface. Prefer the CLI for automation; use the Console for interactive paste/preview/apply while debugging plans.
+
+## `agent:previs`
+
+Orchestrates shot-list → graybox project → first frames.
+
+```bash
+# Initialize / optional reset only
+npm run agent:previs -- \
+  --manifest examples/previs/minimal-dialogue.json \
+  --write --reset-project --initialize-only \
+  --output artifacts/previs
+
+# Full run
+npm run agent:previs -- \
+  --manifest examples/previs/music-video-graybox.json \
+  --write --reset-project \
+  --output artifacts/previs
+```
+
+Safety: `--reset-project` requires `--write`. Manifest hash is stored in `run-state.json`; resume refuses a silently changed manifest.
+
+## `agent:render-stills` / `agent:contact-sheet`
+
+```bash
+npm run agent:render-stills -- --write --output artifacts/previs
+npm run agent:contact-sheet -- \
+  --input artifacts/previs/shots \
+  --output artifacts/previs/contact-sheet.png
+```

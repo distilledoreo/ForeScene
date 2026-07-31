@@ -612,6 +612,14 @@ function applyShotCreate(
   shot = withShotPanoLink(ctx.project, shot, linkedPano);
   if (command.shot.name) shot.name = command.shot.name;
   if (command.shot.description !== undefined) shot.description = command.shot.description;
+  if (command.shot.shotNumber) {
+    shot.shotNumber = command.shot.shotNumber;
+  }
+  if (command.shot.productionShotId) {
+    shot.productionShotId = command.shot.productionShotId;
+  } else if (command.shot.shotNumber) {
+    shot.productionShotId = command.shot.shotNumber;
+  }
   shot.objectOverrides = structuredClone(sourceShot?.objectOverrides ?? {});
 
   ctx.project = touchProject({

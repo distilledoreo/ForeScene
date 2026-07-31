@@ -177,3 +177,21 @@ npm run agent:run -- --plan plans/conversation.preview.json --screenshot artifac
 - Selected-keyframe transient staging
 - `file.import`
 - `viewport.capture` (screenshots use Playwright against the live canvas today)
+
+## Autonomous previs (production manifest)
+
+Higher-level graybox pipeline stacked on the Agent API. See `docs/previs-production-manifest.md`.
+
+New browser methods:
+
+- `resetProject({ name, description?, aspectRatio?, frameRate?, expectedProjectId?, resetAuthorization })` — requires read-write **and** `resetAuthorization: "reset-project"`
+- `getProjectDocument()` — read-only `structuredClone` of the live `LocationProject`
+
+`shot.create` accepts optional `shotNumber` / `productionShotId` so previs shot numbers are preserved exactly.
+
+```bash
+npm run agent:previs -- \
+  --manifest examples/previs/minimal-dialogue.json \
+  --write --reset-project \
+  --output artifacts/previs
+```

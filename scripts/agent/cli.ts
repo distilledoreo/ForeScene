@@ -9,8 +9,12 @@
  *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
  *   npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
  *   npm run agent:package -- --write --output artifacts/package.zip
+ *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
+ *   npm run agent:render-stills -- --output artifacts/previs
+ *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
  *
  * Write commands require explicit `--write` (session) or `--persist-write` (profile).
+ * Project reset additionally requires `--reset-project`.
  */
 
 import { mkdir, readFile } from 'node:fs/promises';
@@ -18,6 +22,7 @@ import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
+import { runContactSheetCli, runPrevisCli, runRenderStillsCli } from './previs';
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -31,13 +36,19 @@ function parseArgs(argv: string[]) {
   const args = {
     command: argv[0] ?? 'inspect',
     plan: undefined as string | undefined,
+    manifest: undefined as string | undefined,
     url: undefined as string | undefined,
     headless: false,
     writeAccess: false,
     persistWrite: false,
+    resetProject: false,
+    initializeOnly: false,
+    skipPackage: false,
     workspace: undefined as string | undefined,
     output: undefined as string | undefined,
     screenshot: undefined as string | undefined,
+    input: undefined as string | undefined,
+    profile: undefined as string | undefined,
     shotIds: [] as string[],
   };
 
@@ -45,6 +56,8 @@ function parseArgs(argv: string[]) {
     const token = argv[index]!;
     if (token === '--plan') {
       args.plan = argv[++index];
+    } else if (token === '--manifest') {
+      args.manifest = argv[++index];
     } else if (token === '--url') {
       args.url = argv[++index];
     } else if (token === '--headless') {
@@ -54,12 +67,22 @@ function parseArgs(argv: string[]) {
     } else if (token === '--persist-write') {
       args.persistWrite = true;
       args.writeAccess = true;
+    } else if (token === '--reset-project') {
+      args.resetProject = true;
+    } else if (token === '--initialize-only') {
+      args.initializeOnly = true;
+    } else if (token === '--skip-package') {
+      args.skipPackage = true;
     } else if (token === '--workspace') {
       args.workspace = argv[++index];
     } else if (token === '--output') {
       args.output = argv[++index];
     } else if (token === '--screenshot') {
       args.screenshot = argv[++index];
+    } else if (token === '--input') {
+      args.input = argv[++index];
+    } else if (token === '--profile') {
+      args.profile = argv[++index];
     } else if (token === '--shot') {
       const shotId = argv[++index];
       if (shotId) args.shotIds.push(shotId);
@@ -379,6 +402,53 @@ async function main() {
       output: args.output,
       shotIds: args.shotIds,
     });
+    return;
+  }
+
+  if (args.command === 'previs') {
+    if (!args.manifest) throw new Error('--manifest is required for previs');
+    if (args.resetProject) {
+      requireExplicitWrite('previs --reset-project', args.writeAccess);
+    }
+    const result = await runPrevisCli({
+      manifestPath: args.manifest,
+      url: args.url,
+      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      resetProject: args.resetProject,
+      initializeOnly: args.initializeOnly,
+      outputDir: args.output ?? 'artifacts/previs',
+      skipPackage: args.skipPackage,
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (args.command === 'render-stills') {
+    requireExplicitWrite('render-stills', args.writeAccess);
+    const result = await runRenderStillsCli({
+      url: args.url,
+      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      outputDir: args.output ?? 'artifacts/previs',
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (args.command === 'contact-sheet') {
+    if (!args.input) throw new Error('--input is required for contact-sheet');
+    if (!args.output) throw new Error('--output is required for contact-sheet');
+    const result = await runContactSheetCli({
+      inputDir: args.input,
+      outputPath: args.output,
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 

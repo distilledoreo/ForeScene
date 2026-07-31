@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Minimal Dialogue",
+    "description": "Two-character dialogue fixture for autonomous previs.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "room",
+      "name": "Interior Room",
+      "template": "interior_room",
+      "description": "Simple dialogue room"
+    }
+  ],
+  "cast": [
+    {
+      "id": "alex",
+      "name": "Alex",
+      "type": "human_dummy",
+      "height": 1.75,
+      "color": "#60a5fa",
+      "defaultPose": "standing-neutral"
+    },
+    {
+      "id": "blair",
+      "name": "Blair",
+      "type": "human_dummy",
+      "height": 1.68,
+      "color": "#f472b6",
+      "defaultPose": "standing-neutral"
+    }
+  ],
+  "props": [
+    {
+      "id": "table",
+      "name": "Table",
+      "primitive": "table",
+      "color": "#78716c"
+    }
+  ],
+  "shots": [
+    {
+      "id": "s010",
+      "shotNumber": "010",
+      "name": "Wide two-shot",
+      "description": "Alex and Blair standing across from each other.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "left" },
+          "face": "blair",
+          "pose": "standing-neutral"
+        },
+        {
+          "subject": "blair",
+          "placement": { "type": "location_slot", "slot": "right" },
+          "face": "alex",
+          "pose": "standing-neutral"
+        }
+      ],
+      "camera": {
+        "template": "two_shot",
+        "subjects": ["alex", "blair"],
+        "angle": "front",
+        "lensClass": "wide"
+      },
+      "requirements": {
+        "visibleSubjects": ["alex", "blair"]
+      }
+    },
+    {
+      "id": "s020",
+      "shotNumber": "020",
+      "name": "Alex medium",
+      "description": "Medium on Alex listening.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "face": "blair",
+          "pose": "standing-alert"
+        },
+        {
+          "subject": "blair",
+          "placement": { "type": "location_slot", "slot": "right" },
+          "face": "alex"
+        }
+      ],
+      "camera": {
+        "template": "medium",
+        "subjects": ["alex"],
+        "angle": "three_quarter",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["alex"]
+      }
+    },
+    {
+      "id": "s030",
+      "shotNumber": "030",
+      "name": "Blair OTS",
+      "description": "Over Blair's shoulder onto Alex.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "face": "blair"
+        },
+        {
+          "subject": "blair",
+          "placement": { "type": "relative", "anchor": "alex", "relation": "in_front_of" },
+          "face": "alex"
+        }
+      ],
+      "camera": {
+        "template": "over_the_shoulder",
+        "subjects": ["alex"],
+        "foregroundSubject": "blair",
+        "angle": "three_quarter",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["alex", "blair"]
+      }
+    },
+    {
+      "id": "s040",
+      "shotNumber": "040",
+      "name": "Alex close-up",
+      "description": "Close-up reaction.",
+      "locationId": "room",
+      "subjects": ["alex"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "standing-alert"
+        }
+      ],
+      "camera": {
+        "template": "close_up",
+        "subjects": ["alex"],
+        "angle": "three_quarter",
+        "lensClass": "long"
+      },
+      "requirements": {
+        "visibleSubjects": ["alex"]
+      }
+    }
+  ]
+}
