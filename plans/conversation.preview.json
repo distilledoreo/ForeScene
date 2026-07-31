@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "description": "Stage a two-person conversation (preview-only example)",
+  "commands": [
+    {
+      "op": "object.create",
+      "ref": "actorA",
+      "object": {
+        "type": "human_dummy",
+        "name": "Actor A",
+        "position": [-1.2, 0, 0]
+      }
+    },
+    {
+      "op": "object.create",
+      "ref": "actorB",
+      "object": {
+        "type": "human_dummy",
+        "name": "Actor B",
+        "position": [1.2, 0, 0]
+      }
+    },
+    {
+      "op": "shot.create",
+      "ref": "mediumShot",
+      "shot": {
+        "name": "Two-shot medium",
+        "camera": {
+          "position": [0, 1.6, 5],
+          "target": [0, 1.4, 0],
+          "fovDegrees": 40
+        }
+      }
+    },
+    {
+      "op": "shot.stageObject",
+      "shot": { "ref": "mediumShot" },
+      "object": { "ref": "actorA" },
+      "posePreset": "standing-neutral"
+    }
+  ]
+}

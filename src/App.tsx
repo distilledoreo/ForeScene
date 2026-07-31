@@ -19,15 +19,18 @@ import {
   Save,
   ShieldCheck,
   Sun,
+  Terminal,
   Upload,
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
 import type { ProjectSaveStatus } from './engine/projectSafety';
 import { BRAND, projectBackupAcceptAttribute, readMigratedPreference } from './config/brand';
 import { useAppModeStore } from './state/useAppModeStore';
+import { useAgentControlStore } from './state/useAgentControlStore';
 import { useProjectStore } from './state/useProjectStore';
 import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
+import { useForeSceneAgentApi } from './hooks/useForeSceneAgentApi';
 import { useProjectLifecycle } from './hooks/useProjectLifecycle';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
@@ -43,6 +46,7 @@ const PanoViewerWorkspace = lazy(() => import('./components/workspaces/PanoViewe
 const HelpWorkspace = lazy(() => import('./components/workspaces/HelpWorkspace').then((m) => ({ default: m.HelpWorkspace })));
 const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance').then((m) => ({ default: m.WorkflowGuidance })));
 const ProjectSafetyDialog = lazy(() => import('./components/common/ProjectSafetyDialog').then((m) => ({ default: m.ProjectSafetyDialog })));
+const AgentConsoleDialog = lazy(() => import('./components/common/AgentConsoleDialog').then((m) => ({ default: m.AgentConsoleDialog })));
 
 const workspaceItems: Array<{ id: Workspace; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'build', label: 'Build', icon: Boxes },
@@ -71,6 +75,7 @@ export default function App() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
+  const [agentConsoleOpen, setAgentConsoleOpen] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
@@ -85,6 +90,9 @@ export default function App() {
   const projectSaveMessage = useProjectSafetyStore((state) => state.message);
   const projectLastSavedAt = useProjectSafetyStore((state) => state.lastSavedAt);
   const criticalProjectWrite = useProjectSafetyStore((state) => state.criticalWrite);
+  const agentControlMode = useAgentControlStore((state) => state.controlMode);
+  const setAgentControlMode = useAgentControlStore((state) => state.setControlMode);
+  useForeSceneAgentApi();
 
   const {
     fileRef,
@@ -107,6 +115,7 @@ export default function App() {
     closeProjectOverlays: () => {
       setHelpOpen(false);
       setProjectSafetyOpen(false);
+      setAgentConsoleOpen(false);
     },
   });
 
@@ -317,6 +326,36 @@ export default function App() {
                         }}
                       />
                       <ProjectMenuButton
+                        icon={<Terminal className="h-4 w-4" />}
+                        label="Agent Console"
+                        onClick={() => {
+                          setAgentConsoleOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-agent-console-open
+                      />
+                      {agentControlMode !== 'read-write' ? (
+                        <ProjectMenuButton
+                          icon={<Terminal className="h-4 w-4" />}
+                          label="Enable Agent Writes"
+                          onClick={() => {
+                            setAgentControlMode('read-write');
+                            setProjectMenuOpen(false);
+                          }}
+                          data-agent-control-enable
+                        />
+                      ) : (
+                        <ProjectMenuButton
+                          icon={<Terminal className="h-4 w-4" />}
+                          label="Disable Agent Writes"
+                          onClick={() => {
+                            setAgentControlMode('read-only');
+                            setProjectMenuOpen(false);
+                          }}
+                          data-agent-control-disable
+                        />
+                      )}
+                      <ProjectMenuButton
                         icon={<FileJson className="h-4 w-4" />}
                         label="Export Project Backup"
                         onClick={() => {
@@ -361,6 +400,26 @@ export default function App() {
               className="pointer-events-auto flex shrink-0 items-center overflow-hidden rounded-2xl border border-subtle/80 bg-surface-overlay/80 shadow-card backdrop-blur-sm md:absolute md:right-7 md:top-3"
               data-header-actions
             >
+              {agentControlMode === 'read-write' && (
+                <div
+                  className="flex h-11 items-center gap-2 border-r border-subtle/70 px-2"
+                  data-agent-control-badge="active"
+                  role="status"
+                >
+                  <span className="hidden text-xs font-medium text-amber-700 dark:text-amber-300 sm:inline">
+                    Agent control active
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-subtle/80 px-2 py-1 text-xs font-medium text-primary hover:border-strong"
+                    data-agent-control-stop
+                    onClick={() => setAgentControlMode('read-only')}
+                    title="Disable agent write access"
+                  >
+                    Stop
+                  </button>
+                </div>
+              )}
               {!isPanoViewer && !helpOpen && (
                 <>
                   <div
@@ -479,6 +538,15 @@ export default function App() {
             onRemoveProjectHistory={removeLocalProjectHistory}
             onApplyRepair={applyProjectHealthRepair}
             onExportBackup={saveProject}
+          />
+        </Suspense>
+      )}
+
+      {agentConsoleOpen && (
+        <Suspense fallback={null}>
+          <AgentConsoleDialog
+            open={agentConsoleOpen}
+            onClose={() => setAgentConsoleOpen(false)}
           />
         </Suspense>
       )}

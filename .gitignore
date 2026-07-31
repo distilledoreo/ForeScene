@@ -2,6 +2,7 @@ node_modules/
 dist/
 artifacts/
 .tmp-*profile/
+.forescene-agent/
 *.log
 *.err.log
 .env
