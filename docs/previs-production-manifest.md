@@ -96,6 +96,11 @@ Safety:
 - `--write` alone does **not** authorize project replacement
 - `--reset-project` must be passed together with `--write`
 - Manifest hash is stored in `run-state.json`; resume refuses a silently changed manifest
+- Pass `--update-manifest` to accept a changed manifest and invalidate only affected shots (and dependents). Shot-only edits resume without `--reset-project`; location/cast/prop edits also need `--reset-project`
+- `--profile` selects a persistent Playwright user-data directory
+- Unless `--skip-package` is set, a failed package phase makes the run `ok: false`
+
+Live Chromium coverage: `npm run test:e2e:previs` (tagged `@heavy`).
 
 ## Output layout
 
