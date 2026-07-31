@@ -1,9 +1,8 @@
 /**
  * Telemetry-driven repair suggestions for structured validation issues.
- * Limited to two attempts per shot by the orchestrator.
  *
- * Applies ONE root-cause correction per attempt (priority order), then the
- * orchestrator re-renders and remeasures.
+ * Applies ONE root-cause correction per attempt. For two_shot and OTS,
+ * re-runs the dedicated template solver instead of generic dolly nudges.
  */
 
 import type { CameraData, Vec3 } from '../../domain/types';
@@ -11,7 +10,11 @@ import type { FrameValidationIssue } from './frameValidation';
 import type { ForeSceneAgentCommand } from '../agent/protocol';
 import type { ShotCompositionTelemetry } from './compositionTelemetry';
 import { FRAMING_COVERAGE } from './framing';
-import type { PrevisCameraTemplate } from './manifest';
+import type { PrevisCameraTemplate, PrevisShotDefinition } from './manifest';
+import {
+  reSolveTemplateCamera,
+  type SubjectBounds,
+} from './cameraSolver';
 
 export interface RepairPlan {
   commands: ForeSceneAgentCommand[];
@@ -48,9 +51,28 @@ export function buildRepairPlan(params: {
   template?: PrevisCameraTemplate;
   primarySubjectId?: string;
   foregroundSubjectId?: string;
+  /** Live subject bounds for template re-solves (two_shot / OTS). */
+  subjects?: SubjectBounds[];
+  aspectRatio?: number;
+  blockers?: Array<{ id?: string; min: Vec3; max: Vec3 }>;
+  /** Full shot definition when available — preferred for re-solve. */
+  shotDefinition?: PrevisShotDefinition;
 }): RepairPlan | undefined {
   const primaryIssue = selectPrimaryIssue(params.issues);
   if (!primaryIssue) return undefined;
+
+  // Template-specific re-solve for two-shot and OTS: never stack generic dolly ops.
+  if (
+    (params.template === 'two_shot' || params.template === 'over_the_shoulder')
+    && params.subjects
+    && params.subjects.length >= 1
+    && primaryIssue.code !== 'frame_blank'
+    && primaryIssue.code !== 'render_not_ready'
+    && primaryIssue.code !== 'character_underground'
+  ) {
+    const resolved = reSolveForTemplate(params, primaryIssue.code);
+    if (resolved) return resolved;
+  }
 
   const commands: ForeSceneAgentCommand[] = [];
   const notes: string[] = [];
@@ -80,8 +102,6 @@ export function buildRepairPlan(params: {
       } else {
         camera.position = moveToward(camera.position, camera.target, 0.82);
       }
-      // Vertical: if head is too low in frame (large headTopY), look down so
-      // the subject rises (headTopY decreases).
       const headY = typeof primaryIssue.measured?.headTopY === 'number'
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y;
@@ -114,15 +134,12 @@ export function buildRepairPlan(params: {
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y
           ?? 0.25;
-      // Look down so the head moves toward the top of the frame (smaller headTopY).
       camera = applyHeadroomCorrection(camera, headY, 0.10);
       cameraChanged = true;
       notes.push('reduce headroom');
       break;
     }
     case 'head_clipped': {
-      // Head is above the top of frame (headTopY too small / negative). Look up
-      // slightly and pull back so the crown re-enters.
       camera.target = [camera.target[0], camera.target[1] + 0.12, camera.target[2]];
       camera.position = moveAway(camera.position, camera.target, 1.08);
       cameraChanged = true;
@@ -253,7 +270,6 @@ export function buildRepairPlan(params: {
 
   if (commands.length === 0 && notes.length === 0) return undefined;
   if (commands.length === 0 && notes[0] === 're-render after ready') {
-    // No camera op — orchestrator still re-renders.
     return {
       commands: [],
       description: `Repair: ${notes.join(', ')}`,
@@ -269,9 +285,116 @@ export function buildRepairPlan(params: {
   };
 }
 
-/**
- * Select the single highest-priority repairable issue.
- */
+function reSolveForTemplate(
+  params: {
+    shotTarget: { id: string } | { ref: string };
+    camera: CameraData;
+    template?: PrevisCameraTemplate;
+    primarySubjectId?: string;
+    foregroundSubjectId?: string;
+    subjects?: SubjectBounds[];
+    aspectRatio?: number;
+    blockers?: Array<{ id?: string; min: Vec3; max: Vec3 }>;
+    shotDefinition?: PrevisShotDefinition;
+  },
+  issueCode: string,
+): RepairPlan | undefined {
+  const template = params.template!;
+  const subjects = params.subjects!;
+  const aspectRatio = params.aspectRatio
+    ?? params.camera.aspectRatio
+    ?? 16 / 9;
+  const primaryIds = params.shotDefinition?.camera.subjects
+    ?? (params.primarySubjectId ? [params.primarySubjectId] : subjects.map((s) => s.id));
+  const foreground = params.foregroundSubjectId
+    ?? params.shotDefinition?.camera.foregroundSubject;
+
+  const shot: PrevisShotDefinition = params.shotDefinition ?? {
+    id: 'repair',
+    shotNumber: '000',
+    name: 'repair',
+    description: 'template re-solve',
+    locationId: 'loc',
+    subjects: primaryIds,
+    camera: {
+      template,
+      subjects: primaryIds,
+      ...(foreground ? { foregroundSubject: foreground } : {}),
+    },
+  };
+
+  const solved = reSolveTemplateCamera({
+    shot: {
+      ...shot,
+      camera: {
+        ...shot.camera,
+        template,
+        subjects: primaryIds,
+        ...(foreground ? { foregroundSubject: foreground } : {}),
+      },
+    },
+    subjects,
+    aspectRatio,
+    blockers: params.blockers,
+  });
+
+  if (!solved.camera.position.every(Number.isFinite)) return undefined;
+
+  // Skip no-op re-solves.
+  const posDist = Math.hypot(
+    solved.camera.position[0] - params.camera.position[0],
+    solved.camera.position[1] - params.camera.position[1],
+    solved.camera.position[2] - params.camera.position[2],
+  );
+  const tgtDist = Math.hypot(
+    solved.camera.target[0] - params.camera.target[0],
+    solved.camera.target[1] - params.camera.target[1],
+    solved.camera.target[2] - params.camera.target[2],
+  );
+  if (posDist < 0.02 && tgtDist < 0.02) {
+    // Still emit a tiny orbit so the attempt is not a no-op when stuck.
+    if (template === 'over_the_shoulder') {
+      const nudged = {
+        position: rotateAroundTarget(solved.camera.position, solved.camera.target, 18),
+        target: solved.camera.target,
+        fovDegrees: solved.camera.fovDegrees,
+      };
+      return {
+        commands: [{
+          op: 'shot.updateCamera',
+          shot: params.shotTarget,
+          camera: {
+            position: nudged.position,
+            target: nudged.target,
+            fovDegrees: nudged.fovDegrees,
+          },
+        }],
+        description: `Repair: OTS re-solve (+orbit) for ${issueCode}`,
+        primaryIssueCode: issueCode,
+      };
+    }
+  }
+
+  return {
+    commands: [{
+      op: 'shot.updateCamera',
+      shot: params.shotTarget,
+      camera: {
+        position: solved.camera.position,
+        target: solved.camera.target,
+        fovDegrees: solved.camera.fovDegrees,
+        aspectRatio: solved.camera.aspectRatio,
+        near: solved.camera.near,
+        far: solved.camera.far,
+      },
+    }],
+    description: template === 'two_shot'
+      ? `Repair: two-shot dedicated re-solve for ${issueCode}`
+      : `Repair: OTS dedicated re-solve for ${issueCode}`,
+    primaryIssueCode: issueCode,
+  };
+}
+
 export function selectPrimaryIssue(
   issues: FrameValidationIssue[],
 ): FrameValidationIssue | undefined {
@@ -293,7 +416,6 @@ export function applyHeadroomCorrection(
   desiredHeadTopY: number,
 ): { position: Vec3; target: Vec3; fovDegrees: number } {
   const excess = headTopY - desiredHeadTopY;
-  // Positive excess → look down (decrease target Y) so subject moves up in image.
   const lookDown = excess * 0.85;
   return {
     position: [
@@ -310,13 +432,6 @@ export function applyHeadroomCorrection(
   };
 }
 
-/**
- * Predict approximate screen-Y change direction for head after headroom repair.
- * Used by unit tests — pure geometry, no WebGL.
- *
- * Returns estimated headTopY after applying the same vertical aim change used
- * in applyHeadroomCorrection, under a simplified pinhole model.
- */
 export function estimateHeadTopYAfterHeadroomRepair(params: {
   camera: CameraData;
   headWorld: Vec3;
@@ -335,7 +450,6 @@ export function estimateHeadTopYAfterHeadroomRepair(params: {
     desired,
   );
 
-  // Project head through old and new look directions on the vertical plane.
   const projectY = (cam: { position: Vec3; target: Vec3; fovDegrees: number }) => {
     const forward: Vec3 = [
       cam.target[0] - cam.position[0],
@@ -351,9 +465,7 @@ export function estimateHeadTopYAfterHeadroomRepair(params: {
     ];
     const depth = toHead[0] * f[0] + toHead[1] * f[1] + toHead[2] * f[2];
     if (depth < 1e-4) return params.headTopY;
-    // World up component relative to forward.
     const up: Vec3 = [0, 1, 0];
-    // Camera up ≈ orthogonalize world up against forward.
     const dotFU = f[0] * up[0] + f[1] * up[1] + f[2] * up[2];
     const camUp: Vec3 = [up[0] - f[0] * dotFU, up[1] - f[1] * dotFU, up[2] - f[2] * dotFU];
     const upLen = Math.hypot(camUp[0], camUp[1], camUp[2]) || 1;
@@ -361,7 +473,6 @@ export function estimateHeadTopYAfterHeadroomRepair(params: {
     const elev = toHead[0] * u[0] + toHead[1] * u[1] + toHead[2] * u[2];
     const fovRad = (cam.fovDegrees * Math.PI) / 180;
     const ndcY = elev / (depth * Math.tan(fovRad / 2));
-    // Screen Y: 0 top (matches projectWorldPoint).
     return 1 - (ndcY * 0.5 + 0.5);
   };
 

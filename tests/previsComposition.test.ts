@@ -240,6 +240,104 @@ describe('camera solver V2', () => {
     expect(ots.camera.position.every(Number.isFinite)).toBe(true);
   });
 
+  it('produces a balanced perpendicular two-shot when actors share depth', () => {
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [-1, 0, 0] });
+    const blair = subjectBoundsFromPlacement({ id: 'blair', position: [1, 0, 0], height: 1.68 });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '010',
+        camera: {
+          template: 'two_shot',
+          subjects: ['alex', 'blair'],
+          angle: 'front',
+          lensClass: 'wide',
+        },
+      }),
+      subjects: [alex, blair],
+      aspectRatio: 16 / 9,
+    });
+
+    // Camera should sit roughly perpendicular to the actor line (X axis).
+    const midX = 0;
+    const midZ = 0;
+    const camDx = solved.camera.position[0] - midX;
+    const camDz = solved.camera.position[2] - midZ;
+    // Prefer depth along Z (perpendicular to X-separated actors).
+    expect(Math.abs(camDz)).toBeGreaterThan(Math.abs(camDx) * 0.6);
+
+    // Equal depth → similar camera distance to each actor.
+    const distA = Math.hypot(
+      solved.camera.position[0] - alex.position[0],
+      solved.camera.position[2] - alex.position[2],
+    );
+    const distB = Math.hypot(
+      solved.camera.position[0] - blair.position[0],
+      solved.camera.position[2] - blair.position[2],
+    );
+    const depthRatio = Math.max(distA, distB) / Math.max(1e-4, Math.min(distA, distB));
+    expect(depthRatio).toBeLessThan(1.35);
+  });
+
+  it('OTS aims at upper torso so primary head is not mid-frame', () => {
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] });
+    const blair = subjectBoundsFromPlacement({
+      id: 'blair',
+      position: [0, 0, 1.15],
+      height: 1.68,
+      yawRadians: Math.PI,
+    });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '030',
+        camera: {
+          template: 'over_the_shoulder',
+          subjects: ['alex'],
+          foregroundSubject: 'blair',
+          angle: 'three_quarter',
+        },
+      }),
+      subjects: [alex, blair],
+      aspectRatio: 16 / 9,
+    });
+    // Target should be near chest height (~0.70 * H), not near head top (~1.0 * H).
+    const chestY = 1.75 * 0.70;
+    const headY = 1.75;
+    expect(Math.abs(solved.camera.target[1] - chestY)).toBeLessThan(
+      Math.abs(solved.camera.target[1] - headY),
+    );
+  });
+
+  it('two-shot repair re-solves rather than generic dolly', () => {
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [-1, 0, 0] });
+    const blair = subjectBoundsFromPlacement({ id: 'blair', position: [1, 0, 0] });
+    // Intentionally bad camera: close on one side → depth imbalance.
+    const badCamera = makeCamera({
+      position: [-2.5, 1.5, 0.2],
+      target: [-0.5, 1.0, 0],
+      fovDegrees: 45,
+    });
+    const plan = buildRepairPlan({
+      shotTarget: { id: 'shot-1' },
+      camera: badCamera,
+      template: 'two_shot',
+      primarySubjectId: 'alex',
+      subjects: [alex, blair],
+      aspectRatio: 16 / 9,
+      issues: [{
+        code: 'unwanted_subject_dominant',
+        message: 'imbalanced',
+      }],
+    });
+    expect(plan?.description).toMatch(/two-shot dedicated re-solve/i);
+    const cmd = plan!.commands.find((c) => c.op === 'shot.updateCamera');
+    expect(cmd && cmd.op === 'shot.updateCamera').toBe(true);
+    if (cmd && cmd.op === 'shot.updateCamera') {
+      // Should move off the side-on depth trap toward a more frontal/perp placement.
+      const midDist = Math.abs(cmd.camera.position![0]!);
+      expect(midDist).toBeLessThan(2.2);
+    }
+  });
+
   it('penalizes secondary dominance via candidate scoring for medium', () => {
     const alex = subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] });
     const blair = subjectBoundsFromPlacement({ id: 'blair', position: [0.4, 0, 0.2] });

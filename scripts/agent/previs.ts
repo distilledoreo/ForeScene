@@ -40,6 +40,7 @@ import {
   touchRunState,
   upsertEntity,
   upsertShotState,
+  subjectBoundsFromPlacement,
   validateShotFrame,
   type FrameValidationResult,
   type PrevisEntityMapping,
@@ -47,6 +48,7 @@ import {
   type PrevisRunState,
   type RemovedShotEntry,
   type ShotCompositionTelemetry,
+  type SubjectBounds,
 } from '../../src/engine/previs/index';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
@@ -343,6 +345,64 @@ function subjectNameMap(manifest: PrevisProductionManifestV1): Record<string, st
   for (const character of manifest.cast) map[character.id] = character.name;
   for (const prop of manifest.props ?? []) map[prop.id] = prop.name;
   return map;
+}
+
+const REPAIR_SOLID_TYPES = new Set([
+  'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
+]);
+
+function solidBlockersFromProject(project: LocationProject): Array<{ id: string; min: [number, number, number]; max: [number, number, number] }> {
+  const blockers: Array<{ id: string; min: [number, number, number]; max: [number, number, number] }> = [];
+  for (const object of project.scene.objects) {
+    if (!REPAIR_SOLID_TYPES.has(object.type)) continue;
+    if (object.visible === false) continue;
+    const hx = (object.dimensions[0] * object.transform.scale[0]) / 2;
+    const hy = (object.dimensions[1] * object.transform.scale[1]) / 2;
+    const hz = (object.dimensions[2] * object.transform.scale[2]) / 2;
+    const c = object.transform.position;
+    blockers.push({
+      id: object.id,
+      min: [c[0] - hx, c[1] - hy, c[2] - hz],
+      max: [c[0] + hx, c[1] + hy, c[2] + hz],
+    });
+  }
+  return blockers;
+}
+
+function buildSubjectBoundsForRepair(
+  project: LocationProject,
+  definition: import('../../src/engine/previs').PrevisShotDefinition,
+  subjectNames: Record<string, string>,
+): SubjectBounds[] {
+  const ids = new Set([
+    ...definition.subjects,
+    ...definition.camera.subjects,
+    ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
+  ]);
+  const bounds: SubjectBounds[] = [];
+  for (const id of ids) {
+    const name = subjectNames[id] ?? id;
+    const object = project.scene.objects.find((candidate) => (
+      candidate.name === name
+      || candidate.name.toLowerCase() === name.toLowerCase()
+      || candidate.name.toLowerCase().includes(id.toLowerCase())
+    ));
+    if (!object) continue;
+    const height = object.dimensions[1] * object.transform.scale[1];
+    const width = object.dimensions[0] * object.transform.scale[0];
+    const depth = object.dimensions[2] * object.transform.scale[2];
+    const floorY = object.transform.position[1] - height / 2;
+    const yaw = object.transform.rotation[1] * (Math.PI / 180);
+    bounds.push(subjectBoundsFromPlacement({
+      id,
+      position: [object.transform.position[0], floorY, object.transform.position[2]],
+      height,
+      width,
+      depth,
+      yawRadians: yaw,
+    }));
+  }
+  return bounds;
 }
 
 function resolveMappingIds(
@@ -907,9 +967,15 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       while (
         finalResult.status !== 'passed'
         && finalResult.issues.some((issue) => isRepairableIssue(issue.code))
-        && repairAttempts < 2
+        && repairAttempts < 3
         && shotState?.shotId
       ) {
+        const repairSubjects = buildSubjectBoundsForRepair(
+          project,
+          definition,
+          names,
+        );
+        const repairBlockers = solidBlockersFromProject(project);
         const repair = buildRepairPlan({
           shotTarget: { id: shotState.shotId },
           camera: shot.camera,
@@ -918,8 +984,17 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           template: definition.camera.template,
           primarySubjectId: definition.camera.subjects[0],
           foregroundSubjectId: definition.camera.foregroundSubject,
+          subjects: repairSubjects,
+          aspectRatio: shot.camera.aspectRatio ?? aspectRatioValue(manifest.project.aspectRatio),
+          blockers: repairBlockers,
+          shotDefinition: definition,
         });
         if (!repair) break;
+        // Empty command plans (e.g. re-render only) still count as an attempt.
+        if (repair.commands.length === 0 && repair.primaryIssueCode !== 'frame_blank'
+          && repair.primaryIssueCode !== 'render_not_ready') {
+          break;
+        }
 
         repairAttempts += 1;
         await applyPlanOnPage(session.page, {
@@ -988,7 +1063,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           fromCanonicalRenderer: true,
           pixelStats: reframe.pixelStats,
         });
-        if (finalResult.status !== 'passed' && repairAttempts >= 2) {
+        if (finalResult.status !== 'passed' && repairAttempts >= 3) {
           finalResult = {
             ...finalResult,
             status: finalResult.status === 'failed' ? 'needs_review' : finalResult.status,

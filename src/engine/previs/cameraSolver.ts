@@ -73,7 +73,23 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
   if (template === 'over_the_shoulder') {
     return solveOverTheShoulder(input);
   }
+  if (template === 'two_shot') {
+    return solveTwoShot(input);
+  }
 
+  return solveGenericTemplate(input);
+}
+
+/**
+ * Template-specific re-solve for repairs. Prefer this over generic dolly nudges
+ * for two_shot and over_the_shoulder.
+ */
+export function reSolveTemplateCamera(input: CameraSolveInput): CameraSolveResult {
+  return solveShotCamera(input);
+}
+
+function solveGenericTemplate(input: CameraSolveInput): CameraSolveResult {
+  const template = input.shot.camera.template;
   const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
   const angle = input.shot.camera.angle ?? defaultAngleForTemplate(template);
   const fovDegrees = verticalFovForLens(lensClass, input.aspectRatio);
@@ -121,7 +137,6 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
     profile,
   });
 
-  // Also try alternate lens classes within safe bounds.
   const lensOptions: PrevisLensClass[] = uniqueLenses(lensClass, template);
   let best: ScoredCandidate | undefined;
   let bestHardPass: ScoredCandidate | undefined;
@@ -153,18 +168,13 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
       if (!best || scored.score > best.score) {
         best = { ...scored, camera };
       }
-      // Prefer candidates that pass hard template constraints.
       if (scored.hardPass && (!bestHardPass || scored.score > bestHardPass.score)) {
         bestHardPass = { ...scored, camera };
       }
     }
   }
 
-  if (bestHardPass) {
-    best = bestHardPass;
-  } else if (template === 'two_shot') {
-    warnings.push('No two-shot candidate met hard balance constraints; using best soft score.');
-  }
+  if (bestHardPass) best = bestHardPass;
 
   if (!best) {
     const fallbackPos: Vec3 = [target[0], target[1] + 0.3, target[2] + Math.max(2, distance)];
@@ -177,7 +187,6 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
     };
   }
 
-  // Wall fallback: if best is still obstructed, hide dominant wall blockers.
   let hideBlockerIds: string[] | undefined;
   if (best.wallBlocked && blockerBoxes.length > 0) {
     const wallIds = best.blockingWallIds ?? [];
@@ -185,7 +194,6 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
       hideBlockerIds = wallIds;
       notes.push('wall_hidden_for_camera');
       warnings.push(`Hiding ${wallIds.length} wall(s) for camera clarity.`);
-      // Re-score with those walls removed.
       const remaining = blockerBoxes.filter((box) => !wallIds.includes(box.objectId));
       const rescored = scoreCandidate({
         camera: best.camera,
@@ -214,13 +222,286 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
 }
 
 // ---------------------------------------------------------------------------
+// Dedicated two-shot solver
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic balanced two-shot:
+ * midpoint → perpendicular to actor line → distance fit → target height last.
+ * Never falls back to unbalanced soft scoring when actors share depth.
+ */
+function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
+  const template = 'two_shot' as const;
+  const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
+  const profile = framingProfileForTemplate(template);
+  const warnings: string[] = [];
+  const notes: string[] = [];
+  const frameWidth = input.frameWidth ?? FRAME_W;
+  const frameHeight = input.frameHeight ?? Math.round(frameWidth / input.aspectRatio);
+  const subjectIds = new Set(input.shot.camera.subjects);
+  let primary = input.subjects.filter((subject) => subjectIds.has(subject.id));
+  if (primary.length < 2) {
+    primary = [...input.subjects].slice(0, 2);
+  }
+  if (primary.length < 2) {
+    warnings.push('two_shot requires two subjects; falling back to generic solve.');
+    return solveGenericTemplate({
+      ...input,
+      shot: { ...input.shot, camera: { ...input.shot.camera, template: 'wide' } },
+    });
+  }
+
+  const a = primary[0]!;
+  const b = primary[1]!;
+  const dx = b.position[0] - a.position[0];
+  const dz = b.position[2] - a.position[2];
+  const len = Math.hypot(dx, dz) || 1;
+  const perps: Array<[number, number]> = [
+    [-dz / len, dx / len],
+    [dz / len, -dx / len],
+  ];
+
+  const heightA = Math.max(0.4, a.max[1] - a.min[1]);
+  const heightB = Math.max(0.4, b.max[1] - b.min[1]);
+  const subjectHeight = Math.max(heightA, heightB);
+  const floorY = Math.min(a.position[1], b.position[1]);
+  // Balance first at mid-chest; refine headroom after.
+  const balanceAimY = floorY + subjectHeight * 0.62;
+  const midXZ: Vec3 = [
+    (a.position[0] + b.position[0]) / 2,
+    balanceAimY,
+    (a.position[2] + b.position[2]) / 2,
+  ];
+
+  const blockerBoxes = (input.blockers ?? []).map((box, index) => ({
+    objectId: box.id ?? `blocker_${index}`,
+    min: box.min,
+    max: box.max,
+  }));
+
+  const lensOptions = uniqueLenses(lensClass, template);
+  let bestHard: ScoredCandidate | undefined;
+  let bestAny: ScoredCandidate | undefined;
+
+  // Distance band: start near enough to fill, then pull back until both fit.
+  const baseDist = Math.max(2.2, len * 1.1 + subjectHeight * 1.4);
+
+  for (const lens of lensOptions) {
+    const fov = verticalFovForLens(lens, input.aspectRatio);
+    for (const [px, pz] of perps) {
+      for (let distScale = 0.75; distScale <= 1.85; distScale += 0.08) {
+        const distance = baseDist * distScale;
+        // Slight lateral bias keeps both subjects off the exact center line.
+        for (const lateral of [0, 0.12, -0.12]) {
+          const latX = (-pz) * lateral;
+          const latZ = px * lateral;
+          const position: Vec3 = [
+            midXZ[0] + px * distance + latX,
+            balanceAimY + subjectHeight * 0.06,
+            midXZ[2] + pz * distance + latZ,
+          ];
+          if (isInsideAny(position, blockerBoxes)) continue;
+
+          // Pass 1: balance aim only.
+          let target: Vec3 = [midXZ[0], balanceAimY, midXZ[2]];
+          let camera = makeCamera(position, target, fov, input.aspectRatio);
+          let scored = scoreCandidate({
+            camera,
+            template,
+            profile,
+            primary: [a, b],
+            allSubjects: input.subjects,
+            blockers: blockerBoxes,
+            frameWidth,
+            frameHeight,
+            declaredSubjectIds: subjectIds,
+          });
+
+          // Pass 2: only after area balance, nudge target height for headroom.
+          if (scored.hardPass || twoShotAreaRatio(scored, a.id, b.id) <= 2.4) {
+            const headA = scored.subjectScores[a.id]?.landmarks?.headTop?.y;
+            const headB = scored.subjectScores[b.id]?.landmarks?.headTop?.y;
+            if (headA !== undefined && headB !== undefined) {
+              const meanHead = (headA + headB) / 2;
+              const desired = 0.10;
+              // Look down when heads too low (large Y).
+              const excess = meanHead - desired;
+              target = [midXZ[0], balanceAimY - excess * subjectHeight * 0.55, midXZ[2]];
+              camera = makeCamera(position, target, fov, input.aspectRatio);
+              scored = scoreCandidate({
+                camera,
+                template,
+                profile,
+                primary: [a, b],
+                allSubjects: input.subjects,
+                blockers: blockerBoxes,
+                frameWidth,
+                frameHeight,
+                declaredSubjectIds: subjectIds,
+              });
+            }
+          }
+
+          const ratio = twoShotAreaRatio(scored, a.id, b.id);
+          if (ratio > 2.4) {
+            // Hard reject unbalanced depth.
+            scored = { ...scored, hardPass: false, score: scored.score - 200 };
+          }
+
+          if (!bestAny || scored.score > bestAny.score) {
+            bestAny = { ...scored, camera };
+          }
+          if (scored.hardPass && ratio <= 2.4 && (!bestHard || scored.score > bestHard.score)) {
+            bestHard = { ...scored, camera };
+          }
+        }
+      }
+    }
+  }
+
+  if (!bestHard) {
+    // Deterministic fallback: force perpendicular at a distance that equalizes scale.
+    const forced = forceBalancedTwoShotCamera({
+      a,
+      b,
+      midXZ,
+      perps,
+      subjectHeight,
+      balanceAimY,
+      fovDegrees: verticalFovForLens(lensClass, input.aspectRatio),
+      aspectRatio: input.aspectRatio,
+      blockerBoxes,
+      frameWidth,
+      frameHeight,
+      subjectIds,
+      allSubjects: input.subjects,
+      profile,
+    });
+    if (forced) {
+      bestHard = forced;
+      notes.push('two_shot_deterministic_fallback');
+    } else {
+      warnings.push('two_shot deterministic fallback could not hard-pass; using best candidate.');
+    }
+  }
+
+  const best = bestHard ?? bestAny;
+  if (!best) {
+    const fallbackPos: Vec3 = [midXZ[0], balanceAimY + 0.3, midXZ[2] + baseDist];
+    warnings.push('two_shot: no candidates; emergency fallback.');
+    return {
+      camera: makeCamera(fallbackPos, [midXZ[0], balanceAimY, midXZ[2]], verticalFovForLens(lensClass, input.aspectRatio), input.aspectRatio),
+      score: -50,
+      warnings,
+      measuredCoverage: FRAMING_COVERAGE.two_shot.target,
+    };
+  }
+
+  let hideBlockerIds: string[] | undefined;
+  if (best.wallBlocked && best.blockingWallIds?.length) {
+    hideBlockerIds = best.blockingWallIds;
+    notes.push('wall_hidden_for_camera');
+  }
+
+  return {
+    camera: best.camera,
+    score: best.score,
+    warnings,
+    measuredCoverage: best.primaryHeightCoverage,
+    hideBlockerIds,
+    notes: notes.length > 0 ? notes : undefined,
+  };
+}
+
+function twoShotAreaRatio(
+  scored: ScoredCandidate,
+  idA: string,
+  idB: string,
+): number {
+  const a = scored.subjectScores[idA]?.areaCoverage ?? 0;
+  const b = scored.subjectScores[idB]?.areaCoverage ?? 0;
+  return Math.max(a, b) / Math.max(1e-4, Math.min(a, b));
+}
+
+function forceBalancedTwoShotCamera(params: {
+  a: SubjectBounds;
+  b: SubjectBounds;
+  midXZ: Vec3;
+  perps: Array<[number, number]>;
+  subjectHeight: number;
+  balanceAimY: number;
+  fovDegrees: number;
+  aspectRatio: number;
+  blockerBoxes: Array<{ objectId: string; min: Vec3; max: Vec3 }>;
+  frameWidth: number;
+  frameHeight: number;
+  subjectIds: Set<string>;
+  allSubjects: SubjectBounds[];
+  profile: FramingProfile;
+}): ScoredCandidate | undefined {
+  // Equal depth: both actors at same distance from a pure perpendicular camera.
+  let best: ScoredCandidate | undefined;
+  for (const [px, pz] of params.perps) {
+    for (let distance = 2.0; distance <= 10; distance += 0.15) {
+      const position: Vec3 = [
+        params.midXZ[0] + px * distance,
+        params.balanceAimY + params.subjectHeight * 0.05,
+        params.midXZ[2] + pz * distance,
+      ];
+      if (isInsideAny(position, params.blockerBoxes)) continue;
+      let target: Vec3 = [params.midXZ[0], params.balanceAimY, params.midXZ[2]];
+      let camera = makeCamera(position, target, params.fovDegrees, params.aspectRatio);
+      let scored = scoreCandidate({
+        camera,
+        template: 'two_shot',
+        profile: params.profile,
+        primary: [params.a, params.b],
+        allSubjects: params.allSubjects,
+        blockers: params.blockerBoxes,
+        frameWidth: params.frameWidth,
+        frameHeight: params.frameHeight,
+        declaredSubjectIds: params.subjectIds,
+      });
+      const ratio = twoShotAreaRatio(scored, params.a.id, params.b.id);
+      if (ratio > 2.4) continue;
+
+      // Headroom after balance.
+      const headA = scored.subjectScores[params.a.id]?.landmarks?.headTop?.y;
+      const headB = scored.subjectScores[params.b.id]?.landmarks?.headTop?.y;
+      if (headA !== undefined && headB !== undefined) {
+        const meanHead = (headA + headB) / 2;
+        const excess = meanHead - 0.10;
+        target = [params.midXZ[0], params.balanceAimY - excess * params.subjectHeight * 0.55, params.midXZ[2]];
+        camera = makeCamera(position, target, params.fovDegrees, params.aspectRatio);
+        scored = scoreCandidate({
+          camera,
+          template: 'two_shot',
+          profile: params.profile,
+          primary: [params.a, params.b],
+          allSubjects: params.allSubjects,
+          blockers: params.blockerBoxes,
+          frameWidth: params.frameWidth,
+          frameHeight: params.frameHeight,
+          declaredSubjectIds: params.subjectIds,
+        });
+      }
+      if (twoShotAreaRatio(scored, params.a.id, params.b.id) > 2.4) continue;
+      if (!scored.hardPass) continue;
+      if (!best || scored.score > best.score) {
+        best = { ...scored, camera };
+      }
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 // OTS dedicated solver
 // ---------------------------------------------------------------------------
 
 function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
   const template = 'over_the_shoulder' as const;
   const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
-  const fovDegrees = verticalFovForLens(lensClass, input.aspectRatio);
   const profile = framingProfileForTemplate(template);
   const warnings: string[] = [];
   const notes: string[] = [];
@@ -259,21 +540,19 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     yawRadians: fgYaw,
   });
 
-  const primaryEyes: Vec3 = [
+  // Aim at primary upper torso/chest so primary head lands near Y 0.10–0.22.
+  const primaryAim: Vec3 = [
     primarySubject.position[0],
-    landmarkWorldY(primarySubject.position[1], primHeight, 'eyes'),
-    primarySubject.position[2],
-  ];
-  const primaryChest: Vec3 = [
-    primarySubject.position[0],
-    landmarkWorldY(primarySubject.position[1], primHeight, 'chest'),
+    primarySubject.position[1] + primHeight * (
+      HUMAN_LANDMARK_HEIGHT.chest * 0.7 + HUMAN_LANDMARK_HEIGHT.shoulders * 0.3
+    ),
     primarySubject.position[2],
   ];
 
   const candidates: Array<{ position: Vec3; target: Vec3; side: 'left' | 'right' }> = [];
   for (const side of ['left', 'right'] as const) {
     const shoulder = side === 'left' ? shoulders.left : shoulders.right;
-    // Behind shoulder, offset outward from head, slightly elevated.
+    // Behind foreground shoulder, outward — keep most of torso out of frame.
     const awayFromPrimary: Vec3 = [
       foreground.position[0] - primarySubject.position[0],
       0,
@@ -282,20 +561,26 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     const awayLen = Math.hypot(awayFromPrimary[0], awayFromPrimary[2]) || 1;
     const backX = awayFromPrimary[0] / awayLen;
     const backZ = awayFromPrimary[2] / awayLen;
-    // Outward = perpendicular to facing.
     const outX = side === 'left' ? -Math.cos(fgYaw) : Math.cos(fgYaw);
     const outZ = side === 'left' ? -Math.sin(fgYaw) : Math.sin(fgYaw);
 
-    for (const back of [0.35, 0.55, 0.75]) {
-      for (const out of [0.15, 0.28, 0.40]) {
-        for (const elev of [0.05, 0.12, 0.22]) {
+    // Closer/tighter to shoulder so FG reads as edge head/shoulder, not profile two-shot.
+    for (const back of [0.22, 0.32, 0.42, 0.55]) {
+      for (const out of [0.18, 0.28, 0.38, 0.48]) {
+        // Keep camera near shoulder height (not elevated) to reduce empty headroom.
+        for (const elev of [-0.02, 0.02, 0.06, 0.10]) {
           const position: Vec3 = [
             shoulder[0] + backX * back + outX * out,
             shoulder[1] + elev,
             shoulder[2] + backZ * back + outZ * out,
           ];
-          for (const target of [primaryEyes, primaryChest]) {
-            candidates.push({ position, target: [...target] as Vec3, side });
+          // Prefer chest/upper-torso aim; small vertical target offsets for headroom.
+          for (const tOff of [0, -0.06, -0.12, 0.05]) {
+            candidates.push({
+              position,
+              target: [primaryAim[0], primaryAim[1] + tOff, primaryAim[2]],
+              side,
+            });
           }
         }
       }
@@ -329,20 +614,32 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
         declaredSubjectIds: subjectIds,
         otsSide: candidate.side,
       });
-      // OTS-specific: foreground edge occupancy 12–35% width, primary dominant.
+
       const fg = scored.subjectScores[foreground.id];
       const prim = scored.subjectScores[primarySubject.id];
       let score = scored.score;
-      if (fg) {
-        const edge = candidate.side === 'left' ? fg.centerX : 1 - fg.centerX;
-        if (fg.widthCoverage >= 0.12 && fg.widthCoverage <= 0.35) score += 30;
-        else score -= Math.abs(fg.widthCoverage - 0.22) * 80;
-        if (edge < 0.35) score += 15;
-        // Penalize full-body centered foreground.
-        if (fg.heightCoverage > 0.75 && Math.abs(fg.centerX - 0.5) < 0.15) score -= 40;
+
+      // Primary headroom band 0.10–0.22 is a hard preference for OTS.
+      const headY = prim?.landmarks?.headTop?.y;
+      if (headY !== undefined) {
+        if (headY >= 0.10 && headY <= 0.22) score += 50;
+        else if (headY > 0.22) score -= (headY - 0.22) * 200;
+        else score -= (0.10 - headY) * 150;
       }
-      if (prim && fg && prim.areaCoverage > fg.areaCoverage * 0.8) score += 20;
-      if (prim?.faceOccluded) score -= 50;
+
+      if (fg) {
+        // Upper-body width occupancy (already preferred in scoreCandidate for OTS).
+        if (fg.widthCoverage >= 0.12 && fg.widthCoverage <= 0.32) score += 40;
+        else score -= Math.abs(fg.widthCoverage - 0.20) * 100;
+        const edge = candidate.side === 'left' ? fg.centerX : 1 - fg.centerX;
+        if (edge < 0.28) score += 25;
+        else score -= (edge - 0.28) * 80;
+        // Must hug edge — not a centered/profile second subject.
+        if (Math.abs(fg.centerX - 0.5) < 0.18) score -= 45;
+        if (fg.heightCoverage > 0.55 && Math.abs(fg.centerX - 0.5) < 0.22) score -= 50;
+      }
+      if (prim && fg && prim.areaCoverage > fg.areaCoverage * 0.9) score += 25;
+      if (prim?.faceOccluded) score -= 60;
 
       if (!best || score > best.score) {
         best = { ...scored, score, camera, side: candidate.side };
@@ -355,10 +652,58 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     return solveGenericWithOtsBias(input, warnings);
   }
 
+  // Reapply OTS framing profile after selection: fix residual headroom via aim.
+  const headY = best.subjectScores[primarySubject.id]?.landmarks?.headTop?.y;
+  if (headY !== undefined && (headY < 0.08 || headY > 0.24)) {
+    const excess = headY - 0.14;
+    const adjusted = makeCamera(
+      best.camera.position,
+      [
+        best.camera.target[0],
+        best.camera.target[1] - excess * primHeight * 0.45,
+        best.camera.target[2],
+      ],
+      best.camera.fovDegrees,
+      input.aspectRatio,
+    );
+    const rescored = scoreCandidate({
+      camera: adjusted,
+      template,
+      profile,
+      primary: [primarySubject],
+      allSubjects: input.subjects,
+      foregroundId: foreground.id,
+      blockers: blockerBoxes,
+      frameWidth,
+      frameHeight,
+      declaredSubjectIds: subjectIds,
+      otsSide: best.side,
+    });
+    best = { ...rescored, camera: adjusted, side: best.side, score: rescored.score + 10 };
+    notes.push('ots_headroom_reprofile');
+  }
+
   let hideBlockerIds: string[] | undefined;
   if (best.wallBlocked && best.blockingWallIds?.length) {
     hideBlockerIds = best.blockingWallIds;
     notes.push('wall_hidden_for_camera');
+    // Re-score framing with walls hidden so composition still matches OTS profile.
+    const remaining = blockerBoxes.filter((box) => !hideBlockerIds!.includes(box.objectId));
+    const rescored = scoreCandidate({
+      camera: best.camera,
+      template,
+      profile,
+      primary: [primarySubject],
+      allSubjects: input.subjects,
+      foregroundId: foreground.id,
+      blockers: remaining,
+      frameWidth,
+      frameHeight,
+      declaredSubjectIds: subjectIds,
+      otsSide: best.side,
+    });
+    best = { ...best, ...rescored, camera: best.camera, side: best.side };
+    notes.push('ots_reprofile_after_wall_hide');
   }
 
   return {
