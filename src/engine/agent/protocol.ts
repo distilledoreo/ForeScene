@@ -272,6 +272,10 @@ export type ForeSceneAgentCommand =
       clearPoseOnly?: boolean;
     }
   | {
+      op: 'shot.delete';
+      shot: AgentEntityTarget;
+    }
+  | {
       op: 'landmark.create';
       ref?: string;
       landmark: {
@@ -350,6 +354,7 @@ export interface AgentPlanDiff {
   objectsDeleted: string[];
   shotsCreated: string[];
   shotsUpdated: string[];
+  shotsDeleted: string[];
   landmarksCreated: string[];
   landmarksUpdated: string[];
   landmarksDeleted: string[];

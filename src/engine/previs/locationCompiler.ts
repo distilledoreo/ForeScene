@@ -15,6 +15,7 @@ import { locationZoneOrigin, sceneExtentWithinLimits } from './spatialLayout';
 import type { PrevisEntityMapping } from './runState';
 import type { Vec3 } from '../../domain/types';
 import { previsError, type PrevisDiagnostic } from './manifestDiagnostics';
+import { defaultPropDimensions } from './propDimensions';
 
 /** Agent plan refs may only contain letters, digits, _ or -. */
 export function previsRef(...parts: string[]): string {
@@ -309,23 +310,24 @@ function mapPropPrimitive(prop: PrevisPropDefinition): {
   dimensions: [number, number, number];
   color?: string;
 } {
+  const dimensions = prop.dimensions ?? defaultPropDimensions(prop.primitive);
   switch (prop.primitive) {
     case 'sphere':
-      return { type: 'terrain_mass', dimensions: [0.5, 0.5, 0.5], color: '#94a3b8' };
+      return { type: 'terrain_mass', dimensions, color: '#94a3b8' };
     case 'cylinder':
-      return { type: 'column', dimensions: [0.35, 1.0, 0.35], color: '#78716c' };
+      return { type: 'column', dimensions, color: '#78716c' };
     case 'disc':
-      return { type: 'box', dimensions: [0.8, 0.08, 0.8], color: '#a8a29e' };
+      return { type: 'box', dimensions, color: '#a8a29e' };
     case 'shield':
-      return { type: 'box', dimensions: [0.7, 1.0, 0.12], color: '#64748b' };
+      return { type: 'box', dimensions, color: '#64748b' };
     case 'sword':
-      return { type: 'box', dimensions: [0.12, 1.1, 0.08], color: '#cbd5e1' };
+      return { type: 'box', dimensions, color: '#cbd5e1' };
     case 'table':
-      return { type: 'box', dimensions: [1.6, 0.85, 0.9], color: '#6b5344' };
+      return { type: 'box', dimensions, color: '#6b5344' };
     case 'custom_simple':
     case 'box':
     default:
-      return { type: 'box', dimensions: [0.6, 0.6, 0.6], color: '#78716c' };
+      return { type: 'box', dimensions, color: '#78716c' };
   }
 }
 

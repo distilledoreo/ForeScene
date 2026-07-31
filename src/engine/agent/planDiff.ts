@@ -36,6 +36,7 @@ export function emptyPlanDiff(): AgentPlanDiff {
     objectsDeleted: [],
     shotsCreated: [],
     shotsUpdated: [],
+    shotsDeleted: [],
     landmarksCreated: [],
     landmarksUpdated: [],
     landmarksDeleted: [],
@@ -60,6 +61,7 @@ export function buildPlanSummary(params: {
   const affectedShotIds = unique([
     ...params.diff.shotsCreated,
     ...params.diff.shotsUpdated,
+    ...params.diff.shotsDeleted,
   ]);
   const affectedLandmarkIds = unique([
     ...params.diff.landmarksCreated,

@@ -258,6 +258,8 @@ function parseCommand(
       return parseShotStageObject(record, path, errors, warnings);
     case 'shot.clearStaging':
       return parseShotClearStaging(record, path, errors, warnings);
+    case 'shot.delete':
+      return parseShotDelete(record, path, errors);
     case 'landmark.create':
       return parseLandmarkCreate(record, path, refNames, errors, warnings);
     case 'landmark.update':
@@ -676,6 +678,16 @@ function parseShotClearStaging(
   if (object) command.object = object;
   if (clearPoseOnly !== undefined) command.clearPoseOnly = clearPoseOnly;
   return command;
+}
+
+function parseShotDelete(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  return { op: 'shot.delete', shot };
 }
 
 function parseLandmarkCreate(

@@ -31,6 +31,7 @@ export function compileProduction(
   options: {
     existingContext?: CompiledProductionContext;
     skipShotNumbers?: Set<string>;
+    existingShotIds?: Record<string, string>;
     batchSize?: number;
   } = {},
 ): ProductionCompileResult {
@@ -54,6 +55,7 @@ export function compileProduction(
 
   const shotBatches = compileShotList(manifest, context, {
     skipShotNumbers: options.skipShotNumbers,
+    existingShotIds: options.existingShotIds,
     batchSize: options.batchSize,
   });
   for (const batch of shotBatches) {

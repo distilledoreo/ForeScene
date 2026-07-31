@@ -96,7 +96,7 @@ Supported plan commands:
 - `project.updateInfo`
 - `object.create` / `object.update` / `object.delete` / `object.duplicate`
 - `shot.create` / `shot.rename` / `shot.updateDescription` / `shot.updateCamera`
-- `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging`
+- `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging` / `shot.delete`
 - `landmark.create` / `landmark.update` / `landmark.delete` / `landmark.linkObject`
 - `export.sceneDefaults.patch`
 - `export.shotOverrides.patch` / `reset` / `copy` / `promote`
@@ -130,6 +130,7 @@ Supported shot commands:
 - `shot.select` / `shot.copyStagingToNext`
 - `shot.stageObject` (transform, visible, humanPose, posePreset)
 - `shot.clearStaging` (`clearPoseOnly` keeps transform/visibility)
+- `shot.delete` (refuses to delete the last remaining shot)
 
 Staging never mutates Build scene objects. Absolute overrides are idempotent.
 

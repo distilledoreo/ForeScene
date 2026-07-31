@@ -19,13 +19,22 @@ export interface ManifestUpdateDiff {
   locationsChanged: string[];
   castChanged: string[];
   propsChanged: string[];
+  /** Shot numbers present in next that changed vs previous. */
   shotsChanged: string[];
+  /** Shot numbers present in previous but missing from next. */
+  shotsRemoved: string[];
   /** Shot numbers that must be recompiled (changed themselves or depend on changed entities). */
   shotsToInvalidate: string[];
   /** Scene phases that must rerun. */
   invalidateLocations: boolean;
   invalidateCast: boolean;
   invalidateProps: boolean;
+}
+
+export interface RemovedShotEntry {
+  shotNumber: string;
+  shotId?: string;
+  framePath?: string;
 }
 
 function stableJson(value: unknown): string {
@@ -72,21 +81,22 @@ function shotDependsOn(
   return false;
 }
 
-function shotChanged(
+function classifyShotEdits(
   previous: PrevisShotDefinition[] | undefined,
   next: PrevisShotDefinition[] | undefined,
-): string[] {
+): { shotsChanged: string[]; shotsRemoved: string[] } {
   const prevMap = new Map((previous ?? []).map((item) => [item.shotNumber, item]));
   const nextMap = new Map((next ?? []).map((item) => [item.shotNumber, item]));
-  const changed = new Set<string>();
+  const shotsChanged: string[] = [];
+  const shotsRemoved: string[] = [];
   for (const [shotNumber, item] of nextMap) {
     const prior = prevMap.get(shotNumber);
-    if (!prior || stableJson(prior) !== stableJson(item)) changed.add(shotNumber);
+    if (!prior || stableJson(prior) !== stableJson(item)) shotsChanged.push(shotNumber);
   }
   for (const shotNumber of prevMap.keys()) {
-    if (!nextMap.has(shotNumber)) changed.add(shotNumber);
+    if (!nextMap.has(shotNumber)) shotsRemoved.push(shotNumber);
   }
-  return [...changed];
+  return { shotsChanged, shotsRemoved };
 }
 
 export function diffPrevisManifests(
@@ -96,7 +106,7 @@ export function diffPrevisManifests(
   const locationsChanged = entityChanged(previous.locations, next.locations);
   const castChanged = entityChanged(previous.cast, next.cast);
   const propsChanged = entityChanged(previous.props, next.props);
-  const shotsChanged = shotChanged(previous.shots, next.shots);
+  const { shotsChanged, shotsRemoved } = classifyShotEdits(previous.shots, next.shots);
 
   const changedSets = {
     locations: new Set(locationsChanged),
@@ -110,13 +120,13 @@ export function diffPrevisManifests(
       shotsToInvalidate.add(shot.shotNumber);
     }
   }
-  // Removed shots — nothing to invalidate in next, but old numbers drop out naturally.
 
   return {
     locationsChanged,
     castChanged,
     propsChanged,
     shotsChanged,
+    shotsRemoved,
     shotsToInvalidate: [...shotsToInvalidate],
     invalidateLocations: locationsChanged.length > 0,
     invalidateCast: castChanged.length > 0,
@@ -135,19 +145,39 @@ const PENDING_SHOT: PrevisShotRunState = {
 
 /**
  * Apply a controlled manifest update onto an existing run-state.
- * Preserves completed work for unchanged shots; invalidates dependents.
+ * Preserves completed work for unchanged shots; invalidates dependents;
+ * removes deleted shots from run-state (caller must delete them live).
  */
 export function applyManifestUpdateToRunState(params: {
   state: PrevisRunState;
   previousManifest: PrevisProductionManifestV1;
   nextManifest: PrevisProductionManifestV1;
   nextManifestHash: string;
-}): { state: PrevisRunState; diff: ManifestUpdateDiff } {
+}): {
+  state: PrevisRunState;
+  diff: ManifestUpdateDiff;
+  removedShots: RemovedShotEntry[];
+} {
   const diff = diffPrevisManifests(params.previousManifest, params.nextManifest);
   let state = touchRunState({
     ...params.state,
     manifestHash: params.nextManifestHash,
   });
+
+  const removedShots: RemovedShotEntry[] = [];
+  if (diff.shotsRemoved.length > 0) {
+    const nextShots = { ...state.shots };
+    for (const shotNumber of diff.shotsRemoved) {
+      const existing = nextShots[shotNumber];
+      removedShots.push({
+        shotNumber,
+        shotId: existing?.shotId,
+        framePath: existing?.framePath,
+      });
+      delete nextShots[shotNumber];
+    }
+    state = touchRunState({ ...state, shots: nextShots });
+  }
 
   // Ensure every next shot has a slot.
   for (const shot of params.nextManifest.shots) {
@@ -168,7 +198,7 @@ export function applyManifestUpdateToRunState(params: {
       issues: undefined,
       lastError: undefined,
       framePath: undefined,
-      // Keep shotId if the live project still has it — recompile may update camera/staging.
+      // Keep shotId if the live project still has it — recompile updates in place.
       shotId: existing?.shotId,
     });
   }
@@ -183,7 +213,13 @@ export function applyManifestUpdateToRunState(params: {
     if (diff.invalidateProps) state = setPhase(state, 'props', 'pending');
   }
 
-  if (diff.shotsToInvalidate.length > 0 || diff.invalidateLocations || diff.invalidateCast || diff.invalidateProps) {
+  if (
+    diff.shotsToInvalidate.length > 0
+    || diff.shotsRemoved.length > 0
+    || diff.invalidateLocations
+    || diff.invalidateCast
+    || diff.invalidateProps
+  ) {
     state = setPhase(state, 'shots', 'pending');
     state = setPhase(state, 'render', 'pending');
     state = setPhase(state, 'validation', 'pending');
@@ -191,7 +227,7 @@ export function applyManifestUpdateToRunState(params: {
     state = setPhase(state, 'package', 'pending');
   }
 
-  return { state, diff };
+  return { state, diff, removedShots };
 }
 
 export function locationPrimitiveBlockers(

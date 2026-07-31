@@ -153,6 +153,39 @@ describe('previs compilers', () => {
     const numbers = compiled.shotBatches.flatMap((batch) => batch.shotNumbers);
     expect(numbers).toEqual(['030', '040']);
   });
+
+  it('upserts existing shots instead of creating duplicates', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    const compiled = compileProduction(parsed.manifest!, {
+      skipShotNumbers: new Set(['010', '020', '040']),
+      existingShotIds: { '030': 'shot_existing030abc' },
+    });
+    const commands = compiled.shotBatches.flatMap((batch) => batch.plan.commands);
+    expect(commands.some((command) => command.op === 'shot.create')).toBe(false);
+    expect(commands.some((command) => (
+      command.op === 'shot.updateCamera'
+      && 'id' in command.shot
+      && command.shot.id === 'shot_existing030abc'
+    ))).toBe(true);
+    expect(commands.some((command) => (
+      command.op === 'shot.clearStaging'
+      && 'id' in command.shot
+      && command.shot.id === 'shot_existing030abc'
+    ))).toBe(true);
+    expect(commands.filter((command) => command.op === 'shot.stageObject').length).toBeGreaterThan(0);
+  });
+
+  it('stages props using defaultPropDimensions height', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('music-video-graybox.json'));
+    const compiled = compileProduction(parsed.manifest!);
+    const insertBatch = compiled.shotBatches.find((batch) => batch.shotNumbers.includes('070'));
+    expect(insertBatch).toBeTruthy();
+    const stage = insertBatch!.plan.commands.find((command) => {
+      if (command.op !== 'shot.stageObject') return false;
+      return command.visible === true && command.transform?.position?.[1] === 0.5;
+    });
+    expect(stage).toBeTruthy();
+  });
 });
 
 describe('blocking and camera solvers', () => {
@@ -341,6 +374,41 @@ describe('run-state resume', () => {
     expect(updated.state.phases.contactSheet).toBe('pending');
     expect(updated.state.phases.package).toBe('pending');
     expect(updated.state.phases.locations).toBe('complete');
+  });
+
+  it('update-manifest removes deleted shots from run-state', () => {
+    const previous = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
+    let state = createInitialRunState({
+      manifestHash: hashPrevisManifest(previous),
+      shotNumbers: previous.shots.map((shot) => shot.shotNumber),
+    });
+    for (const shot of previous.shots) {
+      state = upsertShotState(state, shot.shotNumber, {
+        compile: 'complete',
+        render: 'complete',
+        validation: 'passed',
+        shotId: `shot_id_${shot.shotNumber}`,
+        framePath: `shots/${shot.shotNumber}.png`,
+      });
+    }
+
+    const next = structuredClone(previous);
+    next.shots = next.shots.filter((shot) => shot.shotNumber !== '040');
+
+    const updated = applyManifestUpdateToRunState({
+      state,
+      previousManifest: previous,
+      nextManifest: next,
+      nextManifestHash: hashPrevisManifest(next),
+    });
+
+    expect(updated.diff.shotsRemoved).toEqual(['040']);
+    expect(updated.state.shots['040']).toBeUndefined();
+    expect(updated.removedShots).toEqual([
+      { shotNumber: '040', shotId: 'shot_id_040', framePath: 'shots/040.png' },
+    ]);
+    expect(updated.state.shots['010']?.compile).toBe('complete');
+    expect(updated.state.phases.shots).toBe('pending');
   });
 
   it('validateManifestShotNumbers catches duplicates', () => {

@@ -23,6 +23,9 @@ import {
 } from './cameraSolver';
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
+import { defaultPropDimensions } from './propDimensions';
+
+export { defaultPropDimensions } from './propDimensions';
 
 export const PREVIS_SHOT_BATCH_SIZE = 5;
 
@@ -46,6 +49,8 @@ export function compileShotList(
     batchSize?: number;
     /** Skip shot numbers already compiled in run-state. */
     skipShotNumbers?: Set<string>;
+    /** Existing live shot ids keyed by shot number — compile as upsert instead of create. */
+    existingShotIds?: Record<string, string>;
   } = {},
 ): CompiledShotBatch[] {
   const batchSize = options.batchSize ?? PREVIS_SHOT_BATCH_SIZE;
@@ -55,7 +60,9 @@ export function compileShotList(
 
   for (let index = 0; index < pending.length; index += batchSize) {
     const slice = pending.slice(index, index + batchSize);
-    batches.push(compileShotBatch(manifest, context, slice, batches.length));
+    batches.push(compileShotBatch(manifest, context, slice, batches.length, {
+      existingShotIds: options.existingShotIds,
+    }));
   }
 
   return batches;
@@ -66,14 +73,14 @@ export function compileShotBatch(
   context: CompiledProductionContext,
   shots: PrevisShotDefinition[],
   batchIndex: number,
+  options: {
+    existingShotIds?: Record<string, string>;
+  } = {},
 ): CompiledShotBatch {
   const diagnostics: PrevisDiagnostic[] = [];
   const commands: ForeSceneAgentCommand[] = [];
   const shotResults: CompiledShotBatch['shotResults'] = {};
   const aspect = aspectRatioValue(manifest.project.aspectRatio);
-
-  // Hide all cast/props by default in build; visibility is per-shot staging.
-  // We stage visibility per shot instead.
 
   for (const shot of shots) {
     const path = `shots[id=${shot.id}]`;
@@ -88,7 +95,9 @@ export function compileShotBatch(
     }
 
     try {
-      const compiled = compileSingleShot(shot, manifest, context, aspect);
+      const compiled = compileSingleShot(shot, manifest, context, aspect, {
+        existingShotId: options.existingShotIds?.[shot.shotNumber],
+      });
       diagnostics.push(...compiled.diagnostics);
       commands.push(...compiled.commands);
       shotResults[shot.shotNumber] = {
@@ -134,6 +143,7 @@ function compileSingleShot(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,
   aspectRatio: number,
+  options: { existingShotId?: string } = {},
 ): {
   ok: boolean;
   commands: ForeSceneAgentCommand[];
@@ -219,14 +229,25 @@ function compileSingleShot(
   }
 
   const shotRef = previsRef('shot', shot.shotNumber);
-  commands.push({
-    op: 'shot.create',
-    ref: shotRef,
-    shot: {
+  const existingId = options.existingShotId;
+  const shotTarget: { id: string } | { ref: string } = existingId
+    ? { id: existingId }
+    : { ref: shotRef };
+
+  if (existingId) {
+    commands.push({
+      op: 'shot.rename',
+      shot: shotTarget,
       name: shot.name,
+    });
+    commands.push({
+      op: 'shot.updateDescription',
+      shot: shotTarget,
       description: shot.description,
-      shotNumber: shot.shotNumber,
-      productionShotId: shot.shotNumber,
+    });
+    commands.push({
+      op: 'shot.updateCamera',
+      shot: shotTarget,
       camera: {
         position: cameraSolve.camera.position,
         target: cameraSolve.camera.target,
@@ -235,8 +256,31 @@ function compileSingleShot(
         near: cameraSolve.camera.near,
         far: cameraSolve.camera.far,
       },
-    },
-  });
+    });
+    commands.push({
+      op: 'shot.clearStaging',
+      shot: shotTarget,
+    });
+  } else {
+    commands.push({
+      op: 'shot.create',
+      ref: shotRef,
+      shot: {
+        name: shot.name,
+        description: shot.description,
+        shotNumber: shot.shotNumber,
+        productionShotId: shot.shotNumber,
+        camera: {
+          position: cameraSolve.camera.position,
+          target: cameraSolve.camera.target,
+          fovDegrees: cameraSolve.camera.fovDegrees,
+          aspectRatio: cameraSolve.camera.aspectRatio,
+          near: cameraSolve.camera.near,
+          far: cameraSolve.camera.far,
+        },
+      },
+    });
+  }
 
   // Hide every cast/prop not in this shot; stage participants.
   const visibleIds = new Set([
@@ -264,7 +308,7 @@ function compileSingleShot(
       const height = character.height ?? 1.75;
       commands.push({
         op: 'shot.stageObject',
-        shot: { ref: shotRef },
+        shot: shotTarget,
         object: objectTarget,
         visible: true,
         transform: {
@@ -277,7 +321,7 @@ function compileSingleShot(
     } else {
       commands.push({
         op: 'shot.stageObject',
-        shot: { ref: shotRef },
+        shot: shotTarget,
         object: objectTarget,
         visible: false,
       });
@@ -293,10 +337,10 @@ function compileSingleShot(
     const blocking = blockingResults[prop.id];
     if (inShot) {
       const position = subjectPositions[prop.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
-      const dims = prop.dimensions ?? [0.6, 0.6, 0.6];
+      const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
       commands.push({
         op: 'shot.stageObject',
-        shot: { ref: shotRef },
+        shot: shotTarget,
         object: objectTarget,
         visible: true,
         transform: {
@@ -308,7 +352,7 @@ function compileSingleShot(
     } else {
       commands.push({
         op: 'shot.stageObject',
-        shot: { ref: shotRef },
+        shot: shotTarget,
         object: objectTarget,
         visible: false,
       });
@@ -326,7 +370,7 @@ function compileSingleShot(
       if (!active) {
         commands.push({
           op: 'shot.stageObject',
-          shot: { ref: shotRef },
+          shot: shotTarget,
           object: resolveEntityTarget(objectToken, objectToken),
           visible: false,
         });
@@ -336,7 +380,7 @@ function compileSingleShot(
 
   commands.push({
     op: 'shot.select',
-    shot: { ref: shotRef },
+    shot: shotTarget,
   });
 
   for (const warning of warnings) {
@@ -372,25 +416,6 @@ function defaultBlocking(
   }));
 }
 
-function defaultPropDimensions(primitive: string): [number, number, number] {
-  switch (primitive) {
-    case 'shield':
-      return [0.7, 1.0, 0.12];
-    case 'sword':
-      return [0.12, 1.1, 0.08];
-    case 'table':
-      return [1.6, 0.85, 0.9];
-    case 'sphere':
-      return [0.5, 0.5, 0.5];
-    case 'cylinder':
-      return [0.35, 1.0, 0.35];
-    case 'disc':
-      return [0.8, 0.08, 0.8];
-    default:
-      return [0.6, 0.6, 0.6];
-  }
-}
-
 /**
  * Prefer a real object id when the run-state has resolved one after apply.
  * Fall back to a plan-local ref for same-plan compiles / previews.
@@ -411,4 +436,3 @@ function looksLikeEntityId(value: string): boolean {
   return /^(obj|object|shot|lm|landmark|asset|project|pano|keyframe)_/i.test(value)
     && value.length >= 12;
 }
-

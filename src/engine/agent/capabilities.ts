@@ -42,6 +42,7 @@ export const AGENT_MUTATE_COMMANDS = [
   'shot.stageObject',
   'shot.clearObjectPose',
   'shot.clearObjectStaging',
+  'shot.delete',
   'landmark.create',
   'landmark.update',
   'landmark.delete',

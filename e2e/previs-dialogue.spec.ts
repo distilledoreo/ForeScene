@@ -3,16 +3,18 @@
  *
  * Proves the integration boundaries static unit tests cannot:
  * blank profile → reset → locations/cast/shots → distinct PNGs →
- * contact sheet → package → reload → second run without duplicating.
+ * contact sheet → package → resume → --update-manifest upsert/delete.
  *
  * @heavy — long WebGL + package path (main/nightly / explicit run)
  */
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import { openAgentBrowser, waitForAgentIdle } from '../scripts/agent/browser';
 import { runPrevisCli } from '../scripts/agent/previs';
+import type { PrevisProductionManifestV1 } from '../src/engine/previs';
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -28,8 +30,31 @@ async function fileSha256(filePath: string): Promise<string> {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+async function listLiveShots(params: {
+  url: string;
+  profileDir: string;
+}): Promise<Array<{ id: string; shotNumber: string; name: string }>> {
+  const session = await openAgentBrowser({
+    url: params.url,
+    headless: true,
+    writeAccess: true,
+    persistWrite: false,
+    profileDir: params.profileDir,
+  });
+  try {
+    await waitForAgentIdle(session.page);
+    return session.page.evaluate(() => window.foreScene!.listShots().map((shot) => ({
+      id: shot.id,
+      shotNumber: shot.shotNumber,
+      name: shot.name,
+    })));
+  } finally {
+    await session.close();
+  }
+}
+
 test.describe('@heavy autonomous previs dialogue fixture', () => {
-  test('four-shot dialogue: reset → frames → package → resume without dupes', async ({
+  test('four-shot dialogue: reset → frames → package → update-manifest upsert/delete', async ({
     browserName,
     baseURL,
   }) => {
@@ -41,12 +66,12 @@ test.describe('@heavy autonomous previs dialogue fixture', () => {
     await rm(outputDir, { recursive: true, force: true });
     await mkdir(profileDir, { recursive: true });
 
-    const manifestPath = path.resolve('examples/previs/minimal-dialogue.json');
+    const baseManifestPath = path.resolve('examples/previs/minimal-dialogue.json');
     const url = baseURL ?? 'http://127.0.0.1:4173';
 
     try {
       const first = await runPrevisCli({
-        manifestPath,
+        manifestPath: baseManifestPath,
         url,
         headless: true,
         writeAccess: true,
@@ -65,32 +90,32 @@ test.describe('@heavy autonomous previs dialogue fixture', () => {
       expect(first.contactSheet).toBeTruthy();
 
       const shotNumbers = ['010', '020', '030', '040'];
-      const hashes = new Set<string>();
+      const hashes = new Map<string, string>();
       for (const shotNumber of shotNumbers) {
         const framePath = path.join(outputDir, 'shots', `${shotNumber}.png`);
         expect(await pathExists(framePath), `missing frame ${shotNumber}`).toBe(true);
         const info = await stat(framePath);
         expect(info.size, `empty frame ${shotNumber}`).toBeGreaterThan(512);
-        hashes.add(await fileSha256(framePath));
+        hashes.set(shotNumber, await fileSha256(framePath));
       }
-      expect(hashes.size, 'frames must be distinct PNGs').toBe(4);
+      expect(new Set(hashes.values()).size, 'frames must be distinct PNGs').toBe(4);
 
       expect(await pathExists(path.join(outputDir, 'contact-sheet.html'))).toBe(true);
       expect(await pathExists(path.join(outputDir, 'contact-sheet.png'))).toBe(true);
       expect(await pathExists(path.join(outputDir, 'validation.json'))).toBe(true);
       expect(await pathExists(path.join(outputDir, 'package.zip'))).toBe(true);
       expect(await pathExists(path.join(outputDir, 'run-state.json'))).toBe(true);
-      expect(await pathExists(path.join(outputDir, 'summary.json'))).toBe(true);
 
-      const validation = JSON.parse(
-        await readFile(path.join(outputDir, 'validation.json'), 'utf8'),
-      ) as { results: Array<{ shotNumber: string; status: string }> };
-      expect(validation.results.map((item) => item.shotNumber).sort()).toEqual(shotNumbers);
+      const liveAfterFirst = await listLiveShots({ url, profileDir });
+      expect(liveAfterFirst.map((shot) => shot.shotNumber).sort()).toEqual(shotNumbers);
+      expect(liveAfterFirst).toHaveLength(4);
+      const idsAfterFirst = Object.fromEntries(
+        liveAfterFirst.map((shot) => [shot.shotNumber, shot.id]),
+      );
 
-      // Second run: same profile + output, no reset — resume must not duplicate.
-      const beforeObjects = await readFile(path.join(outputDir, 'run-state.json'), 'utf8');
+      // Ordinary resume — unchanged manifest must not duplicate.
       const second = await runPrevisCli({
-        manifestPath,
+        manifestPath: baseManifestPath,
         url,
         headless: true,
         writeAccess: true,
@@ -99,35 +124,83 @@ test.describe('@heavy autonomous previs dialogue fixture', () => {
         outputDir,
         profileDir,
       });
-
       expect(second.ok, second.error ?? 'resume previs run failed').toBe(true);
-      expect(second.shotsCreated).toBe(4);
-      // Frames already complete — render loop should reuse them.
       expect(second.framesRendered).toBe(4);
+      const liveAfterResume = await listLiveShots({ url, profileDir });
+      expect(liveAfterResume).toHaveLength(4);
+      expect(Object.fromEntries(liveAfterResume.map((shot) => [shot.shotNumber, shot.id])))
+        .toEqual(idsAfterFirst);
 
-      const afterState = JSON.parse(
-        await readFile(path.join(outputDir, 'run-state.json'), 'utf8'),
-      ) as {
-        shots: Record<string, { compile: string; shotId?: string }>;
-        entities: Record<string, unknown>;
-      };
-      expect(Object.keys(afterState.shots).sort()).toEqual(shotNumbers);
-      for (const shotNumber of shotNumbers) {
-        expect(afterState.shots[shotNumber]?.compile).toBe('complete');
-      }
+      // Correction loop: change shot 030 camera and upsert in place.
+      const originalManifest = JSON.parse(
+        await readFile(baseManifestPath, 'utf8'),
+      ) as PrevisProductionManifestV1;
+      const editedManifest = structuredClone(originalManifest);
+      const shot030 = editedManifest.shots.find((shot) => shot.shotNumber === '030')!;
+      shot030.camera.angle = 'profile';
+      shot030.description = 'Revised OTS — profile angle';
+      const editedPath = path.join(outputDir, 'manifest-edit-030.json');
+      await writeFile(editedPath, `${JSON.stringify(editedManifest, null, 2)}\n`, 'utf8');
 
-      // Entity map should not balloon from a no-op resume (same keys as before).
-      const beforeState = JSON.parse(beforeObjects) as { entities: Record<string, unknown> };
-      expect(Object.keys(afterState.entities).sort()).toEqual(
-        Object.keys(beforeState.entities).sort(),
+      const updated = await runPrevisCli({
+        manifestPath: editedPath,
+        url,
+        headless: true,
+        writeAccess: true,
+        persistWrite: false,
+        resetProject: false,
+        updateManifest: true,
+        outputDir,
+        profileDir,
+      });
+      expect(updated.ok, updated.error ?? 'update-manifest run failed').toBe(true);
+
+      const liveAfterUpdate = await listLiveShots({ url, profileDir });
+      expect(liveAfterUpdate).toHaveLength(4);
+      expect(liveAfterUpdate.map((shot) => shot.shotNumber).sort()).toEqual(shotNumbers);
+      const idsAfterUpdate = Object.fromEntries(
+        liveAfterUpdate.map((shot) => [shot.shotNumber, shot.id]),
       );
+      expect(idsAfterUpdate['010']).toBe(idsAfterFirst['010']);
+      expect(idsAfterUpdate['020']).toBe(idsAfterFirst['020']);
+      expect(idsAfterUpdate['030']).toBe(idsAfterFirst['030']);
+      expect(idsAfterUpdate['040']).toBe(idsAfterFirst['040']);
 
-      // Frames remain distinct after resume.
-      const resumeHashes = new Set<string>();
-      for (const shotNumber of shotNumbers) {
-        resumeHashes.add(await fileSha256(path.join(outputDir, 'shots', `${shotNumber}.png`)));
-      }
-      expect(resumeHashes).toEqual(hashes);
+      expect(await fileSha256(path.join(outputDir, 'shots', '010.png'))).toBe(hashes.get('010'));
+      expect(await fileSha256(path.join(outputDir, 'shots', '020.png'))).toBe(hashes.get('020'));
+      expect(await fileSha256(path.join(outputDir, 'shots', '040.png'))).toBe(hashes.get('040'));
+      expect(await fileSha256(path.join(outputDir, 'shots', '030.png'))).not.toBe(hashes.get('030'));
+
+      // Remove shot 040 and assert only three live shots remain.
+      const trimmedManifest = structuredClone(editedManifest);
+      trimmedManifest.shots = trimmedManifest.shots.filter((shot) => shot.shotNumber !== '040');
+      const trimmedPath = path.join(outputDir, 'manifest-remove-040.json');
+      await writeFile(trimmedPath, `${JSON.stringify(trimmedManifest, null, 2)}\n`, 'utf8');
+
+      const removed = await runPrevisCli({
+        manifestPath: trimmedPath,
+        url,
+        headless: true,
+        writeAccess: true,
+        persistWrite: false,
+        resetProject: false,
+        updateManifest: true,
+        outputDir,
+        profileDir,
+      });
+      expect(removed.ok, removed.error ?? 'remove-shot update failed').toBe(true);
+
+      const liveAfterRemove = await listLiveShots({ url, profileDir });
+      expect(liveAfterRemove).toHaveLength(3);
+      expect(liveAfterRemove.map((shot) => shot.shotNumber).sort()).toEqual(['010', '020', '030']);
+      expect(liveAfterRemove.find((shot) => shot.shotNumber === '010')?.id).toBe(idsAfterFirst['010']);
+      expect(liveAfterRemove.find((shot) => shot.shotNumber === '030')?.id).toBe(idsAfterFirst['030']);
+
+      const runState = JSON.parse(
+        await readFile(path.join(outputDir, 'run-state.json'), 'utf8'),
+      ) as { shots: Record<string, unknown> };
+      expect(runState.shots['040']).toBeUndefined();
+      expect(Object.keys(runState.shots).sort()).toEqual(['010', '020', '030']);
     } finally {
       await rm(outputDir, { recursive: true, force: true }).catch(() => undefined);
     }

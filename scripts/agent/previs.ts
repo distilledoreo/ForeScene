@@ -39,6 +39,7 @@ import {
   type PrevisEntityMapping,
   type PrevisProductionManifestV1,
   type PrevisRunState,
+  type RemovedShotEntry,
 } from '../../src/engine/previs/index';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
@@ -102,6 +103,7 @@ async function loadOrCreateRunState(params: {
   error?: string;
   updated?: boolean;
   sceneRebuildRequired?: boolean;
+  removedShots?: RemovedShotEntry[];
 }> {
   const runStatePath = path.join(params.outputDir, 'run-state.json');
   const normalizedPath = path.join(params.outputDir, 'manifest.normalized.json');
@@ -157,6 +159,7 @@ async function loadOrCreateRunState(params: {
         resumed: true,
         updated: true,
         sceneRebuildRequired,
+        removedShots: updated.removedShots,
       };
     }
     return { state: existing, resumed: true };
@@ -502,8 +505,62 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       ...compiled.context,
       entities: { ...compiled.context.entities, ...state.entities },
     };
+
+    // Delete manifest-removed shots before upserts (Origin / leftovers pruned after create).
+    const keepShotNumbers = new Set(manifest.shots.map((shot) => shot.shotNumber));
+    const liveBeforeCompile = await session.page.evaluate(() => window.foreScene!.listShots());
+    const removedNumbers = new Set((loaded.removedShots ?? []).map((entry) => entry.shotNumber));
+    const deleteIds = new Set<string>();
+    for (const entry of loaded.removedShots ?? []) {
+      if (entry.shotId) deleteIds.add(entry.shotId);
+    }
+    for (const shot of liveBeforeCompile) {
+      if (removedNumbers.has(shot.shotNumber)) {
+        deleteIds.add(shot.id);
+      }
+    }
+    // Never delete down to zero shots before creates — blank Origin stays until replacements exist.
+    const remainingAfterDelete = liveBeforeCompile.filter((shot) => !deleteIds.has(shot.id)).length;
+    if (deleteIds.size > 0 && remainingAfterDelete >= 1) {
+      const deletePlan = {
+        version: 1 as const,
+        planId: 'previs-shot-delete',
+        description: 'Remove obsolete previs shots',
+        commands: [...deleteIds].map((id) => ({
+          op: 'shot.delete' as const,
+          shot: { id },
+        })),
+      };
+      const deleted = await applyPlanOnPage(session.page, deletePlan);
+      await writeJson(path.join(outputDir, 'logs', 'shots-delete.json'), {
+        deleteIds: [...deleteIds],
+        deleted,
+      });
+      if (!deleted.ok) {
+        state = setPhase(state, 'shots', 'failed');
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'shots',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: deleted.diagnostics,
+          error: 'Failed to delete obsolete shots.',
+        };
+      }
+    }
+
+    const existingShotIds: Record<string, string> = {};
+    for (const [shotNumber, shotState] of Object.entries(state.shots)) {
+      if (shotState.shotId && !skipShots.has(shotNumber)) {
+        existingShotIds[shotNumber] = shotState.shotId;
+      }
+    }
+
     const shotBatches = compileShotList(manifest, resolvedContext, {
       skipShotNumbers: skipShots,
+      existingShotIds,
     });
 
     state = setPhase(state, 'shots', 'in_progress');
@@ -528,10 +585,13 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             ref.kind === 'shot' && ref.ref === `shot_${shotNumber}`
           ))?.id
           : undefined;
+        const retainedId = existingShotIds[shotNumber];
         if (result?.ok && applied.ok) {
           state = upsertShotState(state, shotNumber, {
             compile: 'complete',
-            ...(createdShotId ? { shotId: createdShotId } : {}),
+            ...(createdShotId || retainedId
+              ? { shotId: createdShotId ?? retainedId }
+              : {}),
           });
           shotsCreated += 1;
         } else if (result && !result.ok) {
@@ -549,7 +609,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(runStatePath, state);
     }
 
-    const liveShots = await session.page.evaluate(() => window.foreScene!.listShots());
+    let liveShots = await session.page.evaluate(() => window.foreScene!.listShots());
     for (const shot of liveShots) {
       if (state.shots[shot.shotNumber]) {
         state = upsertShotState(state, shot.shotNumber, {
@@ -557,6 +617,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           compile: state.shots[shot.shotNumber]?.compile === 'failed' ? 'failed' : 'complete',
         });
       }
+    }
+    // Final prune — drop blank Origin and any leftover non-manifest shots.
+    const extras = liveShots.filter((shot) => !keepShotNumbers.has(shot.shotNumber));
+    if (extras.length > 0) {
+      const prune = await applyPlanOnPage(session.page, {
+        version: 1,
+        planId: 'previs-shot-prune',
+        commands: extras.map((shot) => ({
+          op: 'shot.delete' as const,
+          shot: { id: shot.id },
+        })),
+      });
+      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), { extras, prune });
+      liveShots = await session.page.evaluate(() => window.foreScene!.listShots());
     }
     state = setPhase(state, 'shots', 'complete');
     await writeJson(runStatePath, state);

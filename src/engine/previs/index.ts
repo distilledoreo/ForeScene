@@ -22,6 +22,7 @@ export * from './shotTemplates';
 export * from './shotCompiler';
 export * from './shotValidator';
 export * from './posePresets';
+export * from './propDimensions';
 export * from './frameValidation';
 export * from './repairs';
 export * from './contactSheet';
