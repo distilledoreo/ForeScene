@@ -93,3 +93,46 @@ Screenshots target `[data-testid="scene-viewport"]` when present, otherwise the 
 ## Agent Console
 
 The in-app **Agent Console** (Project menu) is the same API surface. Prefer the CLI for automation; use the Console for interactive paste/preview/apply while debugging plans.
+
+## `agent:previs`
+
+Orchestrates shot-list → graybox project → first frames.
+
+```bash
+# Initialize / optional reset only
+npm run agent:previs -- \
+  --manifest examples/previs/minimal-dialogue.json \
+  --write --reset-project --initialize-only \
+  --output artifacts/previs
+
+# Full run (optional isolated browser profile)
+npm run agent:previs -- \
+  --manifest examples/previs/music-video-graybox.json \
+  --write --reset-project \
+  --profile .forescene-agent/music-video-profile \
+  --output artifacts/previs
+
+# Correction loop after editing failed/warned shots
+npm run agent:previs -- \
+  --manifest path/to/manifest.json \
+  --write \
+  --update-manifest \
+  --output artifacts/previs
+```
+
+Safety:
+- `--reset-project` requires `--write`.
+- Manifest hash is stored in `run-state.json`; a silently changed manifest is refused.
+- Pass `--update-manifest` to invalidate only changed shots (and dependents). Shot-only edits resume without `--reset-project`. Location/cast/prop edits also need `--reset-project` so creates are not duplicated.
+- `--profile` selects a persistent Playwright user-data dir (defaults to `.forescene-agent/profile`).
+- Unless `--skip-package` is set, a failed package phase makes the run `ok: false`.
+
+
+## `agent:render-stills` / `agent:contact-sheet`
+
+```bash
+npm run agent:render-stills -- --write --output artifacts/previs
+npm run agent:contact-sheet -- \
+  --input artifacts/previs/shots \
+  --output artifacts/previs/contact-sheet.png
+```

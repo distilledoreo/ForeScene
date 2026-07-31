@@ -5,6 +5,24 @@
 ### What this is
 ForeScene (`forescene` package) is a **local-first, browser-only** React 19 + TypeScript + Vite 6 app for previsualization, continuity, and AI-video handoff (Three.js 3D + 360 panorama tooling). There is **no backend, database, account system, or secrets** — running the single Vite dev server exercises the whole product end to end.
 
+### Operating ForeScene vs developing ForeScene
+
+**Operating ForeScene** — the user wants you to manipulate a live ForeScene project (hosted or local) from a shot list / production brief. Use the Agent CLI and the ForeScene previs skill. **Do not edit application source code.**
+
+Preferred commands:
+
+- `npm run agent:inspect`
+- `npm run agent:previs`
+- `npm run agent:preview`
+- `npm run agent:apply`
+- `npm run agent:render-stills`
+- `npm run agent:contact-sheet`
+- `npm run agent:package`
+
+See `.grok/skills/forescene-previs/SKILL.md` and `docs/previs-production-manifest.md`.
+
+**Developing ForeScene** — the user wants you to change the application itself. Normal source-code development is allowed; follow the validation levels below.
+
 ### Running (see `package.json` scripts / `README.md` for the canonical list)
 - Dev server: `npm run dev` → serves on port **3000** (`--host=0.0.0.0`). This is the whole app.
 - Build: `npm run build` (Vite; does not type-check). Preview built output: `npm run preview` (port 4173).
@@ -63,6 +81,7 @@ Leave tablet/phone responsive, WebKit, screenshot baselines, and heavy workflows
 - **`npm run test` does not need Playwright Chromium.** Browser-backed WebGL tests live in `tests/browser/**` and run via `npm run test:browser` (or `npm run test:all`). Install Chromium with `npm run test:e2e:install` / `npx playwright install chromium` before those.
 - Playwright E2E (`npm run test:e2e`) auto-runs `npm run build` + `vite preview` on port 4173 unless `PLAYWRIGHT_BASE_URL` is set. Prefer tagged suites: `test:e2e:smoke` (required on PR), `test:e2e:responsive`, `test:e2e:visual`, `test:e2e:heavy`, `test:e2e:webkit`, `test:e2e:webkit-gpu` (canary). Set `PLAYWRIGHT_SKIP_BUILD=1` when `dist/` is already built. `FULL_REGRESSION=1` enables serial workers + one retry (main/nightly).
 - Set `DISABLE_HMR=true` to disable Vite HMR/file watching (lowers CPU during heavy agent edits).
+- **`agent:previs --reset-project` requires `--write`.** `--write` alone does not authorize project replacement.
 
 ### What to assert in tests
 Prefer behavioral proofs (“opening Stage starts zero automatic preview renders”) over source-wiring inspections (“this `useEffect` must list these exact dependency names”). Keep UI label / Help inventory guards when they protect discoverability; prune implementation-structure string matches when a real behavioral test already covers the regression.

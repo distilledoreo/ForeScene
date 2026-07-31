@@ -19,6 +19,8 @@ export interface AgentBrowserOptions {
   writeAccess?: boolean;
   /** Persist write seed in profile localStorage (`--persist-write`). */
   persistWrite?: boolean;
+  /** Optional dedicated persistent profile directory (absolute or repo-relative). */
+  profileDir?: string;
   viewport?: { width: number; height: number };
 }
 
@@ -101,10 +103,15 @@ export async function openAgentBrowser(
   const viewport = options.viewport ?? { width: 1600, height: 1000 };
   const persistWrite = options.persistWrite === true;
   const writeAccess = options.writeAccess === true || persistWrite;
+  const profileDir = options.profileDir
+    ? (path.isAbsolute(options.profileDir)
+      ? options.profileDir
+      : path.resolve(REPO_ROOT, options.profileDir))
+    : AGENT_PROFILE_DIR;
 
-  await mkdir(AGENT_PROFILE_DIR, { recursive: true });
+  await mkdir(profileDir, { recursive: true });
 
-  const context = await chromium.launchPersistentContext(AGENT_PROFILE_DIR, {
+  const context = await chromium.launchPersistentContext(profileDir, {
     headless,
     viewport,
   });

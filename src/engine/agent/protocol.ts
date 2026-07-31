@@ -7,6 +7,7 @@ import type {
   CameraData,
   ExportSettingsOverride,
   HumanPose,
+  LocationProject,
   SceneObjectType,
   StagingRole,
   Transform,
@@ -226,6 +227,9 @@ export type ForeSceneAgentCommand =
       shot: {
         name?: string;
         description?: string;
+        /** Exact production shot number from a previs manifest (preserved verbatim). */
+        shotNumber?: string;
+        productionShotId?: string;
         camera?: Partial<CameraData>;
       };
     }
@@ -266,6 +270,10 @@ export type ForeSceneAgentCommand =
       shot: AgentEntityTarget;
       object?: AgentEntityTarget;
       clearPoseOnly?: boolean;
+    }
+  | {
+      op: 'shot.delete';
+      shot: AgentEntityTarget;
     }
   | {
       op: 'landmark.create';
@@ -346,6 +354,7 @@ export interface AgentPlanDiff {
   objectsDeleted: string[];
   shotsCreated: string[];
   shotsUpdated: string[];
+  shotsDeleted: string[];
   landmarksCreated: string[];
   landmarksUpdated: string[];
   landmarksDeleted: string[];
@@ -427,6 +436,19 @@ export interface ForeSceneRuntimeServices {
   captureViewport?: (options: AgentCaptureOptions) => Promise<AgentCaptureResult>;
 }
 
+export interface AgentResetProjectRequest {
+  name: string;
+  description?: string;
+  aspectRatio?: string;
+  frameRate?: number;
+  expectedProjectId?: string;
+  /**
+   * Must be the literal `"reset-project"`. The CLI sets this only when
+   * `--reset-project` is passed together with `--write`.
+   */
+  resetAuthorization?: string;
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -434,6 +456,11 @@ export interface ForeSceneBrowserApi {
   getCapabilities(): ForeSceneAgentCapabilities;
 
   inspectProject(): AgentProjectInspection;
+  /**
+   * Read-only structuredClone of the live LocationProject (for offline validation /
+   * autonomous previs). Does not expose write handles.
+   */
+  getProjectDocument(): LocationProject;
   listObjects(query?: AgentObjectQuery): AgentObjectSummary[];
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
@@ -452,6 +479,13 @@ export interface ForeSceneBrowserApi {
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
   waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus>;
+
+  /**
+   * Replace the live project with a blank graybox shell.
+   * Requires read-write mode and explicit `resetAuthorization: "reset-project"`.
+   * Creates a recovery snapshot and preserves Agent transaction rollback guarantees.
+   */
+  resetProject(input: AgentResetProjectRequest): Promise<AgentPlanApplyResult & { projectId?: string }>;
 
   /** Package selected shots (same engine path as Export workspace). Requires write access. */
   exportPackage(input?: AgentPackageExportRequest): Promise<AgentPackageExportResult>;

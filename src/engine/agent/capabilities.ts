@@ -11,6 +11,7 @@ export const AGENT_INSPECT_COMMANDS = [
   'app.status',
   'app.capabilities',
   'project.inspect',
+  'project.document',
   'object.list',
   'object.find',
   'object.inspect',
@@ -41,6 +42,7 @@ export const AGENT_MUTATE_COMMANDS = [
   'shot.stageObject',
   'shot.clearObjectPose',
   'shot.clearObjectStaging',
+  'shot.delete',
   'landmark.create',
   'landmark.update',
   'landmark.delete',
@@ -51,6 +53,7 @@ export const AGENT_MUTATE_COMMANDS = [
   'export.shotOverrides.copy',
   'export.shotOverrides.promote',
   'export.package',
+  'project.reset',
 ] as const;
 
 export const AGENT_DEFERRED_COMMANDS = [
@@ -69,7 +72,7 @@ export function buildAgentCapabilities(
     inspection: controlMode !== 'off',
     mutations: writeAccess,
     packageExport: true,
-    projectReplacement: false,
+    projectReplacement: writeAccess,
     commands: {
       inspect: [...AGENT_INSPECT_COMMANDS],
       mutate: [...AGENT_MUTATE_COMMANDS],

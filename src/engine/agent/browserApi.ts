@@ -18,6 +18,7 @@ import {
   exportAgentPackage,
   getAgentPackageExportProgress,
 } from './packageExportControl';
+import { resetAgentProject } from './projectReset';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -45,6 +46,7 @@ import type {
   AgentPlanHistoryEntry,
   AgentPlanPreviewResult,
   AgentProjectInspection,
+  AgentResetProjectRequest,
   AgentShotInspection,
   ForeSceneAgentStatus,
   ForeSceneBrowserApi,
@@ -164,6 +166,14 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       }
       return inspectProjectSnapshot(readInspectionContext());
+    },
+
+    getProjectDocument(): LocationProject {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      }
+      return structuredClone(readInspectionContext().project);
     },
 
     listObjects(query?: AgentObjectQuery) {
@@ -318,6 +328,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     listPlanHistory(): AgentPlanHistoryEntry[] {
       return listAgentHistory();
+    },
+
+    async resetProject(input: AgentResetProjectRequest): Promise<AgentPlanApplyResult & { projectId?: string }> {
+      return resetAgentProject(input);
     },
 
     async exportPackage(input: AgentPackageExportRequest = {}): Promise<AgentPackageExportResult> {

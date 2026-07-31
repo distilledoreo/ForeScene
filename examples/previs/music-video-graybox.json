@@ -1,0 +1,240 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Music Video Graybox",
+    "description": "Two-location music-video graybox fixture.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "ruins",
+      "name": "Roman Ruins",
+      "template": "ruins"
+    },
+    {
+      "id": "armory",
+      "name": "Armory",
+      "template": "armory"
+    }
+  ],
+  "cast": [
+    {
+      "id": "joseph",
+      "name": "Joseph",
+      "type": "human_dummy",
+      "height": 1.8,
+      "color": "#d6d3d1",
+      "defaultPose": "standing-alert"
+    },
+    {
+      "id": "soldier",
+      "name": "Soldier",
+      "type": "human_dummy",
+      "height": 1.78,
+      "color": "#a8a29e",
+      "defaultPose": "standing-defensive"
+    },
+    {
+      "id": "captain",
+      "name": "Captain",
+      "type": "human_dummy",
+      "height": 1.82,
+      "color": "#78716c",
+      "defaultPose": "standing-neutral"
+    }
+  ],
+  "props": [
+    {
+      "id": "shield",
+      "name": "Shield",
+      "primitive": "shield",
+      "color": "#64748b"
+    }
+  ],
+  "shots": [
+    {
+      "id": "mv010",
+      "shotNumber": "010",
+      "name": "Ruins establishing",
+      "description": "Wide establishing of the ruins.",
+      "locationId": "ruins",
+      "subjects": ["joseph"],
+      "blocking": [
+        {
+          "subject": "joseph",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "standing-neutral"
+        }
+      ],
+      "camera": {
+        "template": "establishing",
+        "subjects": ["joseph"],
+        "angle": "front",
+        "lensClass": "wide"
+      }
+    },
+    {
+      "id": "mv020",
+      "shotNumber": "020",
+      "name": "Joseph entrance",
+      "description": "Joseph just inside the entrance.",
+      "locationId": "ruins",
+      "subjects": ["joseph"],
+      "blocking": [
+        {
+          "subject": "joseph",
+          "placement": { "type": "relative", "anchor": "entrance", "relation": "just_inside" },
+          "pose": "standing-alert"
+        }
+      ],
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph"],
+        "angle": "three_quarter"
+      }
+    },
+    {
+      "id": "mv030",
+      "shotNumber": "030",
+      "name": "Soldier confronts",
+      "description": "Soldier faces Joseph near the platform.",
+      "locationId": "ruins",
+      "subjects": ["joseph", "soldier"],
+      "blocking": [
+        {
+          "subject": "joseph",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "face": "soldier",
+          "pose": "standing-defensive"
+        },
+        {
+          "subject": "soldier",
+          "placement": { "type": "relative", "anchor": "joseph", "relation": "across_from" },
+          "face": "joseph",
+          "pose": "shield-ready"
+        }
+      ],
+      "camera": {
+        "template": "two_shot",
+        "subjects": ["joseph", "soldier"],
+        "angle": "three_quarter"
+      },
+      "requirements": {
+        "visibleSubjects": ["joseph", "soldier"]
+      }
+    },
+    {
+      "id": "mv040",
+      "shotNumber": "040",
+      "name": "Joseph MCU",
+      "description": "Medium close-up on Joseph.",
+      "locationId": "ruins",
+      "subjects": ["joseph"],
+      "blocking": [
+        {
+          "subject": "joseph",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "standing-alert"
+        }
+      ],
+      "camera": {
+        "template": "medium_close_up",
+        "subjects": ["joseph"],
+        "angle": "three_quarter",
+        "lensClass": "normal"
+      }
+    },
+    {
+      "id": "mv050",
+      "shotNumber": "050",
+      "name": "Armory wide",
+      "description": "Wide of the armory interior.",
+      "locationId": "armory",
+      "subjects": ["captain", "joseph"],
+      "blocking": [
+        {
+          "subject": "captain",
+          "placement": { "type": "relative", "anchor": "work_table", "relation": "near" },
+          "pose": "standing-neutral"
+        },
+        {
+          "subject": "joseph",
+          "placement": { "type": "relative", "anchor": "main_door", "relation": "just_inside" },
+          "face": "captain",
+          "pose": "standing-alert"
+        }
+      ],
+      "camera": {
+        "template": "wide",
+        "subjects": ["captain", "joseph"],
+        "angle": "front",
+        "lensClass": "wide"
+      }
+    },
+    {
+      "id": "mv060",
+      "shotNumber": "060",
+      "name": "Captain profile",
+      "description": "Profile of the captain at the table.",
+      "locationId": "armory",
+      "subjects": ["captain"],
+      "blocking": [
+        {
+          "subject": "captain",
+          "placement": { "type": "relative", "anchor": "work_table", "relation": "beside" },
+          "pose": "standing-neutral"
+        }
+      ],
+      "camera": {
+        "template": "profile",
+        "subjects": ["captain"],
+        "angle": "profile",
+        "lensClass": "normal"
+      }
+    },
+    {
+      "id": "mv070",
+      "shotNumber": "070",
+      "name": "Shield insert",
+      "description": "Insert of the shield prop.",
+      "locationId": "armory",
+      "subjects": ["shield"],
+      "blocking": [
+        {
+          "subject": "shield",
+          "placement": { "type": "relative", "anchor": "weapon_rack", "relation": "near" }
+        }
+      ],
+      "camera": {
+        "template": "insert",
+        "subjects": ["shield"],
+        "lensClass": "long"
+      },
+      "requirements": {
+        "visibleProps": ["shield"]
+      }
+    },
+    {
+      "id": "mv080",
+      "shotNumber": "080",
+      "name": "Low angle Joseph",
+      "description": "Low-angle hero beat.",
+      "locationId": "armory",
+      "subjects": ["joseph"],
+      "blocking": [
+        {
+          "subject": "joseph",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "sword-ready"
+        }
+      ],
+      "camera": {
+        "template": "low_angle",
+        "subjects": ["joseph"],
+        "angle": "front",
+        "lensClass": "normal"
+      }
+    }
+  ]
+}

@@ -283,6 +283,8 @@ function applyCommand(
       return applyShotStageObject(ctx, command, refs, diff, path);
     case 'shot.clearStaging':
       return applyShotClearStaging(ctx, command, refs, diff, path);
+    case 'shot.delete':
+      return applyShotDelete(ctx, command, refs, diff, path);
     case 'landmark.create':
       return applyLandmarkCreate(ctx, command, refs, diff, path);
     case 'landmark.update':
@@ -612,6 +614,14 @@ function applyShotCreate(
   shot = withShotPanoLink(ctx.project, shot, linkedPano);
   if (command.shot.name) shot.name = command.shot.name;
   if (command.shot.description !== undefined) shot.description = command.shot.description;
+  if (command.shot.shotNumber) {
+    shot.shotNumber = command.shot.shotNumber;
+  }
+  if (command.shot.productionShotId) {
+    shot.productionShotId = command.shot.productionShotId;
+  } else if (command.shot.shotNumber) {
+    shot.productionShotId = command.shot.shotNumber;
+  }
   shot.objectOverrides = structuredClone(sourceShot?.objectOverrides ?? {});
 
   ctx.project = touchProject({
@@ -976,6 +986,53 @@ function applyShotClearStaging(
   if (!diff.shotsCreated.includes(updated.id)) {
     diff.shotsUpdated.push(updated.id);
   }
+  return { ok: true, warnings: [] };
+}
+
+function applyShotDelete(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.delete' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  if (ctx.project.shots.length <= 1) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'Cannot delete the last remaining shot.',
+          { path },
+        ),
+      ],
+      warnings: [],
+    };
+  }
+  const id = resolved.id;
+  const shots = ctx.project.shots.filter((shot) => shot.id !== id);
+  const nextSelected = ctx.selectedShotId === id ? shots[0]?.id : ctx.selectedShotId;
+  ctx.project = touchProject({
+    ...ctx.project,
+    shots,
+  });
+  ctx.selectedShotId = nextSelected;
+  for (const [refName, entity] of Object.entries(refs)) {
+    if (entity.kind === 'shot' && entity.id === id) delete refs[refName];
+  }
+  diff.shotsDeleted.push(id);
+  diff.selectionChanged = true;
   return { ok: true, warnings: [] };
 }
 

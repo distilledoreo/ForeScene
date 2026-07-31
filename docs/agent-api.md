@@ -96,7 +96,7 @@ Supported plan commands:
 - `project.updateInfo`
 - `object.create` / `object.update` / `object.delete` / `object.duplicate`
 - `shot.create` / `shot.rename` / `shot.updateDescription` / `shot.updateCamera`
-- `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging`
+- `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging` / `shot.delete`
 - `landmark.create` / `landmark.update` / `landmark.delete` / `landmark.linkObject`
 - `export.sceneDefaults.patch`
 - `export.shotOverrides.patch` / `reset` / `copy` / `promote`
@@ -130,6 +130,7 @@ Supported shot commands:
 - `shot.select` / `shot.copyStagingToNext`
 - `shot.stageObject` (transform, visible, humanPose, posePreset)
 - `shot.clearStaging` (`clearPoseOnly` keeps transform/visibility)
+- `shot.delete` (refuses to delete the last remaining shot)
 
 Staging never mutates Build scene objects. Absolute overrides are idempotent.
 
@@ -177,3 +178,21 @@ npm run agent:run -- --plan plans/conversation.preview.json --screenshot artifac
 - Selected-keyframe transient staging
 - `file.import`
 - `viewport.capture` (screenshots use Playwright against the live canvas today)
+
+## Autonomous previs (production manifest)
+
+Higher-level graybox pipeline stacked on the Agent API. See `docs/previs-production-manifest.md`.
+
+New browser methods:
+
+- `resetProject({ name, description?, aspectRatio?, frameRate?, expectedProjectId?, resetAuthorization })` — requires read-write **and** `resetAuthorization: "reset-project"`
+- `getProjectDocument()` — read-only `structuredClone` of the live `LocationProject`
+
+`shot.create` accepts optional `shotNumber` / `productionShotId` so previs shot numbers are preserved exactly.
+
+```bash
+npm run agent:previs -- \
+  --manifest examples/previs/minimal-dialogue.json \
+  --write --reset-project \
+  --output artifacts/previs
+```

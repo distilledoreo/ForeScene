@@ -54,6 +54,7 @@ export const AGENT_EXECUTABLE_OPS = [
   'shot.copyStagingToNext',
   'shot.stageObject',
   'shot.clearStaging',
+  'shot.delete',
   'landmark.create',
   'landmark.update',
   'landmark.delete',

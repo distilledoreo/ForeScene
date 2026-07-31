@@ -243,4 +243,39 @@ describe('agent shot staging', () => {
     expect(prepared.prepared.nextProject.shots[0]!.objectOverrides?.[actor.id]?.visible).toBe(false);
     expect(project.shots[0]!.objectOverrides?.[actor.id]).toBeUndefined();
   });
+
+  it('deletes a shot while refusing to delete the last one', () => {
+    const project = createDefaultProject();
+    const second = createShot({
+      index: 2,
+      camera: createCameraData([0, 1.6, 4], [0, 1.2, 0], 40),
+    });
+    project.shots.push(second);
+
+    const deleted = prepareAgentPlan({
+      version: 1,
+      commands: [{ op: 'shot.delete', shot: { id: second.id } }],
+    }, {
+      project,
+      workspace: 'shots',
+      selectedObjectIds: [],
+      selectedShotId: second.id,
+    });
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    expect(deleted.prepared.nextProject.shots).toHaveLength(1);
+    expect(deleted.prepared.diff.shotsDeleted).toEqual([second.id]);
+    expect(deleted.prepared.nextProject.shots[0]!.id).toBe(project.shots[0]!.id);
+
+    const refused = prepareAgentPlan({
+      version: 1,
+      commands: [{ op: 'shot.delete', shot: { id: project.shots[0]!.id } }],
+    }, {
+      project: deleted.prepared.nextProject,
+      workspace: 'shots',
+      selectedObjectIds: [],
+      selectedShotId: deleted.prepared.nextProject.shots[0]!.id,
+    });
+    expect(refused.ok).toBe(false);
+  });
 });
