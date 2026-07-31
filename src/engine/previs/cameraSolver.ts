@@ -1,6 +1,6 @@
 /**
- * Semantic camera solver — template → finite position/target/FOV.
- * No model-generated world coordinates required.
+ * Camera Solver V2 — template → finite position/target/FOV using real
+ * screen-space projection scoring (not height/distance approximations alone).
  */
 
 import type { CameraData, Vec3 } from '../../domain/types';
@@ -14,9 +14,24 @@ import {
   aimHeightFraction,
   defaultLensClassForTemplate,
   FRAMING_COVERAGE,
-  scoreCoverage,
   verticalFovForLens,
 } from './framing';
+import {
+  cropHeightFraction,
+  framingProfileForTemplate,
+  HUMAN_LANDMARK_HEIGHT,
+  landmarkWorldY,
+  type FramingProfile,
+} from './framingProfiles';
+import {
+  buildCameraMatrices,
+  projectAabb,
+  projectHumanLandmarks,
+  projectWorldPoint,
+  sampleSubjectOcclusion,
+  shoulderWorldPoints,
+  type WorldAabb,
+} from './screenProjection';
 
 export interface SubjectBounds {
   id: string;
@@ -25,14 +40,18 @@ export interface SubjectBounds {
   max: Vec3;
   /** Floor-contact position. */
   position: Vec3;
+  /** Optional facing yaw in radians (0 = +Z). */
+  yawRadians?: number;
 }
 
 export interface CameraSolveInput {
   shot: PrevisShotDefinition;
   subjects: SubjectBounds[];
   aspectRatio: number;
-  /** Optional solid blockers (AABB) for inside-geometry rejection. */
-  blockers?: Array<{ min: Vec3; max: Vec3 }>;
+  /** Optional solid blockers (AABB) for inside-geometry rejection / occlusion. */
+  blockers?: Array<{ id?: string; min: Vec3; max: Vec3 }>;
+  frameWidth?: number;
+  frameHeight?: number;
 }
 
 export interface CameraSolveResult {
@@ -40,15 +59,28 @@ export interface CameraSolveResult {
   score: number;
   warnings: string[];
   measuredCoverage?: number;
+  /** Walls / solids to hide when no clear camera exists. */
+  hideBlockerIds?: string[];
+  notes?: string[];
 }
+
+const FRAME_W = 1280;
+const FRAME_H = 720;
 
 export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
   const template = input.shot.camera.template;
+  if (template === 'over_the_shoulder') {
+    return solveOverTheShoulder(input);
+  }
+
   const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
   const angle = input.shot.camera.angle ?? defaultAngleForTemplate(template);
   const fovDegrees = verticalFovForLens(lensClass, input.aspectRatio);
-  const coverage = FRAMING_COVERAGE[template];
+  const profile = framingProfileForTemplate(template);
   const warnings: string[] = [];
+  const notes: string[] = [];
+  const frameWidth = input.frameWidth ?? FRAME_W;
+  const frameHeight = input.frameHeight ?? Math.round(frameWidth / input.aspectRatio);
 
   const subjectIds = new Set(input.shot.camera.subjects);
   let primary = input.subjects.filter((subject) => subjectIds.has(subject.id));
@@ -60,29 +92,18 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
   const foreground = input.shot.camera.foregroundSubject
     ? input.subjects.find((subject) => subject.id === input.shot.camera.foregroundSubject)
     : undefined;
-  if (input.shot.camera.template === 'over_the_shoulder' && !foreground) {
-    warnings.push('OTS missing foreground subject bounds; approximating.');
-  }
 
   const group = boundsUnion(primary.map((subject) => ({ min: subject.min, max: subject.max })));
   const centroid = centerOf(group);
   const subjectHeight = Math.max(0.4, group.max[1] - group.min[1]);
   const aimY = group.min[1] + subjectHeight * aimHeightFraction(template);
-  let target: Vec3 = [centroid[0], aimY, centroid[2]];
+  const target: Vec3 = [centroid[0], aimY, centroid[2]];
 
-  if (template === 'over_the_shoulder' && foreground) {
-    // Bias target toward primary subject, camera near foreground shoulder.
-    const primaryCentroid = centerOf(boundsUnion(primary.map((s) => ({ min: s.min, max: s.max }))));
-    target = [
-      primaryCentroid[0] * 0.7 + foreground.position[0] * 0.3,
-      aimY,
-      primaryCentroid[2] * 0.7 + foreground.position[2] * 0.3,
-    ];
-  }
-
-  const distance = distanceForCoverage({
-    subjectHeight,
-    coverageTarget: coverage.target,
+  const cropFrac = cropHeightFraction(profile);
+  const cropHeight = subjectHeight * cropFrac;
+  const distance = distanceForCrop({
+    cropHeight,
+    targetScreenSpan: Math.max(0.15, profile.targetScreenBottom - profile.targetScreenTop),
     fovDegrees,
     template,
   });
@@ -95,74 +116,613 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
     centroid,
     foreground,
     subjectHeight,
+    primary,
+    profile,
   });
 
-  let best: { camera: CameraData; score: number; coverage: number } | undefined;
+  // Also try alternate lens classes within safe bounds.
+  const lensOptions: PrevisLensClass[] = uniqueLenses(lensClass, template);
+  let best: ScoredCandidate | undefined;
+  const blockerBoxes = (input.blockers ?? []).map((box, index) => ({
+    objectId: box.id ?? `blocker_${index}`,
+    min: box.min,
+    max: box.max,
+  }));
 
-  for (const candidate of candidates) {
-    if (!isFiniteVec3(candidate.position) || !isFiniteVec3(candidate.target)) continue;
-    if (input.blockers && isInsideAny(candidate.position, input.blockers)) continue;
+  for (const lens of lensOptions) {
+    const fov = verticalFovForLens(lens, input.aspectRatio);
+    for (const candidate of candidates) {
+      const camera = makeCamera(candidate.position, candidate.target, fov, input.aspectRatio);
+      if (!isFiniteVec3(camera.position) || !isFiniteVec3(camera.target)) continue;
+      if (isInsideAny(camera.position, blockerBoxes)) continue;
 
-    const measured = estimateVerticalCoverage({
-      cameraPosition: candidate.position,
-      cameraTarget: candidate.target,
-      fovDegrees,
-      subjectMinY: group.min[1],
-      subjectMaxY: group.max[1],
-    });
-
-    let score = scoreCoverage(measured, coverage);
-    // Prefer candidates that keep required subjects roughly in front of camera.
-    for (const subject of primary) {
-      if (!isRoughlyInFront(candidate.position, candidate.target, centerOf({ min: subject.min, max: subject.max }))) {
-        score -= 25;
+      const scored = scoreCandidate({
+        camera,
+        template,
+        profile,
+        primary,
+        allSubjects: input.subjects,
+        foregroundId: foreground?.id,
+        blockers: blockerBoxes,
+        frameWidth,
+        frameHeight,
+        declaredSubjectIds: subjectIds,
+      });
+      if (!best || scored.score > best.score) {
+        best = { ...scored, camera };
       }
-    }
-    if (template === 'two_shot' && primary.length >= 2) score += 10;
-    if (template === 'over_the_shoulder' && foreground) score += 10;
-
-    if (!best || score > best.score) {
-      best = {
-        camera: {
-          position: candidate.position,
-          target: candidate.target,
-          fovDegrees,
-          aspectRatio: input.aspectRatio,
-          near: 0.05,
-          far: 500,
-        },
-        score,
-        coverage: measured,
-      };
     }
   }
 
   if (!best) {
-    // Guaranteed finite fallback.
     const fallbackPos: Vec3 = [target[0], target[1] + 0.3, target[2] + Math.max(2, distance)];
     warnings.push('All camera candidates rejected; using fallback.');
     return {
-      camera: {
-        position: fallbackPos,
-        target,
-        fovDegrees,
-        aspectRatio: input.aspectRatio,
-        near: 0.05,
-        far: 500,
-      },
+      camera: makeCamera(fallbackPos, target, fovDegrees, input.aspectRatio),
       score: -50,
       warnings,
-      measuredCoverage: coverage.target,
+      measuredCoverage: FRAMING_COVERAGE[template].target,
     };
+  }
+
+  // Wall fallback: if best is still obstructed, hide dominant wall blockers.
+  let hideBlockerIds: string[] | undefined;
+  if (best.wallBlocked && blockerBoxes.length > 0) {
+    const wallIds = best.blockingWallIds ?? [];
+    if (wallIds.length > 0) {
+      hideBlockerIds = wallIds;
+      notes.push('wall_hidden_for_camera');
+      warnings.push(`Hiding ${wallIds.length} wall(s) for camera clarity.`);
+      // Re-score with those walls removed.
+      const remaining = blockerBoxes.filter((box) => !wallIds.includes(box.objectId));
+      const rescored = scoreCandidate({
+        camera: best.camera,
+        template,
+        profile,
+        primary,
+        allSubjects: input.subjects,
+        foregroundId: foreground?.id,
+        blockers: remaining,
+        frameWidth,
+        frameHeight,
+        declaredSubjectIds: subjectIds,
+      });
+      best = { ...rescored, camera: best.camera };
+    }
   }
 
   return {
     camera: best.camera,
     score: best.score,
     warnings,
-    measuredCoverage: best.coverage,
+    measuredCoverage: best.primaryHeightCoverage,
+    hideBlockerIds,
+    notes: notes.length > 0 ? notes : undefined,
   };
 }
+
+// ---------------------------------------------------------------------------
+// OTS dedicated solver
+// ---------------------------------------------------------------------------
+
+function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
+  const template = 'over_the_shoulder' as const;
+  const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
+  const fovDegrees = verticalFovForLens(lensClass, input.aspectRatio);
+  const profile = framingProfileForTemplate(template);
+  const warnings: string[] = [];
+  const notes: string[] = [];
+  const frameWidth = input.frameWidth ?? FRAME_W;
+  const frameHeight = input.frameHeight ?? Math.round(frameWidth / input.aspectRatio);
+
+  const subjectIds = new Set(input.shot.camera.subjects);
+  let primary = input.subjects.filter((subject) => subjectIds.has(subject.id));
+  if (primary.length === 0) {
+    primary = [...input.subjects];
+    warnings.push('OTS: no primary subjects matched.');
+  }
+  const foreground = input.shot.camera.foregroundSubject
+    ? input.subjects.find((subject) => subject.id === input.shot.camera.foregroundSubject)
+    : undefined;
+  if (!foreground) {
+    warnings.push('OTS missing foreground subject bounds; approximating.');
+    return solveGenericWithOtsBias(input, warnings);
+  }
+
+  const primarySubject = primary[0] ?? input.subjects.find((s) => s.id !== foreground.id);
+  if (!primarySubject) {
+    warnings.push('OTS missing primary subject.');
+    return solveGenericWithOtsBias(input, warnings);
+  }
+
+  const fgHeight = Math.max(0.4, foreground.max[1] - foreground.min[1]);
+  const primHeight = Math.max(0.4, primarySubject.max[1] - primarySubject.min[1]);
+  const fgYaw = foreground.yawRadians
+    ?? yawToward(foreground.position, primarySubject.position);
+
+  const shoulders = shoulderWorldPoints({
+    position: foreground.position,
+    height: fgHeight,
+    width: foreground.max[0] - foreground.min[0],
+    yawRadians: fgYaw,
+  });
+
+  const primaryEyes: Vec3 = [
+    primarySubject.position[0],
+    landmarkWorldY(primarySubject.position[1], primHeight, 'eyes'),
+    primarySubject.position[2],
+  ];
+  const primaryChest: Vec3 = [
+    primarySubject.position[0],
+    landmarkWorldY(primarySubject.position[1], primHeight, 'chest'),
+    primarySubject.position[2],
+  ];
+
+  const candidates: Array<{ position: Vec3; target: Vec3; side: 'left' | 'right' }> = [];
+  for (const side of ['left', 'right'] as const) {
+    const shoulder = side === 'left' ? shoulders.left : shoulders.right;
+    // Behind shoulder, offset outward from head, slightly elevated.
+    const awayFromPrimary: Vec3 = [
+      foreground.position[0] - primarySubject.position[0],
+      0,
+      foreground.position[2] - primarySubject.position[2],
+    ];
+    const awayLen = Math.hypot(awayFromPrimary[0], awayFromPrimary[2]) || 1;
+    const backX = awayFromPrimary[0] / awayLen;
+    const backZ = awayFromPrimary[2] / awayLen;
+    // Outward = perpendicular to facing.
+    const outX = side === 'left' ? -Math.cos(fgYaw) : Math.cos(fgYaw);
+    const outZ = side === 'left' ? -Math.sin(fgYaw) : Math.sin(fgYaw);
+
+    for (const back of [0.35, 0.55, 0.75]) {
+      for (const out of [0.15, 0.28, 0.40]) {
+        for (const elev of [0.05, 0.12, 0.22]) {
+          const position: Vec3 = [
+            shoulder[0] + backX * back + outX * out,
+            shoulder[1] + elev,
+            shoulder[2] + backZ * back + outZ * out,
+          ];
+          for (const target of [primaryEyes, primaryChest]) {
+            candidates.push({ position, target: [...target] as Vec3, side });
+          }
+        }
+      }
+    }
+  }
+
+  const blockerBoxes = (input.blockers ?? []).map((box, index) => ({
+    objectId: box.id ?? `blocker_${index}`,
+    min: box.min,
+    max: box.max,
+  }));
+
+  let best: ScoredCandidate & { side?: 'left' | 'right' } | undefined;
+  const lensOptions = uniqueLenses(lensClass, template);
+
+  for (const lens of lensOptions) {
+    const fov = verticalFovForLens(lens, input.aspectRatio);
+    for (const candidate of candidates) {
+      if (isInsideAny(candidate.position, blockerBoxes)) continue;
+      const camera = makeCamera(candidate.position, candidate.target, fov, input.aspectRatio);
+      const scored = scoreCandidate({
+        camera,
+        template,
+        profile,
+        primary: [primarySubject],
+        allSubjects: input.subjects,
+        foregroundId: foreground.id,
+        blockers: blockerBoxes,
+        frameWidth,
+        frameHeight,
+        declaredSubjectIds: subjectIds,
+        otsSide: candidate.side,
+      });
+      // OTS-specific: foreground edge occupancy 12–35% width, primary dominant.
+      const fg = scored.subjectScores[foreground.id];
+      const prim = scored.subjectScores[primarySubject.id];
+      let score = scored.score;
+      if (fg) {
+        const edge = candidate.side === 'left' ? fg.centerX : 1 - fg.centerX;
+        if (fg.widthCoverage >= 0.12 && fg.widthCoverage <= 0.35) score += 30;
+        else score -= Math.abs(fg.widthCoverage - 0.22) * 80;
+        if (edge < 0.35) score += 15;
+        // Penalize full-body centered foreground.
+        if (fg.heightCoverage > 0.75 && Math.abs(fg.centerX - 0.5) < 0.15) score -= 40;
+      }
+      if (prim && fg && prim.areaCoverage > fg.areaCoverage * 0.8) score += 20;
+      if (prim?.faceOccluded) score -= 50;
+
+      if (!best || score > best.score) {
+        best = { ...scored, score, camera, side: candidate.side };
+      }
+    }
+  }
+
+  if (!best) {
+    warnings.push('OTS solver found no candidates; falling back.');
+    return solveGenericWithOtsBias(input, warnings);
+  }
+
+  let hideBlockerIds: string[] | undefined;
+  if (best.wallBlocked && best.blockingWallIds?.length) {
+    hideBlockerIds = best.blockingWallIds;
+    notes.push('wall_hidden_for_camera');
+  }
+
+  return {
+    camera: best.camera,
+    score: best.score,
+    warnings,
+    measuredCoverage: best.primaryHeightCoverage,
+    hideBlockerIds,
+    notes: notes.length > 0 ? notes : undefined,
+  };
+}
+
+function solveGenericWithOtsBias(
+  input: CameraSolveInput,
+  warnings: string[],
+): CameraSolveResult {
+  const result = solveShotCamera({
+    ...input,
+    shot: {
+      ...input.shot,
+      camera: {
+        ...input.shot.camera,
+        template: 'medium',
+      },
+    },
+  });
+  return { ...result, warnings: [...warnings, ...result.warnings] };
+}
+
+// ---------------------------------------------------------------------------
+// Candidates
+// ---------------------------------------------------------------------------
+
+function buildCandidates(params: {
+  template: PrevisCameraTemplate;
+  angle: PrevisCameraAngle;
+  target: Vec3;
+  distance: number;
+  centroid: Vec3;
+  foreground?: SubjectBounds;
+  subjectHeight: number;
+  primary: SubjectBounds[];
+  profile: FramingProfile;
+}): Array<{ position: Vec3; target: Vec3 }> {
+  const yawOffsets = yawOffsetsForAngle(params.angle);
+  const candidates: Array<{ position: Vec3; target: Vec3 }> = [];
+
+  if (params.template === 'overhead') {
+    for (const d of [params.distance * 0.85, params.distance, params.distance * 1.2]) {
+      candidates.push({
+        position: [params.target[0], params.target[1] + d, params.target[2]],
+        target: params.target,
+      });
+      candidates.push({
+        position: [params.target[0] + 0.5, params.target[1] + d * 0.9, params.target[2] + 0.5],
+        target: params.target,
+      });
+    }
+    return candidates;
+  }
+
+  const heightBiases = [
+    heightBiasForTemplate(params.template, params.subjectHeight),
+    heightBiasForTemplate(params.template, params.subjectHeight) + params.subjectHeight * 0.08,
+  ];
+  const targetHeightOffsets = [0, params.subjectHeight * 0.05, -params.subjectHeight * 0.04];
+  const horizontalOffsets = [0, 0.2, -0.2];
+  const distScales = [0.8, 1.0, 1.2, 1.4];
+
+  for (const yawDeg of yawOffsets) {
+    for (const distScale of distScales) {
+      for (const heightBias of heightBiases) {
+        for (const tOff of targetHeightOffsets) {
+          for (const hOff of horizontalOffsets) {
+            const distance = params.distance * distScale;
+            const yaw = (yawDeg * Math.PI) / 180;
+            let origin = params.target;
+            if (params.template === 'over_the_shoulder' && params.foreground) {
+              origin = [
+                params.foreground.position[0],
+                params.target[1],
+                params.foreground.position[2],
+              ];
+            }
+            // Horizontal target offset perpendicular to camera yaw.
+            const perpX = Math.cos(yaw) * hOff;
+            const perpZ = -Math.sin(yaw) * hOff;
+            const target: Vec3 = [
+              params.target[0] + perpX,
+              params.target[1] + tOff,
+              params.target[2] + perpZ,
+            ];
+            const position: Vec3 = [
+              origin[0] + Math.sin(yaw) * distance,
+              origin[1] + heightBias,
+              origin[2] + Math.cos(yaw) * distance,
+            ];
+            candidates.push({ position, target });
+          }
+        }
+      }
+    }
+  }
+
+  // Cap combinatorial explosion for establishing/wide (fewer needed).
+  if (params.template === 'establishing' || params.template === 'wide') {
+    return candidates.filter((_, index) => index % 3 === 0);
+  }
+
+  return candidates;
+}
+
+function yawOffsetsForAngle(angle: PrevisCameraAngle): number[] {
+  switch (angle) {
+    case 'front':
+      return [0, 8, -8, 15, -15];
+    case 'profile':
+      return [90, 85, 95, -90, 80, 100];
+    case 'rear':
+      return [180, 170, 190];
+    case 'three_quarter':
+    default:
+      return [25, 35, 45, 55, -25, -35, -45, -55, 15, -15];
+  }
+}
+
+function heightBiasForTemplate(template: PrevisCameraTemplate, subjectHeight: number): number {
+  switch (template) {
+    case 'low_angle':
+      return -subjectHeight * 0.25;
+    case 'high_angle':
+      return subjectHeight * 0.45;
+    case 'overhead':
+      return subjectHeight;
+    case 'close_up':
+    case 'extreme_close_up':
+      return subjectHeight * 0.12;
+    case 'medium':
+    case 'medium_close_up':
+      return subjectHeight * 0.08;
+    default:
+      return subjectHeight * 0.05;
+  }
+}
+
+function distanceForCrop(params: {
+  cropHeight: number;
+  targetScreenSpan: number;
+  fovDegrees: number;
+  template: PrevisCameraTemplate;
+}): number {
+  const fovRad = (params.fovDegrees * Math.PI) / 180;
+  // screenSpan ≈ cropHeight / (2 * d * tan(fov/2))
+  const denom = 2 * Math.tan(fovRad / 2) * Math.max(0.08, params.targetScreenSpan);
+  let distance = params.cropHeight / denom;
+  if (params.template === 'establishing') distance *= 1.35;
+  if (params.template === 'insert') distance *= 0.45;
+  if (params.template === 'close_up') distance *= 0.95;
+  if (params.template === 'medium_close_up') distance *= 0.9;
+  return Math.min(40, Math.max(0.45, distance));
+}
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+
+interface SubjectScore {
+  centerX: number;
+  centerY: number;
+  widthCoverage: number;
+  heightCoverage: number;
+  areaCoverage: number;
+  clipped: boolean;
+  behindCamera: boolean;
+  faceOccluded?: boolean;
+  landmarks?: Record<string, { x: number; y: number; inFrame: boolean }>;
+}
+
+interface ScoredCandidate {
+  camera: CameraData;
+  score: number;
+  primaryHeightCoverage: number;
+  wallBlocked: boolean;
+  blockingWallIds?: string[];
+  subjectScores: Record<string, SubjectScore>;
+}
+
+function scoreCandidate(params: {
+  camera: CameraData;
+  template: PrevisCameraTemplate;
+  profile: FramingProfile;
+  primary: SubjectBounds[];
+  allSubjects: SubjectBounds[];
+  foregroundId?: string;
+  blockers: Array<{ objectId: string; min: Vec3; max: Vec3 }>;
+  frameWidth: number;
+  frameHeight: number;
+  declaredSubjectIds: Set<string>;
+  otsSide?: 'left' | 'right';
+}): ScoredCandidate {
+  const matrices = buildCameraMatrices(params.camera, params.frameWidth, params.frameHeight);
+  let score = 0;
+  const subjectScores: Record<string, SubjectScore> = {};
+  const blockingWallIds = new Set<string>();
+  let wallBlocked = false;
+  let primaryHeightCoverage = 0;
+
+  const primaryIds = new Set(params.primary.map((s) => s.id));
+
+  for (const subject of params.allSubjects) {
+    const aabb: WorldAabb = { min: subject.min, max: subject.max };
+    const bounds = projectAabb(aabb, matrices);
+    const height = Math.max(0.01, subject.max[1] - subject.min[1]);
+    const landmarks = projectHumanLandmarks({
+      position: subject.position,
+      height,
+      matrices,
+    });
+    const landmarkMap: Record<string, { x: number; y: number; inFrame: boolean }> = {};
+    for (const [name, point] of Object.entries(landmarks)) {
+      landmarkMap[name] = {
+        x: point.x / params.frameWidth,
+        y: point.y / params.frameHeight,
+        inFrame: point.inFrame,
+      };
+    }
+
+    const samples = [
+      { id: 'head', point: [subject.position[0], landmarkWorldY(subject.position[1], height, 'headTop'), subject.position[2]] as Vec3 },
+      { id: 'chest', point: [subject.position[0], landmarkWorldY(subject.position[1], height, 'chest'), subject.position[2]] as Vec3 },
+      { id: 'waist', point: [subject.position[0], landmarkWorldY(subject.position[1], height, 'waist'), subject.position[2]] as Vec3 },
+      { id: 'center', point: centerOf(aabb) },
+    ];
+    const occlusion = sampleSubjectOcclusion({
+      cameraPosition: params.camera.position,
+      subjectSamples: samples,
+      blockers: params.blockers,
+    });
+    if (occlusion.wallDominant || occlusion.occludedSampleRatio > 0.4) {
+      wallBlocked = true;
+      for (const hit of occlusion.hits) {
+        blockingWallIds.add(hit.objectId);
+      }
+    }
+
+    subjectScores[subject.id] = {
+      centerX: bounds.centerX,
+      centerY: bounds.centerY,
+      widthCoverage: bounds.widthCoverage,
+      heightCoverage: bounds.heightCoverage,
+      areaCoverage: bounds.areaCoverage,
+      clipped: bounds.clipped,
+      behindCamera: bounds.behindCamera,
+      faceOccluded: occlusion.faceOccluded,
+      landmarks: landmarkMap,
+    };
+
+    const isPrimary = primaryIds.has(subject.id);
+    const isForeground = subject.id === params.foregroundId;
+
+    if (isPrimary) {
+      primaryHeightCoverage = Math.max(primaryHeightCoverage, bounds.heightCoverage);
+
+      // Framing accuracy vs profile landmarks.
+      const head = landmarkMap.headTop;
+      const bottomKey = params.profile.bottomLandmark;
+      const bottom = landmarkMap[bottomKey];
+      if (head && !head.inFrame && head.y > 0 && head.y < 1) {
+        // partially ok
+      }
+      if (head) {
+        const err = Math.abs(head.y - params.profile.targetScreenTop);
+        score += 40 - err * 120;
+        if (head.y < 0.02) score -= 35; // clipped head
+        if (head.y > 0.35 && params.template !== 'establishing' && params.template !== 'wide') {
+          score -= 20;
+        }
+      }
+      if (bottom) {
+        const err = Math.abs(bottom.y - params.profile.targetScreenBottom);
+        score += 30 - err * 80;
+      }
+
+      // Coverage band.
+      const range = FRAMING_COVERAGE[params.template];
+      const cov = bounds.heightCoverage;
+      if (cov >= range.min && cov <= range.max) {
+        score += 50 - Math.abs(cov - range.target) * 60;
+      } else if (cov < range.min) {
+        score -= (range.min - cov) * 100;
+      } else {
+        score -= (cov - range.max) * 80;
+      }
+
+      if (bounds.behindCamera) score -= 100;
+      if (bounds.clipped && params.template !== 'close_up' && params.template !== 'extreme_close_up') {
+        score -= 15;
+      }
+      if (occlusion.faceOccluded) score -= 45;
+      if (occlusion.occludedSampleRatio > 0.3) score -= 30;
+
+      // Look-room / direction preference: slight bias toward frame center for singles.
+      if (params.primary.length === 1) {
+        score += 10 - Math.abs(bounds.centerX - 0.5) * 20;
+      }
+    } else if (!isForeground) {
+      // Unwanted secondary dominance.
+      const primaryArea = Math.max(
+        ...params.primary.map((p) => subjectScores[p.id]?.areaCoverage ?? 0),
+        0.001,
+      );
+      if (
+        params.declaredSubjectIds.size > 0
+        && !params.declaredSubjectIds.has(subject.id)
+        && bounds.areaCoverage > primaryArea * 0.35
+      ) {
+        score -= 40 + (bounds.areaCoverage / primaryArea) * 20;
+      }
+    }
+  }
+
+  // Two-shot balance.
+  if (params.template === 'two_shot' && params.primary.length >= 2) {
+    const a = subjectScores[params.primary[0]!.id];
+    const b = subjectScores[params.primary[1]!.id];
+    if (a && b && !a.behindCamera && !b.behindCamera) {
+      score += 25;
+      const sep = Math.abs(a.centerX - b.centerX);
+      if (sep >= 0.15 && sep <= 0.55) score += 20;
+      else score -= Math.abs(sep - 0.3) * 40;
+      // Neither dominates excessively.
+      const ratio = Math.max(a.areaCoverage, b.areaCoverage)
+        / Math.max(1e-4, Math.min(a.areaCoverage, b.areaCoverage));
+      if (ratio < 2.2) score += 15;
+      else score -= (ratio - 2.2) * 15;
+      // Safe margins.
+      if (a.centerX > 0.08 && a.centerX < 0.92 && b.centerX > 0.08 && b.centerX < 0.92) {
+        score += 10;
+      }
+    } else {
+      score -= 40;
+    }
+  }
+
+  // Insert: prop should dominate (primary[0] treated as prop).
+  if (params.template === 'insert' && params.primary[0]) {
+    const p = subjectScores[params.primary[0].id];
+    if (p && p.areaCoverage > 0.2) score += 30;
+  }
+
+  // Blocker screen occupancy.
+  for (const blocker of params.blockers) {
+    const bounds = projectAabb({ min: blocker.min, max: blocker.max }, matrices);
+    if (bounds.areaCoverage > 0.45 && bounds.centerX > 0.2 && bounds.centerX < 0.8) {
+      score -= 25;
+      wallBlocked = true;
+      blockingWallIds.add(blocker.objectId);
+    }
+  }
+
+  // Camera inside geometry already filtered; slight reward for clear freestanding.
+  if (!wallBlocked) score += 8;
+
+  return {
+    camera: params.camera,
+    score,
+    primaryHeightCoverage,
+    wallBlocked,
+    blockingWallIds: [...blockingWallIds],
+    subjectScores,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function defaultAngleForTemplate(template: PrevisCameraTemplate): PrevisCameraAngle {
   switch (template) {
@@ -175,115 +735,35 @@ function defaultAngleForTemplate(template: PrevisCameraTemplate): PrevisCameraAn
   }
 }
 
-function distanceForCoverage(params: {
-  subjectHeight: number;
-  coverageTarget: number;
-  fovDegrees: number;
-  template: PrevisCameraTemplate;
-}): number {
-  const fovRad = (params.fovDegrees * Math.PI) / 180;
-  // coverage ≈ subjectHeight / (2 * d * tan(fov/2))
-  const denom = 2 * Math.tan(fovRad / 2) * Math.max(0.05, params.coverageTarget);
-  let distance = params.subjectHeight / denom;
-  if (params.template === 'establishing') distance *= 1.35;
-  if (params.template === 'insert') distance *= 0.7;
-  return Math.min(40, Math.max(0.6, distance));
+function uniqueLenses(primary: PrevisLensClass, template: PrevisCameraTemplate): PrevisLensClass[] {
+  const set = new Set<PrevisLensClass>([primary]);
+  if (template === 'close_up' || template === 'extreme_close_up') {
+    set.add('long');
+    set.add('normal');
+  } else if (template === 'wide' || template === 'establishing' || template === 'two_shot') {
+    set.add('wide');
+    set.add('normal');
+  } else {
+    set.add('normal');
+    set.add(primary === 'long' ? 'normal' : 'long');
+  }
+  return [...set];
 }
 
-function buildCandidates(params: {
-  template: PrevisCameraTemplate;
-  angle: PrevisCameraAngle;
-  target: Vec3;
-  distance: number;
-  centroid: Vec3;
-  foreground?: SubjectBounds;
-  subjectHeight: number;
-}): Array<{ position: Vec3; target: Vec3 }> {
-  const yawOffsets = yawOffsetsForAngle(params.angle);
-  const candidates: Array<{ position: Vec3; target: Vec3 }> = [];
-
-  if (params.template === 'overhead') {
-    candidates.push({
-      position: [params.target[0], params.target[1] + params.distance, params.target[2]],
-      target: params.target,
-    });
-    candidates.push({
-      position: [params.target[0] + 0.5, params.target[1] + params.distance * 0.9, params.target[2] + 0.5],
-      target: params.target,
-    });
-    return candidates;
-  }
-
-  const heightBias = heightBiasForTemplate(params.template, params.subjectHeight);
-
-  for (const yawDeg of yawOffsets) {
-    for (const distScale of [0.85, 1.0, 1.2]) {
-      const distance = params.distance * distScale;
-      const yaw = (yawDeg * Math.PI) / 180;
-      let origin = params.target;
-      if (params.template === 'over_the_shoulder' && params.foreground) {
-        origin = [
-          params.foreground.position[0],
-          params.target[1],
-          params.foreground.position[2],
-        ];
-      }
-      const position: Vec3 = [
-        origin[0] + Math.sin(yaw) * distance,
-        origin[1] + heightBias,
-        origin[2] + Math.cos(yaw) * distance,
-      ];
-      candidates.push({ position, target: params.target });
-    }
-  }
-
-  return candidates;
-}
-
-function yawOffsetsForAngle(angle: PrevisCameraAngle): number[] {
-  switch (angle) {
-    case 'front':
-      return [0, 8, -8];
-    case 'profile':
-      return [90, 85, 95, -90];
-    case 'rear':
-      return [180, 170, 190];
-    case 'three_quarter':
-    default:
-      return [35, 45, 25, -35, -45];
-  }
-}
-
-function heightBiasForTemplate(template: PrevisCameraTemplate, subjectHeight: number): number {
-  switch (template) {
-    case 'low_angle':
-      return -subjectHeight * 0.25;
-    case 'high_angle':
-      return subjectHeight * 0.45;
-    case 'overhead':
-      return subjectHeight;
-    default:
-      return subjectHeight * 0.05;
-  }
-}
-
-function estimateVerticalCoverage(params: {
-  cameraPosition: Vec3;
-  cameraTarget: Vec3;
-  fovDegrees: number;
-  subjectMinY: number;
-  subjectMaxY: number;
-}): number {
-  const subjectHeight = Math.max(0.01, params.subjectMaxY - params.subjectMinY);
-  const midY = (params.subjectMinY + params.subjectMaxY) / 2;
-  const dx = params.cameraPosition[0] - params.cameraTarget[0];
-  const dy = params.cameraPosition[1] - midY;
-  const dz = params.cameraPosition[2] - params.cameraTarget[2];
-  const distance = Math.hypot(dx, dy, dz);
-  if (distance < 1e-4) return 10;
-  const fovRad = (params.fovDegrees * Math.PI) / 180;
-  const frameHeight = 2 * distance * Math.tan(fovRad / 2);
-  return subjectHeight / Math.max(1e-4, frameHeight);
+function makeCamera(
+  position: Vec3,
+  target: Vec3,
+  fovDegrees: number,
+  aspectRatio: number,
+): CameraData {
+  return {
+    position: [...position] as Vec3,
+    target: [...target] as Vec3,
+    fovDegrees,
+    aspectRatio,
+    near: 0.05,
+    far: 500,
+  };
 }
 
 function boundsUnion(boxes: Array<{ min: Vec3; max: Vec3 }>): { min: Vec3; max: Vec3 } {
@@ -315,22 +795,20 @@ function isFiniteVec3(value: Vec3): boolean {
   return value.every((component) => Number.isFinite(component));
 }
 
-function isInsideAny(point: Vec3, blockers: Array<{ min: Vec3; max: Vec3 }>): boolean {
+function isInsideAny(
+  point: Vec3,
+  blockers: Array<{ min: Vec3; max: Vec3 }>,
+): boolean {
+  const margin = 0.08;
   return blockers.some((box) => (
-    point[0] >= box.min[0] && point[0] <= box.max[0]
-    && point[1] >= box.min[1] && point[1] <= box.max[1]
-    && point[2] >= box.min[2] && point[2] <= box.max[2]
+    point[0] >= box.min[0] + margin && point[0] <= box.max[0] - margin
+    && point[1] >= box.min[1] + margin && point[1] <= box.max[1] - margin
+    && point[2] >= box.min[2] + margin && point[2] <= box.max[2] - margin
   ));
 }
 
-function isRoughlyInFront(camera: Vec3, target: Vec3, point: Vec3): boolean {
-  const forward: Vec3 = [target[0] - camera[0], 0, target[2] - camera[2]];
-  const toPoint: Vec3 = [point[0] - camera[0], 0, point[2] - camera[2]];
-  const forwardLen = Math.hypot(forward[0], forward[2]);
-  const pointLen = Math.hypot(toPoint[0], toPoint[2]);
-  if (forwardLen < 1e-6 || pointLen < 1e-6) return true;
-  const dot = (forward[0] * toPoint[0] + forward[2] * toPoint[2]) / (forwardLen * pointLen);
-  return dot > 0.1;
+function yawToward(from: Vec3, to: Vec3): number {
+  return Math.atan2(to[0] - from[0], to[2] - from[2]);
 }
 
 export function subjectBoundsFromPlacement(params: {
@@ -339,11 +817,11 @@ export function subjectBoundsFromPlacement(params: {
   height?: number;
   width?: number;
   depth?: number;
+  yawRadians?: number;
 }): SubjectBounds {
   const height = params.height ?? 1.75;
   const width = params.width ?? 0.55;
   const depth = params.depth ?? 0.55;
-  // position is floor-contact; center is at height/2
   const min: Vec3 = [
     params.position[0] - width / 2,
     params.position[1],
@@ -354,5 +832,14 @@ export function subjectBoundsFromPlacement(params: {
     params.position[1] + height,
     params.position[2] + depth / 2,
   ];
-  return { id: params.id, min, max, position: params.position };
+  return {
+    id: params.id,
+    min,
+    max,
+    position: params.position,
+    yawRadians: params.yawRadians,
+  };
 }
+
+// Re-export landmark height for tests / tooling.
+export { HUMAN_LANDMARK_HEIGHT };

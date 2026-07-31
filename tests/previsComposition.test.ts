@@ -1,0 +1,466 @@
+/**
+ * Unit tests for clean-frame composition telemetry, projection, framing profiles,
+ * strict template validation, and camera solver V2.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { createDefaultProject } from '../src/domain/defaults';
+import type { CameraData, LocationProject, SceneObject, Shot, Vec3 } from '../src/domain/types';
+import {
+  buildCameraMatrices,
+  buildRepairPlan,
+  buildShotCompositionTelemetry,
+  cropHeightFraction,
+  framingProfileForTemplate,
+  HUMAN_FRAMING_PROFILES,
+  HUMAN_LANDMARK_HEIGHT,
+  isRepairableIssue,
+  preflightContactSheet,
+  projectAabb,
+  projectHumanLandmarks,
+  computeRenderPixelStats,
+  rejectRenderPixelStats,
+  solveShotCamera,
+  subjectBoundsFromPlacement,
+  templateFramingBands,
+  validateShotFrame,
+  type PrevisShotDefinition,
+} from '../src/engine/previs';
+
+function makeCamera(partial: Partial<CameraData> & { position: Vec3; target: Vec3 }): CameraData {
+  return {
+    fovDegrees: 35,
+    aspectRatio: 16 / 9,
+    near: 0.05,
+    far: 500,
+    ...partial,
+  };
+}
+
+function makeHuman(
+  id: string,
+  name: string,
+  position: Vec3,
+  height = 1.75,
+): SceneObject {
+  return {
+    id,
+    name,
+    type: 'human_dummy',
+    transform: {
+      position: [position[0], height / 2, position[2]],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+    },
+    dimensions: [0.55, height, 0.55],
+    visible: true,
+    locked: false,
+    color: '#888888',
+    stagingRole: 'person',
+  } as SceneObject;
+}
+
+function makeShot(camera: CameraData, shotNumber = '010'): Shot {
+  return {
+    id: `shot-${shotNumber}`,
+    name: `Shot ${shotNumber}`,
+    description: 'test',
+    shotNumber,
+    camera,
+    cameraKeyframes: [],
+    landmarkIds: [],
+    promptOverrides: {},
+    status: 'planned',
+    assets: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    exportSettings: {
+      width: 1280,
+      height: 720,
+      includeViewport: true,
+      includeAiResultFrame: false,
+      includePanoCrop: false,
+      includeFullPano: false,
+      includeGrayboxPano: false,
+      includeCameraMoveVideo: false,
+      includeCameraMoveReferenceFrames: false,
+      includeMetadata: true,
+      includePrompt: true,
+    },
+  };
+}
+
+function definition(partial: Partial<PrevisShotDefinition> & Pick<PrevisShotDefinition, 'camera' | 'shotNumber'>): PrevisShotDefinition {
+  return {
+    id: partial.id ?? `s${partial.shotNumber}`,
+    name: partial.name ?? partial.shotNumber,
+    description: partial.description ?? 'x',
+    locationId: partial.locationId ?? 'room',
+    subjects: partial.subjects ?? partial.camera.subjects,
+    requirements: partial.requirements,
+    blocking: partial.blocking,
+    camera: partial.camera,
+    shotNumber: partial.shotNumber,
+  };
+}
+
+describe('render pixel stats', () => {
+  it('rejects empty and flat buffers', () => {
+    const empty = computeRenderPixelStats(new Uint8Array(0), 0, 0);
+    expect(rejectRenderPixelStats(empty)?.code).toBe('frame_zero_size');
+
+    const flat = new Uint8Array(64 * 64 * 4);
+    for (let i = 0; i < flat.length; i += 4) {
+      flat[i] = 128;
+      flat[i + 1] = 128;
+      flat[i + 2] = 128;
+      flat[i + 3] = 255;
+    }
+    const flatStats = computeRenderPixelStats(flat, 64, 64);
+    expect(rejectRenderPixelStats(flatStats)?.code).toBe('frame_zero_variance');
+  });
+
+  it('accepts varied opaque content', () => {
+    const data = new Uint8Array(64 * 64 * 4);
+    for (let y = 0; y < 64; y += 1) {
+      for (let x = 0; x < 64; x += 1) {
+        const i = (y * 64 + x) * 4;
+        data[i] = (x * 4) % 256;
+        data[i + 1] = (y * 4) % 256;
+        data[i + 2] = 40;
+        data[i + 3] = 255;
+      }
+    }
+    const stats = computeRenderPixelStats(data, 64, 64);
+    expect(rejectRenderPixelStats(stats)).toBeNull();
+    expect(stats.opaquePixelRatio).toBeGreaterThan(0.9);
+    expect(stats.sampledUniqueColorCount).toBeGreaterThan(3);
+  });
+});
+
+describe('screen projection', () => {
+  it('projects AABB corners into NDC and pixel space', () => {
+    const camera = makeCamera({
+      position: [0, 1.6, 4],
+      target: [0, 1.0, 0],
+      fovDegrees: 40,
+    });
+    const matrices = buildCameraMatrices(camera, 1280, 720);
+    const bounds = projectAabb(
+      { min: [-0.3, 0, -0.3], max: [0.3, 1.75, 0.3] },
+      matrices,
+    );
+    expect(bounds.behindCamera).toBe(false);
+    expect(bounds.heightCoverage).toBeGreaterThan(0.1);
+    expect(bounds.widthCoverage).toBeGreaterThan(0.02);
+    expect(bounds.centerX).toBeGreaterThan(0.3);
+    expect(bounds.centerX).toBeLessThan(0.7);
+  });
+
+  it('projects human landmarks along body height', () => {
+    const camera = makeCamera({
+      position: [0, 1.5, 3],
+      target: [0, 1.2, 0],
+      fovDegrees: 35,
+    });
+    const matrices = buildCameraMatrices(camera, 1280, 720);
+    const landmarks = projectHumanLandmarks({
+      position: [0, 0, 0],
+      height: 1.75,
+      matrices,
+    });
+    expect(landmarks.headTop.y).toBeLessThan(landmarks.feet.y);
+    expect(landmarks.eyes.y).toBeLessThan(landmarks.chest.y);
+    expect(HUMAN_LANDMARK_HEIGHT.headTop).toBe(1);
+  });
+});
+
+describe('framing profiles', () => {
+  it('defines crop segments shorter than full body for medium/close-up', () => {
+    const medium = framingProfileForTemplate('medium');
+    const close = framingProfileForTemplate('close_up');
+    expect(cropHeightFraction(medium)).toBeLessThan(0.6);
+    expect(cropHeightFraction(close)).toBeLessThan(cropHeightFraction(medium));
+    expect(HUMAN_FRAMING_PROFILES.medium?.bottomLandmark).toBe('waist');
+    expect(templateFramingBands('close_up').waistOutside).toBe(true);
+  });
+});
+
+describe('camera solver V2', () => {
+  it('solves finite cameras for two-shot / medium / OTS / close-up', () => {
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [-1, 0, 0] });
+    const blair = subjectBoundsFromPlacement({ id: 'blair', position: [1, 0, 0], height: 1.68 });
+
+    for (const template of ['two_shot', 'medium', 'close_up'] as const) {
+      const solved = solveShotCamera({
+        shot: definition({
+          shotNumber: '010',
+          camera: {
+            template,
+            subjects: template === 'two_shot' ? ['alex', 'blair'] : ['alex'],
+            angle: 'three_quarter',
+          },
+        }),
+        subjects: [alex, blair],
+        aspectRatio: 16 / 9,
+      });
+      expect(solved.camera.position.every(Number.isFinite)).toBe(true);
+      expect(solved.camera.target.every(Number.isFinite)).toBe(true);
+      expect(solved.score).toBeGreaterThan(-200);
+    }
+
+    const ots = solveShotCamera({
+      shot: definition({
+        shotNumber: '030',
+        camera: {
+          template: 'over_the_shoulder',
+          subjects: ['alex'],
+          foregroundSubject: 'blair',
+          angle: 'three_quarter',
+        },
+      }),
+      subjects: [
+        subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] }),
+        subjectBoundsFromPlacement({
+          id: 'blair',
+          position: [0, 0, 1.2],
+          yawRadians: Math.PI,
+        }),
+      ],
+      aspectRatio: 16 / 9,
+    });
+    expect(ots.camera.position.every(Number.isFinite)).toBe(true);
+  });
+
+  it('penalizes secondary dominance via candidate scoring for medium', () => {
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] });
+    const blair = subjectBoundsFromPlacement({ id: 'blair', position: [0.4, 0, 0.2] });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '020',
+        camera: {
+          template: 'medium',
+          subjects: ['alex'],
+          angle: 'three_quarter',
+        },
+      }),
+      subjects: [alex, blair],
+      aspectRatio: 16 / 9,
+    });
+    expect(solved.camera.position.every(Number.isFinite)).toBe(true);
+  });
+});
+
+describe('strict template validation', () => {
+  it('flags a loose close-up when feet are visible', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    project.scene.objects = [alex];
+    // Wide camera — full body in frame (bad close-up).
+    const camera = makeCamera({
+      position: [0, 1.5, 6],
+      target: [0, 0.9, 0],
+      fovDegrees: 50,
+    });
+    const shot = makeShot(camera, '040');
+    project.shots = [shot];
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '040',
+        subjects: ['alex'],
+        camera: { template: 'close_up', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex' },
+      fromCanonicalRenderer: true,
+    });
+
+    expect(result.template).toBe('close_up');
+    expect(result.issues.some((issue) => (
+      issue.code === 'framing_too_loose'
+      || issue.code === 'headroom_excessive'
+    ))).toBe(true);
+    expect(result.telemetry).toBeTruthy();
+  });
+
+  it('passes a reasonable two-shot', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [-0.9, 0, 0]);
+    const blair = makeHuman('blair-id', 'Blair', [0.9, 0, 0], 1.68);
+    project.scene.objects = [alex, blair];
+    const camera = makeCamera({
+      position: [0, 1.55, 4.2],
+      target: [0, 1.0, 0],
+      fovDegrees: 45,
+    });
+    const shot = makeShot(camera, '010');
+    project.shots = [shot];
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '010',
+        subjects: ['alex', 'blair'],
+        camera: {
+          template: 'two_shot',
+          subjects: ['alex', 'blair'],
+          angle: 'front',
+        },
+        requirements: { visibleSubjects: ['alex', 'blair'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex', blair: 'Blair' },
+    });
+
+    expect(result.telemetry?.subjects.alex || result.telemetry?.subjects.Alex).toBeTruthy();
+    // May still warn depending on exact projection, but should not fail hard.
+    expect(result.status === 'failed' && result.issues.every((i) => i.code === 'shot_missing')).toBe(false);
+  });
+
+  it('marks new issue codes as repairable', () => {
+    expect(isRepairableIssue('framing_too_loose')).toBe(true);
+    expect(isRepairableIssue('ots_foreground_too_large')).toBe(true);
+    expect(isRepairableIssue('wall_dominant')).toBe(true);
+    expect(isRepairableIssue('required_subject_missing')).toBe(false);
+  });
+});
+
+describe('telemetry-driven repairs', () => {
+  it('scales camera distance from measured coverage', () => {
+    const camera = makeCamera({
+      position: [0, 1.6, 4],
+      target: [0, 1.2, 0],
+      fovDegrees: 35,
+    });
+    const plan = buildRepairPlan({
+      shotTarget: { id: 'shot-1' },
+      camera,
+      template: 'medium',
+      primarySubjectId: 'alex',
+      issues: [{
+        code: 'framing_too_loose',
+        message: 'too loose',
+        measuredCoverage: 0.3,
+        measured: { heightCoverage: 0.3, headTopY: 0.22 },
+      }],
+    });
+    expect(plan).toBeTruthy();
+    const cmd = plan!.commands.find((c) => c.op === 'shot.updateCamera');
+    expect(cmd).toBeTruthy();
+    if (cmd && cmd.op === 'shot.updateCamera') {
+      const distBefore = Math.hypot(
+        camera.position[0] - camera.target[0],
+        camera.position[2] - camera.target[2],
+      );
+      const distAfter = Math.hypot(
+        cmd.camera.position![0]! - cmd.camera.target![0]!,
+        cmd.camera.position![2]! - cmd.camera.target![2]!,
+      );
+      expect(distAfter).toBeLessThan(distBefore);
+    }
+  });
+});
+
+describe('contact sheet preflight', () => {
+  it('rejects debug UI paths and missing files', async () => {
+    const result = await preflightContactSheet({
+      shots: [
+        {
+          shotNumber: '010',
+          name: 'A',
+          framePath: 'C:/tmp/debug/010-ui.png',
+          status: 'passed',
+          warningCount: 0,
+          fromCanonicalRenderer: false,
+        },
+        {
+          shotNumber: '020',
+          name: 'B',
+          framePath: 'C:/tmp/shots/020.png',
+          status: 'passed',
+          warningCount: 0,
+          fromCanonicalRenderer: true,
+        },
+      ],
+      fileExists: async (p) => p.includes('020.png'),
+      readPngSize: async () => ({ width: 1280, height: 720, isPng: true }),
+      expectedAspectRatio: 16 / 9,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.code === 'debug_path_rejected')).toBe(true);
+    expect(result.issues.some((i) => i.code === 'not_canonical_renderer')).toBe(true);
+  });
+
+  it('accepts clean canonical frames', async () => {
+    const result = await preflightContactSheet({
+      shots: [
+        {
+          shotNumber: '010',
+          name: 'A',
+          framePath: 'C:/tmp/shots/010.png',
+          status: 'passed',
+          warningCount: 0,
+          fromCanonicalRenderer: true,
+        },
+      ],
+      fileExists: async () => true,
+      readPngSize: async () => ({ width: 1920, height: 1080, isPng: true }),
+      expectedAspectRatio: 16 / 9,
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('composition telemetry builder', () => {
+  it('writes subject landmarks and blockers', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    const wall = {
+      id: 'wall-1',
+      name: 'Wall',
+      type: 'wall',
+      transform: {
+        position: [0, 1.25, -2] as Vec3,
+        rotation: [0, 0, 0] as Vec3,
+        scale: [1, 1, 1] as Vec3,
+      },
+      dimensions: [4, 2.5, 0.2] as Vec3,
+      visible: true,
+      locked: false,
+      color: '#666',
+      stagingRole: 'set',
+    } as SceneObject;
+    project.scene.objects = [alex, wall];
+    const camera = makeCamera({
+      position: [0, 1.5, 3],
+      target: [0, 1.1, 0],
+      fovDegrees: 40,
+    });
+    const shot = makeShot(camera);
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '010',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+      }),
+      subjectNames: { alex: 'Alex' },
+    });
+
+    expect(telemetry.frameWidth).toBe(1280);
+    expect(telemetry.subjects.alex || telemetry.subjects.Alex).toBeTruthy();
+    const subject = telemetry.subjects.alex ?? telemetry.subjects.Alex!;
+    expect(subject.landmarks?.headTop).toBeTruthy();
+    expect(subject.bounds.heightCoverage).toBeGreaterThan(0);
+  });
+});

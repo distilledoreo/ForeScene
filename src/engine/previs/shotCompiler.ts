@@ -185,6 +185,11 @@ function compileSingleShot(
   const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).map(([id, position]) => {
     const character = characterById(manifest, id);
     const prop = (manifest.props ?? []).find((item) => item.id === id);
+    const blocking = blockingResults[id];
+    // Yaw from staging rotation (Y axis degrees → radians).
+    const yawRadians = blocking?.rotation
+      ? (blocking.rotation[1] * Math.PI) / 180
+      : undefined;
     if (character) {
       return subjectBoundsFromPlacement({
         id,
@@ -192,6 +197,7 @@ function compileSingleShot(
         height: character.height ?? 1.75,
         width: 0.55,
         depth: 0.55,
+        yawRadians,
       });
     }
     if (prop) {
@@ -202,18 +208,27 @@ function compileSingleShot(
         width: dims[0],
         height: dims[1],
         depth: dims[2],
+        yawRadians,
       });
     }
-    return subjectBoundsFromPlacement({ id, position, height: 1.75 });
+    return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
   });
 
+  const locationBlockers = context.locationBlockers[shot.locationId] ?? [];
   const cameraSolve = solveShotCamera({
     shot,
     subjects: subjectBounds,
     aspectRatio,
-    blockers: context.locationBlockers[shot.locationId] ?? [],
+    blockers: locationBlockers.map((box, index) => ({
+      id: `loc_${shot.locationId}_blocker_${index}`,
+      min: box.min,
+      max: box.max,
+    })),
   });
   warnings.push(...cameraSolve.warnings);
+  if (cameraSolve.notes?.includes('wall_hidden_for_camera')) {
+    warnings.push('wall_hidden_for_camera');
+  }
 
   if (
     !Number.isFinite(cameraSolve.camera.position[0])
