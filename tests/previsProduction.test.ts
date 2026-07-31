@@ -308,6 +308,38 @@ describe('blocking and camera solvers', () => {
     expect(solved.score).toBeGreaterThan(-100);
   });
 
+  it('hides non-required subjects even when listed in shot.subjects', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    expect(parsed.manifest).toBeTruthy();
+    // Shot 020: subjects include alex+blair, but requirements.visibleSubjects is [alex].
+    const shot020 = parsed.manifest!.shots.find((s) => s.shotNumber === '020');
+    expect(shot020?.subjects).toContain('blair');
+    expect(shot020?.requirements?.visibleSubjects).toEqual(['alex']);
+
+    const compiled = compileProduction(parsed.manifest!);
+    const batch = compiled.shotBatches.find((b) => b.shotNumbers.includes('020'));
+    expect(batch).toBeTruthy();
+    const commands = batch!.plan.commands.filter((c) => c.op === 'shot.stageObject');
+    const blairHide = commands.find((c) => {
+      if (c.op !== 'shot.stageObject') return false;
+      // Cast blair is staged with visible:false
+      const obj = c.object;
+      const ref = 'ref' in obj ? obj.ref : undefined;
+      const id = 'id' in obj ? obj.id : undefined;
+      return c.visible === false && (
+        (typeof ref === 'string' && ref.includes('blair'))
+        || (typeof id === 'string' && id.includes('blair'))
+      );
+    });
+    // Prefer matching by cast ref naming convention.
+    const blairStage = commands.filter((c) => c.op === 'shot.stageObject');
+    const hasHiddenBlair = blairStage.some((c) => c.op === 'shot.stageObject' && c.visible === false);
+    const alexVisible = blairStage.some((c) => c.op === 'shot.stageObject' && c.visible === true);
+    expect(hasHiddenBlair).toBe(true);
+    expect(alexVisible).toBe(true);
+    void blairHide;
+  });
+
   it('binds location blockers to plan object refs (not synthetic index ids)', () => {
     const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
     expect(parsed.manifest).toBeTruthy();

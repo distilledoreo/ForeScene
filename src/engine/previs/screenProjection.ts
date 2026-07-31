@@ -9,19 +9,39 @@ import {
   type HumanLandmark,
 } from './framingProfiles';
 
-export interface ProjectedBounds {
-  ndc: {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-  };
+export interface BoundsCoverage {
+  widthCoverage: number;
+  heightCoverage: number;
+  areaCoverage: number;
+  centerX: number;
+  centerY: number;
   pixels: {
     left: number;
     top: number;
     right: number;
     bottom: number;
   };
+}
+
+export interface ProjectedBounds {
+  /** Unclipped NDC extents (may extend outside [-1, 1]). */
+  ndc: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  };
+  /**
+   * Visible (frame-clamped) pixel box. Occupancy metrics on this object
+   * (`widthCoverage` etc.) use the visible intersection with the frame.
+   */
+  pixels: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+  /** Visible occupancy (0–1). Never exceeds 1. */
   widthCoverage: number;
   heightCoverage: number;
   areaCoverage: number;
@@ -29,6 +49,10 @@ export interface ProjectedBounds {
   centerY: number;
   clipped: boolean;
   behindCamera: boolean;
+  /** Full projected extents before frame clamp — useful for clipping diagnosis. */
+  unclipped: BoundsCoverage;
+  /** Explicit visible metrics (same as top-level occupancy fields). */
+  visible: BoundsCoverage;
 }
 
 export interface ProjectedPoint {
@@ -137,28 +161,67 @@ export function projectAabb(aabb: WorldAabb, matrices: CameraMatrices): Projecte
     return emptyBounds(true);
   }
 
+  const unclipped = coverageFromNdc(minX, maxX, minY, maxY, matrices);
+  // Visible occupancy: clamp NDC to the frame before measuring coverage.
+  const cMinX = Math.max(-1, Math.min(1, minX));
+  const cMaxX = Math.max(-1, Math.min(1, maxX));
+  const cMinY = Math.max(-1, Math.min(1, minY));
+  const cMaxY = Math.max(-1, Math.min(1, maxY));
+  const noVisible = cMinX >= cMaxX || cMinY >= cMaxY;
+  const visible = noVisible
+    ? zeroCoverage()
+    : coverageFromNdc(cMinX, cMaxX, cMinY, cMaxY, matrices);
+  const clipped = minX < -1 || maxX > 1 || minY < -1 || maxY > 1;
+
+  return {
+    ndc: { minX, maxX, minY, maxY },
+    pixels: visible.pixels,
+    widthCoverage: visible.widthCoverage,
+    heightCoverage: visible.heightCoverage,
+    areaCoverage: visible.areaCoverage,
+    centerX: visible.centerX,
+    centerY: visible.centerY,
+    clipped,
+    behindCamera: false,
+    unclipped,
+    visible,
+  };
+}
+
+function coverageFromNdc(
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+  matrices: CameraMatrices,
+): BoundsCoverage {
   const left = (minX * 0.5 + 0.5) * matrices.frameWidth;
   const right = (maxX * 0.5 + 0.5) * matrices.frameWidth;
   // NDC +Y is up; screen top is 0.
   const top = (1 - (maxY * 0.5 + 0.5)) * matrices.frameHeight;
   const bottom = (1 - (minY * 0.5 + 0.5)) * matrices.frameHeight;
-
   const widthPx = Math.max(0, right - left);
   const heightPx = Math.max(0, bottom - top);
   const widthCoverage = widthPx / matrices.frameWidth;
   const heightCoverage = heightPx / matrices.frameHeight;
-  const clipped = minX < -1 || maxX > 1 || minY < -1 || maxY > 1;
-
   return {
-    ndc: { minX, maxX, minY, maxY },
-    pixels: { left, top, right, bottom },
     widthCoverage,
     heightCoverage,
     areaCoverage: widthCoverage * heightCoverage,
-    centerX: (left + right) / 2 / matrices.frameWidth,
-    centerY: (top + bottom) / 2 / matrices.frameHeight,
-    clipped,
-    behindCamera: false,
+    centerX: matrices.frameWidth > 0 ? (left + right) / 2 / matrices.frameWidth : 0.5,
+    centerY: matrices.frameHeight > 0 ? (top + bottom) / 2 / matrices.frameHeight : 0.5,
+    pixels: { left, top, right, bottom },
+  };
+}
+
+function zeroCoverage(): BoundsCoverage {
+  return {
+    widthCoverage: 0,
+    heightCoverage: 0,
+    areaCoverage: 0,
+    centerX: 0.5,
+    centerY: 0.5,
+    pixels: { left: 0, top: 0, right: 0, bottom: 0 },
   };
 }
 
@@ -322,9 +385,10 @@ function aabbCorners(aabb: WorldAabb): Vec3[] {
 }
 
 function emptyBounds(behindCamera: boolean): ProjectedBounds {
+  const z = zeroCoverage();
   return {
     ndc: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
-    pixels: { left: 0, top: 0, right: 0, bottom: 0 },
+    pixels: z.pixels,
     widthCoverage: 0,
     heightCoverage: 0,
     areaCoverage: 0,
@@ -332,7 +396,39 @@ function emptyBounds(behindCamera: boolean): ProjectedBounds {
     centerY: 0.5,
     clipped: true,
     behindCamera,
+    unclipped: z,
+    visible: z,
   };
+}
+
+/**
+ * Project a head-and-shoulders region for OTS / close-up occupancy.
+ * Avoids legs/torso below the frame inflating coverage.
+ */
+export function projectUpperBodyRegion(params: {
+  position: Vec3;
+  height: number;
+  width?: number;
+  depth?: number;
+  matrices: CameraMatrices;
+  /** Fraction of height for bottom of region (shoulders ≈ 0.82). */
+  bottomFraction?: number;
+  /** Fraction of height for top of region (headTop = 1). */
+  topFraction?: number;
+}): ProjectedBounds {
+  const halfW = (params.width ?? 0.55) * 0.5;
+  const halfD = (params.depth ?? 0.55) * 0.5;
+  const bottom = params.bottomFraction ?? HUMAN_LANDMARK_HEIGHT.shoulders;
+  const top = params.topFraction ?? HUMAN_LANDMARK_HEIGHT.headTop;
+  const minY = params.position[1] + params.height * bottom;
+  const maxY = params.position[1] + params.height * top;
+  return projectAabb(
+    {
+      min: [params.position[0] - halfW, minY, params.position[2] - halfD],
+      max: [params.position[0] + halfW, maxY, params.position[2] + halfD],
+    },
+    params.matrices,
+  );
 }
 
 function perspectiveMatrix(fovY: number, aspect: number, near: number, far: number): Float64Array {

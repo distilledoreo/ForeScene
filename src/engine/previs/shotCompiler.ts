@@ -300,12 +300,14 @@ function compileSingleShot(
     });
   }
 
-  // Hide every cast/prop not in this shot; stage participants.
+  // Visibility: participants listed only in shot.subjects may be staged off-camera
+  // (e.g. medium of Alex while Blair remains a scene participant but not visible).
+  // Prefer explicit requirements.visibleSubjects when present.
+  const requiredVisible = shot.requirements?.visibleSubjects ?? shot.subjects;
   const visibleIds = new Set([
-    ...shot.subjects,
+    ...requiredVisible,
     ...shot.camera.subjects,
     ...(shot.camera.foregroundSubject ? [shot.camera.foregroundSubject] : []),
-    ...(shot.requirements?.visibleSubjects ?? []),
     ...(shot.requirements?.visibleProps ?? []),
   ]);
 
@@ -314,12 +316,14 @@ function compileSingleShot(
       context.entities[`cast.${character.id}`]?.objectId,
       previsRef('cast', character.id),
     );
-    const inShot = visibleIds.has(character.id);
+    const isParticipant = shot.subjects.includes(character.id)
+      || visibleIds.has(character.id);
+    const isVisible = visibleIds.has(character.id);
     const blocking = blockingResults[character.id];
     const pose = blocking?.posePreset
       ?? (character.defaultPose ? resolvePrevisPosePresetId(character.defaultPose) : undefined);
 
-    if (inShot) {
+    if (isParticipant) {
       const position = subjectPositions[character.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const rotation = blocking?.rotation ?? [0, 0, 0];
       // Staging transform uses object center Y for humans: height/2 above floor contact.
@@ -328,7 +332,7 @@ function compileSingleShot(
         op: 'shot.stageObject',
         shot: shotTarget,
         object: objectTarget,
-        visible: true,
+        visible: isVisible,
         transform: {
           position: [position[0], height / 2, position[2]],
           rotation,

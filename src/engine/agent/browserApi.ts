@@ -7,6 +7,7 @@ import type { LocationProject, Shot, Workspace } from '../../domain/types';
 import { createExportPlan } from '../exportPlan';
 import { renderShotFrame as renderShotFrameEngine } from '../renderers';
 import {
+  computePixelStatsFromDataUrl,
   rejectRenderPixelStats,
   type RenderPixelStats,
 } from '../previs/renderPixelStats';
@@ -662,8 +663,26 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           };
         }
 
-        const pixelStats: RenderPixelStats | undefined = frame.pixelStats;
-        const rejection = rejectRenderPixelStats(pixelStats);
+        // Prefer WebGL readPixels stats; fall back to decoding the PNG data URL
+        // when readback is flaky (preserveDrawingBuffer races, partial buffers).
+        let pixelStats: RenderPixelStats | undefined = frame.pixelStats;
+        let rejection = rejectRenderPixelStats(pixelStats);
+        if (rejection && frame.dataUrl) {
+          try {
+            const fromDataUrl = await computePixelStatsFromDataUrl(frame.dataUrl);
+            const second = rejectRenderPixelStats(fromDataUrl);
+            if (!second) {
+              pixelStats = fromDataUrl;
+              rejection = null;
+            } else {
+              // Keep the more informative of the two measurements.
+              pixelStats = fromDataUrl;
+              rejection = second;
+            }
+          } catch {
+            // Keep original rejection.
+          }
+        }
         if (rejection) {
           return {
             ok: false,
@@ -671,6 +690,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             revisionId: revisionNow,
             width: frame.width,
             height: frame.height,
+            pngDataUrl: frame.dataUrl,
             pixelStats,
             diagnostics: [
               agentError(rejection.code, rejection.message),

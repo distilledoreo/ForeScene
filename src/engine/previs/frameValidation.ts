@@ -489,7 +489,7 @@ function validateTemplateComposition(params: {
     }
   }
 
-  // Over-the-shoulder
+  // Over-the-shoulder — use visible head/shoulder occupancy, not unclipped full body.
   if (params.template === 'over_the_shoulder') {
     if (!foregroundId) {
       issues.push({
@@ -506,25 +506,33 @@ function validateTemplateComposition(params: {
           subject: foregroundId,
         });
       } else {
-        if (fg.bounds.widthCoverage < 0.10) {
+        const fgOcc = fg.upperBodyBounds ?? fg.bounds;
+        const width = fgOcc.widthCoverage;
+        if (width < 0.10) {
           issues.push({
             code: 'ots_foreground_too_small',
             message: 'OTS foreground occupies too little frame width.',
             subject: foregroundId,
-            measured: { widthCoverage: fg.bounds.widthCoverage },
+            measured: {
+              widthCoverage: width,
+              unclippedWidth: fg.bounds.unclipped?.widthCoverage,
+            },
           });
-        } else if (fg.bounds.widthCoverage > 0.40) {
+        } else if (width > 0.40) {
           issues.push({
             code: 'ots_foreground_too_large',
             message: 'OTS foreground occupies too much frame width.',
             subject: foregroundId,
-            measured: { widthCoverage: fg.bounds.widthCoverage },
+            measured: {
+              widthCoverage: width,
+              unclippedWidth: fg.bounds.unclipped?.widthCoverage,
+            },
           });
         }
         // Full-body centered foreground is wrong for OTS.
         if (
           fg.bounds.heightCoverage > 0.7
-          && Math.abs(fg.bounds.centerX - 0.5) < 0.18
+          && Math.abs(fgOcc.centerX - 0.5) < 0.18
         ) {
           issues.push({
             code: 'ots_foreground_too_large',
@@ -532,19 +540,19 @@ function validateTemplateComposition(params: {
             subject: foregroundId,
             measured: {
               heightCoverage: fg.bounds.heightCoverage,
-              centerX: fg.bounds.centerX,
+              centerX: fgOcc.centerX,
             },
           });
         }
-        const touchesEdge = fg.bounds.centerX < 0.28 || fg.bounds.centerX > 0.72
-          || fg.bounds.pixels.left < params.telemetry.frameWidth * 0.05
-          || fg.bounds.pixels.right > params.telemetry.frameWidth * 0.95;
+        const touchesEdge = fgOcc.centerX < 0.28 || fgOcc.centerX > 0.72
+          || fgOcc.pixels.left < params.telemetry.frameWidth * 0.05
+          || fgOcc.pixels.right > params.telemetry.frameWidth * 0.95;
         if (!touchesEdge) {
           issues.push({
             code: 'ots_foreground_missing',
             message: 'OTS foreground does not read as an edge-hugging shoulder.',
             subject: foregroundId,
-            measured: { centerX: fg.bounds.centerX },
+            measured: { centerX: fgOcc.centerX },
           });
         }
       }
@@ -555,13 +563,15 @@ function validateTemplateComposition(params: {
           subject: primarySubjects[0]?.id,
         });
       }
-      if (prim && fg && fg.bounds.areaCoverage > prim.bounds.areaCoverage * 1.4) {
+      const primOcc = prim?.upperBodyBounds ?? prim?.bounds;
+      const fgOcc = fg?.upperBodyBounds ?? fg?.bounds;
+      if (primOcc && fgOcc && fgOcc.areaCoverage > primOcc.areaCoverage * 1.4) {
         issues.push({
           code: 'ots_primary_obstructed',
           message: 'OTS foreground covers the primary subject.',
           measured: {
-            foregroundArea: fg.bounds.areaCoverage,
-            primaryArea: prim.bounds.areaCoverage,
+            foregroundArea: fgOcc.areaCoverage,
+            primaryArea: primOcc.areaCoverage,
           },
         });
       }

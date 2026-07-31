@@ -27,6 +27,7 @@ import {
   buildCameraMatrices,
   projectAabb,
   projectHumanLandmarks,
+  projectUpperBodyRegion,
   projectWorldPoint,
   sampleSubjectOcclusion,
   shoulderWorldPoints,
@@ -123,6 +124,7 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
   // Also try alternate lens classes within safe bounds.
   const lensOptions: PrevisLensClass[] = uniqueLenses(lensClass, template);
   let best: ScoredCandidate | undefined;
+  let bestHardPass: ScoredCandidate | undefined;
   const blockerBoxes = (input.blockers ?? []).map((box, index) => ({
     objectId: box.id ?? `blocker_${index}`,
     min: box.min,
@@ -151,7 +153,17 @@ export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
       if (!best || scored.score > best.score) {
         best = { ...scored, camera };
       }
+      // Prefer candidates that pass hard template constraints.
+      if (scored.hardPass && (!bestHardPass || scored.score > bestHardPass.score)) {
+        bestHardPass = { ...scored, camera };
+      }
     }
+  }
+
+  if (bestHardPass) {
+    best = bestHardPass;
+  } else if (template === 'two_shot') {
+    warnings.push('No two-shot candidate met hard balance constraints; using best soft score.');
   }
 
   if (!best) {
@@ -451,6 +463,39 @@ function buildCandidates(params: {
     }
   }
 
+  // Two-shot: prioritize cameras perpendicular to the actor line so both sit
+  // at similar depth (balanced scale).
+  if (params.template === 'two_shot' && params.primary.length >= 2) {
+    const a = params.primary[0]!;
+    const b = params.primary[1]!;
+    const dx = b.position[0] - a.position[0];
+    const dz = b.position[2] - a.position[2];
+    const len = Math.hypot(dx, dz) || 1;
+    // Perpendicular directions in XZ.
+    const perpDirs: Array<[number, number]> = [
+      [-dz / len, dx / len],
+      [dz / len, -dx / len],
+    ];
+    const mid: Vec3 = [
+      (a.position[0] + b.position[0]) / 2,
+      params.target[1],
+      (a.position[2] + b.position[2]) / 2,
+    ];
+    for (const [px, pz] of perpDirs) {
+      for (const distScale of [0.9, 1.1, 1.3]) {
+        const d = params.distance * distScale;
+        candidates.push({
+          position: [
+            mid[0] + px * d,
+            mid[1] + heightBiasForTemplate(params.template, params.subjectHeight),
+            mid[2] + pz * d,
+          ],
+          target: mid,
+        });
+      }
+    }
+  }
+
   // Cap combinatorial explosion for establishing/wide (fewer needed).
   if (params.template === 'establishing' || params.template === 'wide') {
     return candidates.filter((_, index) => index % 3 === 0);
@@ -532,6 +577,8 @@ interface ScoredCandidate {
   wallBlocked: boolean;
   blockingWallIds?: string[];
   subjectScores: Record<string, SubjectScore>;
+  /** False when hard template constraints fail (e.g. two-shot balance). */
+  hardPass: boolean;
 }
 
 function scoreCandidate(params: {
@@ -553,6 +600,7 @@ function scoreCandidate(params: {
   const blockingWallIds = new Set<string>();
   let wallBlocked = false;
   let primaryHeightCoverage = 0;
+  let hardPass = true;
 
   const primaryIds = new Set(params.primary.map((s) => s.id));
 
@@ -592,12 +640,29 @@ function scoreCandidate(params: {
       }
     }
 
+    // For OTS foreground / close-ups prefer upper-body occupancy so offscreen
+    // legs do not inflate coverage.
+    const useUpper = params.template === 'over_the_shoulder'
+      || params.template === 'close_up'
+      || params.template === 'extreme_close_up'
+      || params.template === 'medium_close_up';
+    const upper = useUpper
+      ? projectUpperBodyRegion({
+        position: subject.position,
+        height,
+        width: Math.max(0.2, subject.max[0] - subject.min[0]),
+        depth: Math.max(0.2, subject.max[2] - subject.min[2]),
+        matrices,
+      })
+      : undefined;
+    const occ = upper ?? bounds;
+
     subjectScores[subject.id] = {
-      centerX: bounds.centerX,
-      centerY: bounds.centerY,
-      widthCoverage: bounds.widthCoverage,
-      heightCoverage: bounds.heightCoverage,
-      areaCoverage: bounds.areaCoverage,
+      centerX: occ.centerX,
+      centerY: occ.centerY,
+      widthCoverage: occ.widthCoverage,
+      heightCoverage: occ.heightCoverage,
+      areaCoverage: occ.areaCoverage,
       clipped: bounds.clipped,
       behindCamera: bounds.behindCamera,
       faceOccluded: occlusion.faceOccluded,
@@ -668,26 +733,42 @@ function scoreCandidate(params: {
     }
   }
 
-  // Two-shot balance.
+  // Two-shot balance — hard constraints, not soft penalties alone.
   if (params.template === 'two_shot' && params.primary.length >= 2) {
     const a = subjectScores[params.primary[0]!.id];
     const b = subjectScores[params.primary[1]!.id];
-    if (a && b && !a.behindCamera && !b.behindCamera) {
-      score += 25;
+    if (!a || !b || a.behindCamera || b.behindCamera || !a.areaCoverage || !b.areaCoverage) {
+      hardPass = false;
+      score -= 200;
+    } else {
       const sep = Math.abs(a.centerX - b.centerX);
-      if (sep >= 0.15 && sep <= 0.55) score += 20;
-      else score -= Math.abs(sep - 0.3) * 40;
-      // Neither dominates excessively.
       const ratio = Math.max(a.areaCoverage, b.areaCoverage)
         / Math.max(1e-4, Math.min(a.areaCoverage, b.areaCoverage));
-      if (ratio < 2.2) score += 15;
-      else score -= (ratio - 2.2) * 15;
-      // Safe margins.
-      if (a.centerX > 0.08 && a.centerX < 0.92 && b.centerX > 0.08 && b.centerX < 0.92) {
-        score += 10;
+      const headA = a.landmarks?.headTop?.y;
+      const headB = b.landmarks?.headTop?.y;
+      const headDelta = (headA !== undefined && headB !== undefined)
+        ? Math.abs(headA - headB)
+        : 0;
+      const safeMargins = a.centerX > 0.08 && a.centerX < 0.92
+        && b.centerX > 0.08 && b.centerX < 0.92;
+      const bothVisible = a.areaCoverage > 0.01 && b.areaCoverage > 0.01
+        && !a.behindCamera && !b.behindCamera;
+
+      // Hard gates for a conventional balanced two-shot.
+      if (!bothVisible) hardPass = false;
+      if (ratio > 2.4) hardPass = false;
+      if (sep < 0.12 || sep > 0.65) hardPass = false;
+      if (!safeMargins) hardPass = false;
+      if (headDelta > 0.18) hardPass = false;
+
+      if (hardPass) {
+        score += 40;
+        score += 25 - Math.abs(sep - 0.32) * 40;
+        score += 20 - (ratio - 1) * 15;
+        score += 10 - headDelta * 40;
+      } else {
+        score -= 150 + Math.max(0, ratio - 2.4) * 40;
       }
-    } else {
-      score -= 40;
     }
   }
 
@@ -717,6 +798,7 @@ function scoreCandidate(params: {
     wallBlocked,
     blockingWallIds: [...blockingWallIds],
     subjectScores,
+    hardPass,
   };
 }
 

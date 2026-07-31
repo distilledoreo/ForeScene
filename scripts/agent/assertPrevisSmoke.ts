@@ -148,6 +148,10 @@ function assertShotComposition(shotNumber: string, composition: CompositionFile)
       if (!blair?.visible) fail('010: Blair not visible');
       const sep = Math.abs((alex.bounds?.centerX ?? 0.5) - (blair.bounds?.centerX ?? 0.5));
       if (sep < 0.10) fail(`010: horizontal separation too small (${sep.toFixed(3)})`);
+      const aArea = alex.bounds?.areaCoverage ?? 0;
+      const bArea = blair.bounds?.areaCoverage ?? 0;
+      const ratio = Math.max(aArea, bArea) / Math.max(1e-4, Math.min(aArea, bArea));
+      if (ratio > 2.5) fail(`010: actor area ratio ${ratio.toFixed(2)} exceeds balanced two-shot limit`);
       break;
     }
     case '020': {
@@ -163,10 +167,12 @@ function assertShotComposition(shotNumber: string, composition: CompositionFile)
       if (feetIn && (alex.landmarks?.feet?.y ?? 1) < 0.92) {
         fail('020: Alex feet still clearly in frame for medium');
       }
-      // Secondary must not dominate.
+      // Blair should be absent or clearly subordinate (visibility semantics hide non-required).
       const blair = subjectOf(composition, ['blair', 'Blair']);
-      if (blair?.visible && (blair.bounds?.areaCoverage ?? 0) > (alex.bounds?.areaCoverage ?? 0) * 0.45) {
-        fail('020: Blair dominates over Alex');
+      if (blair?.visible) {
+        if ((blair.bounds?.areaCoverage ?? 0) > (alex.bounds?.areaCoverage ?? 0) * 0.35) {
+          fail('020: Blair dominates over Alex');
+        }
       }
       break;
     }
@@ -175,11 +181,17 @@ function assertShotComposition(shotNumber: string, composition: CompositionFile)
       const prim = subjectOf(composition, ['alex', 'Alex']);
       if (!fg?.visible) fail('030: OTS foreground Blair not visible');
       if (!prim?.visible) fail('030: OTS primary Alex not visible');
-      const width = fg.bounds?.widthCoverage ?? 0;
+      // Prefer upper-body occupancy when present (head/shoulders).
+      const fgOcc = (fg as { upperBodyBounds?: { widthCoverage?: number; centerX?: number; areaCoverage?: number } })
+        .upperBodyBounds ?? fg.bounds;
+      const width = fgOcc?.widthCoverage ?? 0;
       if (width < 0.10 || width > 0.40) {
         fail(`030: foreground width ${width.toFixed(3)} outside [0.10, 0.40]`);
       }
-      const centerX = fg.bounds?.centerX ?? 0.5;
+      if (width > 1.001) {
+        fail(`030: foreground width ${width.toFixed(3)} exceeds 1 (unclamped metrics leak)`);
+      }
+      const centerX = fgOcc?.centerX ?? 0.5;
       const touchesEdge = centerX < 0.32 || centerX > 0.68;
       if (!touchesEdge) {
         fail(`030: foreground centerX ${centerX.toFixed(3)} does not read as edge-hugging`);
@@ -198,6 +210,10 @@ function assertShotComposition(shotNumber: string, composition: CompositionFile)
       if (shoulderY === undefined) fail('040: missing shoulders landmark');
       if (headY < 0.03 || headY > 0.22) {
         fail(`040: headroom headTopY ${headY.toFixed(3)} outside close-up band`);
+      }
+      // Head must sit near the top of frame, not the bottom (regression for reversed repair).
+      if (headY > 0.35) {
+        fail(`040: headTopY ${headY.toFixed(3)} is far too low (possible reversed vertical repair)`);
       }
       if (shoulderY < 0.70 || shoulderY > 1.10) {
         fail(`040: shoulders Y ${shoulderY.toFixed(3)} not near frame bottom`);

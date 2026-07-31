@@ -9,6 +9,7 @@ import {
   buildCameraMatrices,
   projectAabb,
   projectHumanLandmarks,
+  projectUpperBodyRegion,
   sampleSubjectOcclusion,
   type ProjectedBounds,
   type ProjectedPoint,
@@ -17,7 +18,13 @@ import type { HumanLandmark } from './framingProfiles';
 import { HUMAN_LANDMARK_HEIGHT } from './framingProfiles';
 
 export interface ShotCompositionSubject {
+  /** Full-body projected AABB (visible occupancy is frame-clamped). */
   bounds: ProjectedBounds;
+  /**
+   * Head-and-shoulders region — preferred for OTS / close-up occupancy so
+   * offscreen legs cannot inflate coverage.
+   */
+  upperBodyBounds?: ProjectedBounds;
   landmarks?: Record<string, {
     x: number;
     y: number;
@@ -179,9 +186,11 @@ function describeSubject(
   const floorY = object.transform.position[1] - heightM / 2;
   const isHuman = object.type === 'human_dummy';
   let landmarks: Record<string, { x: number; y: number; inFrame: boolean }> | undefined;
+  let upperBodyBounds: ProjectedBounds | undefined;
   if (isHuman) {
+    const floorPos: Vec3 = [object.transform.position[0], floorY, object.transform.position[2]];
     const projected = projectHumanLandmarks({
-      position: [object.transform.position[0], floorY, object.transform.position[2]],
+      position: floorPos,
       height: heightM,
       matrices,
     });
@@ -193,6 +202,15 @@ function describeSubject(
         inFrame: point.inFrame,
       };
     }
+    upperBodyBounds = projectUpperBodyRegion({
+      position: floorPos,
+      height: heightM,
+      width: object.dimensions[0] * object.transform.scale[0],
+      depth: object.dimensions[2] * object.transform.scale[2],
+      matrices,
+      bottomFraction: HUMAN_LANDMARK_HEIGHT.shoulders,
+      topFraction: HUMAN_LANDMARK_HEIGHT.headTop,
+    });
   }
 
   const samples = isHuman
@@ -208,6 +226,7 @@ function describeSubject(
 
   return {
     bounds,
+    upperBodyBounds,
     landmarks,
     visible: !bounds.behindCamera && bounds.areaCoverage > 0.0005,
     occlusionRatio: occlusion.occludedSampleRatio,
@@ -258,9 +277,17 @@ function humanOcclusionSamples(
 }
 
 function emptySubjectBounds(): ProjectedBounds {
+  const z = {
+    widthCoverage: 0,
+    heightCoverage: 0,
+    areaCoverage: 0,
+    centerX: 0.5,
+    centerY: 0.5,
+    pixels: { left: 0, top: 0, right: 0, bottom: 0 },
+  };
   return {
     ndc: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
-    pixels: { left: 0, top: 0, right: 0, bottom: 0 },
+    pixels: z.pixels,
     widthCoverage: 0,
     heightCoverage: 0,
     areaCoverage: 0,
@@ -268,6 +295,8 @@ function emptySubjectBounds(): ProjectedBounds {
     centerY: 0.5,
     clipped: true,
     behindCamera: true,
+    unclipped: z,
+    visible: z,
   };
 }
 

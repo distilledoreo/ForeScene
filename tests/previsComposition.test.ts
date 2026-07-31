@@ -7,11 +7,13 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultProject } from '../src/domain/defaults';
 import type { CameraData, LocationProject, SceneObject, Shot, Vec3 } from '../src/domain/types';
 import {
+  applyHeadroomCorrection,
   buildCameraMatrices,
   buildRepairPlan,
   buildShotCompositionTelemetry,
   createInitialRunState,
   cropHeightFraction,
+  estimateHeadTopYAfterHeadroomRepair,
   framingProfileForTemplate,
   HUMAN_FRAMING_PROFILES,
   HUMAN_LANDMARK_HEIGHT,
@@ -24,6 +26,7 @@ import {
   projectHumanLandmarks,
   computeRenderPixelStats,
   rejectRenderPixelStats,
+  selectPrimaryIssue,
   solveShotCamera,
   subjectBoundsFromPlacement,
   templateFramingBands,
@@ -370,6 +373,85 @@ describe('telemetry-driven repairs', () => {
       );
       expect(distAfter).toBeLessThan(distBefore);
     }
+  });
+
+  it('reduces headroom so next headTopY is numerically smaller', () => {
+    const camera = makeCamera({
+      position: [0, 1.6, 3.2],
+      target: [0, 1.35, 0],
+      fovDegrees: 35,
+    });
+    const headWorld: Vec3 = [0, 1.75, 0];
+    const headTopY = 0.28; // excessive headroom
+    const afterY = estimateHeadTopYAfterHeadroomRepair({
+      camera,
+      headWorld,
+      headTopY,
+      desiredHeadTopY: 0.10,
+    });
+    expect(afterY).toBeLessThan(headTopY);
+
+    const repaired = applyHeadroomCorrection(
+      {
+        position: [...camera.position] as Vec3,
+        target: [...camera.target] as Vec3,
+        fovDegrees: camera.fovDegrees,
+      },
+      headTopY,
+      0.10,
+    );
+    // Looking down: target Y decreases when reducing headroom.
+    expect(repaired.target[1]).toBeLessThan(camera.target[1]);
+
+    const plan = buildRepairPlan({
+      shotTarget: { id: 'shot-1' },
+      camera,
+      template: 'close_up',
+      primarySubjectId: 'alex',
+      issues: [{
+        code: 'headroom_excessive',
+        message: 'too much headroom',
+        measured: { headTopY },
+      }, {
+        // Lower priority — must not also run and fight headroom fix.
+        code: 'unwanted_subject_dominant',
+        message: 'secondary',
+      }],
+    });
+    expect(plan?.primaryIssueCode).toBe('headroom_excessive');
+    expect(plan?.description).toContain('reduce headroom');
+    expect(plan?.description).not.toContain('secondary');
+    const cmd = plan!.commands.find((c) => c.op === 'shot.updateCamera');
+    expect(cmd && cmd.op === 'shot.updateCamera' && cmd.camera.target![1]! < camera.target[1]).toBe(true);
+  });
+
+  it('picks a single root-cause issue by priority', () => {
+    const primary = selectPrimaryIssue([
+      { code: 'unwanted_subject_dominant', message: 'x' },
+      { code: 'headroom_excessive', message: 'y' },
+      { code: 'camera_inside_geometry', message: 'z' },
+    ]);
+    expect(primary?.code).toBe('camera_inside_geometry');
+  });
+});
+
+describe('projected bounds clamping', () => {
+  it('keeps visible occupancy ≤ 1 even when AABB extends offscreen', () => {
+    const camera = makeCamera({
+      position: [0, 1.2, 1.2],
+      target: [0, 1.0, 0],
+      fovDegrees: 40,
+    });
+    const matrices = buildCameraMatrices(camera, 1280, 720);
+    // Tall body that will project past the bottom of the frame.
+    const bounds = projectAabb(
+      { min: [-0.4, 0, -0.3], max: [0.4, 2.0, 0.3] },
+      matrices,
+    );
+    expect(bounds.widthCoverage).toBeLessThanOrEqual(1.001);
+    expect(bounds.heightCoverage).toBeLessThanOrEqual(1.001);
+    expect(bounds.areaCoverage).toBeLessThanOrEqual(1.001);
+    expect(bounds.unclipped.heightCoverage).toBeGreaterThanOrEqual(bounds.heightCoverage);
   });
 });
 
