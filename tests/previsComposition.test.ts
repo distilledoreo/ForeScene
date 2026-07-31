@@ -9,6 +9,7 @@ import type { CameraData, LocationProject, SceneObject, Shot, Vec3 } from '../sr
 import {
   applyHeadroomCorrection,
   buildCameraMatrices,
+  buildOtsRepairProfile,
   buildRepairPlan,
   buildShotCompositionTelemetry,
   createInitialRunState,
@@ -20,6 +21,7 @@ import {
   isCanonicalFrame,
   isRepairableIssue,
   migrateRenderPipelineVersion,
+  otsHardAccept,
   PREVIS_RENDER_PIPELINE_VERSION,
   preflightContactSheet,
   projectAabb,
@@ -305,6 +307,111 @@ describe('camera solver V2', () => {
     expect(Math.abs(solved.camera.target[1] - chestY)).toBeLessThan(
       Math.abs(solved.camera.target[1] - headY),
     );
+  });
+
+  it('otsHardAccept rejects giant foreground occupancy', () => {
+    const ok = otsHardAccept({
+      subjectScores: {
+        alex: {
+          centerX: 0.55,
+          centerY: 0.45,
+          widthCoverage: 0.25,
+          heightCoverage: 0.55,
+          areaCoverage: 0.14,
+          clipped: false,
+          behindCamera: false,
+          faceOccluded: false,
+          landmarks: { headTop: { x: 0.55, y: 0.14, inFrame: true } },
+        },
+        blair: {
+          centerX: 0.18,
+          centerY: 0.4,
+          widthCoverage: 0.22,
+          heightCoverage: 0.35,
+          areaCoverage: 0.08,
+          clipped: false,
+          behindCamera: false,
+        },
+      },
+    }, 'alex', 'blair');
+    expect(ok).toBe(true);
+
+    const giantFg = otsHardAccept({
+      subjectScores: {
+        alex: {
+          centerX: 0.55,
+          centerY: 0.45,
+          widthCoverage: 0.25,
+          heightCoverage: 0.55,
+          areaCoverage: 0.10,
+          clipped: false,
+          behindCamera: false,
+          faceOccluded: false,
+          landmarks: { headTop: { x: 0.55, y: 0.14, inFrame: true } },
+        },
+        blair: {
+          centerX: 0.2,
+          centerY: 0.4,
+          widthCoverage: 0.55,
+          heightCoverage: 0.8,
+          areaCoverage: 0.40,
+          clipped: false,
+          behindCamera: false,
+        },
+      },
+    }, 'alex', 'blair');
+    expect(giantFg).toBe(false);
+  });
+
+  it('OTS repair profile for too-large FG increases min back/out and avoids prior camera', () => {
+    const profile = buildOtsRepairProfile({
+      issueCode: 'ots_foreground_too_large',
+      camera: makeCamera({ position: [0, 1.5, 0.5], target: [0, 1.1, 0], fovDegrees: 35 }),
+      issues: [{
+        code: 'ots_foreground_too_large',
+        message: 'too big',
+        measured: { widthCoverage: 0.52 },
+      }],
+    });
+    expect(profile.minBack).toBeGreaterThanOrEqual(0.7);
+    expect(profile.minOut).toBeGreaterThanOrEqual(0.45);
+    expect(profile.previousForegroundWidth).toBeCloseTo(0.52);
+    expect(profile.avoidCamera).toBeTruthy();
+
+    const alex = subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] });
+    const blair = subjectBoundsFromPlacement({
+      id: 'blair',
+      position: [0, 0, 1.15],
+      height: 1.68,
+      yawRadians: Math.PI,
+    });
+    const previous = makeCamera({
+      position: [0.4, 1.55, 0.9],
+      target: [0, 1.2, 0],
+      fovDegrees: 35,
+    });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '030',
+        camera: {
+          template: 'over_the_shoulder',
+          subjects: ['alex'],
+          foregroundSubject: 'blair',
+        },
+      }),
+      subjects: [alex, blair],
+      aspectRatio: 16 / 9,
+      repair: {
+        ...profile,
+        avoidCamera: previous,
+        minCameraDistanceFromAvoid: 0.5,
+      },
+    });
+    const dist = Math.hypot(
+      solved.camera.position[0] - previous.position[0],
+      solved.camera.position[2] - previous.position[2],
+    );
+    expect(dist).toBeGreaterThan(0.45);
   });
 
   it('two-shot repair re-solves rather than generic dolly', () => {

@@ -45,6 +45,35 @@ export interface SubjectBounds {
   yawRadians?: number;
 }
 
+/**
+ * Issue-aware repair guidance for dedicated template re-solves.
+ * Prefer this over generic dolly/orbit nudges.
+ */
+export interface CameraSolveRepairProfile {
+  /** Exclude candidates near this camera (previous failed attempt). */
+  avoidCamera?: CameraData;
+  /** Minimum distance from avoidCamera position (meters). */
+  minCameraDistanceFromAvoid?: number;
+  /** Hard max foreground upper-body width coverage. */
+  foregroundWidthMax?: number;
+  /** Hard min foreground upper-body width coverage. */
+  foregroundWidthMin?: number;
+  /** Require FG width strictly below this (previous measurement). */
+  previousForegroundWidth?: number;
+  primaryHeightMax?: number;
+  primaryHeightMin?: number;
+  /** Prefer the opposite OTS shoulder from avoidCamera. */
+  preferOppositeShoulder?: boolean;
+  /** Minimum back offset from shoulder (meters). */
+  minBack?: number;
+  /** Minimum outward offset from shoulder (meters). */
+  minOut?: number;
+  /** Prefer wider FOV / wider lens class. */
+  preferWiderLens?: boolean;
+  /** Require FG area ≤ primary upper-body area (stricter than 1.5×). */
+  requireLowerFgPrimaryOverlap?: boolean;
+}
+
 export interface CameraSolveInput {
   shot: PrevisShotDefinition;
   subjects: SubjectBounds[];
@@ -53,6 +82,8 @@ export interface CameraSolveInput {
   blockers?: Array<{ id?: string; min: Vec3; max: Vec3 }>;
   frameWidth?: number;
   frameHeight?: number;
+  /** Optional repair profile for issue-aware re-solves. */
+  repair?: CameraSolveRepairProfile;
 }
 
 export interface CameraSolveResult {
@@ -63,6 +94,8 @@ export interface CameraSolveResult {
   /** Walls / solids to hide when no clear camera exists. */
   hideBlockerIds?: string[];
   notes?: string[];
+  /** True when a hard-acceptance candidate was selected. */
+  hardPass?: boolean;
 }
 
 const FRAME_W = 1280;
@@ -499,10 +532,51 @@ function forceBalancedTwoShotCamera(params: {
 // OTS dedicated solver
 // ---------------------------------------------------------------------------
 
+/** Hard OTS acceptance — only hard-pass candidates may be selected silently. */
+export function otsHardAccept(
+  scored: {
+    subjectScores: Record<string, SubjectScore>;
+  },
+  primaryId: string,
+  foregroundId: string,
+  repair?: CameraSolveRepairProfile,
+): boolean {
+  const prim = scored.subjectScores[primaryId];
+  const fg = scored.subjectScores[foregroundId];
+  if (!prim || !fg || prim.behindCamera || fg.behindCamera) return false;
+
+  const headY = prim.landmarks?.headTop?.y;
+  if (headY === undefined || headY < 0.08 || headY > 0.24) return false;
+
+  const primH = prim.heightCoverage;
+  const primHMin = repair?.primaryHeightMin ?? 0.35;
+  const primHMax = repair?.primaryHeightMax ?? 0.85;
+  if (primH < primHMin || primH > primHMax) return false;
+
+  const fgWMin = repair?.foregroundWidthMin ?? 0.12;
+  const fgWMax = repair?.foregroundWidthMax ?? 0.40;
+  if (fg.widthCoverage < fgWMin || fg.widthCoverage > fgWMax) return false;
+  if (
+    repair?.previousForegroundWidth !== undefined
+    && fg.widthCoverage >= repair.previousForegroundWidth - 1e-4
+  ) {
+    return false;
+  }
+
+  if (!(fg.centerX < 0.32 || fg.centerX > 0.68)) return false;
+
+  const areaCap = repair?.requireLowerFgPrimaryOverlap ? 1.0 : 1.5;
+  if (fg.areaCoverage > prim.areaCoverage * areaCap + 1e-4) return false;
+
+  if (prim.faceOccluded) return false;
+  return true;
+}
+
 function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
   const template = 'over_the_shoulder' as const;
   const lensClass = input.shot.camera.lensClass ?? defaultLensClassForTemplate(template);
   const profile = framingProfileForTemplate(template);
+  const repair = input.repair;
   const warnings: string[] = [];
   const notes: string[] = [];
   const frameWidth = input.frameWidth ?? FRAME_W;
@@ -549,10 +623,25 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     primarySubject.position[2],
   ];
 
+  // Infer previous shoulder side from avoidCamera for opposite-shoulder repairs.
+  const preferredSideOrder = otsSideOrder({
+    preferOpposite: repair?.preferOppositeShoulder === true,
+    avoidCamera: repair?.avoidCamera,
+    foreground,
+    shoulders,
+  });
+
+  const minBack = repair?.minBack ?? 0.3;
+  const minOut = repair?.minOut ?? 0.25;
+  const backValues = [0.3, 0.5, 0.7, 0.9, 1.2].filter((v) => v + 1e-6 >= minBack);
+  const outValues = [0.25, 0.45, 0.65, 0.85, 1.1].filter((v) => v + 1e-6 >= minOut);
+  // Always keep at least the farthest samples if filters empty.
+  if (backValues.length === 0) backValues.push(1.2);
+  if (outValues.length === 0) outValues.push(1.1);
+
   const candidates: Array<{ position: Vec3; target: Vec3; side: 'left' | 'right' }> = [];
-  for (const side of ['left', 'right'] as const) {
+  for (const side of preferredSideOrder) {
     const shoulder = side === 'left' ? shoulders.left : shoulders.right;
-    // Behind foreground shoulder, outward — keep most of torso out of frame.
     const awayFromPrimary: Vec3 = [
       foreground.position[0] - primarySubject.position[0],
       0,
@@ -564,18 +653,19 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     const outX = side === 'left' ? -Math.cos(fgYaw) : Math.cos(fgYaw);
     const outZ = side === 'left' ? -Math.sin(fgYaw) : Math.sin(fgYaw);
 
-    // Closer/tighter to shoulder so FG reads as edge head/shoulder, not profile two-shot.
-    for (const back of [0.22, 0.32, 0.42, 0.55]) {
-      for (const out of [0.18, 0.28, 0.38, 0.48]) {
-        // Keep camera near shoulder height (not elevated) to reduce empty headroom.
+    // Farther back/out so only head/shoulder edge remains visible.
+    for (const back of backValues) {
+      for (const out of outValues) {
         for (const elev of [-0.02, 0.02, 0.06, 0.10]) {
           const position: Vec3 = [
             shoulder[0] + backX * back + outX * out,
             shoulder[1] + elev,
             shoulder[2] + backZ * back + outZ * out,
           ];
-          // Prefer chest/upper-torso aim; small vertical target offsets for headroom.
-          for (const tOff of [0, -0.06, -0.12, 0.05]) {
+          if (repair?.avoidCamera && tooCloseToCamera(position, repair.avoidCamera, repair.minCameraDistanceFromAvoid ?? 0.4)) {
+            continue;
+          }
+          for (const tOff of [0, -0.06, -0.12, 0.05, -0.18]) {
             candidates.push({
               position,
               target: [primaryAim[0], primaryAim[1] + tOff, primaryAim[2]],
@@ -593,14 +683,22 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     max: box.max,
   }));
 
-  let best: ScoredCandidate & { side?: 'left' | 'right' } | undefined;
-  const lensOptions = uniqueLenses(lensClass, template);
+  let bestHard: (ScoredCandidate & { side?: 'left' | 'right' }) | undefined;
+  let bestSoft: (ScoredCandidate & { side?: 'left' | 'right' }) | undefined;
+  let lensOptions = uniqueLenses(lensClass, template);
+  if (repair?.preferWiderLens) {
+    lensOptions = uniqueLenses('wide', template);
+  }
 
   for (const lens of lensOptions) {
     const fov = verticalFovForLens(lens, input.aspectRatio);
     for (const candidate of candidates) {
       if (isInsideAny(candidate.position, blockerBoxes)) continue;
       const camera = makeCamera(candidate.position, candidate.target, fov, input.aspectRatio);
+      if (repair?.avoidCamera && tooCloseToCamera(camera.position, repair.avoidCamera, repair.minCameraDistanceFromAvoid ?? 0.4)) {
+        continue;
+      }
+
       const scored = scoreCandidate({
         camera,
         template,
@@ -615,11 +713,11 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
         otsSide: candidate.side,
       });
 
+      const hard = otsHardAccept(scored, primarySubject.id, foreground.id, repair);
       const fg = scored.subjectScores[foreground.id];
       const prim = scored.subjectScores[primarySubject.id];
       let score = scored.score;
 
-      // Primary headroom band 0.10–0.22 is a hard preference for OTS.
       const headY = prim?.landmarks?.headTop?.y;
       if (headY !== undefined) {
         if (headY >= 0.10 && headY <= 0.22) score += 50;
@@ -628,23 +726,38 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
       }
 
       if (fg) {
-        // Upper-body width occupancy (already preferred in scoreCandidate for OTS).
         if (fg.widthCoverage >= 0.12 && fg.widthCoverage <= 0.32) score += 40;
         else score -= Math.abs(fg.widthCoverage - 0.20) * 100;
         const edge = candidate.side === 'left' ? fg.centerX : 1 - fg.centerX;
         if (edge < 0.28) score += 25;
         else score -= (edge - 0.28) * 80;
-        // Must hug edge — not a centered/profile second subject.
         if (Math.abs(fg.centerX - 0.5) < 0.18) score -= 45;
-        if (fg.heightCoverage > 0.55 && Math.abs(fg.centerX - 0.5) < 0.22) score -= 50;
       }
       if (prim && fg && prim.areaCoverage > fg.areaCoverage * 0.9) score += 25;
       if (prim?.faceOccluded) score -= 60;
+      if (hard) score += 80;
+      // Prefer opposite shoulder when requested.
+      if (repair?.preferOppositeShoulder && preferredSideOrder[0] === candidate.side) {
+        score += 20;
+      }
 
-      if (!best || score > best.score) {
-        best = { ...scored, score, camera, side: candidate.side };
+      const entry = { ...scored, score, camera, side: candidate.side, hardPass: hard };
+      if (hard && (!bestHard || score > bestHard.score)) {
+        bestHard = entry;
+      }
+      if (!bestSoft || score > bestSoft.score) {
+        bestSoft = entry;
       }
     }
+  }
+
+  let best = bestHard;
+  if (!best && bestSoft) {
+    best = bestSoft;
+    warnings.push(
+      'OTS: no candidate met hard acceptance constraints; using soft fallback.',
+    );
+    notes.push('ots_soft_fallback');
   }
 
   if (!best) {
@@ -652,42 +765,51 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     return solveGenericWithOtsBias(input, warnings);
   }
 
-  // Reapply OTS framing profile after selection: fix residual headroom via aim.
-  const headY = best.subjectScores[primarySubject.id]?.landmarks?.headTop?.y;
-  if (headY !== undefined && (headY < 0.08 || headY > 0.24)) {
-    const excess = headY - 0.14;
-    const adjusted = makeCamera(
-      best.camera.position,
-      [
-        best.camera.target[0],
-        best.camera.target[1] - excess * primHeight * 0.45,
-        best.camera.target[2],
-      ],
-      best.camera.fovDegrees,
-      input.aspectRatio,
-    );
-    const rescored = scoreCandidate({
-      camera: adjusted,
-      template,
-      profile,
-      primary: [primarySubject],
-      allSubjects: input.subjects,
-      foregroundId: foreground.id,
-      blockers: blockerBoxes,
-      frameWidth,
-      frameHeight,
-      declaredSubjectIds: subjectIds,
-      otsSide: best.side,
-    });
-    best = { ...rescored, camera: adjusted, side: best.side, score: rescored.score + 10 };
-    notes.push('ots_headroom_reprofile');
+  // Reapply OTS framing profile after hard selection: fix residual headroom via aim.
+  if (best.hardPass) {
+    const headY = best.subjectScores[primarySubject.id]?.landmarks?.headTop?.y;
+    if (headY !== undefined && (headY < 0.08 || headY > 0.24)) {
+      const excess = headY - 0.14;
+      const adjusted = makeCamera(
+        best.camera.position,
+        [
+          best.camera.target[0],
+          best.camera.target[1] - excess * primHeight * 0.45,
+          best.camera.target[2],
+        ],
+        best.camera.fovDegrees,
+        input.aspectRatio,
+      );
+      const rescored = scoreCandidate({
+        camera: adjusted,
+        template,
+        profile,
+        primary: [primarySubject],
+        allSubjects: input.subjects,
+        foregroundId: foreground.id,
+        blockers: blockerBoxes,
+        frameWidth,
+        frameHeight,
+        declaredSubjectIds: subjectIds,
+        otsSide: best.side,
+      });
+      if (otsHardAccept(rescored, primarySubject.id, foreground.id, repair)) {
+        best = {
+          ...rescored,
+          camera: adjusted,
+          side: best.side,
+          score: rescored.score + 10,
+          hardPass: true,
+        };
+        notes.push('ots_headroom_reprofile');
+      }
+    }
   }
 
   let hideBlockerIds: string[] | undefined;
   if (best.wallBlocked && best.blockingWallIds?.length) {
     hideBlockerIds = best.blockingWallIds;
     notes.push('wall_hidden_for_camera');
-    // Re-score framing with walls hidden so composition still matches OTS profile.
     const remaining = blockerBoxes.filter((box) => !hideBlockerIds!.includes(box.objectId));
     const rescored = scoreCandidate({
       camera: best.camera,
@@ -702,7 +824,14 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
       declaredSubjectIds: subjectIds,
       otsSide: best.side,
     });
-    best = { ...best, ...rescored, camera: best.camera, side: best.side };
+    const hard = otsHardAccept(rescored, primarySubject.id, foreground.id, repair);
+    best = {
+      ...best,
+      ...rescored,
+      camera: best.camera,
+      side: best.side,
+      hardPass: hard,
+    };
     notes.push('ots_reprofile_after_wall_hide');
   }
 
@@ -713,7 +842,43 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     measuredCoverage: best.primaryHeightCoverage,
     hideBlockerIds,
     notes: notes.length > 0 ? notes : undefined,
+    hardPass: best.hardPass === true,
   };
+}
+
+function tooCloseToCamera(
+  position: Vec3,
+  avoid: CameraData,
+  minDistance: number,
+): boolean {
+  const d = Math.hypot(
+    position[0] - avoid.position[0],
+    position[1] - avoid.position[1],
+    position[2] - avoid.position[2],
+  );
+  return d < minDistance;
+}
+
+function otsSideOrder(params: {
+  preferOpposite: boolean;
+  avoidCamera?: CameraData;
+  foreground: SubjectBounds;
+  shoulders: { left: Vec3; right: Vec3 };
+}): Array<'left' | 'right'> {
+  if (!params.preferOpposite || !params.avoidCamera) {
+    return ['left', 'right'];
+  }
+  const cam = params.avoidCamera.position;
+  const dLeft = Math.hypot(
+    cam[0] - params.shoulders.left[0],
+    cam[2] - params.shoulders.left[2],
+  );
+  const dRight = Math.hypot(
+    cam[0] - params.shoulders.right[0],
+    cam[2] - params.shoulders.right[2],
+  );
+  // Prefer the side farther from the previous camera (opposite shoulder).
+  return dLeft < dRight ? ['right', 'left'] : ['left', 'right'];
 }
 
 function solveGenericWithOtsBias(

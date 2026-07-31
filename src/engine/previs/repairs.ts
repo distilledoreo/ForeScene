@@ -13,6 +13,7 @@ import { FRAMING_COVERAGE } from './framing';
 import type { PrevisCameraTemplate, PrevisShotDefinition } from './manifest';
 import {
   reSolveTemplateCamera,
+  type CameraSolveRepairProfile,
   type SubjectBounds,
 } from './cameraSolver';
 
@@ -70,7 +71,11 @@ export function buildRepairPlan(params: {
     && primaryIssue.code !== 'render_not_ready'
     && primaryIssue.code !== 'character_underground'
   ) {
-    const resolved = reSolveForTemplate(params, primaryIssue.code);
+    const resolved = reSolveForTemplate({
+      ...params,
+      issues: params.issues,
+      telemetry: params.telemetry,
+    }, primaryIssue.code);
     if (resolved) return resolved;
   }
 
@@ -289,6 +294,8 @@ function reSolveForTemplate(
   params: {
     shotTarget: { id: string } | { ref: string };
     camera: CameraData;
+    issues?: FrameValidationIssue[];
+    telemetry?: ShotCompositionTelemetry;
     template?: PrevisCameraTemplate;
     primarySubjectId?: string;
     foregroundSubjectId?: string;
@@ -323,6 +330,19 @@ function reSolveForTemplate(
     },
   };
 
+  const repairProfile = template === 'over_the_shoulder'
+    ? buildOtsRepairProfile({
+      issueCode,
+      camera: params.camera,
+      issues: params.issues ?? [],
+      telemetry: params.telemetry,
+      foregroundId: foreground,
+      primaryId: primaryIds[0],
+    })
+    : template === 'two_shot'
+      ? { avoidCamera: params.camera, minCameraDistanceFromAvoid: 0.35 }
+      : undefined;
+
   const solved = reSolveTemplateCamera({
     shot: {
       ...shot,
@@ -336,11 +356,12 @@ function reSolveForTemplate(
     subjects,
     aspectRatio,
     blockers: params.blockers,
+    repair: repairProfile,
   });
 
   if (!solved.camera.position.every(Number.isFinite)) return undefined;
 
-  // Skip no-op re-solves.
+  // If the re-solve is a near no-op, escalate OTS search farther — never arbitrary orbit.
   const posDist = Math.hypot(
     solved.camera.position[0] - params.camera.position[0],
     solved.camera.position[1] - params.camera.position[1],
@@ -351,27 +372,43 @@ function reSolveForTemplate(
     solved.camera.target[1] - params.camera.target[1],
     solved.camera.target[2] - params.camera.target[2],
   );
-  if (posDist < 0.02 && tgtDist < 0.02) {
-    // Still emit a tiny orbit so the attempt is not a no-op when stuck.
-    if (template === 'over_the_shoulder') {
-      const nudged = {
-        position: rotateAroundTarget(solved.camera.position, solved.camera.target, 18),
-        target: solved.camera.target,
-        fovDegrees: solved.camera.fovDegrees,
-      };
-      return {
-        commands: [{
-          op: 'shot.updateCamera',
-          shot: params.shotTarget,
-          camera: {
-            position: nudged.position,
-            target: nudged.target,
-            fovDegrees: nudged.fovDegrees,
-          },
-        }],
-        description: `Repair: OTS re-solve (+orbit) for ${issueCode}`,
-        primaryIssueCode: issueCode,
-      };
+
+  let finalCamera = solved.camera;
+  if (template === 'over_the_shoulder' && posDist < 0.08 && tgtDist < 0.08) {
+    const escalated = reSolveTemplateCamera({
+      shot: {
+        ...shot,
+        camera: {
+          ...shot.camera,
+          template,
+          subjects: primaryIds,
+          ...(foreground ? { foregroundSubject: foreground } : {}),
+        },
+      },
+      subjects,
+      aspectRatio,
+      blockers: params.blockers,
+      repair: {
+        ...repairProfile,
+        avoidCamera: params.camera,
+        minCameraDistanceFromAvoid: 0.7,
+        minBack: Math.max(repairProfile?.minBack ?? 0.3, 0.9),
+        minOut: Math.max(repairProfile?.minOut ?? 0.25, 0.85),
+        preferOppositeShoulder: true,
+        foregroundWidthMax: Math.min(repairProfile?.foregroundWidthMax ?? 0.40, 0.35),
+      },
+    });
+    if (
+      escalated.camera.position.every(Number.isFinite)
+      && Math.hypot(
+        escalated.camera.position[0] - params.camera.position[0],
+        escalated.camera.position[2] - params.camera.position[2],
+      ) > 0.1
+    ) {
+      finalCamera = escalated.camera;
+    } else {
+      // Genuinely stuck — refuse a meaningless command.
+      return undefined;
     }
   }
 
@@ -380,12 +417,12 @@ function reSolveForTemplate(
       op: 'shot.updateCamera',
       shot: params.shotTarget,
       camera: {
-        position: solved.camera.position,
-        target: solved.camera.target,
-        fovDegrees: solved.camera.fovDegrees,
-        aspectRatio: solved.camera.aspectRatio,
-        near: solved.camera.near,
-        far: solved.camera.far,
+        position: finalCamera.position,
+        target: finalCamera.target,
+        fovDegrees: finalCamera.fovDegrees,
+        aspectRatio: finalCamera.aspectRatio,
+        near: finalCamera.near,
+        far: finalCamera.far,
       },
     }],
     description: template === 'two_shot'
@@ -393,6 +430,87 @@ function reSolveForTemplate(
       : `Repair: OTS dedicated re-solve for ${issueCode}`,
     primaryIssueCode: issueCode,
   };
+}
+
+/** Build issue-aware OTS search constraints for the dedicated solver. */
+export function buildOtsRepairProfile(params: {
+  issueCode: string;
+  camera: CameraData;
+  issues: FrameValidationIssue[];
+  telemetry?: ShotCompositionTelemetry;
+  foregroundId?: string;
+  primaryId?: string;
+}): CameraSolveRepairProfile {
+  const profile: CameraSolveRepairProfile = {
+    avoidCamera: params.camera,
+    minCameraDistanceFromAvoid: 0.4,
+  };
+
+  const issue = params.issues.find((item) => item.code === params.issueCode);
+  const fgKey = params.foregroundId;
+  const fgTelemetry = fgKey && params.telemetry
+    ? params.telemetry.subjects[fgKey]
+      ?? Object.entries(params.telemetry.subjects).find(([key]) => (
+        key.toLowerCase().includes(fgKey.toLowerCase())
+      ))?.[1]
+    : undefined;
+  const prevFgWidth = typeof issue?.measured?.widthCoverage === 'number'
+    ? issue.measured.widthCoverage
+    : fgTelemetry?.upperBodyBounds?.widthCoverage
+      ?? fgTelemetry?.bounds.widthCoverage;
+
+  switch (params.issueCode) {
+    case 'ots_foreground_too_large':
+      profile.minBack = 0.7;
+      profile.minOut = 0.45;
+      profile.foregroundWidthMax = 0.40;
+      if (typeof prevFgWidth === 'number') {
+        profile.previousForegroundWidth = prevFgWidth;
+        profile.foregroundWidthMax = Math.min(0.40, prevFgWidth * 0.92);
+      }
+      profile.minCameraDistanceFromAvoid = 0.55;
+      break;
+    case 'framing_too_tight':
+    case 'subject_too_large':
+      profile.preferWiderLens = true;
+      profile.minBack = 0.5;
+      profile.minOut = 0.45;
+      profile.primaryHeightMax = 0.85;
+      profile.foregroundWidthMax = 0.40;
+      profile.minCameraDistanceFromAvoid = 0.5;
+      break;
+    case 'ots_primary_obstructed':
+    case 'subject_occluded':
+    case 'subject_face_occluded':
+      profile.preferOppositeShoulder = true;
+      profile.requireLowerFgPrimaryOverlap = true;
+      profile.minBack = 0.5;
+      profile.minOut = 0.45;
+      profile.minCameraDistanceFromAvoid = 0.5;
+      break;
+    case 'ots_foreground_too_small':
+      profile.minBack = 0.3;
+      profile.minOut = 0.25;
+      profile.foregroundWidthMin = 0.12;
+      // Allow slightly closer than previous if we know it was too small.
+      break;
+    case 'ots_foreground_missing':
+      profile.preferOppositeShoulder = true;
+      profile.minBack = 0.3;
+      profile.minOut = 0.25;
+      break;
+    case 'headroom_excessive':
+    case 'head_clipped':
+      // Full re-solve with avoid so headroom candidates differ.
+      profile.minCameraDistanceFromAvoid = 0.25;
+      break;
+    default:
+      profile.minBack = 0.5;
+      profile.minOut = 0.45;
+      break;
+  }
+
+  return profile;
 }
 
 export function selectPrimaryIssue(
@@ -518,3 +636,5 @@ function mirrorAroundTarget(position: Vec3, target: Vec3): Vec3 {
     target[2] - (position[2] - target[2]),
   ];
 }
+
+// rotateAroundTarget retained for generic (non-OTS) obstruction repairs only.
