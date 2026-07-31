@@ -18,6 +18,7 @@ import { chromium } from '@playwright/test';
 import type { CameraData, LocationProject, Shot } from '../../src/domain/types';
 import {
   assertManifestHashCompatible,
+  applyManifestUpdateToRunState,
   buildContactSheetSpec,
   buildRepairPlan,
   compileProduction,
@@ -49,10 +50,13 @@ export interface PrevisCliOptions {
   writeAccess: boolean;
   persistWrite: boolean;
   resetProject: boolean;
+  /** Controlled correction loop: accept a changed manifest and invalidate dependents. */
+  updateManifest?: boolean;
   /** When true, stop after initialize/reset (PR1 behavior). */
   initializeOnly?: boolean;
   outputDir: string;
   skipPackage?: boolean;
+  profileDir?: string;
 }
 
 export interface PrevisCliResult {
@@ -91,8 +95,16 @@ async function loadOrCreateRunState(params: {
   outputDir: string;
   manifest: PrevisProductionManifestV1;
   manifestHash: string;
-}): Promise<{ state: PrevisRunState; resumed: boolean; error?: string }> {
+  updateManifest?: boolean;
+}): Promise<{
+  state: PrevisRunState;
+  resumed: boolean;
+  error?: string;
+  updated?: boolean;
+  sceneRebuildRequired?: boolean;
+}> {
   const runStatePath = path.join(params.outputDir, 'run-state.json');
+  const normalizedPath = path.join(params.outputDir, 'manifest.normalized.json');
   if (await pathExists(runStatePath)) {
     const raw = JSON.parse(await readFile(runStatePath, 'utf8')) as unknown;
     const existing = parseRunState(raw);
@@ -109,7 +121,43 @@ async function loadOrCreateRunState(params: {
     }
     const compatible = assertManifestHashCompatible(existing, params.manifestHash);
     if (!compatible.ok) {
-      return { state: existing, resumed: true, error: compatible.message };
+      if (!params.updateManifest) {
+        return { state: existing, resumed: true, error: compatible.message };
+      }
+      if (!(await pathExists(normalizedPath))) {
+        return {
+          state: existing,
+          resumed: true,
+          error: 'Cannot --update-manifest without a previous manifest.normalized.json.',
+        };
+      }
+      const previous = parsePrevisProductionManifest(
+        JSON.parse(await readFile(normalizedPath, 'utf8')) as unknown,
+      ).manifest;
+      if (!previous) {
+        return {
+          state: existing,
+          resumed: true,
+          error: 'Previous manifest.normalized.json failed to parse; cannot update.',
+        };
+      }
+      const updated = applyManifestUpdateToRunState({
+        state: existing,
+        previousManifest: previous,
+        nextManifest: params.manifest,
+        nextManifestHash: params.manifestHash,
+      });
+      const sceneRebuildRequired = (
+        updated.diff.invalidateLocations
+        || updated.diff.invalidateCast
+        || updated.diff.invalidateProps
+      );
+      return {
+        state: updated.state,
+        resumed: true,
+        updated: true,
+        sceneRebuildRequired,
+      };
     }
     return { state: existing, resumed: true };
   }
@@ -206,13 +254,18 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
   const manifest = parsed.manifest;
   const manifestHash = hashPrevisManifest(manifest);
-  await writeJson(path.join(outputDir, 'manifest.normalized.json'), manifest);
 
-  const loaded = await loadOrCreateRunState({ outputDir, manifest, manifestHash });
+  const loaded = await loadOrCreateRunState({
+    outputDir,
+    manifest,
+    manifestHash,
+    updateManifest: options.updateManifest,
+  });
   let state = loaded.state;
   const runStatePath = path.join(outputDir, 'run-state.json');
 
-  if (loaded.error && loaded.resumed && loaded.error.includes('hash mismatch')) {
+  if (loaded.error && loaded.resumed && !loaded.updated) {
+    // Keep the previous manifest.normalized.json intact for a later --update-manifest.
     await writeJson(runStatePath, state);
     return {
       ok: false,
@@ -221,6 +274,28 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       runStatePath,
       error: loaded.error,
     };
+  }
+
+  if (loaded.sceneRebuildRequired && !options.resetProject) {
+    return {
+      ok: false,
+      phase: 'initialized',
+      manifestHash,
+      runStatePath,
+      error:
+        'Manifest update changed locations, cast, or props. Re-run with --update-manifest --reset-project so the scene can be rebuilt without duplicate creates. Shot-only edits do not need --reset-project.',
+    };
+  }
+
+  await writeJson(path.join(outputDir, 'manifest.normalized.json'), manifest);
+
+  if (loaded.updated) {
+    await writeJson(path.join(outputDir, 'logs', 'manifest-update.json'), {
+      nextHash: manifestHash,
+      note: 'Applied controlled --update-manifest invalidation.',
+      sceneRebuildRequired: Boolean(loaded.sceneRebuildRequired),
+    });
+    await writeJson(runStatePath, state);
   }
 
   if (options.resetProject && !options.writeAccess) {
@@ -235,6 +310,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profileDir: options.profileDir,
   });
 
   try {
@@ -259,12 +335,34 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           error: 'Project reset failed.',
         };
       }
+      // After a controlled update + reset, keep completed frames for shots that
+      // were not invalidated; staging must be recompiled into the blank project.
+      const priorShots = loaded.updated ? state.shots : undefined;
       state = createInitialRunState({
         manifestHash,
         outputDir,
         projectId: reset.projectId,
         shotNumbers: manifest.shots.map((shot) => shot.shotNumber),
       });
+      if (priorShots) {
+        for (const [shotNumber, prior] of Object.entries(priorShots)) {
+          const keepFrame = (
+            prior.compile === 'complete'
+            && prior.render === 'complete'
+            && Boolean(prior.framePath)
+          );
+          state = upsertShotState(state, shotNumber, {
+            compile: 'pending',
+            render: keepFrame ? 'complete' : 'pending',
+            validation: keepFrame ? prior.validation : 'pending',
+            framePath: keepFrame ? prior.framePath : undefined,
+            issues: keepFrame ? prior.issues : undefined,
+            renderAttempts: keepFrame ? (prior.renderAttempts ?? prior.attempts ?? 0) : 0,
+            repairAttempts: 0,
+            attempts: 0,
+          });
+        }
+      }
       state = setPhase(state, 'initialized', 'complete');
       state.revisionId = reset.verifiedRevisionId;
       state.projectId = reset.projectId;
@@ -476,12 +574,12 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }
 
       const framePath = path.join(outputDir, 'shots', `${definition.shotNumber}.png`);
-      let attempts = shotState.attempts ?? 0;
+      let renderAttempts = shotState.renderAttempts ?? shotState.attempts ?? 0;
       let rendered = false;
       let lastError: string | undefined;
 
-      while (attempts < 2 && !rendered) {
-        attempts += 1;
+      while (renderAttempts < 2 && !rendered) {
+        renderAttempts += 1;
         try {
           const shotId = shotState.shotId
             ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
@@ -504,13 +602,15 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           state = upsertShotState(state, definition.shotNumber, {
             render: 'complete',
             framePath,
-            attempts,
+            renderAttempts,
+            attempts: renderAttempts,
           });
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
           state = upsertShotState(state, definition.shotNumber, {
             render: 'failed',
-            attempts,
+            renderAttempts,
+            attempts: renderAttempts,
             lastError,
           });
         }
@@ -521,18 +621,18 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     await writeJson(runStatePath, state);
 
     state = setPhase(state, 'validation', 'in_progress');
-    const project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
+    let project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
     const names = subjectNameMap(manifest);
     const validationResults: FrameValidationResult[] = [];
     let previousCamera: CameraData | undefined;
 
     for (const definition of manifest.shots) {
       const shotState = state.shots[definition.shotNumber];
-      const shot = project.shots.find((item) => item.shotNumber === definition.shotNumber);
+      let shot = project.shots.find((item) => item.shotNumber === definition.shotNumber);
       const framePath = shotState?.framePath
         ?? path.join(outputDir, 'shots', `${definition.shotNumber}.png`);
-      const exists = await pathExists(framePath);
-      const byteSize = exists ? (await stat(framePath)).size : undefined;
+      let exists = await pathExists(framePath);
+      let byteSize = exists ? (await stat(framePath)).size : undefined;
 
       if (!shot) {
         const result: FrameValidationResult = {
@@ -557,13 +657,12 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         previousCamera,
         subjectNames: names,
       });
-      previousCamera = shot.camera;
 
-      let attempts = shotState?.attempts ?? 0;
-      if (
+      let repairAttempts = shotState?.repairAttempts ?? 0;
+      while (
         finalResult.status !== 'passed'
         && finalResult.issues.some((issue) => isRepairableIssue(issue.code))
-        && attempts < 2
+        && repairAttempts < 2
         && shotState?.shotId
       ) {
         const repair = buildRepairPlan({
@@ -571,28 +670,53 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           camera: shot.camera,
           issues: finalResult.issues,
         });
-        if (repair) {
-          attempts += 1;
-          await applyPlanOnPage(session.page, {
+        if (!repair) break;
+
+        repairAttempts += 1;
+        await applyPlanOnPage(session.page, {
+          version: 1,
+          planId: `repair-${definition.shotNumber}-${repairAttempts}`,
+          description: repair.description,
+          commands: repair.commands,
+        });
+        await waitForAgentIdle(session.page);
+        await session.page.evaluate(async (id) => {
+          await window.foreScene!.applyPlan({
             version: 1,
-            planId: `repair-${definition.shotNumber}-${attempts}`,
-            description: repair.description,
-            commands: repair.commands,
+            commands: [{ op: 'shot.select', shot: { id } }],
           });
-          await waitForAgentIdle(session.page);
-          await captureSceneScreenshot(session.page, framePath);
+        }, shotState.shotId);
+        await waitForAgentIdle(session.page);
+        await captureSceneScreenshot(session.page, framePath);
+
+        project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
+        shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
+        exists = await pathExists(framePath);
+        byteSize = exists ? (await stat(framePath)).size : undefined;
+
+        finalResult = validateShotFrame({
+          project,
+          shot: shot as Shot,
+          definition,
+          frameExists: exists,
+          frameByteSize: byteSize,
+          previousCamera,
+          subjectNames: names,
+        });
+        if (finalResult.status !== 'passed' && repairAttempts >= 2) {
           finalResult = {
             ...finalResult,
-            status: finalResult.status === 'failed' ? 'needs_review' : 'warning',
+            status: finalResult.status === 'failed' ? 'needs_review' : finalResult.status,
             issues: [
               ...finalResult.issues,
-              { code: 'repair_applied', message: repair.description },
+              { code: 'repair_exhausted', message: `Applied ${repairAttempts} repairs without a clean pass.` },
             ],
           };
-          state = upsertShotState(state, definition.shotNumber, { attempts });
         }
+        state = upsertShotState(state, definition.shotNumber, { repairAttempts });
       }
 
+      previousCamera = shot.camera;
       validationResults.push(finalResult);
       state = upsertShotState(state, definition.shotNumber, {
         validation: finalResult.status === 'passed'
@@ -604,6 +728,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
               : 'failed',
         issues: finalResult.issues,
         framePath,
+        repairAttempts,
       });
     }
 
@@ -661,6 +786,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     await writeJson(runStatePath, state);
 
     let packagePath: string | undefined;
+    let packageFailed = false;
     if (!options.skipPackage) {
       state = setPhase(state, 'package', 'in_progress');
       const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 });
@@ -675,6 +801,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         await download.saveAs(packagePath);
         state = setPhase(state, 'package', 'complete');
       } else {
+        packageFailed = true;
         state = setPhase(state, 'package', 'failed');
       }
       await writeJson(runStatePath, state);
@@ -693,7 +820,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     });
 
     const summary: PrevisCliResult = {
-      ok: !missingFrames && failed === 0,
+      ok: !missingFrames && failed === 0 && !packageFailed,
       projectId: state.projectId,
       shotsRequested: manifest.shots.length,
       shotsCreated,
@@ -705,6 +832,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       package: packagePath,
       manifestHash,
       runStatePath,
+      ...(packageFailed ? { error: 'Package export failed.' } : {}),
     };
     await writeJson(path.join(outputDir, 'summary.json'), summary);
     state = touchRunState(state);
@@ -722,6 +850,7 @@ export async function runRenderStillsCli(options: {
   writeAccess: boolean;
   persistWrite: boolean;
   outputDir: string;
+  profileDir?: string;
 }): Promise<PrevisCliResult> {
   const outputDir = path.resolve(options.outputDir);
   await mkdir(path.join(outputDir, 'shots'), { recursive: true });
@@ -737,6 +866,7 @@ export async function runRenderStillsCli(options: {
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profileDir: options.profileDir,
   });
   try {
     await openWorkspace(session.page, 'shots');

@@ -10,6 +10,7 @@ import type {
   PrevisPropDefinition,
 } from './manifest';
 import { compileLocationTemplate, normalizeAnchorKey } from './locationTemplates';
+import { locationPrimitiveBlockers } from './manifestDiff';
 import { locationZoneOrigin, sceneExtentWithinLimits } from './spatialLayout';
 import type { PrevisEntityMapping } from './runState';
 import type { Vec3 } from '../../domain/types';
@@ -30,6 +31,8 @@ export interface CompiledProductionContext {
   locationOrigins: Record<string, Vec3>;
   /** locationId → anchor key → world position */
   locationAnchors: Record<string, Record<string, Vec3>>;
+  /** locationId → solid AABBs for camera collision rejection */
+  locationBlockers: Record<string, Array<{ min: Vec3; max: Vec3 }>>;
   /** Stable entity mappings for run-state. */
   entities: Record<string, PrevisEntityMapping>;
   /** Plan-local refs created so far. */
@@ -49,6 +52,7 @@ export function createEmptyCompiledContext(): CompiledProductionContext {
   return {
     locationOrigins: {},
     locationAnchors: {},
+    locationBlockers: {},
     entities: {},
     refs: {},
   };
@@ -79,6 +83,16 @@ export function compileLocationsPhase(
     const objectRefs: string[] = [];
     const anchors: Record<string, string> = {};
     const anchorPositions: Record<string, Vec3> = {};
+
+    next.locationBlockers[location.id] = locationPrimitiveBlockers(
+      location,
+      compiled.primitives.map((primitive) => ({
+        type: primitive.type,
+        position: primitive.position,
+        dimensions: primitive.dimensions,
+        rotation: primitive.rotation,
+      })),
+    );
 
     for (const primitive of compiled.primitives) {
       const ref = previsRef('loc', location.id, primitive.ref);
@@ -320,6 +334,15 @@ function cloneContext(context: CompiledProductionContext): CompiledProductionCon
     locationOrigins: { ...context.locationOrigins },
     locationAnchors: Object.fromEntries(
       Object.entries(context.locationAnchors).map(([key, value]) => [key, { ...value }]),
+    ),
+    locationBlockers: Object.fromEntries(
+      Object.entries(context.locationBlockers).map(([key, value]) => [
+        key,
+        value.map((box) => ({
+          min: [...box.min] as Vec3,
+          max: [...box.max] as Vec3,
+        })),
+      ]),
     ),
     entities: structuredClone(context.entities),
     refs: { ...context.refs },

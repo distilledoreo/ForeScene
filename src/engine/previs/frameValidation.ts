@@ -63,6 +63,14 @@ export function validateShotFrame(input: ValidateShotFrameInput): FrameValidatio
   }
 
   const resolved = resolveProjectForShot(project, shot);
+
+  if (isCameraInsideSolidGeometry(camera.position, resolved)) {
+    issues.push({
+      code: 'camera_inside_geometry',
+      message: 'Camera position appears to be inside solid set geometry.',
+    });
+  }
+
   const visibleRequired = definition.requirements?.visibleSubjects
     ?? definition.camera.subjects;
 
@@ -266,6 +274,40 @@ function camerasNearlyIdentical(a: CameraData, b: CameraData): boolean {
 function isFiniteVec3(value: Vec3): boolean {
   return value.every((component) => Number.isFinite(component));
 }
+
+const SOLID_TYPES = new Set([
+  'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
+]);
+
+function isCameraInsideSolidGeometry(
+  cameraPosition: Vec3,
+  project: LocationProject,
+): boolean {
+  for (const object of project.scene.objects) {
+    if (!SOLID_TYPES.has(object.type)) continue;
+    if (object.visible === false) continue;
+    const dims = object.dimensions;
+    const scale = object.transform.scale;
+    const hx = (dims[0] * scale[0]) / 2;
+    const hy = (dims[1] * scale[1]) / 2;
+    const hz = (dims[2] * scale[2]) / 2;
+    const center = object.transform.position;
+    // Shrink slightly so resting near surfaces is not treated as inside.
+    const margin = 0.08;
+    if (
+      cameraPosition[0] > center[0] - hx + margin
+      && cameraPosition[0] < center[0] + hx - margin
+      && cameraPosition[1] > center[1] - hy + margin
+      && cameraPosition[1] < center[1] + hy - margin
+      && cameraPosition[2] > center[2] - hz + margin
+      && cameraPosition[2] < center[2] + hz - margin
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 
 export function isRepairableIssue(code: string): boolean {
   return [

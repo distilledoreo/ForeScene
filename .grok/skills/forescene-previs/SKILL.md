@@ -49,7 +49,7 @@ npm run agent:previs -- \
 
 8. Inspect `artifacts/previs/validation.json`.
 9. Revise only failed or warned shots in the manifest.
-10. Re-run **without** `--reset-project` so completed work resumes.
+10. Re-run with `--update-manifest` (and **without** `--reset-project`) so unchanged shots stay complete.
 11. Confirm every shot has a PNG under `artifacts/previs/shots/`.
 12. Present the contact sheet and `summary.json`.
 

@@ -31,7 +31,10 @@ export interface PrevisShotRunState {
   compile: PrevisShotCompileStatus;
   render: PrevisShotRenderStatus;
   validation: PrevisShotValidationStatus;
+  /** @deprecated Prefer renderAttempts + repairAttempts. */
   attempts?: number;
+  renderAttempts?: number;
+  repairAttempts?: number;
   shotId?: string;
   framePath?: string;
   issues?: Array<{ code: string; message?: string; subject?: string }>;
@@ -82,6 +85,8 @@ export function createInitialRunState(params: {
       render: 'pending',
       validation: 'pending',
       attempts: 0,
+      renderAttempts: 0,
+      repairAttempts: 0,
     };
   }
   return {
@@ -157,7 +162,8 @@ export function upsertShotState(
 }
 
 /**
- * Resume guard: existing run-state may only continue when the manifest hash matches.
+ * Resume guard: existing run-state may only continue when the manifest hash matches
+ * unless the caller opts into a controlled `--update-manifest` path.
  */
 export function assertManifestHashCompatible(
   state: PrevisRunState,
@@ -169,7 +175,9 @@ export function assertManifestHashCompatible(
       message:
         `Manifest hash mismatch: run-state has ${state.manifestHash}, `
         + `current manifest is ${manifestHash}. `
-        + 'Refuse to resume with a silently changed input. Use --reset-project with a fresh output dir.',
+        + 'Refuse to resume with a silently changed input. '
+        + 'Pass --update-manifest to invalidate only changed shots, '
+        + 'or use --reset-project with a fresh output dir.',
     };
   }
   return { ok: true };

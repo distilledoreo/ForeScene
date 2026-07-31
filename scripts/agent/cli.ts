@@ -42,6 +42,7 @@ function parseArgs(argv: string[]) {
     writeAccess: false,
     persistWrite: false,
     resetProject: false,
+    updateManifest: false,
     initializeOnly: false,
     skipPackage: false,
     workspace: undefined as string | undefined,
@@ -69,6 +70,8 @@ function parseArgs(argv: string[]) {
       args.writeAccess = true;
     } else if (token === '--reset-project') {
       args.resetProject = true;
+    } else if (token === '--update-manifest') {
+      args.updateManifest = true;
     } else if (token === '--initialize-only') {
       args.initializeOnly = true;
     } else if (token === '--skip-package') {
@@ -417,9 +420,11 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       resetProject: args.resetProject,
+      updateManifest: args.updateManifest,
       initializeOnly: args.initializeOnly,
       outputDir: args.output ?? 'artifacts/previs',
       skipPackage: args.skipPackage,
+      profileDir: args.profile,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;
@@ -434,6 +439,7 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       outputDir: args.output ?? 'artifacts/previs',
+      profileDir: args.profile,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

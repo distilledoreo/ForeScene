@@ -5,6 +5,7 @@
 export * from './manifest';
 export * from './manifestDiagnostics';
 export * from './manifestValidation';
+export * from './manifestDiff';
 export * from './runState';
 export * from './blankProject';
 export * from './spatialLayout';

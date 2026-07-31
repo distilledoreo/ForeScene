@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   assertManifestHashCompatible,
+  applyManifestUpdateToRunState,
   compileProduction,
   createBlankGrayboxProject,
   createInitialRunState,
@@ -178,6 +179,49 @@ describe('blocking and camera solvers', () => {
     expect(Number.isFinite(results.soldier?.rotation[1])).toBe(true);
   });
 
+  it('resolves mutual facing regardless of blocking order', () => {
+    const results = solveBlockingBatch([
+      {
+        subject: 'joseph',
+        placement: { type: 'location_slot', slot: 'left' },
+        face: 'soldier',
+      },
+      {
+        subject: 'soldier',
+        placement: { type: 'location_slot', slot: 'right' },
+        face: 'joseph',
+      },
+    ], {
+      anchors: {
+        left: [-2, 0, 0],
+        right: [2, 0, 0],
+        center: [0, 0, 0],
+      },
+      subjects: {},
+    });
+    expect(results.joseph?.warnings.some((warning) => warning.includes('face target'))).toBe(false);
+    expect(results.soldier?.warnings.some((warning) => warning.includes('face target'))).toBe(false);
+    // They should face roughly toward each other (yaw near ±90°).
+    expect(Math.abs(results.joseph!.rotation[1])).toBeGreaterThan(45);
+    expect(Math.abs(results.soldier!.rotation[1])).toBeGreaterThan(45);
+  });
+
+  it('frames props using prop dimensions instead of human height', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('music-video-graybox.json'));
+    const compiled = compileProduction(parsed.manifest!);
+    const insertBatch = compiled.shotBatches.find((batch) => batch.shotNumbers.includes('070'));
+    expect(insertBatch).toBeTruthy();
+    const camera = insertBatch!.shotResults['070']?.camera;
+    expect(camera).toBeTruthy();
+    // Shield is ~1m tall; a human-height framing would place the camera much farther.
+    const distance = Math.hypot(
+      camera!.position[0] - camera!.target[0],
+      camera!.position[1] - camera!.target[1],
+      camera!.position[2] - camera!.target[2],
+    );
+    expect(distance).toBeLessThan(4.5);
+  });
+
   it('solves a finite two-shot camera', () => {
     const alex = subjectBoundsFromPlacement({ id: 'alex', position: [-1, 0, 0] });
     const blair = subjectBoundsFromPlacement({ id: 'blair', position: [1, 0, 0] });
@@ -244,6 +288,59 @@ describe('run-state resume', () => {
     expect(state.shots['010']?.compile).toBe('complete');
     const mismatch = assertManifestHashCompatible(state, 'deadbeef');
     expect(mismatch.ok).toBe(false);
+  });
+
+  it('update-manifest invalidates only changed shots', () => {
+    const previous = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
+    let state = createInitialRunState({
+      manifestHash: hashPrevisManifest(previous),
+      shotNumbers: previous.shots.map((shot) => shot.shotNumber),
+    });
+    for (const shot of previous.shots) {
+      state = upsertShotState(state, shot.shotNumber, {
+        compile: 'complete',
+        render: 'complete',
+        validation: 'passed',
+        framePath: `shots/${shot.shotNumber}.png`,
+      });
+    }
+    state = {
+      ...state,
+      phases: {
+        ...state.phases,
+        initialized: 'complete',
+        locations: 'complete',
+        cast: 'complete',
+        props: 'complete',
+        shots: 'complete',
+        render: 'complete',
+        validation: 'complete',
+        contactSheet: 'complete',
+        package: 'complete',
+      },
+    };
+
+    const next = structuredClone(previous);
+    const edited = next.shots.find((shot) => shot.shotNumber === '030')!;
+    edited.description = 'Revised OTS description';
+    edited.camera.angle = 'profile';
+
+    const updated = applyManifestUpdateToRunState({
+      state,
+      previousManifest: previous,
+      nextManifest: next,
+      nextManifestHash: hashPrevisManifest(next),
+    });
+
+    expect(updated.diff.shotsToInvalidate).toEqual(['030']);
+    expect(updated.state.shots['010']?.compile).toBe('complete');
+    expect(updated.state.shots['020']?.compile).toBe('complete');
+    expect(updated.state.shots['030']?.compile).toBe('pending');
+    expect(updated.state.shots['030']?.render).toBe('pending');
+    expect(updated.state.shots['040']?.compile).toBe('complete');
+    expect(updated.state.phases.contactSheet).toBe('pending');
+    expect(updated.state.phases.package).toBe('pending');
+    expect(updated.state.phases.locations).toBe('complete');
   });
 
   it('validateManifestShotNumbers catches duplicates', () => {

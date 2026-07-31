@@ -1,5 +1,9 @@
 /**
  * Semantic blocking solver — location slots + relative placement + grounding.
+ *
+ * Two-pass batch:
+ * 1. Resolve every subject position (relative placement may still be sequential).
+ * 2. Resolve facing/rotation after all positions exist (order-independent).
  */
 
 import type { Vec3 } from '../../domain/types';
@@ -52,10 +56,11 @@ const RELATION_OFFSET: Record<Exclude<PrevisRelativeRelation, 'between'>, { x: n
   just_outside: { x: 0, z: 1.0 },
 };
 
-export function solveBlockingInstruction(
+/** Resolve placement only (no facing). Used by pass 1 of the batch solver. */
+export function resolveBlockingPosition(
   instruction: PrevisBlockingInstruction,
   context: BlockingSolveContext,
-): BlockingSolveResult {
+): { position: Vec3; warnings: string[] } {
   const warnings: string[] = [];
   let position = resolvePlacement(instruction, context, warnings);
 
@@ -65,12 +70,31 @@ export function solveBlockingInstruction(
     position = separateOnGround(position, otherPos, minSpacing);
   }
 
-  // Ground: Y is floor contact for agent create / staging transform overrides.
   position = [position[0], 0, position[2]];
+  return { position, warnings };
+}
 
+export function solveBlockingInstruction(
+  instruction: PrevisBlockingInstruction,
+  context: BlockingSolveContext,
+): BlockingSolveResult {
+  const { position, warnings } = resolveBlockingPosition(instruction, context);
+  return finalizeFacingAndPose(instruction, position, context, warnings);
+}
+
+function finalizeFacingAndPose(
+  instruction: PrevisBlockingInstruction,
+  position: Vec3,
+  context: BlockingSolveContext,
+  warnings: string[],
+): BlockingSolveResult {
   let faceTarget: Vec3 | undefined;
   if (instruction.face) {
-    faceTarget = resolveNamedPoint(instruction.face, context);
+    faceTarget = resolveNamedPoint(instruction.face, {
+      ...context,
+      // Prefer the subject's final position map (pass-2 context).
+      subjects: context.subjects,
+    });
     if (!faceTarget) {
       warnings.push(`face target "${instruction.face}" not found; using default yaw.`);
     }
@@ -136,7 +160,6 @@ function resolveNamedPoint(name: string, context: BlockingSolveContext): Vec3 | 
   if (context.anchors[name]) return context.anchors[name];
   const normalized = normalizeAnchorKey(name);
   if (context.anchors[normalized]) return context.anchors[normalized];
-  // Fuzzy: match display-like keys.
   for (const [key, value] of Object.entries(context.anchors)) {
     if (normalizeAnchorKey(key) === normalized) return value;
   }
@@ -157,17 +180,36 @@ function slotDisplayName(slot: PrevisLocationSlot): string {
   }
 }
 
-/** Apply a list of blocking instructions sequentially (order matters for relative refs). */
+/**
+ * Two-pass blocking batch:
+ * 1. Positions (sequential so relative anchors to other subjects still work)
+ * 2. Facing/rotation using the complete position map
+ */
 export function solveBlockingBatch(
   instructions: PrevisBlockingInstruction[],
   context: BlockingSolveContext,
 ): Record<string, BlockingSolveResult> {
-  const results: Record<string, BlockingSolveResult> = {};
   const subjects = { ...context.subjects };
+  const positionWarnings: Record<string, string[]> = {};
+  const positions: Record<string, Vec3> = {};
+
   for (const instruction of instructions) {
-    const solved = solveBlockingInstruction(instruction, { ...context, subjects });
-    results[instruction.subject] = solved;
-    subjects[instruction.subject] = solved.position;
+    const placed = resolveBlockingPosition(instruction, { ...context, subjects });
+    positions[instruction.subject] = placed.position;
+    subjects[instruction.subject] = placed.position;
+    positionWarnings[instruction.subject] = placed.warnings;
+  }
+
+  const faceContext: BlockingSolveContext = { ...context, subjects: { ...subjects } };
+  const results: Record<string, BlockingSolveResult> = {};
+  for (const instruction of instructions) {
+    const position = positions[instruction.subject]!;
+    results[instruction.subject] = finalizeFacingAndPose(
+      instruction,
+      position,
+      faceContext,
+      [...(positionWarnings[instruction.subject] ?? [])],
+    );
   }
   return results;
 }
