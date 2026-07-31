@@ -30,3 +30,4 @@ export * from './renderPixelStats';
 export * from './framingProfiles';
 export * from './screenProjection';
 export * from './compositionTelemetry';
+export * from './repairSceneState';
