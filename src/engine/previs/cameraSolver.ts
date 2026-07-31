@@ -532,6 +532,30 @@ function forceBalancedTwoShotCamera(params: {
 // OTS dedicated solver
 // ---------------------------------------------------------------------------
 
+/**
+ * OTS primary framing size: preferred head→waist landmark span, else upper-body
+ * height coverage. Never full-body AABB (legs off-frame inflate that metric).
+ */
+export function otsPrimaryCropCoverage(subject: {
+  heightCoverage?: number;
+  landmarks?: Record<string, { x?: number; y?: number; inFrame?: boolean }>;
+  upperBodyHeightCoverage?: number;
+}): number | undefined {
+  const headY = subject.landmarks?.headTop?.y;
+  const waistY = subject.landmarks?.waist?.y;
+  if (typeof headY === 'number' && typeof waistY === 'number') {
+    return waistY - headY;
+  }
+  if (typeof subject.upperBodyHeightCoverage === 'number') {
+    return subject.upperBodyHeightCoverage;
+  }
+  // subjectScores for OTS already store upper-body occupancy as heightCoverage.
+  if (typeof subject.heightCoverage === 'number') {
+    return subject.heightCoverage;
+  }
+  return undefined;
+}
+
 /** Hard OTS acceptance — only hard-pass candidates may be selected silently. */
 export function otsHardAccept(
   scored: {
@@ -548,10 +572,11 @@ export function otsHardAccept(
   const headY = prim.landmarks?.headTop?.y;
   if (headY === undefined || headY < 0.08 || headY > 0.24) return false;
 
-  const primH = prim.heightCoverage;
+  // Landmark span / upper-body — not full-body AABB height.
+  const primCrop = otsPrimaryCropCoverage(prim);
   const primHMin = repair?.primaryHeightMin ?? 0.35;
   const primHMax = repair?.primaryHeightMax ?? 0.85;
-  if (primH < primHMin || primH > primHMax) return false;
+  if (primCrop === undefined || primCrop < primHMin || primCrop > primHMax) return false;
 
   const fgWMin = repair?.foregroundWidthMin ?? 0.12;
   const fgWMax = repair?.foregroundWidthMax ?? 0.40;

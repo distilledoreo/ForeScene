@@ -12,6 +12,7 @@ import {
   type ShotCompositionTelemetry,
 } from './compositionTelemetry';
 import { templateFramingBands } from './framingProfiles';
+import { otsPrimaryCropCoverage } from './cameraSolver';
 
 export type FrameValidationStatus = 'passed' | 'warning' | 'failed' | 'needs_review';
 
@@ -389,27 +390,70 @@ function validateTemplateComposition(params: {
       });
     }
 
-    if (bands.minHeightCoverage !== undefined && data.bounds.heightCoverage < bands.minHeightCoverage) {
-      issues.push({
-        code: 'framing_too_loose',
-        message: `Subject "${id}" is too small in frame.`,
-        subject: id,
-        expectedShotSize: params.template,
-        measuredCoverage: data.bounds.heightCoverage,
-        expected: { minHeightCoverage: bands.minHeightCoverage },
-        measured: { heightCoverage: data.bounds.heightCoverage },
+    // Full-body AABB coverage — not used for OTS (upper-body / landmark span instead).
+    if (params.template !== 'over_the_shoulder') {
+      if (bands.minHeightCoverage !== undefined && data.bounds.heightCoverage < bands.minHeightCoverage) {
+        issues.push({
+          code: 'framing_too_loose',
+          message: `Subject "${id}" is too small in frame.`,
+          subject: id,
+          expectedShotSize: params.template,
+          measuredCoverage: data.bounds.heightCoverage,
+          expected: { minHeightCoverage: bands.minHeightCoverage },
+          measured: { heightCoverage: data.bounds.heightCoverage },
+        });
+      }
+      if (bands.maxHeightCoverage !== undefined && data.bounds.heightCoverage > bands.maxHeightCoverage) {
+        issues.push({
+          code: 'framing_too_tight',
+          message: `Subject "${id}" is too large in frame.`,
+          subject: id,
+          expectedShotSize: params.template,
+          measuredCoverage: data.bounds.heightCoverage,
+          expected: { maxHeightCoverage: bands.maxHeightCoverage },
+          measured: { heightCoverage: data.bounds.heightCoverage },
+        });
+      }
+    } else {
+      // OTS primary size: head→waist landmark span (or upper-body height).
+      const crop = otsPrimaryCropCoverage({
+        landmarks: data.landmarks,
+        heightCoverage: data.upperBodyBounds?.heightCoverage,
+        upperBodyHeightCoverage: data.upperBodyBounds?.heightCoverage,
       });
-    }
-    if (bands.maxHeightCoverage !== undefined && data.bounds.heightCoverage > bands.maxHeightCoverage) {
-      issues.push({
-        code: 'framing_too_tight',
-        message: `Subject "${id}" is too large in frame.`,
-        subject: id,
-        expectedShotSize: params.template,
-        measuredCoverage: data.bounds.heightCoverage,
-        expected: { maxHeightCoverage: bands.maxHeightCoverage },
-        measured: { heightCoverage: data.bounds.heightCoverage },
-      });
+      if (crop !== undefined) {
+        if (crop < 0.35) {
+          issues.push({
+            code: 'framing_too_loose',
+            message: `OTS primary "${id}" head-to-waist crop is too small.`,
+            subject: id,
+            expectedShotSize: 'over_the_shoulder',
+            measuredCoverage: crop,
+            expected: { headToWaistCoverage: [0.35, 0.85] },
+            measured: {
+              headToWaistCoverage: crop,
+              headTopY: headY,
+              waistY,
+              fullBodyHeightCoverage: data.bounds.heightCoverage,
+            },
+          });
+        } else if (crop > 0.85) {
+          issues.push({
+            code: 'framing_too_tight',
+            message: `OTS primary "${id}" head-to-waist crop is too large.`,
+            subject: id,
+            expectedShotSize: 'over_the_shoulder',
+            measuredCoverage: crop,
+            expected: { headToWaistCoverage: [0.35, 0.85] },
+            measured: {
+              headToWaistCoverage: crop,
+              headTopY: headY,
+              waistY,
+              fullBodyHeightCoverage: data.bounds.heightCoverage,
+            },
+          });
+        }
+      }
     }
 
     // Primary off-center for singles (not two-shot / OTS).

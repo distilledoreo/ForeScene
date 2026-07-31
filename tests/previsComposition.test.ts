@@ -321,7 +321,10 @@ describe('camera solver V2', () => {
           clipped: false,
           behindCamera: false,
           faceOccluded: false,
-          landmarks: { headTop: { x: 0.55, y: 0.14, inFrame: true } },
+          landmarks: {
+            headTop: { x: 0.55, y: 0.14, inFrame: true },
+            waist: { x: 0.55, y: 0.72, inFrame: true },
+          },
         },
         blair: {
           centerX: 0.18,
@@ -347,7 +350,10 @@ describe('camera solver V2', () => {
           clipped: false,
           behindCamera: false,
           faceOccluded: false,
-          landmarks: { headTop: { x: 0.55, y: 0.14, inFrame: true } },
+          landmarks: {
+            headTop: { x: 0.55, y: 0.14, inFrame: true },
+            waist: { x: 0.55, y: 0.72, inFrame: true },
+          },
         },
         blair: {
           centerX: 0.2,
@@ -361,6 +367,134 @@ describe('camera solver V2', () => {
       },
     }, 'alex', 'blair');
     expect(giantFg).toBe(false);
+  });
+
+  it('OTS validation uses head-to-waist crop, not full-body AABB height', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    const blair = makeHuman('blair-id', 'Blair', [0.4, 0, 1.1], 1.68);
+    project.scene.objects = [alex, blair];
+
+    // Camera that frames a valid OTS-ish composition geometrically.
+    const camera = makeCamera({
+      position: [0.55, 1.52, 1.55],
+      target: [0.05, 1.22, 0.15],
+      fovDegrees: 35,
+    });
+    const shot = makeShot(camera, '030');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '030',
+        subjects: ['alex', 'blair'],
+        camera: {
+          template: 'over_the_shoulder',
+          subjects: ['alex'],
+          foregroundSubject: 'blair',
+        },
+        requirements: { visibleSubjects: ['alex', 'blair'] },
+      }),
+      subjectNames: { alex: 'Alex', blair: 'Blair' },
+    });
+
+    // Force the failure mode: full-body AABB height > 0.85 while landmark crop is valid.
+    const prim = telemetry.subjects.alex ?? telemetry.subjects.Alex!;
+    prim.bounds.heightCoverage = 0.95;
+    prim.bounds.areaCoverage = 0.5;
+    prim.landmarks = {
+      headTop: { x: 0.55, y: 0.14, inFrame: true },
+      waist: { x: 0.55, y: 0.70, inFrame: true },
+      shoulders: { x: 0.55, y: 0.28, inFrame: true },
+      feet: { x: 0.55, y: 1.2, inFrame: false },
+    };
+    prim.upperBodyBounds = {
+      ...prim.bounds,
+      heightCoverage: 0.42,
+      widthCoverage: 0.28,
+      areaCoverage: 0.12,
+    };
+    prim.faceOccluded = false;
+    prim.visible = true;
+
+    const fg = telemetry.subjects.blair ?? telemetry.subjects.Blair!;
+    fg.visible = true;
+    fg.upperBodyBounds = {
+      ...fg.bounds,
+      widthCoverage: 0.22,
+      heightCoverage: 0.30,
+      areaCoverage: 0.07,
+      centerX: 0.18,
+      pixels: { left: 0, top: 100, right: 280, bottom: 400 },
+    };
+    fg.bounds = {
+      ...fg.bounds,
+      widthCoverage: 0.22,
+      heightCoverage: 0.30,
+      areaCoverage: 0.07,
+      centerX: 0.18,
+      pixels: { left: 0, top: 100, right: 280, bottom: 400 },
+    };
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '030',
+        subjects: ['alex', 'blair'],
+        camera: {
+          template: 'over_the_shoulder',
+          subjects: ['alex'],
+          foregroundSubject: 'blair',
+        },
+        requirements: { visibleSubjects: ['alex', 'blair'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex', blair: 'Blair' },
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    // Must not flag framing_too_tight solely from full-body height > 0.85.
+    expect(result.issues.some((issue) => (
+      issue.code === 'framing_too_tight'
+      && issue.measured
+      && typeof issue.measured === 'object'
+      && 'heightCoverage' in issue.measured
+      && (issue.measured as { heightCoverage?: number }).heightCoverage === 0.95
+    ))).toBe(false);
+
+    // Hard-accept with landmark crop also passes despite huge full-body metric.
+    expect(otsHardAccept({
+      subjectScores: {
+        alex: {
+          centerX: 0.55,
+          centerY: 0.4,
+          widthCoverage: 0.3,
+          heightCoverage: 0.95, // would fail if treated as full-body gate
+          areaCoverage: 0.14,
+          clipped: false,
+          behindCamera: false,
+          faceOccluded: false,
+          landmarks: {
+            headTop: { x: 0.55, y: 0.14, inFrame: true },
+            waist: { x: 0.55, y: 0.70, inFrame: true },
+          },
+        },
+        blair: {
+          centerX: 0.18,
+          centerY: 0.4,
+          widthCoverage: 0.22,
+          heightCoverage: 0.3,
+          areaCoverage: 0.07,
+          clipped: false,
+          behindCamera: false,
+        },
+      },
+    }, 'alex', 'blair')).toBe(true);
   });
 
   it('OTS repair profile for too-large FG increases min back/out and avoids prior camera', () => {

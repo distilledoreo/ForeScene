@@ -218,10 +218,10 @@ export function templateFramingBands(template: PrevisCameraTemplate): TemplateFr
         maxHeightCoverage: 0.90,
       };
     case 'over_the_shoulder':
+      // OTS primary size uses head-to-waist / upper-body metrics, not full-body AABB.
       return {
-        headTopY: [0.05, 0.28],
-        minHeightCoverage: 0.30,
-        maxHeightCoverage: 0.85,
+        headTopY: [0.08, 0.24],
+        // min/max heightCoverage intentionally unused for OTS full-body AABB.
       };
     case 'wide':
     case 'full':
