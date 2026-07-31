@@ -18,6 +18,11 @@ export type PrevisShotValidationStatus =
   | 'needs_review'
   | 'skipped';
 
+/** Bump when the render artifact contract changes (UI screenshots → clean clay, etc.). */
+export const PREVIS_RENDER_PIPELINE_VERSION = 2;
+
+export type PrevisRenderSource = 'canonical_clay_renderer' | 'ui_screenshot' | 'unknown';
+
 export interface PrevisEntityMapping {
   objectIds?: string[];
   objectId?: string;
@@ -25,6 +30,15 @@ export interface PrevisEntityMapping {
   anchors?: Record<string, string>;
   zoneOrigin?: [number, number, number];
   refs?: Record<string, string>;
+}
+
+export interface PrevisShotPixelStats {
+  width: number;
+  height: number;
+  opaquePixelRatio: number;
+  luminanceMean: number;
+  luminanceVariance: number;
+  sampledUniqueColorCount: number;
 }
 
 export interface PrevisShotRunState {
@@ -37,12 +51,20 @@ export interface PrevisShotRunState {
   repairAttempts?: number;
   shotId?: string;
   framePath?: string;
+  /** Provenance of the frame at framePath — never infer from path alone. */
+  renderSource?: PrevisRenderSource;
+  pixelStats?: PrevisShotPixelStats;
   issues?: Array<{ code: string; message?: string; subject?: string }>;
   lastError?: string;
 }
 
 export interface PrevisRunState {
   version: 1;
+  /**
+   * Render artifact pipeline version. Older runs must re-render even if
+   * compile is complete (prevents UI screenshots masquerading as clay frames).
+   */
+  renderPipelineVersion?: number;
   manifestHash: string;
   projectId?: string;
   revisionId?: string;
@@ -91,6 +113,7 @@ export function createInitialRunState(params: {
   }
   return {
     version: 1,
+    renderPipelineVersion: PREVIS_RENDER_PIPELINE_VERSION,
     manifestHash: params.manifestHash,
     projectId: params.projectId,
     createdAt: now,
@@ -110,6 +133,59 @@ export function createInitialRunState(params: {
     shots,
     outputDir: params.outputDir,
   };
+}
+
+/**
+ * When an older run-state is loaded, invalidate rendered frames while preserving
+ * compiled shots and entity mappings. Forces canonical clay re-render.
+ */
+export function migrateRenderPipelineVersion(state: PrevisRunState): {
+  state: PrevisRunState;
+  invalidated: boolean;
+  previousVersion: number;
+} {
+  const previousVersion = state.renderPipelineVersion ?? 1;
+  if (previousVersion >= PREVIS_RENDER_PIPELINE_VERSION) {
+    return { state, invalidated: false, previousVersion };
+  }
+
+  let next: PrevisRunState = {
+    ...state,
+    renderPipelineVersion: PREVIS_RENDER_PIPELINE_VERSION,
+  };
+
+  for (const shotNumber of Object.keys(next.shots)) {
+    const shot = next.shots[shotNumber]!;
+    if (shot.render === 'complete' || shot.framePath || shot.renderSource) {
+      next = upsertShotState(next, shotNumber, {
+        render: 'pending',
+        validation: 'pending',
+        framePath: undefined,
+        renderSource: undefined,
+        pixelStats: undefined,
+        renderAttempts: 0,
+        attempts: 0,
+        issues: undefined,
+        lastError: undefined,
+      });
+    }
+  }
+
+  // Downstream phases must rerun; compile stays complete when already done.
+  next = setPhase(next, 'render', 'pending');
+  next = setPhase(next, 'validation', 'pending');
+  next = setPhase(next, 'contactSheet', 'pending');
+  next = setPhase(next, 'package', 'pending');
+  next = touchRunState(next);
+
+  return { state: next, invalidated: true, previousVersion };
+}
+
+/** True only when provenance is explicitly the canonical clay renderer. */
+export function isCanonicalFrame(shot: PrevisShotRunState | undefined): boolean {
+  return shot?.renderSource === 'canonical_clay_renderer'
+    && shot.render === 'complete'
+    && Boolean(shot.framePath);
 }
 
 export function touchRunState(state: PrevisRunState): PrevisRunState {

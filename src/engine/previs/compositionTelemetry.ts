@@ -91,6 +91,17 @@ export function buildShotCompositionTelemetry(params: {
     ? [...subjectIds]
     : people.map((person) => person.name);
 
+  const indexedObjectIds = new Set<string>();
+  const solidBlockersAll = resolved.scene.objects
+    .filter((candidate) => (
+      SOLID_TYPES.has(candidate.type)
+      && candidate.visible !== false
+    ))
+    .map((candidate) => {
+      const box = objectWorldAabb(candidate);
+      return { objectId: candidate.id, min: box.min, max: box.max };
+    });
+
   for (const key of matchKeys) {
     const object = findObjectBySubjectKey(resolved.scene.objects, key, params.subjectNames);
     if (!object || object.visible === false) {
@@ -100,79 +111,17 @@ export function buildShotCompositionTelemetry(params: {
       };
       continue;
     }
-    const aabb = objectWorldAabb(object);
-    const bounds = projectAabb(aabb, matrices);
-    const heightM = object.dimensions[1] * object.transform.scale[1];
-    const floorY = object.transform.position[1] - heightM / 2;
-    const isHuman = object.type === 'human_dummy';
-    let landmarks: Record<string, { x: number; y: number; inFrame: boolean }> | undefined;
-    if (isHuman) {
-      const projected = projectHumanLandmarks({
-        position: [object.transform.position[0], floorY, object.transform.position[2]],
-        height: heightM,
-        matrices,
-      });
-      landmarks = {};
-      for (const [name, point] of Object.entries(projected) as Array<[HumanLandmark, ProjectedPoint]>) {
-        landmarks[name] = {
-          x: point.x / width,
-          y: point.y / height,
-          inFrame: point.inFrame,
-        };
-      }
-    }
-
-    const solidBlockers = resolved.scene.objects
-      .filter((candidate) => (
-        SOLID_TYPES.has(candidate.type)
-        && candidate.visible !== false
-        && candidate.id !== object.id
-      ))
-      .map((candidate) => {
-        const box = objectWorldAabb(candidate);
-        return { objectId: candidate.id, min: box.min, max: box.max };
-      });
-
-    const samples = isHuman
-      ? humanOcclusionSamples(object, floorY, heightM)
-      : [{ id: 'center', point: [...object.transform.position] as Vec3 }];
-
-    const occlusion = sampleSubjectOcclusion({
-      cameraPosition: shot.camera.position,
-      subjectSamples: samples,
-      blockers: solidBlockers,
-      excludeObjectIds: new Set([object.id]),
-    });
-
-    subjects[key] = {
-      bounds,
-      landmarks,
-      visible: !bounds.behindCamera && bounds.areaCoverage > 0.0005,
-      occlusionRatio: occlusion.occludedSampleRatio,
-      faceOccluded: occlusion.faceOccluded,
-    };
+    indexedObjectIds.add(object.id);
+    subjects[key] = describeSubject(object, matrices, width, height, shot.camera.position, solidBlockersAll);
   }
 
-  // Also index by object name for any visible humans not already keyed.
+  // Index every remaining visible human by name (and id if needed), deduped by object id.
+  // Required so unwanted_subject_dominant can see actors outside the declared subject set.
   for (const person of people) {
-    if (subjects[person.name]) continue;
-    const already = Object.values(subjects).some((entry) => (
-      entry.landmarks && Math.abs(entry.bounds.centerX - 0.5) < 2
-    ));
-    if (already) continue;
-    // Skip if matched via subject id already.
-    const matched = Object.keys(subjects).some((key) => {
-      const obj = findObjectBySubjectKey(resolved.scene.objects, key, params.subjectNames);
-      return obj?.id === person.id;
-    });
-    if (matched) continue;
-
-    const aabb = objectWorldAabb(person);
-    const bounds = projectAabb(aabb, matrices);
-    subjects[person.name] = {
-      bounds,
-      visible: !bounds.behindCamera && bounds.areaCoverage > 0.0005,
-    };
+    if (indexedObjectIds.has(person.id)) continue;
+    indexedObjectIds.add(person.id);
+    const key = subjects[person.name] ? person.id : person.name;
+    subjects[key] = describeSubject(person, matrices, width, height, shot.camera.position, solidBlockersAll);
   }
 
   const blockers: ShotCompositionBlocker[] = [];
@@ -213,6 +162,56 @@ export function objectWorldAabb(object: SceneObject): { min: Vec3; max: Vec3 } {
   return {
     min: [c[0] - hx, c[1] - hy, c[2] - hz],
     max: [c[0] + hx, c[1] + hy, c[2] + hz],
+  };
+}
+
+function describeSubject(
+  object: SceneObject,
+  matrices: ReturnType<typeof buildCameraMatrices>,
+  width: number,
+  height: number,
+  cameraPosition: Vec3,
+  solidBlockers: Array<{ objectId: string; min: Vec3; max: Vec3 }>,
+): ShotCompositionSubject {
+  const aabb = objectWorldAabb(object);
+  const bounds = projectAabb(aabb, matrices);
+  const heightM = object.dimensions[1] * object.transform.scale[1];
+  const floorY = object.transform.position[1] - heightM / 2;
+  const isHuman = object.type === 'human_dummy';
+  let landmarks: Record<string, { x: number; y: number; inFrame: boolean }> | undefined;
+  if (isHuman) {
+    const projected = projectHumanLandmarks({
+      position: [object.transform.position[0], floorY, object.transform.position[2]],
+      height: heightM,
+      matrices,
+    });
+    landmarks = {};
+    for (const [name, point] of Object.entries(projected) as Array<[HumanLandmark, ProjectedPoint]>) {
+      landmarks[name] = {
+        x: point.x / width,
+        y: point.y / height,
+        inFrame: point.inFrame,
+      };
+    }
+  }
+
+  const samples = isHuman
+    ? humanOcclusionSamples(object, floorY, heightM)
+    : [{ id: 'center', point: [...object.transform.position] as Vec3 }];
+
+  const occlusion = sampleSubjectOcclusion({
+    cameraPosition,
+    subjectSamples: samples,
+    blockers: solidBlockers,
+    excludeObjectIds: new Set([object.id]),
+  });
+
+  return {
+    bounds,
+    landmarks,
+    visible: !bounds.behindCamera && bounds.areaCoverage > 0.0005,
+    occlusionRatio: occlusion.occludedSampleRatio,
+    faceOccluded: occlusion.faceOccluded,
   };
 }
 

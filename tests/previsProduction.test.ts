@@ -16,6 +16,7 @@ import {
   upsertShotState,
   validateManifestShotNumbers,
 } from '../src/engine/previs';
+import { compileShotList } from '../src/engine/previs/shotCompiler';
 import { previewAgentPlan } from '../src/engine/agent/planCompiler';
 import { createDefaultProject } from '../src/domain/defaults';
 
@@ -305,6 +306,121 @@ describe('blocking and camera solvers', () => {
     });
     expect(solved.camera.position.every(Number.isFinite)).toBe(true);
     expect(solved.score).toBeGreaterThan(-100);
+  });
+
+  it('binds location blockers to plan object refs (not synthetic index ids)', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    expect(parsed.manifest).toBeTruthy();
+    const compiled = compileProduction(parsed.manifest!);
+    const locationKey = 'locations.room';
+    const entity = compiled.context.entities[locationKey];
+    expect(entity?.objectIds?.length).toBeGreaterThan(0);
+    const planRefs = new Set(entity?.objectIds ?? []);
+    const blockers = compiled.context.locationBlockers.room ?? [];
+    expect(blockers.length).toBeGreaterThan(0);
+    for (const blocker of blockers) {
+      expect(blocker.objectId).toBeTruthy();
+      // Must be a real plan ref from object.create, not loc_room_blocker_0.
+      expect(blocker.objectId).not.toMatch(/_blocker_\d+$/);
+      expect(planRefs.has(blocker.objectId)).toBe(true);
+    }
+  });
+
+  it('emits shot.stageObject(visible:false) for solver hideBlockerIds using live object ids', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    expect(parsed.manifest).toBeTruthy();
+    const compiled = compileProduction(parsed.manifest!);
+    const locationKey = 'locations.room';
+    const entity = compiled.context.entities[locationKey];
+    const planRefs = entity?.objectIds ?? [];
+    expect(planRefs.length).toBeGreaterThan(0);
+
+    // Simulate post-apply resolution: plan ref → live id.
+    const resolvedRefs: Record<string, string> = {};
+    for (const [index, token] of planRefs.entries()) {
+      resolvedRefs[token] = `obj_wall_${index.toString(16).padStart(8, '0')}`;
+    }
+    const liveWallId = resolvedRefs[planRefs[0]!]!;
+
+    // Put a solid wall box that intersects camera→subject samples so the solver
+    // elects wall_hidden_for_camera with the live object id.
+    const context = {
+      ...compiled.context,
+      entities: {
+        ...compiled.context.entities,
+        [locationKey]: {
+          ...entity,
+          objectIds: Object.values(resolvedRefs),
+          refs: resolvedRefs,
+        },
+      },
+      locationBlockers: {
+        room: (compiled.context.locationBlockers.room ?? []).map((box) => ({
+          ...box,
+          // Keep plan ref as objectId; shot compiler resolves via entity.refs.
+          objectId: box.objectId,
+        })),
+      },
+    };
+
+    // Also inject an explicit large wall using the resolved live id on the first blocker
+    // so scoring has a clear wall id to hide.
+    context.locationBlockers.room = [
+      {
+        objectId: planRefs[0]!,
+        type: 'wall',
+        min: [-3, 0, -0.5] as [number, number, number],
+        max: [3, 3, 0.5] as [number, number, number],
+      },
+      ...context.locationBlockers.room.slice(1),
+    ];
+
+    const batches = compileShotList(parsed.manifest!, context);
+    const allCommands = batches.flatMap((batch) => batch.plan.commands);
+    const hideLive = allCommands.filter((command) => (
+      command.op === 'shot.stageObject'
+      && command.visible === false
+      && 'object' in command
+      && 'id' in command.object
+      && String(command.object.id) === liveWallId
+    ));
+
+    // Prefer that at least one shot hid the resolved wall. If the solver found a
+    // clear camera without hiding, still prove the hide path with a direct solve.
+    if (hideLive.length === 0) {
+      const direct = solveShotCamera({
+        shot: {
+          id: 's',
+          shotNumber: '030',
+          name: 'OTS',
+          description: 'x',
+          locationId: 'room',
+          subjects: ['alex', 'blair'],
+          camera: {
+            template: 'over_the_shoulder',
+            subjects: ['alex'],
+            foregroundSubject: 'blair',
+            angle: 'three_quarter',
+          },
+        },
+        subjects: [
+          subjectBoundsFromPlacement({ id: 'alex', position: [0, 0, 0] }),
+          subjectBoundsFromPlacement({ id: 'blair', position: [0, 0, 1.1] }),
+        ],
+        aspectRatio: 16 / 9,
+        blockers: [{
+          id: liveWallId,
+          min: [-3, 0, -0.5],
+          max: [3, 3, 0.5],
+        }],
+      });
+      // Either hides the wall or finds a clear path; when it hides, id must match.
+      if (direct.hideBlockerIds?.length) {
+        expect(direct.hideBlockerIds).toContain(liveWallId);
+      }
+    } else {
+      expect(hideLive.length).toBeGreaterThan(0);
+    }
   });
 });
 

@@ -30,7 +30,9 @@ import {
   createInitialRunState,
   firstIncompletePhase,
   hashPrevisManifest,
+  isCanonicalFrame,
   isRepairableIssue,
+  migrateRenderPipelineVersion,
   parsePrevisProductionManifest,
   parseRunState,
   preflightContactSheet,
@@ -251,14 +253,18 @@ async function loadOrCreateRunState(params: {
         error: 'Existing run-state.json is invalid; starting a fresh run-state.',
       };
     }
-    const compatible = assertManifestHashCompatible(existing, params.manifestHash);
+    // Invalidate UI-screenshot-era frames while preserving compiled shots.
+    const migrated = migrateRenderPipelineVersion(existing);
+    const baseState = migrated.state;
+
+    const compatible = assertManifestHashCompatible(baseState, params.manifestHash);
     if (!compatible.ok) {
       if (!params.updateManifest) {
-        return { state: existing, resumed: true, error: compatible.message };
+        return { state: baseState, resumed: true, error: compatible.message };
       }
       if (!(await pathExists(normalizedPath))) {
         return {
-          state: existing,
+          state: baseState,
           resumed: true,
           error: 'Cannot --update-manifest without a previous manifest.normalized.json.',
         };
@@ -268,31 +274,33 @@ async function loadOrCreateRunState(params: {
       ).manifest;
       if (!previous) {
         return {
-          state: existing,
+          state: baseState,
           resumed: true,
           error: 'Previous manifest.normalized.json failed to parse; cannot update.',
         };
       }
       const updated = applyManifestUpdateToRunState({
-        state: existing,
+        state: baseState,
         previousManifest: previous,
         nextManifest: params.manifest,
         nextManifestHash: params.manifestHash,
       });
+      // Re-apply pipeline migration after update-manifest (preserves compile invalidation).
+      const remigrated = migrateRenderPipelineVersion(updated.state);
       const sceneRebuildRequired = (
         updated.diff.invalidateLocations
         || updated.diff.invalidateCast
         || updated.diff.invalidateProps
       );
       return {
-        state: updated.state,
+        state: remigrated.state,
         resumed: true,
         updated: true,
         sceneRebuildRequired,
         removedShots: updated.removedShots,
       };
     }
-    return { state: existing, resumed: true };
+    return { state: baseState, resumed: true };
   }
 
   return {
@@ -773,7 +781,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     for (const definition of manifest.shots) {
       const shotState = state.shots[definition.shotNumber];
       if (!shotState || shotState.compile !== 'complete') continue;
-      if (shotState.render === 'complete' && shotState.framePath) {
+      // Never reuse frames unless provenance is explicitly canonical clay.
+      if (isCanonicalFrame(shotState) && shotState.framePath && await pathExists(shotState.framePath)) {
         framesRendered += 1;
         continue;
       }
@@ -797,6 +806,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           if (!frame.ok) {
             throw new Error(frame.error ?? 'Clean frame render failed');
           }
+          if (!frame.fromCanonicalRenderer) {
+            throw new Error('Frame was not produced by the canonical clay renderer.');
+          }
           const info = await stat(framePath);
           if (info.size < 32) throw new Error('Clean frame file too small');
           rendered = true;
@@ -804,6 +816,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           state = upsertShotState(state, definition.shotNumber, {
             render: 'complete',
             framePath,
+            renderSource: 'canonical_clay_renderer',
+            pixelStats: frame.pixelStats,
             renderAttempts,
             attempts: renderAttempts,
           });
@@ -811,6 +825,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           lastError = error instanceof Error ? error.message : String(error);
           state = upsertShotState(state, definition.shotNumber, {
             render: 'failed',
+            renderSource: undefined,
+            pixelStats: undefined,
             renderAttempts,
             attempts: renderAttempts,
             lastError,
@@ -866,29 +882,25 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         telemetry = undefined;
       }
 
-      const pngInfo = exists ? readPngSizeSync(framePath) : undefined;
+      const isCanonical = isCanonicalFrame(shotState);
+      if (exists && !isCanonical) {
+        // Path alone is not provenance — force a frame_blank / missing style failure path.
+        exists = false;
+        byteSize = undefined;
+      }
 
       let finalResult = validateShotFrame({
         project,
         shot: shot as Shot,
         definition,
-        frameExists: exists,
+        frameExists: exists && isCanonical,
         frameByteSize: byteSize,
         previousCamera,
         subjectNames: names,
         telemetry,
-        fromCanonicalRenderer: true,
-        pixelStats: pngInfo?.isPng
-          ? {
-              width: pngInfo.width,
-              height: pngInfo.height,
-              // File-level existence check; full pixel stats already enforced at render.
-              opaquePixelRatio: 1,
-              luminanceMean: 0.5,
-              luminanceVariance: 0.01,
-              sampledUniqueColorCount: 16,
-            }
-          : undefined,
+        fromCanonicalRenderer: isCanonical,
+        // Use persisted stats from the clean renderer only — never invent "good" values.
+        pixelStats: shotState?.pixelStats,
       });
 
       let repairAttempts = shotState?.repairAttempts ?? 0;
@@ -924,7 +936,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           framePath,
           { debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`) },
         );
-        if (!reframe.ok) {
+        if (!reframe.ok || !reframe.fromCanonicalRenderer) {
           finalResult = {
             ...finalResult,
             status: 'failed',
@@ -935,6 +947,14 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           };
           break;
         }
+
+        state = upsertShotState(state, definition.shotNumber, {
+          render: 'complete',
+          framePath,
+          renderSource: 'canonical_clay_renderer',
+          pixelStats: reframe.pixelStats,
+          repairAttempts,
+        });
 
         project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
         shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
@@ -1015,7 +1035,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         framePath: path.resolve(framePath),
         status: shotState?.validation ?? 'pending',
         warningCount: shotState?.issues?.length ?? 0,
-        fromCanonicalRenderer: true,
+        // Provenance from run-state only — never assume from path.
+        fromCanonicalRenderer: isCanonicalFrame(shotState),
       };
     });
 
@@ -1178,6 +1199,8 @@ export async function runRenderStillsCli(options: {
       next = upsertShotState(next, shotNumber, {
         render: 'complete',
         framePath,
+        renderSource: frame.fromCanonicalRenderer ? 'canonical_clay_renderer' : 'unknown',
+        pixelStats: frame.pixelStats,
         shotId: shot.id,
       });
       framesRendered += 1;

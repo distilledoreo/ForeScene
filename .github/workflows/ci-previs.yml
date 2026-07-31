@@ -1,5 +1,6 @@
 # Previs pipeline path-conditional + nightly/manual heavy smoke.
-# Lightweight unit coverage always runs on PRs that touch previs/agent paths.
+# Lightweight unit coverage always runs when this workflow is triggered.
+# Heavy four-shot smoke runs on matching PRs (path-filtered), nightly, and manual.
 name: Previs pipeline
 
 on:
@@ -38,11 +39,7 @@ jobs:
 
   previs-smoke:
     name: Four-shot previs smoke
-    # Heavy smoke: manual, nightly, or when explicitly labeled.
-    if: >
-      github.event_name == 'workflow_dispatch'
-      || github.event_name == 'schedule'
-      || contains(github.event.pull_request.labels.*.name, 'previs-smoke')
+    # Path filter already scopes PR runs; also nightly + manual.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -69,43 +66,46 @@ jobs:
           exit 1
       - name: Run four-shot previs fixture
         run: |
+          # Fresh output dir — never reuse old UI-screenshot smoke artifacts.
+          rm -rf artifacts/previs-smoke
           npm run agent:previs -- \
             --manifest examples/previs/minimal-dialogue.json \
             --url http://127.0.0.1:4173 \
             --write \
             --reset-project \
             --headless \
-            --output artifacts/previs
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-      - name: Assert clean frames exist
+            --output artifacts/previs-smoke
+      - name: Assert clean frames + composition quality
         run: |
           set -euo pipefail
           for n in 010 020 030 040; do
-            test -f "artifacts/previs/shots/${n}.png"
-            test -f "artifacts/previs/shots/${n}.composition.json"
+            test -f "artifacts/previs-smoke/shots/${n}.png"
+            test -f "artifacts/previs-smoke/shots/${n}.composition.json"
             # Reject debug paths as production frames
-            ! test -f "artifacts/previs/shots/${n}-ui.png"
+            ! test -f "artifacts/previs-smoke/shots/${n}-ui.png"
           done
-          test -f artifacts/previs/contact-sheet.png
-          test -f artifacts/previs/validation.json
-          test -f artifacts/previs/summary.json
+          test -f artifacts/previs-smoke/contact-sheet.png
+          test -f artifacts/previs-smoke/validation.json
+          test -f artifacts/previs-smoke/summary.json
           # PNG signature check
           for n in 010 020 030 040; do
-            xxd -l 8 -p "artifacts/previs/shots/${n}.png" | grep -q '89504e470d0a1a0a'
+            xxd -l 8 -p "artifacts/previs-smoke/shots/${n}.png" | grep -q '89504e470d0a1a0a'
           done
+          # Strong geometric / validation gates
+          npx tsx scripts/agent/assertPrevisSmoke.ts --dir artifacts/previs-smoke
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: previs-smoke-artifacts
           path: |
-            artifacts/previs/contact-sheet.png
-            artifacts/previs/validation.json
-            artifacts/previs/summary.json
-            artifacts/previs/package.zip
-            artifacts/previs/shots/**
-            artifacts/previs/debug/**
-            artifacts/previs/logs/**
+            artifacts/previs-smoke/contact-sheet.png
+            artifacts/previs-smoke/validation.json
+            artifacts/previs-smoke/summary.json
+            artifacts/previs-smoke/package.zip
+            artifacts/previs-smoke/run-state.json
+            artifacts/previs-smoke/shots/**
+            artifacts/previs-smoke/debug/**
+            artifacts/previs-smoke/logs/**
           retention-days: 14
       - name: Stop preview server
         if: always()

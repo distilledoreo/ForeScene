@@ -214,19 +214,22 @@ function compileSingleShot(
     return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
   });
 
-  const locationBlockers = context.locationBlockers[shot.locationId] ?? [];
+  const locationBlockers = resolveLocationBlockers(
+    context,
+    shot.locationId,
+  );
   const cameraSolve = solveShotCamera({
     shot,
     subjects: subjectBounds,
     aspectRatio,
-    blockers: locationBlockers.map((box, index) => ({
-      id: `loc_${shot.locationId}_blocker_${index}`,
+    blockers: locationBlockers.map((box) => ({
+      id: box.objectId,
       min: box.min,
       max: box.max,
     })),
   });
   warnings.push(...cameraSolve.warnings);
-  if (cameraSolve.notes?.includes('wall_hidden_for_camera')) {
+  if (cameraSolve.notes?.includes('wall_hidden_for_camera') || (cameraSolve.hideBlockerIds?.length ?? 0) > 0) {
     warnings.push('wall_hidden_for_camera');
   }
 
@@ -393,6 +396,18 @@ function compileSingleShot(
     }
   }
 
+  // Apply wall-hide overrides from the camera solver so scored compositions match renders.
+  const hideBlockerIds = new Set(cameraSolve.hideBlockerIds ?? []);
+  for (const blockerId of hideBlockerIds) {
+    if (!blockerId) continue;
+    commands.push({
+      op: 'shot.stageObject',
+      shot: shotTarget,
+      object: resolveEntityTarget(blockerId, blockerId),
+      visible: false,
+    });
+  }
+
   commands.push({
     op: 'shot.select',
     shot: shotTarget,
@@ -442,6 +457,27 @@ function resolveEntityTarget(
   if (stored && looksLikeEntityId(stored)) return { id: stored };
   if (stored && !looksLikeEntityId(stored)) return { ref: stored };
   return { ref: fallbackRef };
+}
+
+/**
+ * Map location blocker plan-refs to live object ids via entity.refs when available.
+ */
+function resolveLocationBlockers(
+  context: CompiledProductionContext,
+  locationId: string,
+): Array<{ objectId: string; min: Vec3; max: Vec3; type?: string }> {
+  const raw = context.locationBlockers[locationId] ?? [];
+  const entity = context.entities[`locations.${locationId}`];
+  const refMap = entity?.refs ?? {};
+  return raw.map((box) => {
+    const resolved = refMap[box.objectId] ?? box.objectId;
+    return {
+      objectId: resolved,
+      min: box.min,
+      max: box.max,
+      type: box.type,
+    };
+  });
 }
 
 function looksLikeEntityId(value: string): boolean {

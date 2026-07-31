@@ -10,11 +10,15 @@ import {
   buildCameraMatrices,
   buildRepairPlan,
   buildShotCompositionTelemetry,
+  createInitialRunState,
   cropHeightFraction,
   framingProfileForTemplate,
   HUMAN_FRAMING_PROFILES,
   HUMAN_LANDMARK_HEIGHT,
+  isCanonicalFrame,
   isRepairableIssue,
+  migrateRenderPipelineVersion,
+  PREVIS_RENDER_PIPELINE_VERSION,
   preflightContactSheet,
   projectAabb,
   projectHumanLandmarks,
@@ -23,6 +27,7 @@ import {
   solveShotCamera,
   subjectBoundsFromPlacement,
   templateFramingBands,
+  upsertShotState,
   validateShotFrame,
   type PrevisShotDefinition,
 } from '../src/engine/previs';
@@ -418,7 +423,81 @@ describe('contact sheet preflight', () => {
   });
 });
 
+describe('render pipeline versioning', () => {
+  it('invalidates non-canonical frames from older pipelines', () => {
+    let state = createInitialRunState({
+      manifestHash: 'abc',
+      shotNumbers: ['010', '020'],
+    });
+    // Simulate a v1 run that recorded frames without provenance.
+    state = {
+      ...state,
+      renderPipelineVersion: 1,
+    };
+    state = upsertShotState(state, '010', {
+      compile: 'complete',
+      render: 'complete',
+      validation: 'passed',
+      framePath: 'shots/010.png',
+      // missing renderSource → not canonical
+    });
+    state = upsertShotState(state, '020', {
+      compile: 'complete',
+      render: 'complete',
+      renderSource: 'canonical_clay_renderer',
+      framePath: 'shots/020.png',
+    });
+
+    const migrated = migrateRenderPipelineVersion(state);
+    expect(migrated.invalidated).toBe(true);
+    expect(migrated.state.renderPipelineVersion).toBe(PREVIS_RENDER_PIPELINE_VERSION);
+    expect(migrated.state.shots['010']?.render).toBe('pending');
+    expect(migrated.state.shots['010']?.framePath).toBeUndefined();
+    expect(migrated.state.shots['010']?.compile).toBe('complete');
+    expect(migrated.state.shots['020']?.render).toBe('pending');
+    expect(isCanonicalFrame(migrated.state.shots['010'])).toBe(false);
+  });
+
+  it('is a no-op when already on current pipeline', () => {
+    const state = createInitialRunState({
+      manifestHash: 'abc',
+      shotNumbers: ['010'],
+    });
+    const migrated = migrateRenderPipelineVersion(state);
+    expect(migrated.invalidated).toBe(false);
+  });
+});
+
 describe('composition telemetry builder', () => {
+  it('indexes secondary visible humans even when primary already has landmarks', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    const blair = makeHuman('blair-id', 'Blair', [1.2, 0, 0.2], 1.68);
+    project.scene.objects = [alex, blair];
+    const camera = makeCamera({
+      position: [0, 1.5, 3],
+      target: [0, 1.1, 0],
+      fovDegrees: 40,
+    });
+    const shot = makeShot(camera);
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      // Only alex is declared — blair should still appear for dominance checks.
+      definition: definition({
+        shotNumber: '020',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+      }),
+      subjectNames: { alex: 'Alex' },
+    });
+
+    expect(telemetry.subjects.alex || telemetry.subjects.Alex).toBeTruthy();
+    expect(telemetry.subjects.Blair || telemetry.subjects.blair || telemetry.subjects['blair-id']).toBeTruthy();
+  });
+
   it('writes subject landmarks and blockers', () => {
     const project = createDefaultProject() as LocationProject;
     const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
