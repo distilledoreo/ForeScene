@@ -19,6 +19,8 @@ export const AGENT_INSPECT_COMMANDS = [
   'shot.inspect',
   'landmark.list',
   'export.plan',
+  'viewport.waitReady',
+  'shot.renderFrame',
 ] as const;
 
 /** Mutation / plan commands available when write access is enabled. */
@@ -58,6 +60,11 @@ export const AGENT_MUTATE_COMMANDS = [
 
 export const AGENT_DEFERRED_COMMANDS = [
   'file.import',
+] as const;
+
+export const AGENT_RUNTIME_COMMANDS = [
+  'viewport.waitReady',
+  'shot.renderFrame',
   'viewport.capture',
 ] as const;
 
@@ -82,6 +89,8 @@ export function buildAgentCapabilities(
       focusObjects: typeof runtime.focusObjects === 'function',
       focusShot: typeof runtime.focusShot === 'function',
       captureViewport: typeof runtime.captureViewport === 'function',
+      renderShotFrame: true,
+      waitForViewportReady: true,
     },
   };
 }

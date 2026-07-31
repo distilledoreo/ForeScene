@@ -1,0 +1,113 @@
+# Previs pipeline path-conditional + nightly/manual heavy smoke.
+# Lightweight unit coverage always runs when this workflow is triggered.
+# Heavy four-shot smoke runs on matching PRs (path-filtered), nightly, and manual.
+name: Previs pipeline
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/agent/previs.ts'
+      - 'scripts/agent/**'
+      - 'src/engine/previs/**'
+      - 'src/engine/agent/**'
+      - 'src/components/**/SceneViewport*'
+      - 'src/components/**/viewport*'
+      - 'src/engine/renderers.ts'
+      - 'examples/previs/**'
+      - 'tests/previs*.ts'
+      - '.github/workflows/ci-previs.yml'
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: previs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  previs-unit:
+    name: Previs unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run tests/previsProduction.test.ts tests/previsComposition.test.ts tests/previsReset.test.ts
+
+  previs-smoke:
+    name: Four-shot previs smoke
+    # Path filter already scopes PR runs; also nightly + manual.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Start preview server
+        run: |
+          npx vite preview --host 127.0.0.1 --port 4173 &
+          echo $! > preview.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4173/ >/dev/null; then
+              echo "preview ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "preview failed to start"
+          exit 1
+      - name: Run four-shot previs fixture
+        run: |
+          # Fresh output dir — never reuse old UI-screenshot smoke artifacts.
+          rm -rf artifacts/previs-smoke
+          npm run agent:previs -- \
+            --manifest examples/previs/minimal-dialogue.json \
+            --url http://127.0.0.1:4173 \
+            --write \
+            --reset-project \
+            --headless \
+            --output artifacts/previs-smoke
+      - name: Assert clean frames + composition quality
+        run: |
+          set -euo pipefail
+          for n in 010 020 030 040; do
+            test -f "artifacts/previs-smoke/shots/${n}.png"
+            test -f "artifacts/previs-smoke/shots/${n}.composition.json"
+            # Reject debug paths as production frames
+            ! test -f "artifacts/previs-smoke/shots/${n}-ui.png"
+          done
+          test -f artifacts/previs-smoke/contact-sheet.png
+          test -f artifacts/previs-smoke/validation.json
+          test -f artifacts/previs-smoke/summary.json
+          # PNG signature check
+          for n in 010 020 030 040; do
+            xxd -l 8 -p "artifacts/previs-smoke/shots/${n}.png" | grep -q '89504e470d0a1a0a'
+          done
+          # Strong geometric / validation gates
+          npx tsx scripts/agent/assertPrevisSmoke.ts --dir artifacts/previs-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: previs-smoke-artifacts
+          path: |
+            artifacts/previs-smoke/contact-sheet.png
+            artifacts/previs-smoke/validation.json
+            artifacts/previs-smoke/summary.json
+            artifacts/previs-smoke/package.zip
+            artifacts/previs-smoke/run-state.json
+            artifacts/previs-smoke/shots/**
+            artifacts/previs-smoke/debug/**
+            artifacts/previs-smoke/logs/**
+          retention-days: 14
+      - name: Stop preview server
+        if: always()
+        run: |
+          if [ -f preview.pid ]; then kill "$(cat preview.pid)" || true; fi

@@ -27,13 +27,27 @@ export function previsRef(...parts: string[]): string {
   return cleaned.slice(0, 64);
 }
 
+export interface LocationBlockerAabb {
+  /**
+   * Plan-local ref at compile time; resolved to live object id after location apply
+   * (via entities[`locations.${id}`].refs).
+   */
+  objectId: string;
+  type?: string;
+  min: Vec3;
+  max: Vec3;
+}
+
 export interface CompiledProductionContext {
   /** locationId → zone origin */
   locationOrigins: Record<string, Vec3>;
   /** locationId → anchor key → world position */
   locationAnchors: Record<string, Record<string, Vec3>>;
-  /** locationId → solid AABBs for camera collision rejection */
-  locationBlockers: Record<string, Array<{ min: Vec3; max: Vec3 }>>;
+  /**
+   * locationId → solid AABBs for camera collision / occlusion.
+   * objectId is a plan ref until entity.refs resolve it to a live id.
+   */
+  locationBlockers: Record<string, LocationBlockerAabb[]>;
   /** Stable entity mappings for run-state. */
   entities: Record<string, PrevisEntityMapping>;
   /** Plan-local refs created so far. */
@@ -85,18 +99,25 @@ export function compileLocationsPhase(
     const anchors: Record<string, string> = {};
     const anchorPositions: Record<string, Vec3> = {};
 
+    // Build blockers with the same plan refs used for object.create so the
+    // camera solver can request real shot.stageObject(visible:false) overrides.
+    const primitiveEntries = compiled.primitives.map((primitive) => {
+      const ref = previsRef('loc', location.id, primitive.ref);
+      return { primitive, ref };
+    });
+
     next.locationBlockers[location.id] = locationPrimitiveBlockers(
       location,
-      compiled.primitives.map((primitive) => ({
+      primitiveEntries.map(({ primitive, ref }) => ({
         type: primitive.type,
         position: primitive.position,
         dimensions: primitive.dimensions,
         rotation: primitive.rotation,
+        ref,
       })),
     );
 
-    for (const primitive of compiled.primitives) {
-      const ref = previsRef('loc', location.id, primitive.ref);
+    for (const { primitive, ref } of primitiveEntries) {
       objectRefs.push(ref);
       commands.push({
         op: 'object.create',
@@ -341,6 +362,8 @@ function cloneContext(context: CompiledProductionContext): CompiledProductionCon
       Object.entries(context.locationBlockers).map(([key, value]) => [
         key,
         value.map((box) => ({
+          objectId: box.objectId,
+          type: box.type,
           min: [...box.min] as Vec3,
           max: [...box.max] as Vec3,
         })),

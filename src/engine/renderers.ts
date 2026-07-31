@@ -81,11 +81,17 @@ import {
   resolveVideoPreset,
   type VideoResolutionPresetId,
 } from './videoPresets';
+import {
+  computeRenderPixelStats,
+  type RenderPixelStats,
+} from './previs/renderPixelStats';
 
 export interface ImageRenderResult {
   dataUrl: string;
   width: number;
   height: number;
+  /** Present when the render path computed canvas pixel sanity stats. */
+  pixelStats?: RenderPixelStats;
 }
 
 export {
@@ -1182,12 +1188,26 @@ export async function renderViewportClay(
     clipping.far,
   );
   renderer.render(scene, camera);
+
+  // Pixel stats from the clean canvas before PNG encode (shared by package + agent).
+  let pixelStats: RenderPixelStats | undefined;
+  try {
+    const gl = renderer.getContext();
+    if (gl && width > 0 && height > 0) {
+      const pixels = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      pixelStats = computeRenderPixelStats(pixels, width, height);
+    }
+  } catch {
+    pixelStats = undefined;
+  }
+
   const dataUrl = renderer.domElement.toDataURL('image/png');
 
   disposeScene(scene);
   disposeRenderer(renderer);
 
-  return { dataUrl, width, height };
+  return { dataUrl, width, height, pixelStats };
 }
 
 export interface ProjectedSceneResources {

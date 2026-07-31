@@ -185,6 +185,11 @@ function compileSingleShot(
   const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).map(([id, position]) => {
     const character = characterById(manifest, id);
     const prop = (manifest.props ?? []).find((item) => item.id === id);
+    const blocking = blockingResults[id];
+    // Yaw from staging rotation (Y axis degrees → radians).
+    const yawRadians = blocking?.rotation
+      ? (blocking.rotation[1] * Math.PI) / 180
+      : undefined;
     if (character) {
       return subjectBoundsFromPlacement({
         id,
@@ -192,6 +197,7 @@ function compileSingleShot(
         height: character.height ?? 1.75,
         width: 0.55,
         depth: 0.55,
+        yawRadians,
       });
     }
     if (prop) {
@@ -202,18 +208,30 @@ function compileSingleShot(
         width: dims[0],
         height: dims[1],
         depth: dims[2],
+        yawRadians,
       });
     }
-    return subjectBoundsFromPlacement({ id, position, height: 1.75 });
+    return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
   });
 
+  const locationBlockers = resolveLocationBlockers(
+    context,
+    shot.locationId,
+  );
   const cameraSolve = solveShotCamera({
     shot,
     subjects: subjectBounds,
     aspectRatio,
-    blockers: context.locationBlockers[shot.locationId] ?? [],
+    blockers: locationBlockers.map((box) => ({
+      id: box.objectId,
+      min: box.min,
+      max: box.max,
+    })),
   });
   warnings.push(...cameraSolve.warnings);
+  if (cameraSolve.notes?.includes('wall_hidden_for_camera') || (cameraSolve.hideBlockerIds?.length ?? 0) > 0) {
+    warnings.push('wall_hidden_for_camera');
+  }
 
   if (
     !Number.isFinite(cameraSolve.camera.position[0])
@@ -282,12 +300,14 @@ function compileSingleShot(
     });
   }
 
-  // Hide every cast/prop not in this shot; stage participants.
+  // Visibility: participants listed only in shot.subjects may be staged off-camera
+  // (e.g. medium of Alex while Blair remains a scene participant but not visible).
+  // Prefer explicit requirements.visibleSubjects when present.
+  const requiredVisible = shot.requirements?.visibleSubjects ?? shot.subjects;
   const visibleIds = new Set([
-    ...shot.subjects,
+    ...requiredVisible,
     ...shot.camera.subjects,
     ...(shot.camera.foregroundSubject ? [shot.camera.foregroundSubject] : []),
-    ...(shot.requirements?.visibleSubjects ?? []),
     ...(shot.requirements?.visibleProps ?? []),
   ]);
 
@@ -296,12 +316,14 @@ function compileSingleShot(
       context.entities[`cast.${character.id}`]?.objectId,
       previsRef('cast', character.id),
     );
-    const inShot = visibleIds.has(character.id);
+    const isParticipant = shot.subjects.includes(character.id)
+      || visibleIds.has(character.id);
+    const isVisible = visibleIds.has(character.id);
     const blocking = blockingResults[character.id];
     const pose = blocking?.posePreset
       ?? (character.defaultPose ? resolvePrevisPosePresetId(character.defaultPose) : undefined);
 
-    if (inShot) {
+    if (isParticipant) {
       const position = subjectPositions[character.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const rotation = blocking?.rotation ?? [0, 0, 0];
       // Staging transform uses object center Y for humans: height/2 above floor contact.
@@ -310,7 +332,7 @@ function compileSingleShot(
         op: 'shot.stageObject',
         shot: shotTarget,
         object: objectTarget,
-        visible: true,
+        visible: isVisible,
         transform: {
           position: [position[0], height / 2, position[2]],
           rotation,
@@ -378,6 +400,18 @@ function compileSingleShot(
     }
   }
 
+  // Apply wall-hide overrides from the camera solver so scored compositions match renders.
+  const hideBlockerIds = new Set(cameraSolve.hideBlockerIds ?? []);
+  for (const blockerId of hideBlockerIds) {
+    if (!blockerId) continue;
+    commands.push({
+      op: 'shot.stageObject',
+      shot: shotTarget,
+      object: resolveEntityTarget(blockerId, blockerId),
+      visible: false,
+    });
+  }
+
   commands.push({
     op: 'shot.select',
     shot: shotTarget,
@@ -427,6 +461,27 @@ function resolveEntityTarget(
   if (stored && looksLikeEntityId(stored)) return { id: stored };
   if (stored && !looksLikeEntityId(stored)) return { ref: stored };
   return { ref: fallbackRef };
+}
+
+/**
+ * Map location blocker plan-refs to live object ids via entity.refs when available.
+ */
+function resolveLocationBlockers(
+  context: CompiledProductionContext,
+  locationId: string,
+): Array<{ objectId: string; min: Vec3; max: Vec3; type?: string }> {
+  const raw = context.locationBlockers[locationId] ?? [];
+  const entity = context.entities[`locations.${locationId}`];
+  const refMap = entity?.refs ?? {};
+  return raw.map((box) => {
+    const resolved = refMap[box.objectId] ?? box.objectId;
+    return {
+      objectId: resolved,
+      min: box.min,
+      max: box.max,
+      type: box.type,
+    };
+  });
 }
 
 function looksLikeEntityId(value: string): boolean {

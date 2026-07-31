@@ -2,6 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import { objectDisplayName } from '../../domain/defaults';
 import { CameraData, Euler, LocationProject, SceneObject, SceneObjectType, ShotDepthSettings, Vec3 } from '../../domain/types';
+import {
+  reportViewportMounted,
+  reportViewportSceneRender,
+  reportViewportSelection,
+  reportViewportUnmounted,
+} from '../../engine/agent/viewportReadiness';
 import { isBuildFreeCameraKey } from '../../engine/buildShortcuts';
 import {
   createForwardSprintState,
@@ -349,6 +355,7 @@ export function SceneViewport({
   const dragRef = useRef<DragState>({ kind: 'idle', x: 0, y: 0, moved: false });
   const lastFloorPointRef = useRef<Vec3 | undefined>(undefined);
   const selectedObjectIdsRef = useRef(selectedObjectIds);
+  const selectedShotIdRef = useRef(selectedShotId);
   const projectRef = useRef(project);
   const snapToGridRef = useRef(snapToGrid);
   const callbacksRef = useRef({
@@ -472,6 +479,7 @@ export function SceneViewport({
   renderDistanceRef.current = clampBuildRenderDistance(renderDistance);
   placementTypeRef.current = placementType;
   shotFramingRef.current = shotFraming;
+  selectedShotIdRef.current = selectedShotId;
   showSceneGuidesRef.current = showSceneGuides;
   showTransformGizmoRef.current = showTransformGizmo;
   gizmoModeRef.current = gizmoMode;
@@ -882,11 +890,22 @@ export function SceneViewport({
           }
         }
         if (shouldAnimateFly) requestRender();
+        reportViewportSceneRender({
+          shotId: selectedShotIdRef.current,
+          canvasWidth: activeRenderer.domElement.width,
+          canvasHeight: activeRenderer.domElement.height,
+          workspace: shotFramingRef.current ? 'shots' : undefined,
+        });
       } catch {
         // Swallow WebGL context-loss races so the workspace error boundary stays quiet.
       }
     };
     requestRender();
+    reportViewportMounted({
+      workspace: shotFramingRef.current ? 'shots' : undefined,
+      canvasWidth: renderer.domElement.width,
+      canvasHeight: renderer.domElement.height,
+    });
 
     const canvas = renderer.domElement;
 
@@ -1689,12 +1708,20 @@ export function SceneViewport({
       renderer.domElement.width = 1;
       renderer.domElement.height = 1;
       renderer.domElement.remove();
+      reportViewportUnmounted();
 
       if (parentFinalizeShotFovWheelBatchRef) {
         parentFinalizeShotFovWheelBatchRef.current = () => {};
       }
     };
   }, [clearTransformGizmo, disposeOcclusionMaps, emitFramingCamera, parentFinalizeShotFovWheelBatchRef, requestRender, syncTransformGizmo, theme]);
+
+  useEffect(() => {
+    reportViewportSelection({
+      workspace: shotFraming ? 'shots' : undefined,
+      selectedShotId: selectedShotId ?? null,
+    });
+  }, [selectedShotId, shotFraming]);
 
   useEffect(() => {
     const modeChanged = freeCameraModeRef.current !== freeCameraActive;

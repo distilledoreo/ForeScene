@@ -96,6 +96,8 @@ export interface ForeSceneAgentCapabilities {
     focusObjects: boolean;
     focusShot: boolean;
     captureViewport: boolean;
+    renderShotFrame?: boolean;
+    waitForViewportReady?: boolean;
   };
 }
 
@@ -449,6 +451,53 @@ export interface AgentResetProjectRequest {
   resetAuthorization?: string;
 }
 
+/** Clean clay first-frame render via the shared package-export renderer. */
+export interface AgentRenderShotFrameInput {
+  shotId: string;
+  pass?: 'clay';
+  width?: number;
+  height?: number;
+}
+
+export interface AgentRenderPixelStats {
+  width: number;
+  height: number;
+  opaquePixelRatio: number;
+  luminanceMean: number;
+  luminanceVariance: number;
+  sampledUniqueColorCount: number;
+}
+
+export interface AgentRenderShotFrameResult {
+  ok: boolean;
+  shotId: string;
+  revisionId: string;
+  width: number;
+  height: number;
+  pngDataUrl?: string;
+  pixelStats?: AgentRenderPixelStats;
+  diagnostics?: AgentDiagnostic[];
+  /** Marks frames produced by the canonical clean clay renderer. */
+  source?: 'canonical_clay_renderer';
+}
+
+export interface AgentWaitForViewportReadyInput {
+  workspace?: Workspace;
+  shotId?: string;
+  timeoutMs?: number;
+}
+
+export interface AgentWaitForViewportReadyResult {
+  ok: boolean;
+  workspace?: Workspace;
+  shotId?: string;
+  revisionId?: string;
+  canvasWidth?: number;
+  canvasHeight?: number;
+  sceneRenderGeneration?: number;
+  diagnostics?: AgentDiagnostic[];
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -479,6 +528,20 @@ export interface ForeSceneBrowserApi {
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
   waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus>;
+
+  /**
+   * Wait until the Shots (or requested) workspace viewport is visually ready.
+   * Prefer stable application state over DOM-text selectors.
+   */
+  waitForViewportReady(
+    options?: AgentWaitForViewportReadyInput,
+  ): Promise<AgentWaitForViewportReadyResult>;
+
+  /**
+   * Render a clean clay first frame for a shot using the same path as
+   * package `inputs/viewport_clay.png` (not a UI screenshot).
+   */
+  renderShotFrame(input: AgentRenderShotFrameInput): Promise<AgentRenderShotFrameResult>;
 
   /**
    * Replace the live project with a blank graybox shell.

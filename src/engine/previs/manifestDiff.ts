@@ -230,6 +230,17 @@ export function applyManifestUpdateToRunState(params: {
   return { state, diff, removedShots };
 }
 
+export interface LocationPrimitiveBlocker {
+  /**
+   * Plan-local object ref at compile time (e.g. loc_room_wall_back).
+   * After location apply, resolved to the live scene-object id via entity.refs.
+   */
+  objectId: string;
+  type: string;
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
 export function locationPrimitiveBlockers(
   location: PrevisLocationDefinition,
   primitives: Array<{
@@ -237,13 +248,15 @@ export function locationPrimitiveBlockers(
     position: [number, number, number];
     dimensions?: [number, number, number];
     rotation?: [number, number, number];
+    /** Plan-local ref for this primitive (required for wall-hide overrides). */
+    ref?: string;
   }>,
-): Array<{ min: [number, number, number]; max: [number, number, number] }> {
+): LocationPrimitiveBlocker[] {
   const solid = new Set([
     'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
   ]);
-  const blockers: Array<{ min: [number, number, number]; max: [number, number, number] }> = [];
-  for (const primitive of primitives) {
+  const blockers: LocationPrimitiveBlocker[] = [];
+  for (const [index, primitive] of primitives.entries()) {
     if (!solid.has(primitive.type)) continue;
     const dims = primitive.dimensions ?? [1, 1, 1];
     // Approximate AABB ignoring yaw for MVP collision.
@@ -257,6 +270,8 @@ export function locationPrimitiveBlockers(
     const cx = primitive.position[0];
     const cz = primitive.position[2];
     blockers.push({
+      objectId: primitive.ref ?? `loc_${location.id}_blocker_${index}`,
+      type: primitive.type,
       min: [cx - hx, Math.max(0, centerY - hy), cz - hz],
       max: [cx + hx, centerY + hy, cz + hz],
     });

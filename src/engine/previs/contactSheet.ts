@@ -8,6 +8,8 @@ export interface ContactSheetShotEntry {
   framePath: string;
   status: string;
   warningCount: number;
+  /** Must be true for paths produced by the canonical clean clay renderer. */
+  fromCanonicalRenderer?: boolean;
 }
 
 export interface ContactSheetSpec {
@@ -16,6 +18,18 @@ export interface ContactSheetSpec {
   cellWidth: number;
   cellHeight: number;
   shots: ContactSheetShotEntry[];
+}
+
+export interface ContactSheetPreflightIssue {
+  code: string;
+  message: string;
+  shotNumber?: string;
+  framePath?: string;
+}
+
+export interface ContactSheetPreflightResult {
+  ok: boolean;
+  issues: ContactSheetPreflightIssue[];
 }
 
 export function buildContactSheetSpec(params: {
@@ -31,6 +45,111 @@ export function buildContactSheetSpec(params: {
     cellHeight: 320,
     shots: params.shots,
   };
+}
+
+/**
+ * Contact-sheet preflight: every referenced file must be a clean canonical PNG.
+ * Rejects debug/UI screenshot paths and non-PNG artifacts.
+ */
+export function preflightContactSheet(params: {
+  shots: ContactSheetShotEntry[];
+  /** Absolute path → file checks */
+  fileExists: (path: string) => boolean | Promise<boolean>;
+  /** Optional PNG dimension reader (width, height). */
+  readPngSize?: (path: string) =>
+    | { width: number; height: number; isPng: boolean }
+    | Promise<{ width: number; height: number; isPng: boolean }>;
+  /** Expected aspect ratio (width/height), e.g. 16/9. */
+  expectedAspectRatio?: number;
+  aspectTolerance?: number;
+}): ContactSheetPreflightResult | Promise<ContactSheetPreflightResult> {
+  const run = async (): Promise<ContactSheetPreflightResult> => {
+    const issues: ContactSheetPreflightIssue[] = [];
+    const aspect = params.expectedAspectRatio;
+    const tol = params.aspectTolerance ?? 0.08;
+
+    for (const shot of params.shots) {
+      const framePath = shot.framePath;
+      if (!framePath) {
+        issues.push({
+          code: 'frame_path_missing',
+          message: `Shot ${shot.shotNumber} has no framePath.`,
+          shotNumber: shot.shotNumber,
+        });
+        continue;
+      }
+
+      // Reject debug/UI screenshot paths.
+      const normalized = framePath.replace(/\\/g, '/').toLowerCase();
+      if (
+        normalized.includes('/debug/')
+        || normalized.endsWith('-ui.png')
+        || normalized.includes('screenshot')
+      ) {
+        issues.push({
+          code: 'debug_path_rejected',
+          message: `Shot ${shot.shotNumber} framePath looks like a debug/UI screenshot.`,
+          shotNumber: shot.shotNumber,
+          framePath,
+        });
+      }
+
+      if (shot.fromCanonicalRenderer === false) {
+        issues.push({
+          code: 'not_canonical_renderer',
+          message: `Shot ${shot.shotNumber} frame was not produced by the canonical clay renderer.`,
+          shotNumber: shot.shotNumber,
+          framePath,
+        });
+      }
+
+      const exists = await params.fileExists(framePath);
+      if (!exists) {
+        issues.push({
+          code: 'frame_missing',
+          message: `Shot ${shot.shotNumber} frame file does not exist.`,
+          shotNumber: shot.shotNumber,
+          framePath,
+        });
+        continue;
+      }
+
+      if (!normalized.endsWith('.png')) {
+        issues.push({
+          code: 'not_png',
+          message: `Shot ${shot.shotNumber} frame is not a PNG.`,
+          shotNumber: shot.shotNumber,
+          framePath,
+        });
+      }
+
+      if (params.readPngSize) {
+        const size = await params.readPngSize(framePath);
+        if (!size.isPng) {
+          issues.push({
+            code: 'invalid_png',
+            message: `Shot ${shot.shotNumber} file is not a valid PNG.`,
+            shotNumber: shot.shotNumber,
+            framePath,
+          });
+        } else if (aspect && size.height > 0) {
+          const measured = size.width / size.height;
+          if (Math.abs(measured - aspect) > tol) {
+            issues.push({
+              code: 'aspect_mismatch',
+              message: `Shot ${shot.shotNumber} aspect ${measured.toFixed(3)} ≠ expected ${aspect.toFixed(3)}.`,
+              shotNumber: shot.shotNumber,
+              framePath,
+            });
+          }
+        }
+      }
+    }
+
+    return { ok: issues.length === 0, issues };
+  };
+
+  return run();
 }
 
 /** HTML document rendered by Playwright to produce contact-sheet.png. */
