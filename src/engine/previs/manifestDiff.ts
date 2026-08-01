@@ -137,6 +137,7 @@ export function diffPrevisManifests(
 const PENDING_SHOT: PrevisShotRunState = {
   compile: 'pending',
   render: 'pending',
+  video: 'pending',
   validation: 'pending',
   attempts: 0,
   renderAttempts: 0,
@@ -191,6 +192,7 @@ export function applyManifestUpdateToRunState(params: {
     state = upsertShotState(state, shotNumber, {
       compile: 'pending',
       render: 'pending',
+      video: 'pending',
       validation: 'pending',
       attempts: 0,
       renderAttempts: 0,
@@ -198,6 +200,8 @@ export function applyManifestUpdateToRunState(params: {
       issues: undefined,
       lastError: undefined,
       framePath: undefined,
+      videoPath: undefined,
+      videoAssetId: undefined,
       // Keep shotId if the live project still has it — recompile updates in place.
       shotId: existing?.shotId,
     });

@@ -3,6 +3,8 @@
  * Grok makes semantic decisions; ForeScene compiles geometry.
  */
 
+import type { Vec3 } from '../../domain/types';
+
 export const PREVIS_MANIFEST_VERSION = 1 as const;
 
 export const PREVIS_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '2.39:1'] as const;
@@ -181,6 +183,33 @@ export interface PrevisShotDefinition {
     visibleProps?: string[];
     notes?: string[];
   };
+  /** Optional temporal authoring compiled through the public Agent timeline API. */
+  motion?: PrevisShotMotion;
+}
+
+export interface PrevisShotMotion {
+  durationSeconds: number;
+  renderControlVideo?: boolean;
+  keyframes: PrevisShotMotionKeyframe[];
+}
+
+export interface PrevisShotMotionKeyframe {
+  timeSeconds: number;
+  camera?: {
+    position?: Vec3;
+    target?: Vec3;
+    fovDegrees?: number;
+  };
+  staging?: Array<{
+    subject: string;
+    visible?: boolean;
+    transform?: {
+      position?: Vec3;
+      rotation?: Vec3;
+      scale?: Vec3;
+    };
+    posePreset?: string;
+  }>;
 }
 
 export type PrevisBlockingPlacement =

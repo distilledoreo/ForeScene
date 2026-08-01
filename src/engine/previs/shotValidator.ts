@@ -96,6 +96,24 @@ export function validateShotDefinition(
     }
   }
 
+  if (shot.motion) {
+    if (shot.motion.keyframes.length < 2) {
+      errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion requires at least two keyframes.', { path: `${path}.motion.keyframes`, entityId: shot.id }));
+    }
+    for (let index = 1; index < shot.motion.keyframes.length; index += 1) {
+      if (shot.motion.keyframes[index]!.timeSeconds <= shot.motion.keyframes[index - 1]!.timeSeconds) {
+        errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion keyframe times must be strictly increasing.', { path: `${path}.motion.keyframes`, entityId: shot.id }));
+        break;
+      }
+    }
+    const knownSubjects = new Set([...castIds, ...propIds]);
+    for (const keyframe of shot.motion.keyframes) {
+      for (const staging of keyframe.staging ?? []) {
+        if (!knownSubjects.has(staging.subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${staging.subject}".`, { path: `${path}.motion`, entityId: shot.id }));
+      }
+    }
+  }
+
   return errors;
 }
 

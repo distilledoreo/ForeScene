@@ -29,6 +29,8 @@ import {
 } from './diagnostics';
 import type {
   AgentEntityTarget,
+  AgentKeyframeTarget,
+  AgentTimelineObjectInput,
   ForeSceneAgentCommand,
   ForeSceneAgentPlan,
 } from './protocol';
@@ -47,6 +49,10 @@ const ALLOWED_PRESETS = new Set(HUMAN_POSE_PRESETS.map((preset) => preset.id));
 
 /** Accept architecture-doc / previs semantic aliases for pose presets. */
 const POSE_PRESET_ALIASES: Record<string, string> = {
+  guard: 'elbows-bent',
+  defensive: 'elbows-bent',
+  reach: 'reaching-right',
+  'sword-raised': 'pointing',
   'standing-neutral': 'neutral',
   'standing-alert': 'standing-relaxed',
   'standing-defensive': 'elbows-bent',
@@ -260,6 +266,22 @@ function parseCommand(
       return parseShotClearStaging(record, path, errors, warnings);
     case 'shot.delete':
       return parseShotDelete(record, path, errors);
+    case 'shot.timeline.replace':
+      return parseShotTimelineReplace(record, path, refNames, errors, warnings);
+    case 'shot.timeline.clear':
+      return parseShotTimelineClear(record, path, errors);
+    case 'shot.timeline.setDuration':
+      return parseShotTimelineSetDuration(record, path, errors);
+    case 'shot.keyframe.create':
+      return parseShotKeyframeCreate(record, path, refNames, errors, warnings);
+    case 'shot.keyframe.update':
+      return parseShotKeyframeUpdate(record, path, errors, warnings);
+    case 'shot.keyframe.delete':
+      return parseShotKeyframeDelete(record, path, errors);
+    case 'shot.keyframe.stageObject':
+      return parseShotKeyframeStageObject(record, path, errors, warnings);
+    case 'shot.keyframe.clearStaging':
+      return parseShotKeyframeClearStaging(record, path, errors);
     case 'landmark.create':
       return parseLandmarkCreate(record, path, refNames, errors, warnings);
     case 'landmark.update':
@@ -688,6 +710,236 @@ function parseShotDelete(
   const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
   if (!shot) return undefined;
   return { op: 'shot.delete', shot };
+}
+
+function parseShotTimelineReplace(
+  record: Record<string, unknown>,
+  path: string,
+  refNames: Set<string>,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const durationSeconds = readTimelineDuration(record.durationSeconds, `${path}.durationSeconds`, errors);
+  if (!Array.isArray(record.keyframes) || record.keyframes.length === 0) {
+    errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'shot.timeline.replace requires a nonempty keyframes array.', { path: `${path}.keyframes` }));
+    return undefined;
+  }
+  const keyframes: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.replace' }>['keyframes'] = [];
+  let previousTime = -Infinity;
+  record.keyframes.forEach((raw, index) => {
+    const keyframePath = `${path}.keyframes[${index}]`;
+    const parsed = parseTimelineKeyframe(raw, keyframePath, refNames, errors, warnings, true);
+    if (!parsed) return;
+    if (parsed.timeSeconds <= previousTime) {
+      errors.push(agentError('timeline_order', 'Replacement keyframes must be in strict chronological order.', { path: `${keyframePath}.timeSeconds` }));
+    }
+    previousTime = parsed.timeSeconds;
+    keyframes.push(parsed);
+  });
+  if (!shot || keyframes.length === 0) return undefined;
+  const command: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.replace' }> = { op: 'shot.timeline.replace', shot, keyframes };
+  if (durationSeconds !== undefined) command.durationSeconds = durationSeconds;
+  return command;
+}
+
+function parseShotTimelineClear(
+  record: Record<string, unknown>, path: string, errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  return shot ? { op: 'shot.timeline.clear', shot } : undefined;
+}
+
+function parseShotTimelineSetDuration(
+  record: Record<string, unknown>, path: string, errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const durationSeconds = readTimelineDuration(record.durationSeconds, `${path}.durationSeconds`, errors);
+  return shot && durationSeconds !== undefined ? { op: 'shot.timeline.setDuration', shot, durationSeconds } : undefined;
+}
+
+function parseShotKeyframeCreate(
+  record: Record<string, unknown>,
+  path: string,
+  refNames: Set<string>,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const ref = readOptionalRef(record.ref, `${path}.ref`, refNames, errors);
+  const timeSeconds = readTimelineTime(record.timeSeconds, `${path}.timeSeconds`, errors);
+  const camera = parsePartialCamera(record.camera, `${path}.camera`, errors);
+  const easing = parseTimelineEasing(record.easing, `${path}.easing`, errors);
+  const objects = parseTimelineObjects(record.objects, `${path}.objects`, errors, warnings);
+  if (!shot || timeSeconds === undefined || !camera) return undefined;
+  const command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.create' }> = {
+    op: 'shot.keyframe.create', shot, timeSeconds, camera,
+  };
+  const label = readOptionalString(record.label, `${path}.label`, errors, warnings);
+  if (ref !== undefined) command.ref = ref;
+  if (label !== undefined) command.label = label;
+  if (easing !== undefined) command.easing = easing;
+  if (objects !== undefined) command.objects = objects;
+  if (record.snapshotShotStaging !== undefined) {
+    if (typeof record.snapshotShotStaging !== 'boolean') errors.push(agentError('snapshot_staging_type', 'snapshotShotStaging must be a boolean.', { path: `${path}.snapshotShotStaging` }));
+    else command.snapshotShotStaging = record.snapshotShotStaging;
+  }
+  return command;
+}
+
+function parseShotKeyframeUpdate(
+  record: Record<string, unknown>, path: string, errors: AgentDiagnostic[], warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const keyframe = parseKeyframeTarget(record.keyframe, `${path}.keyframe`, errors);
+  const timeSeconds = record.timeSeconds === undefined ? undefined : readTimelineTime(record.timeSeconds, `${path}.timeSeconds`, errors);
+  const camera = record.camera === undefined ? undefined : parsePartialCamera(record.camera, `${path}.camera`, errors);
+  const easing = parseTimelineEasing(record.easing, `${path}.easing`, errors);
+  const label = readOptionalString(record.label, `${path}.label`, errors, warnings);
+  const objects = parseTimelineObjects(record.objects, `${path}.objects`, errors, warnings);
+  if (!shot || !keyframe) return undefined;
+  if (timeSeconds === undefined && camera === undefined && easing === undefined && label === undefined && objects === undefined) {
+    errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'shot.keyframe.update requires at least one patch field.', { path }));
+    return undefined;
+  }
+  const command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.update' }> = { op: 'shot.keyframe.update', shot, keyframe };
+  if (timeSeconds !== undefined) command.timeSeconds = timeSeconds;
+  if (camera !== undefined) command.camera = camera;
+  if (easing !== undefined) command.easing = easing;
+  if (label !== undefined) command.label = label;
+  if (objects !== undefined) command.objects = objects;
+  return command;
+}
+
+function parseShotKeyframeDelete(record: Record<string, unknown>, path: string, errors: AgentDiagnostic[]): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const keyframe = parseKeyframeTarget(record.keyframe, `${path}.keyframe`, errors);
+  return shot && keyframe ? { op: 'shot.keyframe.delete', shot, keyframe } : undefined;
+}
+
+function parseShotKeyframeStageObject(
+  record: Record<string, unknown>, path: string, errors: AgentDiagnostic[], warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const keyframe = parseKeyframeTarget(record.keyframe, `${path}.keyframe`, errors);
+  const object = parseEntityTarget(record.object, `${path}.object`, errors);
+  const patch = parseTimelineObjectFields(record, path, errors, warnings);
+  if (!shot || !keyframe || !object || !patch) return undefined;
+  return { op: 'shot.keyframe.stageObject', shot, keyframe, object, ...patch };
+}
+
+function parseShotKeyframeClearStaging(record: Record<string, unknown>, path: string, errors: AgentDiagnostic[]): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  const keyframe = parseKeyframeTarget(record.keyframe, `${path}.keyframe`, errors);
+  const object = record.object === undefined ? undefined : parseEntityTarget(record.object, `${path}.object`, errors);
+  if (!shot || !keyframe || (record.object !== undefined && !object)) return undefined;
+  return object ? { op: 'shot.keyframe.clearStaging', shot, keyframe, object } : { op: 'shot.keyframe.clearStaging', shot, keyframe };
+}
+
+function parseTimelineKeyframe(
+  raw: unknown, path: string, refNames: Set<string>, errors: AgentDiagnostic[], warnings: AgentDiagnostic[], allowRef: boolean,
+): Extract<ForeSceneAgentCommand, { op: 'shot.timeline.replace' }>['keyframes'][number] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(agentError('keyframe_type', 'Keyframe must be an object.', { path }));
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const ref = allowRef ? readOptionalRef(record.ref, `${path}.ref`, refNames, errors) : undefined;
+  const timeSeconds = readTimelineTime(record.timeSeconds, `${path}.timeSeconds`, errors);
+  const camera = parsePartialCamera(record.camera, `${path}.camera`, errors);
+  const label = readOptionalString(record.label, `${path}.label`, errors, warnings);
+  const easing = parseTimelineEasing(record.easing, `${path}.easing`, errors);
+  const objects = parseTimelineObjects(record.objects, `${path}.objects`, errors, warnings);
+  if (timeSeconds === undefined || !camera) return undefined;
+  const result: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.replace' }>['keyframes'][number] = { timeSeconds, camera };
+  if (ref !== undefined) result.ref = ref;
+  if (label !== undefined) result.label = label;
+  if (easing !== undefined) result.easing = easing;
+  if (objects !== undefined) result.objects = objects;
+  return result;
+}
+
+function parseTimelineObjects(
+  raw: unknown, path: string, errors: AgentDiagnostic[], warnings: AgentDiagnostic[],
+): AgentTimelineObjectInput[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    errors.push(agentError('objects_type', 'objects must be an array.', { path }));
+    return undefined;
+  }
+  const result: AgentTimelineObjectInput[] = [];
+  raw.forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(agentError('object_state_type', 'Timeline object state must be an object.', { path: `${path}[${index}]` }));
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const object = parseEntityTarget(record.object, `${path}[${index}].object`, errors);
+    const fields = parseTimelineObjectFields(record, `${path}[${index}]`, errors, warnings);
+    if (object && fields) result.push({ object, ...fields });
+  });
+  return result;
+}
+
+function parseTimelineObjectFields(
+  record: Record<string, unknown>, path: string, errors: AgentDiagnostic[], warnings: AgentDiagnostic[],
+): Pick<AgentTimelineObjectInput, 'transform' | 'visible' | 'humanPose' | 'posePreset'> | undefined {
+  const transform = parseOptionalTransform(record.transform, `${path}.transform`, errors);
+  let visible: boolean | undefined;
+  if (record.visible !== undefined) {
+    if (typeof record.visible !== 'boolean') errors.push(agentError('visible_type', 'visible must be a boolean.', { path: `${path}.visible` }));
+    else visible = record.visible;
+  }
+  const humanPose = parseOptionalHumanPose(record.humanPose, `${path}.humanPose`, errors);
+  let posePreset = readOptionalString(record.posePreset, `${path}.posePreset`, errors, warnings);
+  if (posePreset) {
+    const aliased = POSE_PRESET_ALIASES[posePreset];
+    if (aliased) { warnings.push(agentWarning('pose_preset_alias', `posePreset "${posePreset}" mapped to "${aliased}".`, { path: `${path}.posePreset` })); posePreset = aliased; }
+    if (!ALLOWED_PRESETS.has(posePreset)) { errors.push(agentError('pose_preset', `Unknown posePreset "${posePreset}".`, { path: `${path}.posePreset` })); posePreset = undefined; }
+  }
+  if (transform === undefined && visible === undefined && humanPose === undefined && posePreset === undefined) {
+    errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Timeline object state requires transform, visible, humanPose, and/or posePreset.', { path }));
+    return undefined;
+  }
+  return { ...(transform ? { transform } : {}), ...(visible !== undefined ? { visible } : {}), ...(humanPose ? { humanPose } : {}), ...(posePreset ? { posePreset } : {}) };
+}
+
+function parseKeyframeTarget(raw: unknown, path: string, errors: AgentDiagnostic[]): AgentKeyframeTarget | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Keyframe target must include id or ref.', { path }));
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.id === 'string' && record.id.trim() && record.ref === undefined) return { id: record.id };
+  if (typeof record.ref === 'string' && record.ref.trim() && record.id === undefined) return { ref: record.ref };
+  errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Keyframe target must include exactly one of id or ref.', { path }));
+  return undefined;
+}
+
+function readTimelineTime(raw: unknown, path: string, errors: AgentDiagnostic[]): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+    errors.push(agentError('timeline_time', 'timeSeconds must be a finite non-negative number.', { path }));
+    return undefined;
+  }
+  return raw;
+}
+
+function readTimelineDuration(raw: unknown, path: string, errors: AgentDiagnostic[]): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0.5 || raw > 30) {
+    errors.push(agentError('timeline_duration', 'durationSeconds must be between 0.5 and 30 seconds.', { path }));
+    return undefined;
+  }
+  return raw;
+}
+
+function parseTimelineEasing(raw: unknown, path: string, errors: AgentDiagnostic[]): 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== 'linear' && raw !== 'easeIn' && raw !== 'easeOut' && raw !== 'easeInOut') {
+    errors.push(agentError('timeline_easing', 'easing must be linear, easeIn, easeOut, or easeInOut.', { path }));
+    return undefined;
+  }
+  return raw;
 }
 
 function parseLandmarkCreate(

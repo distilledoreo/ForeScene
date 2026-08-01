@@ -88,9 +88,75 @@ test.describe('Agent API inspection @smoke', () => {
     const objectCountAfterPreview = await page.evaluate(() => window.foreScene!.inspectProject().objectCount);
     expect(objectCountAfterPreview).toBe(inspection.project.objectCount);
   });
+
+  test('inspects and samples a shot timeline without persisting a frame request', async ({ page }) => {
+    await enterStudioWorkspace(page);
+    await dismissOverlays(page);
+    await waitForAgentApi(page);
+
+    const result = await page.evaluate(async () => {
+      const api = window.foreScene!;
+      const shot = api.listShots()[0];
+      if (!shot) return { skipped: true };
+      const timeline = api.inspectShotTimeline({ id: shot.id });
+      const sample = api.sampleShotAtTime({ shot: { id: shot.id }, timeSeconds: timeline.durationSeconds / 2 });
+      return {
+        skipped: false,
+        timeline,
+        sample,
+        status: api.getStatus(),
+      };
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(result.timeline?.keyframes.length).toBeGreaterThanOrEqual(0);
+    expect(result.sample?.sampledTimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(result.sample?.sampledTimeSeconds).toBeLessThanOrEqual(result.timeline?.durationSeconds ?? 0);
+    expect(result.status?.writeAccess).toBe(false);
+  });
 });
 
 test.describe('Agent API transactions @smoke', () => {
+  test('applies a timeline and renders an arbitrary-time clay frame', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'Chromium-only: WebGL frame render');
+    await enterStudioWorkspace(page);
+    await dismissOverlays(page);
+    await waitForAgentApi(page);
+    const shot = await page.evaluate(() => window.foreScene!.listShots()[0]);
+    expect(shot).toBeTruthy();
+    const detail = await page.evaluate((shotId) => window.foreScene!.inspectShot({ id: shotId! }), shot!.id);
+    await enableAgentWritesViaUi(page);
+    const applied = await page.evaluate(async ({ shotId, camera }) => window.foreScene!.applyPlan({
+      version: 1,
+      commands: [{
+        op: 'shot.timeline.replace',
+        shot: { id: shotId },
+        durationSeconds: 2,
+        keyframes: [
+          { timeSeconds: 0, camera },
+          { timeSeconds: 2, camera: { ...camera, position: [camera.position[0] + 0.2, camera.position[1], camera.position[2]] } },
+        ],
+      }],
+    }), { shotId: shot!.id, camera: detail.camera });
+    expect(applied.ok).toBe(true);
+    const frame = await page.evaluate((shotId) => window.foreScene!.renderShotFrame({ shotId, timeSeconds: 1, pass: 'clay' }), shot!.id);
+    expect(frame.ok).toBe(true);
+    expect(frame.sampledTimeSeconds).toBe(1);
+    expect(frame.pngDataUrl?.startsWith('data:image/png')).toBe(true);
+    const video = await page.evaluate((shotId) => window.foreScene!.renderShotVideo({
+      shotId,
+      mode: 'quickPreview',
+      resolutionPreset: '720p',
+      attachToShot: false,
+      download: false,
+    }), shot!.id);
+    expect(video.ok).toBe(true);
+    expect(video.width).toBe(1280);
+    expect(video.height).toBe(720);
+    const undone = await page.evaluate(async () => window.foreScene!.undoLastPlan());
+    expect(undone.ok).toBe(true);
+  });
+
   test('applies, reloads, and undoes via UI write enable', async ({ page, browserName }) => {
     test.skip(browserName === 'webkit', 'Chromium-only: long transaction + reload coverage');
 

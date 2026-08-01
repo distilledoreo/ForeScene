@@ -23,7 +23,10 @@ import type {
   AgentProjectInspection,
   AgentShotInspection,
   AgentShotSummary,
+  AgentShotTimeSample,
+  AgentShotTimelineInspection,
 } from './protocol';
+import { inspectShotTimeline as inspectTimeline, sampleShotTimeline } from '../shotTimeline';
 
 export interface AgentInspectionContext {
   project: LocationProject;
@@ -150,6 +153,46 @@ export function inspectShotSnapshot(shot: Shot): AgentShotInspection {
     },
     landmarkIds: [...shot.landmarkIds],
     stagedObjectIds,
+  };
+}
+
+export function inspectShotTimelineSnapshot(
+  project: LocationProject,
+  shot: Shot,
+): AgentShotTimelineInspection {
+  const inspection = inspectTimeline(project, shot.id);
+  return {
+    ...inspection,
+    keyframes: inspection.keyframes.map((keyframe) => ({
+      id: keyframe.id,
+      label: keyframe.label,
+      timeSeconds: keyframe.timeSeconds,
+      easing: keyframe.easing,
+      camera: {
+        ...keyframe.camera,
+        position: cloneVec3(keyframe.camera.position),
+        target: cloneVec3(keyframe.camera.target),
+      },
+      objectOverrides: structuredClone(keyframe.objectOverrides ?? {}),
+      stagedObjectIds: Object.keys(keyframe.objectOverrides ?? {}),
+    })),
+  };
+}
+
+export function sampleShotAtTimeSnapshot(
+  project: LocationProject,
+  shotId: string,
+  timeSeconds: number,
+): AgentShotTimeSample {
+  const sample = sampleShotTimeline(project, shotId, timeSeconds);
+  return {
+    ...sample,
+    camera: {
+      ...sample.camera,
+      position: cloneVec3(sample.camera.position),
+      target: cloneVec3(sample.camera.target),
+    },
+    objectOverrides: structuredClone(sample.objectOverrides),
   };
 }
 

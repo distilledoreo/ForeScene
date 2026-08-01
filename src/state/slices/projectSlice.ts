@@ -195,6 +195,10 @@ export const createProjectSlice: StateCreator<
     });
   },
 
+  applyShotTimelineProject: (project) => set(() => ({
+    project: touchProject(ensureProjectExportConfiguration(project)),
+  })),
+
   updateProjectInfo: (updates) => set((state) => ({
     project: touchProject({ ...state.project, ...updates }),
   })),

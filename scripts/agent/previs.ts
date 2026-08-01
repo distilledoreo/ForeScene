@@ -2,7 +2,7 @@
  * ForeScene autonomous previs orchestration (CLI-side).
  *
  * Phases: validate → optional reset → locations/cast/props → shot batches →
- * render stills → validation/repairs → contact sheet → package.
+ * render stills/control videos → validation/repairs → contact sheet → package.
  */
 
 import { openSync, readSync, closeSync } from 'node:fs';
@@ -78,6 +78,8 @@ export interface PrevisCliResult {
   shotsRequested?: number;
   shotsCreated?: number;
   framesRendered?: number;
+  controlVideosRendered?: number;
+  controlVideosFailed?: number;
   passed?: number;
   warnings?: number;
   failed?: number;
@@ -224,6 +226,32 @@ async function renderCleanShotFrame(
     revisionId: result.revisionId,
     fromCanonicalRenderer: result.source === 'canonical_clay_renderer',
   };
+}
+
+async function renderControlVideo(
+  page: Page,
+  shotId: string,
+  videoPath: string,
+): Promise<{ ok: boolean; assetId?: string; error?: string }> {
+  // The CLI artifact is the same deterministic render that is attached to the
+  // shot. Register the download listener before starting the asynchronous render.
+  const downloadPromise = page.waitForEvent('download', { timeout: 300_000 }).catch(() => undefined);
+  const result = await page.evaluate(async (id) => window.foreScene!.renderShotVideo({
+    shotId: id,
+    mode: 'render',
+    resolutionPreset: '1080p',
+    appearance: 'clay',
+    contentMode: 'full_scene',
+    attachToShot: true,
+    download: true,
+  }), shotId);
+  if (!result.ok) {
+    return { ok: false, error: result.diagnostics?.[0]?.message ?? 'Control video render failed.' };
+  }
+  const download = await downloadPromise;
+  if (!download) return { ok: false, error: 'Control video render completed without a download artifact.' };
+  await download.saveAs(videoPath);
+  return { ok: true, assetId: result.assetId };
 }
 
 async function loadOrCreateRunState(params: {
@@ -837,6 +865,50 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }
       await writeJson(runStatePath, state);
     }
+
+    let controlVideosRendered = 0;
+    let controlVideosFailed = 0;
+    for (const definition of manifest.shots) {
+      if (!definition.motion?.renderControlVideo) continue;
+      const shotState = state.shots[definition.shotNumber];
+      if (!shotState || shotState.compile !== 'complete') continue;
+      const videoPath = path.join(outputDir, 'shots', `${definition.shotNumber}.mp4`);
+      if (shotState.video === 'complete' && shotState.videoPath && await pathExists(shotState.videoPath)) {
+        controlVideosRendered += 1;
+        continue;
+      }
+      const shotId = shotState.shotId
+        ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
+      if (!shotId) {
+        controlVideosFailed += 1;
+        state = upsertShotState(state, definition.shotNumber, {
+          video: 'failed',
+          videoPath: undefined,
+          lastError: `No shot id for ${definition.shotNumber}`,
+        });
+        await writeJson(runStatePath, state);
+        continue;
+      }
+      try {
+        const video = await renderControlVideo(session.page, shotId, videoPath);
+        await writeJson(path.join(outputDir, 'logs', `video-${definition.shotNumber}.json`), video);
+        if (!video.ok) throw new Error(video.error ?? 'Control video render failed.');
+        controlVideosRendered += 1;
+        state = upsertShotState(state, definition.shotNumber, {
+          video: 'complete',
+          videoPath,
+          videoAssetId: video.assetId,
+        });
+      } catch (error) {
+        controlVideosFailed += 1;
+        state = upsertShotState(state, definition.shotNumber, {
+          video: 'failed',
+          videoPath: undefined,
+          lastError: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await writeJson(runStatePath, state);
+    }
     state = setPhase(state, 'render', 'complete');
     await writeJson(runStatePath, state);
 
@@ -1147,13 +1219,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const shotState = state.shots[shot.shotNumber];
       return shotState?.compile === 'complete' && shotState.render !== 'complete';
     });
+    const missingControlVideos = manifest.shots.some((shot) => {
+      if (!shot.motion?.renderControlVideo) return false;
+      const shotState = state.shots[shot.shotNumber];
+      return shotState?.compile === 'complete' && shotState.video !== 'complete';
+    });
 
     const summary: PrevisCliResult = {
-      ok: !missingFrames && failed === 0 && !packageFailed,
+      ok: !missingFrames && !missingControlVideos && failed === 0 && !packageFailed,
       projectId: state.projectId,
       shotsRequested: manifest.shots.length,
       shotsCreated,
       framesRendered,
+      controlVideosRendered,
+      controlVideosFailed,
       passed,
       warnings,
       failed,

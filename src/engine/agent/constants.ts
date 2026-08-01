@@ -7,6 +7,8 @@ export const AGENT_PLAN_SCHEMA_VERSION = 1 as const;
 
 export const AGENT_PLAN_LIMITS = {
   maxCommands: 200,
+  maxTimelineCommandsPerPlan: 512,
+  maxKeyframesPerShot: 64,
   maxRefLength: 64,
   maxNameLength: 120,
   maxDescriptionLength: 4000,
@@ -55,6 +57,14 @@ export const AGENT_EXECUTABLE_OPS = [
   'shot.stageObject',
   'shot.clearStaging',
   'shot.delete',
+  'shot.timeline.replace',
+  'shot.timeline.clear',
+  'shot.timeline.setDuration',
+  'shot.keyframe.create',
+  'shot.keyframe.update',
+  'shot.keyframe.delete',
+  'shot.keyframe.stageObject',
+  'shot.keyframe.clearStaging',
   'landmark.create',
   'landmark.update',
   'landmark.delete',

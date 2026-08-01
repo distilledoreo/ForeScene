@@ -159,6 +159,11 @@ function compileSingleShot(
 
   // Default subject parking at location center if no blocking provided.
   const subjectPositions: Record<string, Vec3> = {};
+  const effectiveStaticTransforms: Record<string, {
+    position: Vec3;
+    rotation: Vec3;
+    scale: Vec3;
+  }> = {};
   for (const subjectId of shot.subjects) {
     const center = anchors.center ?? zoneOrigin;
     subjectPositions[subjectId] = [center[0], 0, center[2]];
@@ -328,16 +333,18 @@ function compileSingleShot(
       const rotation = blocking?.rotation ?? [0, 0, 0];
       // Staging transform uses object center Y for humans: height/2 above floor contact.
       const height = character.height ?? 1.75;
+      const transform = {
+        position: [position[0], height / 2, position[2]] as Vec3,
+        rotation: [...rotation] as Vec3,
+        scale: [1, 1, 1] as Vec3,
+      };
+      effectiveStaticTransforms[character.id] = transform;
       commands.push({
         op: 'shot.stageObject',
         shot: shotTarget,
         object: objectTarget,
         visible: isVisible,
-        transform: {
-          position: [position[0], height / 2, position[2]],
-          rotation,
-          scale: [1, 1, 1],
-        },
+        transform,
         ...(pose ? { posePreset: pose } : {}),
       });
     } else {
@@ -360,16 +367,18 @@ function compileSingleShot(
     if (inShot) {
       const position = subjectPositions[prop.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
+      const transform = {
+        position: [position[0], dims[1] / 2, position[2]] as Vec3,
+        rotation: [...(blocking?.rotation ?? [0, 0, 0])] as Vec3,
+        scale: [1, 1, 1] as Vec3,
+      };
+      effectiveStaticTransforms[prop.id] = transform;
       commands.push({
         op: 'shot.stageObject',
         shot: shotTarget,
         object: objectTarget,
         visible: true,
-        transform: {
-          position: [position[0], dims[1] / 2, position[2]],
-          rotation: blocking?.rotation ?? [0, 0, 0],
-          scale: [1, 1, 1],
-        },
+        transform,
       });
     } else {
       commands.push({
@@ -409,6 +418,37 @@ function compileSingleShot(
       shot: shotTarget,
       object: resolveEntityTarget(blockerId, blockerId),
       visible: false,
+    });
+  }
+
+  if (shot.motion) {
+    commands.push({
+      op: 'shot.timeline.replace',
+      shot: shotTarget,
+      durationSeconds: shot.motion.durationSeconds,
+      keyframes: shot.motion.keyframes.map((keyframe) => ({
+        timeSeconds: keyframe.timeSeconds,
+        camera: keyframe.camera ?? {},
+        objects: keyframe.staging?.map((staging) => ({
+          object: resolveEntityTarget(
+            context.entities[`cast.${staging.subject}`]?.objectId
+              ?? context.entities[`props.${staging.subject}`]?.objectId,
+            previsRef(manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop', staging.subject),
+          ),
+          ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
+          ...(staging.transform ? {
+            transform: {
+              ...(effectiveStaticTransforms[staging.subject] ?? {
+                position: [0, 0, 0] as Vec3,
+                rotation: [0, 0, 0] as Vec3,
+                scale: [1, 1, 1] as Vec3,
+              }),
+              ...staging.transform,
+            },
+          } : {}),
+          ...(staging.posePreset ? { posePreset: staging.posePreset } : {}),
+        })),
+      })),
     });
   }
 

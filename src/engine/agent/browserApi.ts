@@ -6,6 +6,7 @@
 import type { LocationProject, Shot, Workspace } from '../../domain/types';
 import { createExportPlan } from '../exportPlan';
 import { renderShotFrame as renderShotFrameEngine } from '../renderers';
+import { sampleShotTimeline } from '../shotTimeline';
 import {
   computePixelStatsFromDataUrl,
   rejectRenderPixelStats,
@@ -24,6 +25,12 @@ import {
   exportAgentPackage,
   getAgentPackageExportProgress,
 } from './packageExportControl';
+import {
+  cancelAgentShotVideoRender,
+  getAgentShotVideoRenderProgress,
+  isAgentShotVideoRenderActive,
+  renderAgentShotVideo,
+} from './videoRenderControl';
 import { resetAgentProject } from './projectReset';
 import {
   AGENT_DIAGNOSTIC_CODES,
@@ -33,11 +40,13 @@ import {
   inspectObjectSnapshot,
   inspectProjectSnapshot,
   inspectShotSnapshot,
+  inspectShotTimelineSnapshot,
   listLandmarksSnapshot,
   listObjectsSnapshot,
   listShotsSnapshot,
   resolveExistingObjectTarget,
   resolveExistingShotTarget,
+  sampleShotAtTimeSnapshot,
   type AgentInspectionContext,
 } from './inspection';
 import {
@@ -60,6 +69,10 @@ import type {
   AgentRenderShotFrameResult,
   AgentResetProjectRequest,
   AgentShotInspection,
+  AgentShotTimeSample,
+  AgentShotTimelineInspection,
+  AgentShotVideoRenderInput,
+  AgentShotVideoRenderResult,
   AgentWaitForViewportReadyInput,
   AgentWaitForViewportReadyResult,
   ForeSceneAgentStatus,
@@ -84,6 +97,7 @@ function isBusy(status: ForeSceneAgentStatus): boolean {
     status.busy.criticalWrite
     || status.busy.grayboxRender
     || status.busy.packageExport
+    || status.busy.videoRender
   );
 }
 
@@ -151,6 +165,7 @@ export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
       criticalWrite: safety.criticalWrite,
       grayboxRender: projectState.isRenderingGraybox,
       packageExport: projectState.isExportingPackage,
+      videoRender: isAgentShotVideoRenderActive(),
     },
     persistence: {
       ready: typeof safety.flushProject === 'function',
@@ -246,6 +261,32 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         );
       }
       return inspectShotSnapshot(shot);
+    },
+
+    inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
+      if (!shot) throw new AgentApiError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${resolved.id}".`);
+      return inspectShotTimelineSnapshot(project, shot);
+    },
+
+    sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, input.shot);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      return sampleShotAtTimeSnapshot(project, resolved.id, input.timeSeconds);
     },
 
     listLandmarks() {
@@ -631,8 +672,26 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       const revisionAtStart = safety.activeRevisionId ?? '';
       const width = input.width ?? shot.exportSettings.width;
       const height = input.height ?? shot.exportSettings.height;
+      let timeSample: ReturnType<typeof sampleShotTimeline> | undefined;
+      try {
+        timeSample = input.timeSeconds === undefined
+          ? undefined
+          : sampleShotTimeline(project, shot.id, input.timeSeconds);
+      } catch (error) {
+        return {
+          ok: false,
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Invalid frame time.')],
+        };
+      }
       const shotForRender: Shot = {
         ...shot,
+        ...(timeSample
+          ? { camera: timeSample.camera, objectOverrides: timeSample.objectOverrides }
+          : {}),
         exportSettings: {
           ...shot.exportSettings,
           width,
@@ -654,6 +713,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             revisionId: revisionNow,
             width: frame.width,
             height: frame.height,
+            ...(timeSample ? {
+              requestedTimeSeconds: timeSample.requestedTimeSeconds,
+              sampledTimeSeconds: timeSample.sampledTimeSeconds,
+            } : {}),
             diagnostics: [
               agentError(
                 AGENT_DIAGNOSTIC_CODES.staleRevision,
@@ -704,6 +767,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           revisionId: revisionNow,
           width: frame.width,
           height: frame.height,
+          ...(timeSample ? {
+            requestedTimeSeconds: timeSample.requestedTimeSeconds,
+            sampledTimeSeconds: timeSample.sampledTimeSeconds,
+          } : {}),
           pngDataUrl: frame.dataUrl,
           pixelStats,
           source: 'canonical_clay_renderer',
@@ -723,6 +790,18 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           ],
         };
       }
+    },
+
+    renderShotVideo(input: AgentShotVideoRenderInput): Promise<AgentShotVideoRenderResult> {
+      return renderAgentShotVideo(input);
+    },
+
+    getShotVideoRenderProgress() {
+      return getAgentShotVideoRenderProgress();
+    },
+
+    cancelShotVideoRender() {
+      return cancelAgentShotVideoRender();
     },
   };
 

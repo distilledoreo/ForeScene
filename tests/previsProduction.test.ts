@@ -42,6 +42,24 @@ describe('previs production manifest', () => {
     expect(result.manifest?.shots).toHaveLength(8);
   });
 
+  it('parses motion keyframes and rejects a duration mismatch', () => {
+    const input = loadExample('minimal-dialogue.json') as { shots: Array<Record<string, unknown>> };
+    input.shots[0]!.motion = {
+      durationSeconds: 2,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0, camera: { position: [0, 1, 2], target: [0, 1, 0] } },
+        { timeSeconds: 2, staging: [{ subject: 'alex', visible: true, transform: { position: [1, 0, 0] } }] },
+      ],
+    };
+    const result = parsePrevisProductionManifest(input);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.shots[0]?.motion?.keyframes).toHaveLength(2);
+
+    input.shots[0]!.motion = { durationSeconds: 3, keyframes: [{ timeSeconds: 0 }, { timeSeconds: 2 }] };
+    expect(parsePrevisProductionManifest(input).errors.some((item) => item.code === 'invalid_range')).toBe(true);
+  });
+
   it('rejects duplicate shot numbers and unknown refs', () => {
     const result = parsePrevisProductionManifest({
       version: 1,
@@ -127,6 +145,46 @@ describe('previs compilers', () => {
       expect(command.shot.camera?.target?.every((value) => Number.isFinite(value))).toBe(true);
       expect(Number.isFinite(command.shot.camera?.fovDegrees)).toBe(true);
     }
+  });
+
+  it('merges partial motion transforms with each actor\'s static shot transform', () => {
+    const input = structuredClone(loadExample('minimal-dialogue.json')) as {
+      shots: Array<Record<string, unknown>>;
+    };
+    input.shots[0]!.motion = {
+      durationSeconds: 2,
+      keyframes: [
+        { timeSeconds: 0 },
+        {
+          timeSeconds: 2,
+          staging: [{
+            subject: 'alex',
+            transform: { rotation: [0, 1, 0] },
+          }],
+        },
+      ],
+    };
+    const parsed = parsePrevisProductionManifest(input);
+    expect(parsed.errors).toEqual([]);
+    const compiled = compileProduction(parsed.manifest!);
+    const commands = compiled.shotBatches[0]!.plan.commands;
+    const staticStage = commands.find((command) => (
+      command.op === 'shot.stageObject'
+      && 'ref' in command.object
+      && command.object.ref === 'cast_alex'
+      && command.transform
+    ));
+    const timeline = commands.find((command) => command.op === 'shot.timeline.replace');
+
+    expect(staticStage?.op).toBe('shot.stageObject');
+    expect(timeline?.op).toBe('shot.timeline.replace');
+    if (staticStage?.op !== 'shot.stageObject' || timeline?.op !== 'shot.timeline.replace') return;
+    const animatedTransform = timeline.keyframes[1]!.objects?.[0]?.transform;
+    expect(animatedTransform).toEqual({
+      position: staticStage.transform!.position,
+      rotation: [0, 1, 0],
+      scale: staticStage.transform!.scale,
+    });
   });
 
   it('previews a location plan against a blank project without mutating it', () => {
@@ -522,6 +580,64 @@ describe('run-state resume', () => {
     expect(updated.state.phases.contactSheet).toBe('pending');
     expect(updated.state.phases.package).toBe('pending');
     expect(updated.state.phases.locations).toBe('complete');
+  });
+
+  it('invalidates changed motion videos while retaining unchanged motion videos', () => {
+    const previous = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
+    const motion = (x: number) => ({
+      durationSeconds: 2,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0 },
+        {
+          timeSeconds: 2,
+          camera: {
+            position: [x, 2, 4] as [number, number, number],
+            target: [0, 1, 0] as [number, number, number],
+          },
+        },
+      ],
+    });
+    previous.shots[0]!.motion = motion(0);
+    previous.shots[1]!.motion = motion(1);
+
+    let state = createInitialRunState({
+      manifestHash: hashPrevisManifest(previous),
+      shotNumbers: previous.shots.map((shot) => shot.shotNumber),
+    });
+    state = upsertShotState(state, '010', {
+      compile: 'complete', render: 'complete', validation: 'passed',
+      video: 'complete', videoPath: 'shots/010.mp4', videoAssetId: 'asset_010',
+    });
+    state = upsertShotState(state, '020', {
+      compile: 'complete', render: 'complete', validation: 'passed',
+      video: 'complete', videoPath: 'shots/020.mp4', videoAssetId: 'asset_020',
+    });
+
+    const next = structuredClone(previous);
+    next.shots[0]!.motion!.keyframes[1]!.camera!.position = [2, 2, 4];
+    const updated = applyManifestUpdateToRunState({
+      state,
+      previousManifest: previous,
+      nextManifest: next,
+      nextManifestHash: hashPrevisManifest(next),
+    });
+
+    expect(updated.diff.shotsToInvalidate).toEqual(['010']);
+    expect(updated.state.shots['010']).toMatchObject({
+      compile: 'pending',
+      render: 'pending',
+      video: 'pending',
+    });
+    expect(updated.state.shots['010']?.videoPath).toBeUndefined();
+    expect(updated.state.shots['010']?.videoAssetId).toBeUndefined();
+    expect(updated.state.shots['020']).toMatchObject({
+      compile: 'complete',
+      render: 'complete',
+      video: 'complete',
+      videoPath: 'shots/020.mp4',
+      videoAssetId: 'asset_020',
+    });
   });
 
   it('update-manifest removes deleted shots from run-state', () => {

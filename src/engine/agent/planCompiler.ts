@@ -8,13 +8,16 @@ import {
   createOriginShot,
   createSceneObject,
   createShot,
+  createCameraKeyframe,
 } from '../../domain/defaults';
 import type {
   CameraData,
+  CameraKeyframe,
   Landmark,
   LocationProject,
   SceneObject,
   Shot,
+  ShotObjectOverrides,
   ShotExportSettings,
   Transform,
   Vec3,
@@ -29,6 +32,7 @@ import {
   setShotExportOverride,
 } from '../exportConfiguration';
 import { applyHumanPosePreset } from '../humanPosePresets';
+import { createId } from '../../utils/ids';
 import { duplicateSceneObject } from '../sandboxCore';
 import {
   canStageObjectPerShot,
@@ -45,7 +49,7 @@ import {
 import { normalizeWorkspace } from '../workflow';
 import { copyStagingToNextShot } from '../sequenceStoryboard';
 import { touchProject } from '../../state/slices/touchProject';
-import { AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
+import { AGENT_PLAN_LIMITS, AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -65,9 +69,22 @@ import type {
   AgentPlanSummary,
   ForeSceneAgentCommand,
   ForeSceneAgentPlan,
+  AgentTimelineObjectInput,
 } from './protocol';
 import { resolveLandmarkTarget, resolveObjectTarget, resolveShotTarget } from './targetResolver';
 import { parseForeSceneAgentPlan } from './validation';
+import {
+  clearKeyframeStaging,
+  clearShotTimeline,
+  createShotKeyframe,
+  deleteShotKeyframe,
+  replaceShotTimeline,
+  setShotTimelineDuration,
+  stageObjectAtKeyframe,
+  updateShotKeyframe,
+  validateCompletedShotTimeline,
+} from '../shotTimeline';
+import { resolveKeyframeTarget } from './targetResolver';
 
 export interface AgentPlanExecutionContext {
   project: LocationProject;
@@ -76,6 +93,7 @@ export interface AgentPlanExecutionContext {
   selectedShotId?: string;
   activePanoId?: string;
   gridSnap: boolean;
+  timelineTouched: Set<string>;
 }
 
 export interface PreparedAgentPlan {
@@ -111,6 +129,7 @@ export function createAgentPlanExecutionContext(params: {
     selectedShotId: params.selectedShotId,
     activePanoId: params.activePanoId,
     gridSnap: params.gridSnap ?? true,
+    timelineTouched: new Set(),
   };
 }
 
@@ -172,6 +191,20 @@ export function prepareAgentPlan(
       return { ok: false, diagnostics, warnings };
     }
     warnings.push(...result.warnings);
+  }
+
+  for (const shotId of ctx.timelineTouched) {
+    const shot = ctx.project.shots.find((candidate) => candidate.id === shotId);
+    if (!shot) continue;
+    try {
+      validateCompletedShotTimeline(shot);
+    } catch (error) {
+      return {
+        ok: false,
+        diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Invalid completed shot timeline.', { path: `shot:${shotId}.timeline` })],
+        warnings,
+      };
+    }
   }
 
   const afterSelection: AgentSelectionState = {
@@ -285,6 +318,22 @@ function applyCommand(
       return applyShotClearStaging(ctx, command, refs, diff, path);
     case 'shot.delete':
       return applyShotDelete(ctx, command, refs, diff, path);
+    case 'shot.timeline.replace':
+      return applyShotTimelineReplace(ctx, command, refs, diff, path);
+    case 'shot.timeline.clear':
+      return applyShotTimelineClear(ctx, command, refs, diff, path);
+    case 'shot.timeline.setDuration':
+      return applyShotTimelineSetDuration(ctx, command, refs, diff, path);
+    case 'shot.keyframe.create':
+      return applyShotKeyframeCreate(ctx, command, refs, diff, path);
+    case 'shot.keyframe.update':
+      return applyShotKeyframeUpdate(ctx, command, refs, diff, path);
+    case 'shot.keyframe.delete':
+      return applyShotKeyframeDelete(ctx, command, refs, diff, path);
+    case 'shot.keyframe.stageObject':
+      return applyShotKeyframeStageObject(ctx, command, refs, diff, path);
+    case 'shot.keyframe.clearStaging':
+      return applyShotKeyframeClearStaging(ctx, command, refs, diff, path);
     case 'landmark.create':
       return applyLandmarkCreate(ctx, command, refs, diff, path);
     case 'landmark.update':
@@ -987,6 +1036,241 @@ function applyShotClearStaging(
     diff.shotsUpdated.push(updated.id);
   }
   return { ok: true, warnings: [] };
+}
+
+function applyShotTimelineReplace(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.replace' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const shot = ctx.project.shots.find((item) => item.id === shotResult.id);
+  if (!shot) return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${shotResult.id}".`)], path);
+  if (command.keyframes.length > AGENT_PLAN_LIMITS.maxKeyframesPerShot) {
+    return timelineResolveFailure([agentError('keyframe_limit', `A shot may contain at most ${AGENT_PLAN_LIMITS.maxKeyframesPerShot} keyframes.`, { path })], path);
+  }
+  const keyframes: CameraKeyframe[] = [];
+  for (let index = 0; index < command.keyframes.length; index += 1) {
+    const input = command.keyframes[index]!;
+    const objects = resolveTimelineObjects(ctx, shot, input.objects, refs, `${path}.keyframes[${index}].objects`);
+    if (!objects.ok) return objects;
+    const id = createId('keyframe');
+    const keyframe = createCameraKeyframe({
+      label: input.label ?? (index === 0 ? 'Start' : index === command.keyframes.length - 1 ? 'End' : `Keyframe ${index}`),
+      timeSeconds: input.timeSeconds,
+      camera: mergeCamera(shot.camera, input.camera),
+      easing: input.easing,
+      ...(input.objects !== undefined ? { objectOverrides: objects.value } : {}),
+    });
+    keyframes.push({ ...keyframe, id });
+    if (input.ref) refs[input.ref] = { kind: 'keyframe', id, ref: input.ref, name: keyframe.label };
+  }
+  try {
+    ctx.project = replaceShotTimeline(ctx.project, shot.id, { durationSeconds: command.durationSeconds, keyframes });
+  } catch (error) {
+    return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Invalid timeline replacement.', { path })], path);
+  }
+  markTimelineUpdated(ctx, diff, shot.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotTimelineClear(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.clear' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) return timelineResolveFailure(resolved.diagnostics, path);
+  try { ctx.project = clearShotTimeline(ctx.project, resolved.id); }
+  catch (error) { return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to clear timeline.', { path })], path); }
+  markTimelineUpdated(ctx, diff, resolved.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotTimelineSetDuration(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.timeline.setDuration' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const resolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!resolved.ok) return timelineResolveFailure(resolved.diagnostics, path);
+  try { ctx.project = setShotTimelineDuration(ctx.project, resolved.id, command.durationSeconds); }
+  catch (error) { return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to set timeline duration.', { path })], path); }
+  markTimelineUpdated(ctx, diff, resolved.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotKeyframeCreate(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.create' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const shot = ctx.project.shots.find((item) => item.id === shotResult.id);
+  if (!shot) return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${shotResult.id}".`)], path);
+  if (shot.cameraKeyframes.length >= AGENT_PLAN_LIMITS.maxKeyframesPerShot) return timelineResolveFailure([agentError('keyframe_limit', `A shot may contain at most ${AGENT_PLAN_LIMITS.maxKeyframesPerShot} keyframes.`, { path })], path);
+  const objects = resolveTimelineObjects(ctx, shot, command.objects, refs, `${path}.objects`);
+  if (!objects.ok) return objects;
+  try {
+    ctx.project = createShotKeyframe(ctx.project, shot.id, {
+      timeSeconds: command.timeSeconds,
+      label: command.label,
+      camera: mergeCamera(shot.camera, command.camera),
+      easing: command.easing,
+      ...(command.objects !== undefined ? { objectOverrides: objects.value } : {}),
+      snapshotShotStaging: command.snapshotShotStaging,
+    });
+  } catch (error) {
+    return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to create keyframe.', { path })], path);
+  }
+  const created = ctx.project.shots.find((item) => item.id === shot.id)?.cameraKeyframes.find((item) => !shot.cameraKeyframes.some((old) => old.id === item.id));
+  if (created && command.ref) refs[command.ref] = { kind: 'keyframe', id: created.id, ref: command.ref, name: created.label };
+  markTimelineUpdated(ctx, diff, shot.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotKeyframeUpdate(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.update' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const keyframeResult = resolveKeyframeTarget(ctx.project, shotResult.id, command.keyframe, refs);
+  if (!keyframeResult.ok) return timelineResolveFailure(keyframeResult.diagnostics, path);
+  const shot = ctx.project.shots.find((item) => item.id === shotResult.id)!;
+  const keyframe = shot.cameraKeyframes.find((item) => item.id === keyframeResult.id)!;
+  const objects = resolveTimelineObjects(ctx, shot, command.objects, refs, `${path}.objects`);
+  if (!objects.ok) return objects;
+  try {
+    ctx.project = updateShotKeyframe(ctx.project, shot.id, keyframe.id, {
+      timeSeconds: command.timeSeconds,
+      label: command.label,
+      camera: command.camera,
+      easing: command.easing,
+      ...(command.objects !== undefined ? { objectOverrides: objects.value } : {}),
+    });
+  } catch (error) {
+    return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to update keyframe.', { path })], path);
+  }
+  markTimelineUpdated(ctx, diff, shot.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotKeyframeDelete(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.delete' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const keyframeResult = resolveKeyframeTarget(ctx.project, shotResult.id, command.keyframe, refs);
+  if (!keyframeResult.ok) return timelineResolveFailure(keyframeResult.diagnostics, path);
+  try { ctx.project = deleteShotKeyframe(ctx.project, shotResult.id, keyframeResult.id); }
+  catch (error) { return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to delete keyframe.', { path })], path); }
+  markTimelineUpdated(ctx, diff, shotResult.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotKeyframeStageObject(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.stageObject' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const keyframeResult = resolveKeyframeTarget(ctx.project, shotResult.id, command.keyframe, refs);
+  if (!keyframeResult.ok) return timelineResolveFailure(keyframeResult.diagnostics, path);
+  const objectResult = resolveObjectTarget(ctx.project, command.object, refs);
+  if (!objectResult.ok) return timelineResolveFailure(objectResult.diagnostics, path);
+  const pose = command.humanPose ?? (command.posePreset ? applyHumanPosePreset(command.posePreset) : undefined);
+  try {
+    ctx.project = stageObjectAtKeyframe(ctx.project, shotResult.id, keyframeResult.id, objectResult.id, {
+      transform: command.transform, visible: command.visible, humanPose: pose,
+    });
+  } catch (error) {
+    return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to stage keyframe object.', { path })], path);
+  }
+  markTimelineUpdated(ctx, diff, shotResult.id);
+  return { ok: true, warnings: [] };
+}
+
+function applyShotKeyframeClearStaging(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.keyframe.clearStaging' }>,
+  refs: Record<string, AgentEntityReference>, diff: AgentPlanDiff, path: string,
+): ApplyResult {
+  const shotResult = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResult.ok) return timelineResolveFailure(shotResult.diagnostics, path);
+  const keyframeResult = resolveKeyframeTarget(ctx.project, shotResult.id, command.keyframe, refs);
+  if (!keyframeResult.ok) return timelineResolveFailure(keyframeResult.diagnostics, path);
+  let next: LocationProject;
+  let objectId: string | undefined;
+  if (command.object) {
+    const objectResult = resolveObjectTarget(ctx.project, command.object, refs);
+    if (!objectResult.ok) return timelineResolveFailure(objectResult.diagnostics, `${path}.object`);
+    objectId = objectResult.id;
+  }
+  try {
+    next = clearKeyframeStaging(ctx.project, shotResult.id, keyframeResult.id, objectId);
+  } catch (error) {
+    return timelineResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Unable to clear keyframe staging.', { path })], path);
+  }
+  ctx.project = next;
+  markTimelineUpdated(ctx, diff, shotResult.id);
+  return { ok: true, warnings: [] };
+}
+
+function resolveTimelineObjects(
+  ctx: AgentPlanExecutionContext,
+  shot: Shot,
+  entries: AgentTimelineObjectInput[] | undefined,
+  refs: Record<string, AgentEntityReference>,
+  path: string,
+): { ok: true; value: ShotObjectOverrides } | { ok: false; diagnostics: AgentDiagnostic[]; warnings: AgentDiagnostic[] } {
+  if (entries === undefined) return { ok: true, value: {} };
+  let overrides: ShotObjectOverrides = {};
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const objectResult = resolveObjectTarget(ctx.project, entry.object, refs);
+    if (!objectResult.ok) return timelineObjectResolveFailure(objectResult.diagnostics, `${path}[${index}].object`);
+    const object = ctx.project.scene.objects.find((item) => item.id === objectResult.id);
+    if (!object) return timelineObjectResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No object with id "${objectResult.id}".`)], path);
+    if (!canStageObjectPerShot(object)) return timelineObjectResolveFailure([agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `Object "${object.name}" cannot be staged.`, { path })], path);
+    const humanPose = entry.humanPose ?? (entry.posePreset ? applyHumanPosePreset(entry.posePreset) : undefined);
+    overrides = updateShotObjectOverrides({ objectOverrides: overrides }, object, {
+      transform: entry.transform,
+      visible: entry.visible,
+      humanPose,
+    });
+  }
+  return { ok: true, value: overrides };
+}
+
+function mergeCamera(base: CameraData, patch: Partial<CameraData>): CameraData {
+  return {
+    ...base,
+    ...patch,
+    position: patch.position ? [...patch.position] as Vec3 : [...base.position] as Vec3,
+    target: patch.target ? [...patch.target] as Vec3 : [...base.target] as Vec3,
+  };
+}
+
+function timelineResolveFailure(diagnostics: AgentDiagnostic[], path: string): ApplyResult {
+  return { ok: false, diagnostics: diagnostics.map((item) => ({ ...item, path: item.path ? `${path}.${item.path}` : path })), warnings: [] };
+}
+
+function timelineObjectResolveFailure(diagnostics: AgentDiagnostic[], path: string): { ok: false; diagnostics: AgentDiagnostic[]; warnings: AgentDiagnostic[] } {
+  return { ok: false, diagnostics: diagnostics.map((item) => ({ ...item, path: item.path ? `${path}.${item.path}` : path })), warnings: [] };
+}
+
+function markTimelineUpdated(ctx: AgentPlanExecutionContext, diff: AgentPlanDiff, shotId: string): void {
+  ctx.timelineTouched.add(shotId);
+  if (!diff.shotsCreated.includes(shotId) && !diff.shotsUpdated.includes(shotId)) diff.shotsUpdated.push(shotId);
 }
 
 function applyShotDelete(
