@@ -28,7 +28,7 @@ export function ModeChooser({ visible }: { visible: boolean }) {
           <ModeCard
             icon={<Boxes className="h-7 w-7" />}
             title="Open ForeScene"
-            description="Sets, characters, shots, continuity tools, and production-ready handoffs."
+            description="Sets, characters, shots, and production handoffs. A starter launcher appears when the project is blank."
             onClick={() => choose('studio')}
             dataMode="studio"
           />

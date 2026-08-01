@@ -1,39 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { enterStudioWorkspace } from './helpers/app-entry';
 import { workspaceTab } from './workspace-navigation';
 
 // Tag taxonomy: @smoke — essential workflow on desktop Chromium PRs.
 // Full-regression is owned by the main/nightly workflows (see AGENTS.md).
 
+/** Workspace entry: Studio + launcher dismissed so chrome is clickable. */
 async function enterStudio(page: Page) {
-  // Skip splash video so it never blocks pointer events mid-test.
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.setItem('forescene-splash-seen', '1');
-    } catch {
-      // ignore
-    }
-  });
-  await page.goto('/');
-  const modeChooser = page.locator('[data-mode-chooser]');
-  const studio = page.getByRole('button', { name: /Open ForeScene/i });
-  if (await modeChooser.isVisible().catch(() => false)) {
-    await studio.click();
-  } else {
-    try {
-      await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await studio.click();
-    } catch {
-      // Already in a mode from a previous session.
-    }
-  }
-  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
-  if (await splash.isVisible().catch(() => false)) {
-    await splash.click({ force: true });
-    await expect(splash).toBeHidden({ timeout: 5000 });
-  }
-  await expect(workspaceTab(page, 'Build')).toBeVisible({ timeout: 15000 });
-  await expect(modeChooser).toBeHidden({ timeout: 5000 }).catch(() => undefined);
+  await enterStudioWorkspace(page);
 }
 
 async function dismissOverlays(page: Page) {

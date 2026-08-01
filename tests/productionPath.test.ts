@@ -62,8 +62,11 @@ describe('workflow guidance UI', () => {
     expect(app).toContain('startNewProject');
     expect(app).toContain('data-project-new-button');
     expect(app).toContain('data-project-new-confirm');
+    // New project uses blank graybox; temple starter remains available from the launcher.
+    expect(lifecycle).toContain('createBlankGrayboxProject');
     expect(lifecycle).toContain('createDefaultProject');
-    expect(lifecycle).toContain('Before starting a new project');
+    expect(lifecycle).toMatch(/Before: Started new project|Before starting a new project|Started new project/);
+    expect(lifecycle).toContain('commitAndActivateProject');
     expect(app).toMatch(/label="New Project"/);
     expect(app).toContain('Start a new project?');
   });

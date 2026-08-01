@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { LocationProject } from '../domain/types';
 import { createDefaultProject } from '../domain/defaults';
+import { createBlankGrayboxProject } from '../engine/previs/blankProject';
+import { loadSampleProject as loadBundledSample } from '../engine/sampleProjects';
 import type { CompiledSetBlueprint } from '../engine/setBlueprintCompiler';
 import type { ProjectPersistenceController } from '../engine/projectPersistenceController';
 import { useAppModeStore } from '../state/useAppModeStore';
@@ -47,6 +49,10 @@ export interface UseProjectLifecycleOptions {
 export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycleOptions) {
   const fileRef = useRef<HTMLInputElement>(null);
   const persistenceControllerRef = useRef<ProjectPersistenceController | undefined>(undefined);
+  /** Resolves once the persistence controller has started (or is already live). */
+  const controllerReadyPromiseRef = useRef<Promise<ProjectPersistenceController> | undefined>(undefined);
+  const resolveControllerReadyRef = useRef<((controller: ProjectPersistenceController) => void) | undefined>(undefined);
+  const [projectLifecycleReady, setProjectLifecycleReady] = useState(false);
   const [projectImportStatus, setProjectImportStatus] = useState<ProjectImportStatus>();
   const [newProjectConfirmOpen, setNewProjectConfirmOpen] = useState(false);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -60,6 +66,34 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const setRecovered = useProjectSafetyStore((state) => state.setRecovered);
   const setFlushProject = useProjectSafetyStore((state) => state.setFlushProject);
   const setRunDestructiveProjectMutation = useProjectSafetyStore((state) => state.setRunDestructiveProjectMutation);
+
+  /** Await the live persistence controller — never throw “still starting” to fast clickers. */
+  const awaitPersistenceController = async (): Promise<ProjectPersistenceController> => {
+    const live = persistenceControllerRef.current;
+    if (live) return live;
+    if (!controllerReadyPromiseRef.current) {
+      controllerReadyPromiseRef.current = new Promise<ProjectPersistenceController>((resolve) => {
+        resolveControllerReadyRef.current = resolve;
+      });
+    }
+    return controllerReadyPromiseRef.current;
+  };
+
+  /** Wait for the live controller and any critical local write to become idle. */
+  const awaitProjectWriteIdle = async (): Promise<void> => {
+    await awaitPersistenceController();
+
+    if (!useProjectSafetyStore.getState().criticalWrite) return;
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = useProjectSafetyStore.subscribe((state) => {
+        if (!state.criticalWrite) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  };
 
   const openProjectPicker = () => {
     if (criticalProjectWrite) {
@@ -75,8 +109,40 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   /**
+   * Replace the live project with a committed document (snapshot → commit → set).
+   * Shared by new project, sample load, and launcher manual starts.
+   * Waits for persistence readiness so a fast launcher click never races startup.
+   */
+  const commitAndActivateProject = async (
+    next: LocationProject,
+    reason: string,
+    successMessage: string,
+  ) => {
+    await awaitProjectWriteIdle();
+    const controller = await awaitPersistenceController();
+    const current = useProjectStore.getState().project;
+    await controller.createSnapshot(current, `Before: ${reason}`);
+    await controller.commitProject(next, {
+      kind: 'import',
+      reason,
+    });
+    controller.ignoreNextProjectChange(next);
+    setProject(next);
+    useProjectStore.getState().clearObjectSelection();
+    setWorkspace('build');
+    setAppMode('studio');
+    closeProjectOverlays();
+    setNewProjectConfirmOpen(false);
+    setProjectImportStatus({
+      tone: 'success',
+      message: successMessage,
+    });
+  };
+
+  /**
    * Start a blank ForeScene project. Snapshots the current autosaved project
-   * so Project Safety can restore it, then swaps in createDefaultProject().
+   * so Project Safety can restore it, then swaps in a blank graybox shell
+   * (launcher can reappear for first-project guidance).
    */
   const startNewProject = async () => {
     if (criticalProjectWrite || isCreatingNewProject) {
@@ -89,25 +155,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     setIsCreatingNewProject(true);
     setProjectImportStatus(undefined);
     try {
-      const controller = persistenceControllerRef.current;
-      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-      const current = useProjectStore.getState().project;
-      await controller.createSnapshot(current, `Before starting a new project (from “${current.name}”)`);
-      const fresh = createDefaultProject();
-      await controller.commitProject(fresh, {
-        kind: 'import',
-        reason: `Started new project: ${fresh.name}`,
+      const fresh = createBlankGrayboxProject({
+        name: 'Untitled Production',
+        description: '',
+        aspectRatio: '16:9',
       });
-      controller.ignoreNextProjectChange(fresh);
-      setProject(fresh);
-      setWorkspace('build');
-      setAppMode('studio');
-      closeProjectOverlays();
-      setNewProjectConfirmOpen(false);
-      setProjectImportStatus({
-        tone: 'success',
-        message: `Started a new project: ${fresh.name}. Your previous project was saved as a local recovery point.`,
-      });
+      await commitAndActivateProject(
+        fresh,
+        `Started new project: ${fresh.name}`,
+        `Started a new project: ${fresh.name}. Your previous project was saved as a local recovery point.`,
+      );
     } catch (error) {
       setProjectImportStatus({
         tone: 'error',
@@ -120,12 +177,113 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     }
   };
 
+  /**
+   * Load a bundled sample production (fresh factory copy every time).
+   * @returns true when the sample was activated successfully.
+   */
+  const loadSampleProject = async (sampleId: string): Promise<boolean> => {
+    setProjectImportStatus(undefined);
+    try {
+      const sample = loadBundledSample(sampleId);
+      await commitAndActivateProject(
+        sample,
+        `Loaded sample: ${sample.name}`,
+        `Opened sample “${sample.name}”. Explore Build → Reference → Shots → Export. Use Reset sample anytime to restore the baseline.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not load sample: ${error.message}`
+          : 'Could not load sample.',
+      });
+      return false;
+    }
+  };
+
+  /** Reset the active sample from the canonical factory. */
+  const resetSampleProject = async (sampleId: string): Promise<boolean> => {
+    return loadSampleProject(sampleId);
+  };
+
+  /**
+   * Start the temple starter set (legacy default project content).
+   * @returns true when activated successfully.
+   */
+  const startStarterProject = async (): Promise<boolean> => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before starting a project.',
+      });
+      return false;
+    }
+    setProjectImportStatus(undefined);
+    try {
+      const fresh = createDefaultProject();
+      fresh.name = 'Temple Starter';
+      fresh.description = 'Courtyard starter set with scale figure — ready to frame shots.';
+      await commitAndActivateProject(
+        fresh,
+        `Started temple starter: ${fresh.name}`,
+        `Started “${fresh.name}”. Build on the courtyard set or replace geometry as needed.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not start starter project: ${error.message}`
+          : 'Could not start starter project.',
+      });
+      return false;
+    }
+  };
+
+  /**
+   * Start a blank graybox without the new-project confirm flow (launcher path).
+   * Stays effectively blank — callers that need Build without the launcher should
+   * dismiss only after this returns true.
+   * @returns true when activated successfully.
+   */
+  const startBlankProject = async (): Promise<boolean> => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before starting a project.',
+      });
+      return false;
+    }
+    setProjectImportStatus(undefined);
+    try {
+      const fresh = createBlankGrayboxProject({
+        name: 'Untitled Production',
+        description: '',
+        aspectRatio: '16:9',
+      });
+      await commitAndActivateProject(
+        fresh,
+        `Started blank project: ${fresh.name}`,
+        `Started a blank graybox set. Add architecture, characters, and shots from Build.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not start blank project: ${error.message}`
+          : 'Could not start blank project.',
+      });
+      return false;
+    }
+  };
+
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
       const { readProjectFile } = await loadProjectIo();
-      const controller = persistenceControllerRef.current;
-      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+      const controller = await awaitPersistenceController();
       await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another project');
       const importedProject = await readProjectFile(file);
       // The imported package has been validated before this point. Stage its
@@ -156,8 +314,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const saveProject = () => {
     void (async () => {
       try {
-        const controller = persistenceControllerRef.current;
-        if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+        const controller = await awaitPersistenceController();
         const verified = await controller.flushAndLoadActiveRevision('Verified save before backup export');
         if (!verified) throw new Error('No verified project revision is available for backup export.');
         const { downloadProject } = await loadProjectIo();
@@ -176,14 +333,12 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   const createProjectSnapshot = async (reason: string) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, reason);
   };
 
   const restoreProjectSnapshot = async (revisionId: string) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     const { restoreProjectRevision } = await loadProjectSafety();
     const currentProject = useProjectStore.getState().project;
     const restored = await restoreProjectRevision(currentProject.id, revisionId);
@@ -203,8 +358,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
 
   const openLocalProjectHistory = async (projectId: string, revisionId: string) => {
     if (projectId === useProjectStore.getState().project.id) return;
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another local project');
     const { restoreProjectRevision } = await loadProjectSafety();
     const opened = await restoreProjectRevision(projectId, revisionId);
@@ -232,8 +386,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   const applyProjectHealthRepair = async (repairedProject: LocationProject) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, 'Before repairing project health');
     await controller.commitProject(repairedProject, {
       kind: 'autosave',
@@ -252,8 +405,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     if (criticalProjectWrite) {
       throw new Error('Please wait for the current local save to finish before creating a generated set.');
     }
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
 
     const current = useProjectStore.getState().project;
     const next = compiled.project;
@@ -285,6 +437,12 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     let unsubscribe: (() => void) | undefined;
     let unsubscribeAssetFailures: (() => void) | undefined;
     const projectAtStartup = useProjectStore.getState().project;
+
+    // Fresh readiness gate for this mount (callers can await immediately).
+    setProjectLifecycleReady(false);
+    controllerReadyPromiseRef.current = new Promise<ProjectPersistenceController>((resolve) => {
+      resolveControllerReadyRef.current = resolve;
+    });
 
     void (async () => {
       try {
@@ -332,6 +490,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
           controller.start(currentProject);
         }
 
+        // Unblock sample load / import / new-project callers waiting on readiness.
+        resolveControllerReadyRef.current?.(controller);
+        setProjectLifecycleReady(true);
+
         unsubscribe = useProjectStore.subscribe((next, previous) => {
           if (next.project !== previous.project) controller.noteProjectChange(next.project, previous.project);
         });
@@ -346,6 +508,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
             : 'Local recovery could not start.',
           criticalWrite: false,
         });
+        setProjectLifecycleReady(false);
       }
     })();
 
@@ -355,8 +518,11 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       unsubscribeAssetFailures?.();
       setFlushProject(undefined);
       setRunDestructiveProjectMutation(undefined);
+      setProjectLifecycleReady(false);
       persistenceControllerRef.current?.dispose();
       persistenceControllerRef.current = undefined;
+      resolveControllerReadyRef.current = undefined;
+      controllerReadyPromiseRef.current = undefined;
     };
   }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered, setRunDestructiveProjectMutation]);
 
@@ -383,10 +549,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     newProjectConfirmOpen,
     setNewProjectConfirmOpen,
     isCreatingNewProject,
+    /** True once local persistence has started and project swaps are safe. */
+    projectLifecycleReady,
     openProjectPicker,
     importProject,
     saveProject,
     startNewProject,
+    startBlankProject,
+    startStarterProject,
+    loadSampleProject,
+    resetSampleProject,
     createProjectSnapshot,
     restoreProjectSnapshot,
     openLocalProjectHistory,

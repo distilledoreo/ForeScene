@@ -593,6 +593,11 @@ export interface Shot {
   promptOverrides: PromptOverrides;
   status: ShotStatus;
   assets: ShotAssetRefs;
+  /**
+   * Optional shot metadata (e.g. system scaffold tags for blank-project detection).
+   * Not required for export; preserved across backup/import when present.
+   */
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

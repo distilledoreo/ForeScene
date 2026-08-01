@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { dismissOverlays, enterStudio } from './helpers/app-entry';
+import { dismissOverlays, enterStudioWorkspace } from './helpers/app-entry';
 
 async function openHelpCenter(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Open app menu' }).click();
@@ -9,7 +9,7 @@ async function openHelpCenter(page: import('@playwright/test').Page) {
 
 test.describe('@smoke comprehensive Help Center', () => {
   test('searches an exact visible control label and returns to a workspace', async ({ page }) => {
-    await enterStudio(page);
+    await enterStudioWorkspace(page);
     await dismissOverlays(page);
     await openHelpCenter(page);
 
@@ -34,7 +34,7 @@ test.describe('@responsive Help Center navigation', () => {
   test('offers the compact section picker on phone layouts', async ({ page }, testInfo) => {
     test.skip(!testInfo.project.name.includes('phone'), 'Phone project only.');
 
-    await enterStudio(page);
+    await enterStudioWorkspace(page);
     await dismissOverlays(page);
     await openHelpCenter(page);
 

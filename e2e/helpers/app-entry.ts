@@ -41,6 +41,25 @@ export async function enterStudio(page: Page) {
   await expect(modeChooser).toBeHidden({ timeout: 5000 }).catch(() => undefined);
 }
 
+/**
+ * Enter Studio and dismiss the first-project launcher when present so existing
+ * app tests can reach Build / Help / brand menu without pointer interception.
+ */
+export async function enterStudioWorkspace(page: Page) {
+  await enterStudio(page);
+  const launcher = page.locator('[data-project-launcher]');
+  if (await launcher.isVisible().catch(() => false)) {
+    await page.locator('[data-project-launcher-dismiss]').click();
+    await expect(launcher).toBeHidden({ timeout: 10_000 });
+  }
+}
+
+/** Enter Studio and assert the first-project launcher is showing (blank project). */
+export async function enterStudioExpectingLauncher(page: Page) {
+  await enterStudio(page);
+  await expect(page.locator('[data-project-launcher]')).toBeVisible({ timeout: 15_000 });
+}
+
 /** Dismiss common workflow modals / toasts that intercept clicks. */
 export async function dismissOverlays(page: Page) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
