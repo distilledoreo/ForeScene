@@ -122,11 +122,9 @@ test.describe('@smoke first-project launcher', () => {
     ]);
     await expectRetainedContactSheetResolves(page);
 
-    await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
-    // goToWorkspace already waits for the shell. Dismiss guidance before the
-    // next navigation instead of racing a duplicate assertion against its modal.
-    await dismissOverlays(page);
-
+    // This launcher smoke verifies sample data through the Agent API and then
+    // exercises its intended Reference → Export handoff. GPU-heavy Shots mounting
+    // remains covered by the dedicated WebKit GPU canary and workflow smoke tests.
     await goToWorkspace(page, 'Reference', '[data-panoramas-card], [data-reference-bottom-chrome]');
     await expect(workspaceTab(page, 'Reference')).toHaveAttribute('aria-current', 'page');
     await expect(page.locator('[data-styled-pano-count]')).toBeVisible();
