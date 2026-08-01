@@ -1,13 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { dismissOverlays, enterStudio } from './helpers/app-entry';
+import {
+  dismissOverlays,
+  enterStudioExpectingLauncher,
+} from './helpers/app-entry';
 import { goToWorkspace, workspaceTab } from './workspace-navigation';
-
-async function enterStudioExpectingLauncher(page: Page) {
-  await enterStudio(page);
-  // Fresh blank project should show the first-project launcher after Studio.
-  await expect(page.locator('[data-project-launcher]')).toBeVisible({ timeout: 15_000 });
-}
 
 /** Project name lives inside the brand menu — open it first. */
 async function openProjectMenu(page: Page) {

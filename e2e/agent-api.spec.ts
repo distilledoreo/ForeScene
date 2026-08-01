@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { dismissOverlays, enterStudio, reloadAndAwaitRecovery, waitForVerifiedSave } from './helpers/app-entry';
+import { dismissOverlays, enterStudioWorkspace, reloadAndAwaitRecovery, waitForVerifiedSave } from './helpers/app-entry';
 
 async function waitForAgentApi(page: import('@playwright/test').Page) {
   await page.waitForFunction(() => {
@@ -19,7 +19,7 @@ async function enableAgentWritesViaUi(page: import('@playwright/test').Page) {
 
 test.describe('Agent API inspection @smoke', () => {
   test('exposes window.foreScene inspection and blocks writes by default', async ({ page }) => {
-    await enterStudio(page);
+    await enterStudioWorkspace(page);
     await dismissOverlays(page);
     await waitForAgentApi(page);
 
@@ -94,7 +94,7 @@ test.describe('Agent API transactions @smoke', () => {
   test('applies, reloads, and undoes via UI write enable', async ({ page, browserName }) => {
     test.skip(browserName === 'webkit', 'Chromium-only: long transaction + reload coverage');
 
-    await enterStudio(page);
+    await enterStudioWorkspace(page);
     await dismissOverlays(page);
     await waitForAgentApi(page);
 
@@ -214,7 +214,7 @@ test.describe('Agent Console @smoke', () => {
   test('opens and previews through window.foreScene', async ({ page, browserName }) => {
     test.skip(browserName === 'webkit', 'Chromium-only: console dialog coverage');
 
-    await enterStudio(page);
+    await enterStudioWorkspace(page);
     await dismissOverlays(page);
     await waitForAgentApi(page);
 

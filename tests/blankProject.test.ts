@@ -15,6 +15,7 @@ import {
   SAMPLE_PROJECTS,
 } from '../src/engine/sampleProjects';
 import { createExportPlan } from '../src/engine/exportPlan';
+import { pruneUnreferencedProjectAssets } from '../src/engine/projectAssets';
 import {
   getExportSelectionWarnings,
   getProjectWarnings,
@@ -226,6 +227,24 @@ describe('sample project load and reset', () => {
 
   it('rejects unknown sample ids', () => {
     expect(() => loadSampleProject('not-a-real-sample')).toThrow(/Unknown sample/i);
+  });
+
+  it('retains the contact-sheet asset (and sample marker) through setProject pruning', () => {
+    const sample = loadSampleProject(DIALOGUE_DEMO_SAMPLE_ID);
+    const normalized = pruneUnreferencedProjectAssets(sample);
+
+    expect(
+      Object.values(normalized.assets.assets).some(
+        (asset) => asset.metadata?.role === 'contact-sheet',
+      ),
+    ).toBe(true);
+    expect(
+      Object.values(normalized.assets.assets).some(
+        (asset) => asset.metadata?.retainInProject === true,
+      ),
+    ).toBe(true);
+    expect(getSampleProjectId(normalized)).toBe(DIALOGUE_DEMO_SAMPLE_ID);
+    expect(isDialogueDemoSample(normalized)).toBe(true);
   });
 
   it('reaches Export without graybox or missing-file preflight warnings', () => {

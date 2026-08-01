@@ -169,12 +169,17 @@ export function createDialogueDemoSample(): LocationProject {
     role: 'styled-panorama',
   });
 
+  // Contact sheet doubles as the sample marker (retainInProject survives prune).
   const contactSheet = makeImageAsset({
     name: 'Dialogue Demo Contact Sheet',
     dataUri: DIALOGUE_DEMO_ASSETS.contactSheet.dataUri,
     width: DIALOGUE_DEMO_ASSETS.contactSheet.width,
     height: DIALOGUE_DEMO_ASSETS.contactSheet.height,
     role: 'contact-sheet',
+    extraMeta: {
+      retainInProject: true,
+      sampleVersion: 1,
+    },
   });
 
   const shotThumbAssets: Record<string, ProjectAsset> = {};
@@ -345,23 +350,6 @@ export function createDialogueDemoSample(): LocationProject {
   for (const thumb of Object.values(shotThumbAssets)) {
     registryAssets[thumb.id] = thumb;
   }
-
-  // Stable project-level sample marker asset (survives rename / shot edits).
-  const sampleMarker = makeImageAsset({
-    name: 'Dialogue Demo Sample Marker',
-    dataUri: DIALOGUE_DEMO_ASSETS.contactSheet.dataUri,
-    width: 1,
-    height: 1,
-    role: 'sample-marker',
-    extraMeta: {
-      sampleProjectId: DIALOGUE_DEMO_SAMPLE_ID,
-      sampleVersion: 1,
-    },
-  });
-  // Keep marker 1×1 logical but reuse contact sheet bytes only if needed — use tiny unique metadata.
-  sampleMarker.width = DIALOGUE_DEMO_ASSETS.contactSheet.width;
-  sampleMarker.height = DIALOGUE_DEMO_ASSETS.contactSheet.height;
-  registryAssets[sampleMarker.id] = sampleMarker;
 
   const project: LocationProject = {
     schemaVersion: '1.0',

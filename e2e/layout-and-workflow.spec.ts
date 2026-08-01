@@ -1,43 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { enterStudioWorkspace } from './helpers/app-entry';
 import { goToWorkspace, workspaceTab } from './workspace-navigation';
 
+/** Workspace entry: Studio + launcher dismissed so chrome is clickable. */
 async function enterStudio(page: Page) {
-  // Skip splash video so it never blocks pointer events mid-test.
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.setItem('forescene-splash-seen', '1');
-    } catch {
-      // ignore
-    }
-  });
-
-  await page.goto('/');
-
-  // Mode chooser appears when appMode is null after splash.
-  const modeChooser = page.locator('[data-mode-chooser]');
-  const studio = page.getByRole('button', { name: /Open ForeScene/i });
-  if (await modeChooser.isVisible().catch(() => false)) {
-    await studio.click();
-  } else {
-    // Wait briefly in case chooser is still mounting.
-    try {
-      await modeChooser.waitFor({ state: 'visible', timeout: 3000 });
-      await studio.click();
-    } catch {
-      // Already in a mode from a previous session (should not happen with clean context).
-    }
-  }
-
-  // Ensure any residual splash is gone.
-  const splash = page.getByRole('dialog', { name: 'ForeScene splash' });
-  if (await splash.isVisible().catch(() => false)) {
-    await splash.click({ force: true });
-    await expect(splash).toBeHidden({ timeout: 5000 });
-  }
-
-  await expect(workspaceTab(page, 'Build')).toBeVisible({ timeout: 15000 });
-  await expect(modeChooser).toBeHidden({ timeout: 5000 }).catch(() => undefined);
+  await enterStudioWorkspace(page);
 }
 
 async function dismissOverlays(page: Page) {

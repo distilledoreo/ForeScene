@@ -35,6 +35,11 @@ export function getReferencedProjectAssetIds(project: LocationProject): Set<stri
     }
   }
 
+  // Bundled sample extras (contact sheet, markers) that must survive setProject pruning.
+  for (const [assetId, asset] of Object.entries(project.assets?.assets ?? {})) {
+    if (asset.metadata?.retainInProject === true) referenced.add(assetId);
+  }
+
   return referenced;
 }
 
