@@ -167,7 +167,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
   const {
     project,
     addCamera,
-    updateShot,
+    applyShotTimelineProject,
     landShotFraming,
     attachCameraMoveVideoToShot,
     attachKeyframePreviewToShot,
@@ -175,7 +175,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
   } = useProjectStore(useShallow((state) => ({
     project: state.project,
     addCamera: state.addCamera,
-    updateShot: state.updateShot,
+    applyShotTimelineProject: state.applyShotTimelineProject,
     landShotFraming: state.landShotFraming,
     attachCameraMoveVideoToShot: state.attachCameraMoveVideoToShot,
     attachKeyframePreviewToShot: state.attachKeyframePreviewToShot,
@@ -275,14 +275,11 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     const nextProject = setShotTimelineKeyframes(latest, selectedShot.id, keyframes);
     const nextShot = nextProject.shots.find((shot) => shot.id === selectedShot.id);
     if (!nextShot) return;
-    updateShot(selectedShot.id, {
-      cameraKeyframes: nextShot.cameraKeyframes,
-      assets: nextShot.assets,
-    });
+    applyShotTimelineProject(nextProject);
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);
     setCameraMoveNotice(undefined);
-  }, [selectedShot, setCameraMoveError, setCameraMoveNotice, setCameraMovePreviewUrl, updateShot]);
+  }, [applyShotTimelineProject, selectedShot, setCameraMoveError, setCameraMoveNotice, setCameraMovePreviewUrl]);
 
   const captureCameraMoveKeyframe = useCallback((slot: CameraMoveKeyframeSlot) => {
     if (!selectedShot) return;
@@ -625,11 +622,13 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     const nextProject = setShotTimelineKeyframes(latest, selectedShot.id, nextKeyframes);
     const nextShot = nextProject.shots.find((item) => item.id === selectedShot.id);
     if (!nextShot) return;
-    // Persist live pose so chrome re-renders cannot reseat the camera at an old origin.
-    updateShot(selectedShot.id, {
-      camera: pose,
-      cameraKeyframes: nextShot.cameraKeyframes,
-      assets: nextShot.assets,
+    // Persist live pose and the complete timeline transaction so global asset
+    // pruning from the domain service is not discarded by a shot-only update.
+    applyShotTimelineProject({
+      ...nextProject,
+      shots: nextProject.shots.map((shot) => shot.id === selectedShot.id
+        ? { ...shot, camera: pose }
+        : shot),
     });
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);
@@ -677,7 +676,7 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
     snapshotPreview,
     stopCameraMovePreview,
     thumbnailFreshAfterFinishRef,
-    updateShot,
+    applyShotTimelineProject,
     videoAuthoring,
     videoCaptureState,
   ]);

@@ -51,6 +51,21 @@ export interface ShotTimelineSample {
   objectOverrides: ShotObjectOverrides;
 }
 
+/**
+ * Stable identity for the shot state consumed by a camera-move render.
+ * Deliberately excludes UI metadata and persisted binary asset references so
+ * a render can reject only changes that alter its authored result.
+ */
+export function fingerprintShotTimeline(
+  shot: Pick<Shot, 'camera' | 'cameraKeyframes' | 'objectOverrides'>,
+): string {
+  return stableJson({
+    camera: shot.camera,
+    cameraKeyframes: shot.cameraKeyframes,
+    objectOverrides: shot.objectOverrides ?? {},
+  });
+}
+
 export interface ReplaceShotTimelineInput {
   durationSeconds?: number;
   keyframes: readonly CameraKeyframe[];
@@ -399,6 +414,17 @@ function hasManualTiming(keyframes: readonly CameraKeyframe[], durationSeconds: 
     const expected = (index / (keyframes.length - 1)) * durationSeconds;
     return Math.abs(keyframe.timeSeconds - expected) > 0.001;
   });
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 // Keep the imported easing helper part of this module's public interpolation contract.

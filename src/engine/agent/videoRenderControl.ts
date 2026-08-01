@@ -6,6 +6,7 @@ import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { awaitAgentNotBusy } from './busy';
+import { fingerprintShotTimeline } from '../shotTimeline';
 import {
   isAgentShotVideoRenderActive,
   setAgentShotVideoRenderActive,
@@ -104,6 +105,7 @@ export async function renderAgentShotVideo(
   const shot = project.shots.find((candidate) => candidate.id === input.shotId);
   if (!shot) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${input.shotId}".`)] };
   if (shot.cameraKeyframes.length < 2) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Shot video render requires at least two keyframes.')] };
+  const timelineFingerprintAtStart = fingerprintShotTimeline(shot);
 
   const attachToShot = input.attachToShot !== false;
   const shouldDownload = input.download !== false;
@@ -138,6 +140,34 @@ export async function renderAgentShotVideo(
     let assetId: string | undefined;
     if (attachToShot) {
       if (!video.dataUrl) throw new Error('Rendered video did not provide attachable data.');
+      const currentProject = useProjectStore.getState().project;
+      const currentShot = currentProject.shots.find((candidate) => candidate.id === shot.id);
+      if (!currentShot || fingerprintShotTimeline(currentShot) !== timelineFingerprintAtStart) {
+        if (shouldDownload) downloadBlob(video.blob, renderName(shot));
+        latestProgress = {
+          phase: 'failed',
+          progress: 1,
+          shotId: shot.id,
+          message: 'Shot timeline changed during video render; output was not attached.',
+          error: 'stale_revision',
+        };
+        return {
+          ok: false,
+          shotId: shot.id,
+          fileName: renderName(shot),
+          width: video.width,
+          height: video.height,
+          durationSeconds: video.durationSeconds,
+          frameRate: video.frameRate,
+          mimeType: video.mimeType,
+          encodeMode: video.encodeMode,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.staleRevision,
+            'Shot timeline changed during video render; the generated video was not attached.',
+          )],
+          progress: latestProgress,
+        };
+      }
       latestProgress = { phase: 'saving', progress: 0.98, shotId: shot.id, message: 'Attaching rendered video to shot.' };
       const asset = useProjectStore.getState().attachCameraMoveVideoToShot(shot.id, {
         name: renderName(shot),

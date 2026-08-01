@@ -10,6 +10,7 @@ export type PrevisPhaseStatus = 'pending' | 'in_progress' | 'complete' | 'failed
 
 export type PrevisShotCompileStatus = 'pending' | 'complete' | 'failed' | 'skipped';
 export type PrevisShotRenderStatus = 'pending' | 'complete' | 'failed' | 'skipped';
+export type PrevisShotVideoStatus = 'pending' | 'complete' | 'failed' | 'skipped';
 export type PrevisShotValidationStatus =
   | 'pending'
   | 'passed'
@@ -53,6 +54,9 @@ export interface PrevisShotRunState {
   framePath?: string;
   /** Provenance of the frame at framePath — never infer from path alone. */
   renderSource?: PrevisRenderSource;
+  video?: PrevisShotVideoStatus;
+  videoPath?: string;
+  videoAssetId?: string;
   pixelStats?: PrevisShotPixelStats;
   issues?: Array<{ code: string; message?: string; subject?: string }>;
   lastError?: string;

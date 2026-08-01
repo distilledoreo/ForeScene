@@ -147,6 +147,46 @@ describe('previs compilers', () => {
     }
   });
 
+  it('merges partial motion transforms with each actor\'s static shot transform', () => {
+    const input = structuredClone(loadExample('minimal-dialogue.json')) as {
+      shots: Array<Record<string, unknown>>;
+    };
+    input.shots[0]!.motion = {
+      durationSeconds: 2,
+      keyframes: [
+        { timeSeconds: 0 },
+        {
+          timeSeconds: 2,
+          staging: [{
+            subject: 'alex',
+            transform: { rotation: [0, 1, 0] },
+          }],
+        },
+      ],
+    };
+    const parsed = parsePrevisProductionManifest(input);
+    expect(parsed.errors).toEqual([]);
+    const compiled = compileProduction(parsed.manifest!);
+    const commands = compiled.shotBatches[0]!.plan.commands;
+    const staticStage = commands.find((command) => (
+      command.op === 'shot.stageObject'
+      && 'ref' in command.object
+      && command.object.ref === 'cast_alex'
+      && command.transform
+    ));
+    const timeline = commands.find((command) => command.op === 'shot.timeline.replace');
+
+    expect(staticStage?.op).toBe('shot.stageObject');
+    expect(timeline?.op).toBe('shot.timeline.replace');
+    if (staticStage?.op !== 'shot.stageObject' || timeline?.op !== 'shot.timeline.replace') return;
+    const animatedTransform = timeline.keyframes[1]!.objects?.[0]?.transform;
+    expect(animatedTransform).toEqual({
+      position: staticStage.transform!.position,
+      rotation: [0, 1, 0],
+      scale: staticStage.transform!.scale,
+    });
+  });
+
   it('previews a location plan against a blank project without mutating it', () => {
     const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
     const compiled = compileProduction(parsed.manifest!);

@@ -52,8 +52,11 @@ preview, atomic apply, undo, and controlled invalidation of stale video assets:
 ```
 
 Motion requires at least two strictly increasing keyframes, with the final
-keyframe time equal to `durationSeconds`. `renderControlVideo` is metadata for
-the production runner; video generation remains an explicit render step.
+keyframe time equal to `durationSeconds`. When `renderControlVideo` is `true`,
+`agent:previs` performs a deterministic 1080p clay camera-move render after
+the shot is compiled, attaches it to the shot, and saves the MP4 under the
+run output's `shots/` directory. The render is skipped when that artifact is
+already present in resumable run-state.
 
 See `src/engine/previs/manifest.ts` for the full TypeScript contract.
 
