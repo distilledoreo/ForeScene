@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Bot,
   Clapperboard,
@@ -31,6 +31,51 @@ export interface ProjectLauncherProps {
   projectLifecycleReady?: boolean;
 }
 
+let sampleOpenRequestToken = 0;
+
+/**
+ * A failed first project swap can remount the launcher, so component-local
+ * effects and refs cannot reliably coordinate a retry. Observe the persisted
+ * busy → stable-ready transition from the DOM and retry the deterministic
+ * bundled sample exactly once while the launcher is still present.
+ */
+function scheduleSampleRetry(
+  onAction: (action: ProjectLauncherAction) => void,
+  sampleId: string,
+  requestToken: number,
+) {
+  const startedAt = Date.now();
+  let observedBusy = false;
+  let readySince: number | undefined;
+
+  const poll = () => {
+    if (requestToken !== sampleOpenRequestToken) return;
+
+    const launcher = document.querySelector<HTMLElement>('[data-project-launcher]');
+    if (!launcher) return;
+
+    const ready = launcher.dataset.projectLifecycleReady === 'true';
+    if (!ready) {
+      observedBusy = true;
+      readySince = undefined;
+    } else if (observedBusy) {
+      readySince ??= Date.now();
+      if (Date.now() - readySince >= 500) {
+        // Invalidate this coordinator before issuing the single retry.
+        sampleOpenRequestToken += 1;
+        onAction({ type: 'load-sample', sampleId });
+        return;
+      }
+    }
+
+    if (Date.now() - startedAt < 15_000) {
+      window.setTimeout(poll, 100);
+    }
+  };
+
+  window.setTimeout(poll, 100);
+}
+
 /**
  * Production-oriented first-project launcher shown when Studio is active
  * and the live project is effectively blank.
@@ -45,50 +90,11 @@ export function ProjectLauncher({
   const [manualOpen, setManualOpen] = useState(initialManualOpen);
   const primarySample = SAMPLE_PROJECTS[0];
   const replacementReady = projectLifecycleReady;
-  const sampleRetryPendingRef = useRef(false);
-  const sampleRetryObservedBusyRef = useRef(false);
-  const sampleRetryUsedRef = useRef(false);
-  const sampleRetryTimerRef = useRef<number | undefined>(undefined);
-
-  useEffect(() => () => {
-    if (sampleRetryTimerRef.current !== undefined) {
-      window.clearTimeout(sampleRetryTimerRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!sampleRetryPendingRef.current || sampleRetryUsedRef.current || !primarySample) return;
-
-    if (!replacementReady) {
-      sampleRetryObservedBusyRef.current = true;
-      if (sampleRetryTimerRef.current !== undefined) {
-        window.clearTimeout(sampleRetryTimerRef.current);
-        sampleRetryTimerRef.current = undefined;
-      }
-      return;
-    }
-
-    if (!sampleRetryObservedBusyRef.current || sampleRetryTimerRef.current !== undefined) return;
-
-    // A project swap briefly returns to ready between its snapshot and commit.
-    // Debounce the ready edge, then retry once only when the launcher is still
-    // mounted—successful activation unmounts it and cancels this timer.
-    sampleRetryTimerRef.current = window.setTimeout(() => {
-      sampleRetryTimerRef.current = undefined;
-      const launcher = document.querySelector<HTMLElement>('[data-project-launcher]');
-      if (!launcher || launcher.dataset.projectLifecycleReady !== 'true') return;
-
-      sampleRetryUsedRef.current = true;
-      sampleRetryPendingRef.current = false;
-      onAction({ type: 'load-sample', sampleId: primarySample.id });
-    }, 400);
-  }, [onAction, primarySample, replacementReady]);
 
   const openPrimarySample = () => {
     if (!primarySample) return;
-    sampleRetryPendingRef.current = true;
-    sampleRetryObservedBusyRef.current = false;
-    sampleRetryUsedRef.current = false;
+    const requestToken = ++sampleOpenRequestToken;
+    scheduleSampleRetry(onAction, primarySample.id, requestToken);
     onAction({ type: 'load-sample', sampleId: primarySample.id });
   };
 
