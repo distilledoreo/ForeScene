@@ -48,7 +48,7 @@ export function ProjectLauncher({
   const sampleRetryPendingRef = useRef(false);
   const sampleRetryObservedBusyRef = useRef(false);
   const sampleRetryUsedRef = useRef(false);
-  const sampleRetryTimerRef = useRef<number>();
+  const sampleRetryTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => () => {
     if (sampleRetryTimerRef.current !== undefined) {
