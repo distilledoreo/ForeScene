@@ -123,7 +123,8 @@ test.describe('@smoke first-project launcher', () => {
     await expectRetainedContactSheetResolves(page);
 
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
-    await expect(page.locator('[data-shots-camera-shell]')).toBeVisible();
+    // goToWorkspace already waits for the shell. Dismiss guidance before the
+    // next navigation instead of racing a duplicate assertion against its modal.
     await dismissOverlays(page);
 
     await goToWorkspace(page, 'Reference', '[data-panoramas-card], [data-reference-bottom-chrome]');
