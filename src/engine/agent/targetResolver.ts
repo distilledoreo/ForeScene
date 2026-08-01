@@ -11,7 +11,7 @@ import {
   type AgentDiagnostic,
 } from './diagnostics';
 import { listObjectsSnapshot } from './inspection';
-import type { AgentEntityReference, AgentEntityTarget } from './protocol';
+import type { AgentEntityReference, AgentEntityTarget, AgentKeyframeTarget } from './protocol';
 
 export type ResolveTargetResult =
   | { ok: true; id: string; fromRef?: string }
@@ -195,6 +195,30 @@ export function resolveShotTarget(
       ),
     ],
   };
+}
+
+export function resolveKeyframeTarget(
+  project: LocationProject,
+  shotId: string,
+  target: AgentKeyframeTarget,
+  refs: Record<string, AgentEntityReference>,
+): ResolveTargetResult {
+  const shot = project.shots.find((candidate) => candidate.id === shotId);
+  if (!shot) {
+    return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${shotId}".`)] };
+  }
+  if ('id' in target) {
+    if (shot.cameraKeyframes.some((keyframe) => keyframe.id === target.id)) return { ok: true, id: target.id };
+    return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No keyframe with id "${target.id}" in shot "${shotId}".`)] };
+  }
+  const resolved = refs[target.ref];
+  if (!resolved || resolved.kind !== 'keyframe') {
+    return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `Unknown keyframe ref "${target.ref}".`)] };
+  }
+  if (!shot.cameraKeyframes.some((keyframe) => keyframe.id === resolved.id)) {
+    return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `Keyframe ref "${target.ref}" is not in shot "${shotId}".`)] };
+  }
+  return { ok: true, id: resolved.id, fromRef: target.ref };
 }
 
 export function resolveLandmarkTarget(

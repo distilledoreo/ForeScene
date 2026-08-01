@@ -14,6 +14,7 @@ Playwright hosts and observes the browser. The Agent API performs exact project 
 **Milestone 6 — landmarks & export configuration** ✓  
 **Milestone 7 — package-export control** ✓  
 **Milestone 8 — in-app Agent Console** ✓
+**Milestone 9 — temporal authoring and controlled video** ✓
 
 Available now:
 
@@ -22,6 +23,10 @@ Available now:
 - Package export via API / CLI / Agent Console
 - `npm run agent:screenshot` / `agent:verify` / `agent:run` / `agent:package`
 - Project menu → **Agent Console** (same `window.foreScene` path)
+- Timeline inspection and arbitrary-time sampling without changing the live shot
+- Declarative timeline replacement, keyframe create/update/delete, staging, preview/apply, and undo
+- Arbitrary-time clay frames via `renderShotFrame({ shotId, timeSeconds })`
+- Controlled shot video rendering with progress and cancellation via `renderShotVideo()`
 
 ## Quick start
 
@@ -98,6 +103,43 @@ Supported plan commands:
 - `shot.create` / `shot.rename` / `shot.updateDescription` / `shot.updateCamera`
 - `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging` / `shot.delete`
 - `landmark.create` / `landmark.update` / `landmark.delete` / `landmark.linkObject`
+- `shot.timeline.replace` / `shot.timeline.clear` / `shot.timeline.setDuration`
+- `shot.keyframe.create` / `shot.keyframe.update` / `shot.keyframe.delete`
+- `shot.keyframe.stageObject` / `shot.keyframe.clearStaging`
+
+## Temporal authoring
+
+Inspection is available through `inspectShotTimeline({ shotId })` and
+`sampleShotAtTime({ shotId, timeSeconds })`. Sampling clamps to the shot duration
+and returns interpolated camera and object overrides; it does not persist changes.
+
+```js
+await window.foreScene.previewPlan({
+  version: 1,
+  planId: 'demo-motion',
+  commands: [{
+    op: 'shot.timeline.replace',
+    shot: { id: 'shot-id' },
+    durationSeconds: 4,
+    keyframes: [
+      { timeSeconds: 0, camera: { position: [0, 2, 6], target: [0, 1, 0] } },
+      { timeSeconds: 4, camera: { position: [2, 2, 4], target: [0, 1, 0] } },
+    ],
+  }],
+});
+```
+
+The CLI exposes the same render path:
+
+```bash
+npm run agent:frame -- --shot shot-id --time 2 --output artifacts/midpoint.png
+npm run agent:video -- --shot shot-id --write --resolution 1080p --output artifacts/shot.mp4
+```
+
+Video rendering is exclusive with other Agent writes, reports progress through
+`getShotVideoRenderProgress()`, and can be stopped with
+`cancelShotVideoRender()`. A failed or cancelled render leaves the previous shot
+video attachment intact.
 - `export.sceneDefaults.patch`
 - `export.shotOverrides.patch` / `reset` / `copy` / `promote`
 - `workspace.open` / `selection.set`

@@ -50,6 +50,7 @@ import {
   shouldExportCameraMoveDepth,
 } from '../../engine/depthRender';
 import { snapshotStageableObjectOverrides } from '../../engine/objectKeyframes';
+import { setShotTimelineKeyframes } from '../../engine/shotTimeline';
 import {
   buildKeyframeThumbCacheFromKeyframes,
   shouldCommitKeyframeThumb,
@@ -270,12 +271,13 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
 
   const updateCameraMoveKeyframes = useCallback((keyframes: CameraKeyframe[]) => {
     if (!selectedShot) return;
+    const latest = useProjectStore.getState().project;
+    const nextProject = setShotTimelineKeyframes(latest, selectedShot.id, keyframes);
+    const nextShot = nextProject.shots.find((shot) => shot.id === selectedShot.id);
+    if (!nextShot) return;
     updateShot(selectedShot.id, {
-      cameraKeyframes: keyframes,
-      assets: {
-        ...selectedShot.assets,
-        cameraMoveVideoAssetId: undefined,
-      },
+      cameraKeyframes: nextShot.cameraKeyframes,
+      assets: nextShot.assets,
     });
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);
@@ -620,14 +622,14 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
       easing: cameraMoveEasing,
       preserveManualTiming,
     });
+    const nextProject = setShotTimelineKeyframes(latest, selectedShot.id, nextKeyframes);
+    const nextShot = nextProject.shots.find((item) => item.id === selectedShot.id);
+    if (!nextShot) return;
     // Persist live pose so chrome re-renders cannot reseat the camera at an old origin.
     updateShot(selectedShot.id, {
       camera: pose,
-      cameraKeyframes: nextKeyframes,
-      assets: {
-        ...latestShot.assets,
-        cameraMoveVideoAssetId: undefined,
-      },
+      cameraKeyframes: nextShot.cameraKeyframes,
+      assets: nextShot.assets,
     });
     setCameraMovePreviewUrl(undefined);
     setCameraMoveError(undefined);

@@ -31,6 +31,8 @@ import {
   type PrevisPropPrimitive,
   type PrevisRelativeRelation,
   type PrevisShotDefinition,
+  type PrevisShotMotion,
+  type PrevisShotMotionKeyframe,
 } from './manifest';
 import {
   PREVIS_DIAGNOSTIC_CODES,
@@ -576,6 +578,10 @@ function parseShots(
       }
     }
 
+    const motion = record.motion === undefined
+      ? undefined
+      : parseShotMotion(record.motion, `${path}.motion`, ids, errors, warnings);
+
     if (id && shotNumber && name && locationId && camera) {
       result.push({
         id,
@@ -587,11 +593,111 @@ function parseShots(
         camera,
         ...(blocking ? { blocking } : {}),
         ...(requirements ? { requirements } : {}),
+        ...(motion ? { motion } : {}),
       });
     }
   });
 
   return result;
+}
+
+function parseShotMotion(
+  value: unknown,
+  path: string,
+  ids: { castIds: Set<string>; propIds: Set<string> },
+  errors: PrevisDiagnostic[],
+  warnings: PrevisDiagnostic[],
+): PrevisShotMotion | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'motion must be an object.', { path }));
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const durationSeconds = readOptionalPositiveNumber(record.durationSeconds, `${path}.durationSeconds`, errors);
+  const renderControlVideo = record.renderControlVideo === undefined
+    ? undefined
+    : Boolean(record.renderControlVideo);
+  if (record.renderControlVideo !== undefined && typeof record.renderControlVideo !== 'boolean') {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.renderControlVideo must be a boolean.`, { path: `${path}.renderControlVideo` }));
+  }
+  if (!Array.isArray(record.keyframes) || record.keyframes.length < 2) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, `${path}.keyframes must contain at least two entries.`, { path: `${path}.keyframes` }));
+    return undefined;
+  }
+  const keyframes = record.keyframes.flatMap((entry, index) => {
+    const itemPath = `${path}.keyframes[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'motion keyframe must be an object.', { path: itemPath }));
+      return [];
+    }
+    const item = entry as Record<string, unknown>;
+    const timeSeconds = readNonnegativeNumber(item.timeSeconds, `${itemPath}.timeSeconds`, errors);
+    let camera: PrevisShotMotionKeyframe['camera'] | undefined;
+    if (item.camera !== undefined) {
+      if (!item.camera || typeof item.camera !== 'object' || Array.isArray(item.camera)) {
+        errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'camera must be an object.', { path: `${itemPath}.camera` }));
+      } else {
+        const raw = item.camera as Record<string, unknown>;
+        const position = raw.position === undefined ? undefined : readFiniteVec3(raw.position, `${itemPath}.camera.position`, errors);
+        const target = raw.target === undefined ? undefined : readFiniteVec3(raw.target, `${itemPath}.camera.target`, errors);
+        const fovDegrees = raw.fovDegrees === undefined ? undefined : readOptionalPositiveNumber(raw.fovDegrees, `${itemPath}.camera.fovDegrees`, errors);
+        camera = { ...(position ? { position } : {}), ...(target ? { target } : {}), ...(fovDegrees !== undefined ? { fovDegrees } : {}) };
+      }
+    }
+    const staging = parseMotionStaging(item.staging, `${itemPath}.staging`, ids, errors, warnings);
+    return timeSeconds === undefined ? [] : [{ timeSeconds, ...(camera ? { camera } : {}), ...(staging ? { staging } : {}) }];
+  });
+  for (let index = 1; index < keyframes.length; index += 1) {
+    if (keyframes[index]!.timeSeconds <= keyframes[index - 1]!.timeSeconds) {
+      errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion keyframe times must be strictly increasing.', { path: `${path}.keyframes` }));
+      break;
+    }
+  }
+  if (durationSeconds === undefined) return undefined;
+  if (keyframes.length < 2 || keyframes[keyframes.length - 1]!.timeSeconds !== durationSeconds) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion durationSeconds must equal the final keyframe time.', { path }));
+    return undefined;
+  }
+  return { durationSeconds, ...(renderControlVideo !== undefined ? { renderControlVideo } : {}), keyframes };
+}
+
+function parseMotionStaging(
+  value: unknown,
+  path: string,
+  ids: { castIds: Set<string>; propIds: Set<string> },
+  errors: PrevisDiagnostic[],
+  warnings: PrevisDiagnostic[],
+): PrevisShotMotionKeyframe['staging'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'staging must be an array.', { path }));
+    return undefined;
+  }
+  return value.flatMap((entry, index) => {
+    const itemPath = `${path}[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'staging entry must be an object.', { path: itemPath }));
+      return [];
+    }
+    const item = entry as Record<string, unknown>;
+    const subject = readNonemptyString(item.subject, `${itemPath}.subject`, errors);
+    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${subject}".`, { path: `${itemPath}.subject` }));
+    const visible = item.visible === undefined ? undefined : Boolean(item.visible);
+    if (item.visible !== undefined && typeof item.visible !== 'boolean') errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'visible must be a boolean.', { path: `${itemPath}.visible` }));
+    let transform: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] } | undefined;
+    if (item.transform !== undefined) {
+      if (!item.transform || typeof item.transform !== 'object' || Array.isArray(item.transform)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'transform must be an object.', { path: `${itemPath}.transform` }));
+      else {
+        const raw = item.transform as Record<string, unknown>;
+        const position = raw.position === undefined ? undefined : readFiniteVec3(raw.position, `${itemPath}.transform.position`, errors);
+        const rotation = raw.rotation === undefined ? undefined : readFiniteVec3(raw.rotation, `${itemPath}.transform.rotation`, errors);
+        const scale = raw.scale === undefined ? undefined : readFiniteVec3(raw.scale, `${itemPath}.transform.scale`, errors);
+        transform = { ...(position ? { position } : {}), ...(rotation ? { rotation } : {}), ...(scale ? { scale } : {}) };
+      }
+    }
+    const posePreset = readOptionalString(item.posePreset, `${itemPath}.posePreset`, errors, warnings);
+    return subject ? [{ subject, ...(visible !== undefined ? { visible } : {}), ...(transform ? { transform } : {}), ...(posePreset ? { posePreset } : {}) }] : [];
+  });
 }
 
 function parseBlocking(
@@ -919,6 +1025,30 @@ function readOptionalPositiveNumber(
     return undefined;
   }
   return value;
+}
+
+function readNonnegativeNumber(value: unknown, path: string, errors: PrevisDiagnostic[]): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path} must be a finite number.`, { path }));
+    return undefined;
+  }
+  if (value < 0) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, `${path} must be nonnegative.`, { path }));
+    return undefined;
+  }
+  return value;
+}
+
+function readFiniteVec3(
+  value: unknown,
+  path: string,
+  errors: PrevisDiagnostic[],
+): [number, number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 3 || value.some((item) => typeof item !== 'number' || !Number.isFinite(item))) {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path} must be a 3-number array.`, { path }));
+    return undefined;
+  }
+  return [value[0] as number, value[1] as number, value[2] as number];
 }
 
 function readVec3(

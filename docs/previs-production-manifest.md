@@ -33,6 +33,28 @@ interface PrevisProductionManifestV1 {
 }
 ```
 
+Shots may include optional temporal authoring. It is compiled into the same
+Agent timeline commands used by direct automation, so it participates in plan
+preview, atomic apply, undo, and controlled invalidation of stale video assets:
+
+```json
+{
+  "motion": {
+    "durationSeconds": 4,
+    "renderControlVideo": true,
+    "keyframes": [
+      { "timeSeconds": 0, "camera": { "position": [0, 2, 6], "target": [0, 1, 0] } },
+      { "timeSeconds": 4, "camera": { "position": [2, 2, 4], "target": [0, 1, 0] },
+        "staging": [{ "subject": "alex", "transform": { "position": [1, 0, 0] } }] }
+    ]
+  }
+}
+```
+
+Motion requires at least two strictly increasing keyframes, with the final
+keyframe time equal to `durationSeconds`. `renderControlVideo` is metadata for
+the production runner; video generation remains an explicit render step.
+
 See `src/engine/previs/manifest.ts` for the full TypeScript contract.
 
 ## Location templates

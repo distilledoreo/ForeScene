@@ -88,6 +88,37 @@ describe('agent plan validation', () => {
     expect(unsupported.errors.some((item) => item.code === 'not_implemented')).toBe(true);
   });
 
+  it('parses temporal commands and enforces their wire-level invariants', () => {
+    const valid = parseForeSceneAgentPlan({
+      version: 1,
+      commands: [{
+        op: 'shot.timeline.replace',
+        shot: { id: 'shot_123456789' },
+        durationSeconds: 2,
+        keyframes: [
+          { timeSeconds: 0, camera: {} },
+          { timeSeconds: 2, camera: {}, objects: [{ object: { ref: 'cast.alex' }, visible: true }] },
+        ],
+      }],
+    });
+    expect(valid.errors).toEqual([]);
+    expect(valid.plan?.commands[0]?.op).toBe('shot.timeline.replace');
+
+    const invalid = parseForeSceneAgentPlan({
+      version: 1,
+      commands: [{
+        op: 'shot.timeline.replace',
+        shot: { id: 'shot_123456789' },
+        durationSeconds: 2,
+        keyframes: [
+          { timeSeconds: 1, camera: {} },
+          { timeSeconds: 1, camera: {} },
+        ],
+      }],
+    });
+    expect(invalid.errors.some((item) => item.code === 'timeline_order')).toBe(true);
+  });
+
   it('aliases standing-neutral pose presets', () => {
     const result = parseForeSceneAgentPlan({
       version: 1,

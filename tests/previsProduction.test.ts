@@ -42,6 +42,24 @@ describe('previs production manifest', () => {
     expect(result.manifest?.shots).toHaveLength(8);
   });
 
+  it('parses motion keyframes and rejects a duration mismatch', () => {
+    const input = loadExample('minimal-dialogue.json') as { shots: Array<Record<string, unknown>> };
+    input.shots[0]!.motion = {
+      durationSeconds: 2,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0, camera: { position: [0, 1, 2], target: [0, 1, 0] } },
+        { timeSeconds: 2, staging: [{ subject: 'alex', visible: true, transform: { position: [1, 0, 0] } }] },
+      ],
+    };
+    const result = parsePrevisProductionManifest(input);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.shots[0]?.motion?.keyframes).toHaveLength(2);
+
+    input.shots[0]!.motion = { durationSeconds: 3, keyframes: [{ timeSeconds: 0 }, { timeSeconds: 2 }] };
+    expect(parsePrevisProductionManifest(input).errors.some((item) => item.code === 'invalid_range')).toBe(true);
+  });
+
   it('rejects duplicate shot numbers and unknown refs', () => {
     const result = parsePrevisProductionManifest({
       version: 1,

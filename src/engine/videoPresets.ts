@@ -3,7 +3,7 @@ export const DEFAULT_VIDEO_WIDTH = 1920;
 export const DEFAULT_VIDEO_HEIGHT = 1080;
 export const DEFAULT_VIDEO_FRAME_RATE = 30;
 
-export type VideoResolutionPresetId = '1080p' | '4k';
+export type VideoResolutionPresetId = '720p' | '1080p' | '4k';
 
 export interface VideoResolutionPreset {
   id: VideoResolutionPresetId;
@@ -24,6 +24,17 @@ export interface VideoResolutionPreset {
  * 1080p30 → Level 4.0; 4K30 → Level 5.1.
  */
 export const VIDEO_RESOLUTION_PRESETS: Record<VideoResolutionPresetId, VideoResolutionPreset> = {
+  '720p': {
+    id: '720p',
+    label: '720p30 (Preview)',
+    width: 1280,
+    height: 720,
+    frameRate: DEFAULT_VIDEO_FRAME_RATE,
+    avcCodecString: 'avc1.64001f',
+    profile: 'high',
+    level: '3.1',
+    bitrate: 5_000_000,
+  },
   '1080p': {
     id: '1080p',
     label: '1080p30 (Resolve)',
@@ -58,6 +69,7 @@ export function resolveVideoPreset(
 
 export function videoPresetForSize(width: number, height: number): VideoResolutionPreset {
   if (width >= 3840 || height >= 2160) return VIDEO_RESOLUTION_PRESETS['4k'];
+  if (width <= 1280 || height <= 720) return VIDEO_RESOLUTION_PRESETS['720p'];
   return VIDEO_RESOLUTION_PRESETS['1080p'];
 }
 

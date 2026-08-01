@@ -17,7 +17,7 @@
  * Project reset additionally requires `--reset-project`.
  */
 
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
 import { inspectViaBrowser } from './inspect';
@@ -51,6 +51,12 @@ function parseArgs(argv: string[]) {
     input: undefined as string | undefined,
     profile: undefined as string | undefined,
     shotIds: [] as string[],
+    timeSeconds: undefined as number | undefined,
+    resolution: undefined as string | undefined,
+    appearance: undefined as string | undefined,
+    content: undefined as string | undefined,
+    noAttach: false,
+    noDownload: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -89,12 +95,93 @@ function parseArgs(argv: string[]) {
     } else if (token === '--shot') {
       const shotId = argv[++index];
       if (shotId) args.shotIds.push(shotId);
+    } else if (token === '--time') {
+      const value = Number(argv[++index]);
+      if (!Number.isFinite(value)) throw new Error('--time must be a finite number');
+      args.timeSeconds = value;
+    } else if (token === '--resolution') {
+      args.resolution = argv[++index];
+    } else if (token === '--appearance') {
+      args.appearance = argv[++index];
+    } else if (token === '--content') {
+      args.content = argv[++index];
+    } else if (token === '--no-attach') {
+      args.noAttach = true;
+    } else if (token === '--no-download') {
+      args.noDownload = true;
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }
   }
 
   return args;
+}
+
+async function runFrame(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  shotId: string;
+  timeSeconds?: number;
+  output: string;
+}) {
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(async (input) => (
+      window.foreScene!.renderShotFrame({ shotId: input.shotId, timeSeconds: input.timeSeconds, pass: 'clay' })
+    ), { shotId: options.shotId, timeSeconds: options.timeSeconds });
+    if (!result.ok || !result.pngDataUrl) {
+      printJson(result);
+      process.exitCode = 1;
+      return;
+    }
+    const comma = result.pngDataUrl.indexOf(',');
+    if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
+    const target = path.resolve(options.output);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64'));
+    printJson({ ...result, pngDataUrl: undefined, output: target });
+  });
+}
+
+async function runVideo(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  shotId: string;
+  output?: string;
+  resolution?: string;
+  appearance?: string;
+  content?: string;
+  attachToShot: boolean;
+  download: boolean;
+}) {
+  await withSession(options, async (session) => {
+    const contentMode = options.content === 'full' ? 'full_scene' : options.content;
+    const downloadPromise = options.download && options.output
+      ? session.page.waitForEvent('download', { timeout: 600_000 })
+      : null;
+    const result = await session.page.evaluate(async (input) => (
+      window.foreScene!.renderShotVideo({
+        shotId: input.shotId,
+        resolutionPreset: input.resolution as '720p' | '1080p' | '4k' | undefined,
+        appearance: input.appearance as 'clay' | 'projected' | 'depth' | undefined,
+        contentMode: input.content as 'full_scene' | 'clean_plate' | 'characters_only' | undefined,
+        attachToShot: input.attachToShot,
+        download: input.download,
+      })
+    ), { ...options, content: contentMode });
+    let savedPath: string | undefined;
+    if (downloadPromise && result.ok) {
+      const download = await downloadPromise;
+      savedPath = path.resolve(options.output!);
+      await mkdir(path.dirname(savedPath), { recursive: true });
+      await download.saveAs(savedPath);
+    }
+    printJson({ ...result, savedPath });
+    if (!result.ok) process.exitCode = 1;
+  });
 }
 
 function requireExplicitWrite(command: string, writeAccess: boolean): void {
@@ -364,6 +451,42 @@ async function main() {
       persistWrite: args.persistWrite,
       workspace: args.workspace,
       output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'frame') {
+    const shotId = args.shotIds[0];
+    if (!shotId) throw new Error('--shot is required for frame');
+    if (!args.output) throw new Error('--output is required for frame');
+    await runFrame({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      shotId,
+      timeSeconds: args.timeSeconds,
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'video') {
+    const shotId = args.shotIds[0];
+    if (!shotId) throw new Error('--shot is required for video');
+    requireExplicitWrite('video', args.writeAccess);
+    await runVideo({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      shotId,
+      output: args.output,
+      resolution: args.resolution,
+      appearance: args.appearance,
+      content: args.content,
+      attachToShot: !args.noAttach,
+      download: !args.noDownload,
     });
     return;
   }

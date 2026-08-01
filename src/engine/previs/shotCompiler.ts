@@ -412,6 +412,34 @@ function compileSingleShot(
     });
   }
 
+  if (shot.motion) {
+    commands.push({
+      op: 'shot.timeline.replace',
+      shot: shotTarget,
+      durationSeconds: shot.motion.durationSeconds,
+      keyframes: shot.motion.keyframes.map((keyframe) => ({
+        timeSeconds: keyframe.timeSeconds,
+        camera: keyframe.camera ?? {},
+        objects: keyframe.staging?.map((staging) => ({
+          object: resolveEntityTarget(
+            context.entities[`cast.${staging.subject}`]?.objectId
+              ?? context.entities[`props.${staging.subject}`]?.objectId,
+            previsRef(manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop', staging.subject),
+          ),
+          ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
+          ...(staging.transform ? {
+            transform: {
+              position: staging.transform.position ?? [0, 0, 0],
+              rotation: staging.transform.rotation ?? [0, 0, 0],
+              scale: staging.transform.scale ?? [1, 1, 1],
+            },
+          } : {}),
+          ...(staging.posePreset ? { posePreset: staging.posePreset } : {}),
+        })),
+      })),
+    });
+  }
+
   commands.push({
     op: 'shot.select',
     shot: shotTarget,

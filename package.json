@@ -20,6 +20,8 @@
     "agent:preview": "tsx scripts/agent/cli.ts preview",
     "agent:apply": "tsx scripts/agent/cli.ts apply",
     "agent:screenshot": "tsx scripts/agent/cli.ts screenshot",
+    "agent:frame": "tsx scripts/agent/cli.ts frame",
+    "agent:video": "tsx scripts/agent/cli.ts video",
     "agent:verify": "tsx scripts/agent/cli.ts verify",
     "agent:run": "tsx scripts/agent/cli.ts run",
     "agent:package": "tsx scripts/agent/cli.ts package",

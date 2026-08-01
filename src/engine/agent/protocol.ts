@@ -5,12 +5,14 @@
 
 import type {
   CameraData,
+  CameraKeyframeEasing,
   ExportSettingsOverride,
   HumanPose,
   LocationProject,
   SceneObjectType,
   StagingRole,
   Transform,
+  ShotObjectOverrides,
   Workspace,
 } from '../../domain/types';
 import type {
@@ -20,13 +22,25 @@ import type {
 } from '../exportPlan';
 import type { ExportSettingFieldPath } from '../exportConfiguration';
 import type { PackageExportPhase } from '../packageExport';
+import type { VideoResolutionPresetId } from '../videoPresets';
+import type { SceneContentMode } from '../shotSceneState';
 import type { AgentDiagnostic } from './diagnostics';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
 export type AgentControlMode = 'off' | 'read-only' | 'read-write';
 
-export type AgentEntityKind = 'object' | 'shot' | 'landmark';
+export type AgentEntityKind = 'object' | 'shot' | 'landmark' | 'keyframe';
+
+export type AgentKeyframeTarget = { id: string } | { ref: string };
+
+export interface AgentTimelineObjectInput {
+  object: AgentEntityTarget;
+  transform?: Transform;
+  visible?: boolean;
+  humanPose?: HumanPose;
+  posePreset?: string;
+}
 
 /** Stable target for existing entities or plan-local refs (mutations use refs). */
 export type AgentEntityTarget =
@@ -52,6 +66,7 @@ export interface ForeSceneAgentBusyState {
   criticalWrite: boolean;
   grayboxRender: boolean;
   packageExport: boolean;
+  videoRender: boolean;
 }
 
 export interface ForeSceneAgentPersistenceStatus {
@@ -87,6 +102,8 @@ export interface ForeSceneAgentCapabilities {
   mutations: boolean;
   packageExport: boolean;
   projectReplacement: boolean;
+  timelineInspection: boolean;
+  timelineSampling: boolean;
   commands: {
     inspect: string[];
     mutate: string[];
@@ -165,6 +182,33 @@ export interface AgentShotInspection extends AgentShotSummary {
   camera: CameraData;
   landmarkIds: string[];
   stagedObjectIds: string[];
+}
+
+export interface AgentKeyframeInspection {
+  id: string;
+  label: string;
+  timeSeconds: number;
+  easing?: CameraKeyframeEasing;
+  camera: CameraData;
+  objectOverrides: ShotObjectOverrides;
+  stagedObjectIds: string[];
+}
+
+export interface AgentShotTimelineInspection {
+  shotId: string;
+  durationSeconds: number;
+  renderable: boolean;
+  hasManualTiming: boolean;
+  keyframes: AgentKeyframeInspection[];
+}
+
+export interface AgentShotTimeSample {
+  shotId: string;
+  requestedTimeSeconds: number;
+  sampledTimeSeconds: number;
+  durationSeconds: number;
+  camera: CameraData;
+  objectOverrides: ShotObjectOverrides;
 }
 
 export interface AgentLandmarkSummary {
@@ -276,6 +320,59 @@ export type ForeSceneAgentCommand =
   | {
       op: 'shot.delete';
       shot: AgentEntityTarget;
+    }
+  | {
+      op: 'shot.timeline.replace';
+      shot: AgentEntityTarget;
+      durationSeconds?: number;
+      keyframes: Array<{
+        ref?: string;
+        label?: string;
+        timeSeconds: number;
+        camera: Partial<CameraData>;
+        easing?: CameraKeyframeEasing;
+        objects?: AgentTimelineObjectInput[];
+      }>;
+    }
+  | { op: 'shot.timeline.clear'; shot: AgentEntityTarget }
+  | { op: 'shot.timeline.setDuration'; shot: AgentEntityTarget; durationSeconds: number }
+  | {
+      op: 'shot.keyframe.create';
+      shot: AgentEntityTarget;
+      ref?: string;
+      timeSeconds: number;
+      camera: Partial<CameraData>;
+      label?: string;
+      easing?: CameraKeyframeEasing;
+      objects?: AgentTimelineObjectInput[];
+      snapshotShotStaging?: boolean;
+    }
+  | {
+      op: 'shot.keyframe.update';
+      shot: AgentEntityTarget;
+      keyframe: AgentKeyframeTarget;
+      timeSeconds?: number;
+      label?: string;
+      camera?: Partial<CameraData>;
+      easing?: CameraKeyframeEasing;
+      objects?: AgentTimelineObjectInput[];
+    }
+  | { op: 'shot.keyframe.delete'; shot: AgentEntityTarget; keyframe: AgentKeyframeTarget }
+  | {
+      op: 'shot.keyframe.stageObject';
+      shot: AgentEntityTarget;
+      keyframe: AgentKeyframeTarget;
+      object: AgentEntityTarget;
+      transform?: Transform;
+      visible?: boolean;
+      humanPose?: HumanPose;
+      posePreset?: string;
+    }
+  | {
+      op: 'shot.keyframe.clearStaging';
+      shot: AgentEntityTarget;
+      keyframe: AgentKeyframeTarget;
+      object?: AgentEntityTarget;
     }
   | {
       op: 'landmark.create';
@@ -454,6 +551,7 @@ export interface AgentResetProjectRequest {
 /** Clean clay first-frame render via the shared package-export renderer. */
 export interface AgentRenderShotFrameInput {
   shotId: string;
+  timeSeconds?: number;
   pass?: 'clay';
   width?: number;
   height?: number;
@@ -476,9 +574,57 @@ export interface AgentRenderShotFrameResult {
   height: number;
   pngDataUrl?: string;
   pixelStats?: AgentRenderPixelStats;
+  requestedTimeSeconds?: number;
+  sampledTimeSeconds?: number;
   diagnostics?: AgentDiagnostic[];
   /** Marks frames produced by the canonical clean clay renderer. */
   source?: 'canonical_clay_renderer';
+}
+
+export interface AgentShotVideoRenderInput {
+  shotId: string;
+  mode?: 'render' | 'quickPreview';
+  resolutionPreset?: VideoResolutionPresetId;
+  appearance?: 'clay' | 'projected' | 'depth';
+  contentMode?: SceneContentMode;
+  backgroundColor?: string;
+  includeCharacterAttachments?: boolean;
+  download?: boolean;
+  attachToShot?: boolean;
+}
+
+export type AgentShotVideoRenderPhase =
+  | 'preparing'
+  | 'rendering'
+  | 'encoding'
+  | 'saving'
+  | 'complete'
+  | 'failed'
+  | 'cancelled';
+
+export interface AgentShotVideoProgress {
+  phase: AgentShotVideoRenderPhase;
+  progress: number;
+  completedFrames?: number;
+  totalFrames?: number;
+  shotId: string;
+  message: string;
+  error?: string;
+}
+
+export interface AgentShotVideoRenderResult {
+  ok: boolean;
+  shotId?: string;
+  assetId?: string;
+  fileName?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  frameRate?: number;
+  mimeType?: string;
+  encodeMode?: 'render' | 'quickPreview';
+  diagnostics: AgentDiagnostic[];
+  progress?: AgentShotVideoProgress;
 }
 
 export interface AgentWaitForViewportReadyInput {
@@ -514,6 +660,8 @@ export interface ForeSceneBrowserApi {
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
   inspectShot(target: AgentEntityTarget): AgentShotInspection;
+  inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
+  sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
   listLandmarks(): AgentLandmarkSummary[];
   createExportPlan(input?: AgentExportPlanRequest): AgentExportPlanResult;
 
@@ -542,6 +690,9 @@ export interface ForeSceneBrowserApi {
    * package `inputs/viewport_clay.png` (not a UI screenshot).
    */
   renderShotFrame(input: AgentRenderShotFrameInput): Promise<AgentRenderShotFrameResult>;
+  renderShotVideo(input: AgentShotVideoRenderInput): Promise<AgentShotVideoRenderResult>;
+  getShotVideoRenderProgress(): AgentShotVideoProgress | null;
+  cancelShotVideoRender(): AgentShotVideoRenderResult;
 
   /**
    * Replace the live project with a blank graybox shell.
