@@ -49,6 +49,10 @@ export interface UseProjectLifecycleOptions {
 export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycleOptions) {
   const fileRef = useRef<HTMLInputElement>(null);
   const persistenceControllerRef = useRef<ProjectPersistenceController | undefined>(undefined);
+  /** Resolves once the persistence controller has started (or is already live). */
+  const controllerReadyPromiseRef = useRef<Promise<ProjectPersistenceController> | undefined>(undefined);
+  const resolveControllerReadyRef = useRef<((controller: ProjectPersistenceController) => void) | undefined>(undefined);
+  const [projectLifecycleReady, setProjectLifecycleReady] = useState(false);
   const [projectImportStatus, setProjectImportStatus] = useState<ProjectImportStatus>();
   const [newProjectConfirmOpen, setNewProjectConfirmOpen] = useState(false);
   const [isCreatingNewProject, setIsCreatingNewProject] = useState(false);
@@ -62,6 +66,18 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const setRecovered = useProjectSafetyStore((state) => state.setRecovered);
   const setFlushProject = useProjectSafetyStore((state) => state.setFlushProject);
   const setRunDestructiveProjectMutation = useProjectSafetyStore((state) => state.setRunDestructiveProjectMutation);
+
+  /** Await the live persistence controller — never throw “still starting” to fast clickers. */
+  const awaitPersistenceController = async (): Promise<ProjectPersistenceController> => {
+    const live = persistenceControllerRef.current;
+    if (live) return live;
+    if (!controllerReadyPromiseRef.current) {
+      controllerReadyPromiseRef.current = new Promise<ProjectPersistenceController>((resolve) => {
+        resolveControllerReadyRef.current = resolve;
+      });
+    }
+    return controllerReadyPromiseRef.current;
+  };
 
   const openProjectPicker = () => {
     if (criticalProjectWrite) {
@@ -79,14 +95,14 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   /**
    * Replace the live project with a committed document (snapshot → commit → set).
    * Shared by new project, sample load, and launcher manual starts.
+   * Waits for persistence readiness so a fast launcher click never races startup.
    */
   const commitAndActivateProject = async (
     next: LocationProject,
     reason: string,
     successMessage: string,
   ) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     const current = useProjectStore.getState().project;
     await controller.createSnapshot(current, `Before: ${reason}`);
     await controller.commitProject(next, {
@@ -257,8 +273,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     if (!file) return;
     try {
       const { readProjectFile } = await loadProjectIo();
-      const controller = persistenceControllerRef.current;
-      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+      const controller = await awaitPersistenceController();
       await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another project');
       const importedProject = await readProjectFile(file);
       // The imported package has been validated before this point. Stage its
@@ -289,8 +304,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const saveProject = () => {
     void (async () => {
       try {
-        const controller = persistenceControllerRef.current;
-        if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+        const controller = await awaitPersistenceController();
         const verified = await controller.flushAndLoadActiveRevision('Verified save before backup export');
         if (!verified) throw new Error('No verified project revision is available for backup export.');
         const { downloadProject } = await loadProjectIo();
@@ -309,14 +323,12 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   const createProjectSnapshot = async (reason: string) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, reason);
   };
 
   const restoreProjectSnapshot = async (revisionId: string) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     const { restoreProjectRevision } = await loadProjectSafety();
     const currentProject = useProjectStore.getState().project;
     const restored = await restoreProjectRevision(currentProject.id, revisionId);
@@ -336,8 +348,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
 
   const openLocalProjectHistory = async (projectId: string, revisionId: string) => {
     if (projectId === useProjectStore.getState().project.id) return;
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another local project');
     const { restoreProjectRevision } = await loadProjectSafety();
     const opened = await restoreProjectRevision(projectId, revisionId);
@@ -365,8 +376,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   const applyProjectHealthRepair = async (repairedProject: LocationProject) => {
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
     await controller.createSnapshot(useProjectStore.getState().project, 'Before repairing project health');
     await controller.commitProject(repairedProject, {
       kind: 'autosave',
@@ -385,8 +395,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     if (criticalProjectWrite) {
       throw new Error('Please wait for the current local save to finish before creating a generated set.');
     }
-    const controller = persistenceControllerRef.current;
-    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const controller = await awaitPersistenceController();
 
     const current = useProjectStore.getState().project;
     const next = compiled.project;
@@ -418,6 +427,12 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     let unsubscribe: (() => void) | undefined;
     let unsubscribeAssetFailures: (() => void) | undefined;
     const projectAtStartup = useProjectStore.getState().project;
+
+    // Fresh readiness gate for this mount (callers can await immediately).
+    setProjectLifecycleReady(false);
+    controllerReadyPromiseRef.current = new Promise<ProjectPersistenceController>((resolve) => {
+      resolveControllerReadyRef.current = resolve;
+    });
 
     void (async () => {
       try {
@@ -465,6 +480,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
           controller.start(currentProject);
         }
 
+        // Unblock sample load / import / new-project callers waiting on readiness.
+        resolveControllerReadyRef.current?.(controller);
+        setProjectLifecycleReady(true);
+
         unsubscribe = useProjectStore.subscribe((next, previous) => {
           if (next.project !== previous.project) controller.noteProjectChange(next.project, previous.project);
         });
@@ -479,6 +498,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
             : 'Local recovery could not start.',
           criticalWrite: false,
         });
+        setProjectLifecycleReady(false);
       }
     })();
 
@@ -488,8 +508,11 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       unsubscribeAssetFailures?.();
       setFlushProject(undefined);
       setRunDestructiveProjectMutation(undefined);
+      setProjectLifecycleReady(false);
       persistenceControllerRef.current?.dispose();
       persistenceControllerRef.current = undefined;
+      resolveControllerReadyRef.current = undefined;
+      controllerReadyPromiseRef.current = undefined;
     };
   }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered, setRunDestructiveProjectMutation]);
 
@@ -516,6 +539,8 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     newProjectConfirmOpen,
     setNewProjectConfirmOpen,
     isCreatingNewProject,
+    /** True once local persistence has started and project swaps are safe. */
+    projectLifecycleReady,
     openProjectPicker,
     importProject,
     saveProject,

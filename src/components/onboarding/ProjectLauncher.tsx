@@ -23,6 +23,11 @@ export interface ProjectLauncherProps {
   onAction: (action: ProjectLauncherAction) => void;
   /** When true, show the manual sub-panel immediately. */
   initialManualOpen?: boolean;
+  /**
+   * False while local project recovery/persistence is still starting.
+   * Project-replacement actions are disabled until ready (underlying lifecycle still awaits).
+   */
+  projectLifecycleReady?: boolean;
 }
 
 /**
@@ -34,9 +39,11 @@ export interface ProjectLauncherProps {
 export function ProjectLauncher({
   onAction,
   initialManualOpen = false,
+  projectLifecycleReady = true,
 }: ProjectLauncherProps) {
   const [manualOpen, setManualOpen] = useState(initialManualOpen);
   const primarySample = SAMPLE_PROJECTS[0];
+  const replacementReady = projectLifecycleReady;
 
   return (
     <div
@@ -45,6 +52,7 @@ export function ProjectLauncher({
       aria-modal="true"
       aria-labelledby="project-launcher-title"
       data-project-launcher
+      data-project-lifecycle-ready={replacementReady ? 'true' : 'false'}
     >
       <div className="relative max-h-[min(92vh,52rem)] w-full max-w-3xl space-y-4 overflow-y-auto rounded-[var(--radius-card)] border border-subtle bg-surface-raised p-5 shadow-soft sm:p-7">
         <button
@@ -68,6 +76,15 @@ export function ProjectLauncher({
             Choose a path into a complete production. Every option states what you will get —
             nothing leaves you in an empty workspace without context.
           </p>
+          {!replacementReady && (
+            <p
+              className="text-xs font-medium text-accent"
+              role="status"
+              data-project-lifecycle-preparing
+            >
+              Preparing local recovery…
+            </p>
+          )}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -88,6 +105,7 @@ export function ProjectLauncher({
             onClick={() => setManualOpen((open) => !open)}
             dataOption="build-manually"
             active={manualOpen}
+            disabled={!replacementReady}
           />
           <LauncherCard
             icon={<FolderOpen className="h-6 w-6" />}
@@ -96,6 +114,7 @@ export function ProjectLauncher({
             detail="Load a .fsp / .zip / .json project backup from disk. Local recovery remains available from Project Safety."
             onClick={() => onAction({ type: 'open-existing' })}
             dataOption="open-existing"
+            disabled={!replacementReady}
           />
         </div>
 
@@ -104,6 +123,7 @@ export function ProjectLauncher({
             onBlank={() => onAction({ type: 'build-blank' })}
             onStarter={() => onAction({ type: 'build-starter' })}
             onImport={() => onAction({ type: 'open-existing' })}
+            disabled={!replacementReady}
           />
         )}
 
@@ -111,6 +131,7 @@ export function ProjectLauncher({
           <SampleProjectCard
             sample={primarySample}
             onOpen={() => onAction({ type: 'load-sample', sampleId: primarySample.id })}
+            disabled={!replacementReady}
           />
         )}
 
@@ -142,6 +163,7 @@ function LauncherCard({
   onClick,
   dataOption,
   active,
+  disabled,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -151,14 +173,16 @@ function LauncherCard({
   onClick: () => void;
   dataOption: string;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       data-launcher-option={dataOption}
       aria-pressed={active}
-      className={`flex flex-col items-start gap-3 rounded-2xl border p-4 text-left transition ${
+      className={`flex flex-col items-start gap-3 rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
         active
           ? 'border-[var(--accent)] bg-accent-soft/50 shadow-card'
           : 'border-subtle bg-surface-muted/60 hover:border-[var(--accent)] hover:bg-accent-soft/40 hover:shadow-card'

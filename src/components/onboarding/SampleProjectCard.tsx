@@ -8,6 +8,8 @@ export interface SampleProjectCardProps {
   /** When the sample is already loaded, offer reset. */
   onReset?: () => void;
   isActiveSample?: boolean;
+  /** Disable open/reset while project lifecycle is still preparing. */
+  disabled?: boolean;
 }
 
 /**
@@ -18,6 +20,7 @@ export function SampleProjectCard({
   onOpen,
   onReset,
   isActiveSample = false,
+  disabled = false,
 }: SampleProjectCardProps) {
   return (
     <div
@@ -44,7 +47,8 @@ export function SampleProjectCard({
           <button
             type="button"
             onClick={onReset}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-subtle bg-surface-raised px-3 py-2 text-xs font-semibold text-primary transition hover:border-[var(--accent)]"
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-subtle bg-surface-raised px-3 py-2 text-xs font-semibold text-primary transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
             data-sample-reset
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -54,7 +58,8 @@ export function SampleProjectCard({
           <button
             type="button"
             onClick={onOpen}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[var(--accent-hover)]"
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
             data-sample-open
           >
             <Sparkles className="h-3.5 w-3.5" />

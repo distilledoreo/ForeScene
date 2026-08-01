@@ -28,7 +28,10 @@ test.describe('@smoke first-project launcher', () => {
   test('opens Dialogue Demo sample and reaches Reference + Export', async ({ page }) => {
     await enterStudioExpectingLauncher(page);
 
-    await page.locator('[data-sample-open]').click();
+    // Wait for persistence readiness — sample open is disabled until lifecycle is ready.
+    const openSample = page.locator('[data-sample-open]');
+    await expect(openSample).toBeEnabled({ timeout: 30_000 });
+    await openSample.click();
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await expect(page.locator('[data-project-import-status="success"]')).toBeVisible({ timeout: 15_000 }).catch(() => undefined);
     // Workflow guidance / objective modals often appear after a project swap.
@@ -89,7 +92,9 @@ test.describe('@smoke first-project launcher', () => {
 
   test('reset sample restores baseline after edits', async ({ page }) => {
     await enterStudioExpectingLauncher(page);
-    await page.locator('[data-sample-open]').click();
+    const openSample = page.locator('[data-sample-open]');
+    await expect(openSample).toBeEnabled({ timeout: 30_000 });
+    await openSample.click();
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await dismissOverlays(page);
     await expectProjectName(page, /Dialogue Demo/i);

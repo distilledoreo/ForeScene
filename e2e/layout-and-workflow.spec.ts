@@ -179,14 +179,32 @@ test.describe('@smoke build interactions', () => {
     await workspaceTab(page, 'Build').click();
     await dismissOverlays(page);
 
-    // Shortcuts ignore editable targets; focus the 3D viewport so Ctrl/Cmd+A is not lost.
+    // Blank stage only has locked floor + light helper. Stamp two real boxes so
+    // select-all has multiple selectable production objects (not temple-dependent).
+    const tray = page.locator('[data-build-object-tray]');
+    await expect(tray).toBeVisible();
+    await tray.getByRole('button', { name: /Box/i }).first().click();
+
     const viewport = page.getByTestId('scene-viewport');
     await expect(viewport).toBeVisible();
+    const bounds = await viewport.boundingBox();
+    expect(bounds).toBeTruthy();
+    if (bounds) {
+      await page.mouse.click(bounds.x + bounds.width * 0.4, bounds.y + bounds.height * 0.55);
+      await page.mouse.click(bounds.x + bounds.width * 0.6, bounds.y + bounds.height * 0.55);
+    }
+
+    // Shortcuts ignore editable targets; focus the 3D viewport so Ctrl/Cmd+A is not lost.
     await viewport.focus();
     await expect(viewport).toBeFocused();
 
     await page.keyboard.press('ControlOrMeta+A');
-    await expect(page.locator('[data-build-selection-count]')).toContainText(/objects selected/);
+    // Two boxes plus any unlocked helper (e.g. key light) — at least the two boxes.
+    const selection = page.locator('[data-build-selection-count]');
+    await expect(selection).toContainText(/objects selected/);
+    const selectionText = await selection.textContent();
+    const selectedCount = Number.parseInt(selectionText ?? '0', 10);
+    expect(selectedCount).toBeGreaterThanOrEqual(2);
     await page.keyboard.press('ControlOrMeta+C');
     await expect(page.locator('[data-build-command-status]')).toContainText(/Copied/);
     await page.keyboard.press('ControlOrMeta+V');

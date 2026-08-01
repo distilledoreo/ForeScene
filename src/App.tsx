@@ -120,6 +120,7 @@ export default function App() {
     startStarterProject,
     loadSampleProject,
     resetSampleProject,
+    projectLifecycleReady,
     createProjectSnapshot,
     restoreProjectSnapshot,
     openLocalProjectHistory,
@@ -684,7 +685,10 @@ export default function App() {
 
       <ModeChooser visible={showModeChooser} />
       {showProjectLauncher && (
-        <ProjectLauncher onAction={handleLauncherAction} />
+        <ProjectLauncher
+          onAction={handleLauncherAction}
+          projectLifecycleReady={projectLifecycleReady}
+        />
       )}
       <SplashScreen onDismissed={() => setSplashDone(true)} />
     </div>

@@ -5,6 +5,7 @@ export interface ManualProjectOptionsProps {
   onBlank: () => void;
   onStarter: () => void;
   onImport: () => void;
+  disabled?: boolean;
 }
 
 /**
@@ -14,6 +15,7 @@ export function ManualProjectOptions({
   onBlank,
   onStarter,
   onImport,
+  disabled = false,
 }: ManualProjectOptionsProps) {
   return (
     <div
@@ -33,6 +35,7 @@ export function ManualProjectOptions({
           outcome="Empty stage with a ground slab and light — ready for your own set."
           onClick={onBlank}
           dataOption="blank-graybox"
+          disabled={disabled}
         />
         <ManualOption
           icon={<LayoutTemplate className="h-4 w-4" />}
@@ -40,6 +43,7 @@ export function ManualProjectOptions({
           outcome="A small courtyard set with scale figure so you can frame shots immediately."
           onClick={onStarter}
           dataOption="temple-starter"
+          disabled={disabled}
         />
         <ManualOption
           icon={<FolderOpen className="h-4 w-4" />}
@@ -47,6 +51,7 @@ export function ManualProjectOptions({
           outcome="Open an existing ForeScene project backup from disk."
           onClick={onImport}
           dataOption="import-backup"
+          disabled={disabled}
         />
       </div>
     </div>
@@ -59,19 +64,22 @@ function ManualOption({
   outcome,
   onClick,
   dataOption,
+  disabled,
 }: {
   icon: React.ReactNode;
   title: string;
   outcome: string;
   onClick: () => void;
   dataOption: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       data-manual-option={dataOption}
-      className="flex flex-col items-start gap-2 rounded-xl border border-subtle bg-surface-raised p-3 text-left transition hover:border-[var(--accent)] hover:bg-accent-soft/30"
+      className="flex flex-col items-start gap-2 rounded-xl border border-subtle bg-surface-raised p-3 text-left transition hover:border-[var(--accent)] hover:bg-accent-soft/30 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-soft text-accent">
         {icon}
