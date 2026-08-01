@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   Clapperboard,
@@ -45,6 +45,52 @@ export function ProjectLauncher({
   const [manualOpen, setManualOpen] = useState(initialManualOpen);
   const primarySample = SAMPLE_PROJECTS[0];
   const replacementReady = projectLifecycleReady;
+  const sampleRetryPendingRef = useRef(false);
+  const sampleRetryObservedBusyRef = useRef(false);
+  const sampleRetryUsedRef = useRef(false);
+  const sampleRetryTimerRef = useRef<number>();
+
+  useEffect(() => () => {
+    if (sampleRetryTimerRef.current !== undefined) {
+      window.clearTimeout(sampleRetryTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sampleRetryPendingRef.current || sampleRetryUsedRef.current || !primarySample) return;
+
+    if (!replacementReady) {
+      sampleRetryObservedBusyRef.current = true;
+      if (sampleRetryTimerRef.current !== undefined) {
+        window.clearTimeout(sampleRetryTimerRef.current);
+        sampleRetryTimerRef.current = undefined;
+      }
+      return;
+    }
+
+    if (!sampleRetryObservedBusyRef.current || sampleRetryTimerRef.current !== undefined) return;
+
+    // A project swap briefly returns to ready between its snapshot and commit.
+    // Debounce the ready edge, then retry once only when the launcher is still
+    // mounted—successful activation unmounts it and cancels this timer.
+    sampleRetryTimerRef.current = window.setTimeout(() => {
+      sampleRetryTimerRef.current = undefined;
+      const launcher = document.querySelector<HTMLElement>('[data-project-launcher]');
+      if (!launcher || launcher.dataset.projectLifecycleReady !== 'true') return;
+
+      sampleRetryUsedRef.current = true;
+      sampleRetryPendingRef.current = false;
+      onAction({ type: 'load-sample', sampleId: primarySample.id });
+    }, 400);
+  }, [onAction, primarySample, replacementReady]);
+
+  const openPrimarySample = () => {
+    if (!primarySample) return;
+    sampleRetryPendingRef.current = true;
+    sampleRetryObservedBusyRef.current = false;
+    sampleRetryUsedRef.current = false;
+    onAction({ type: 'load-sample', sampleId: primarySample.id });
+  };
 
   return (
     <div
@@ -131,7 +177,7 @@ export function ProjectLauncher({
         {primarySample && (
           <SampleProjectCard
             sample={primarySample}
-            onOpen={() => onAction({ type: 'load-sample', sampleId: primarySample.id })}
+            onOpen={openPrimarySample}
             disabled={!replacementReady}
           />
         )}
