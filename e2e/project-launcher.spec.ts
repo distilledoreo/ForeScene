@@ -67,9 +67,14 @@ async function expectRetainedContactSheetResolves(page: Page) {
     if (!key) return false;
 
     const assets = await open('panoref-project-assets');
-    const blob = await read<Blob>(assets, 'binary-assets', key);
+    const stored = await read<Blob | { bytes: ArrayBuffer; type: string }>(assets, 'binary-assets', key);
     assets.close();
-    if (!(blob instanceof Blob)) return false;
+    const blob = stored instanceof Blob
+      ? stored
+      : stored && stored.bytes instanceof ArrayBuffer
+        ? new Blob([stored.bytes], { type: stored.type })
+        : undefined;
+    if (!blob) return false;
     const url = URL.createObjectURL(blob);
     try {
       const response = await fetch(url);
@@ -169,6 +174,7 @@ test.describe('@smoke first-project launcher', () => {
     await dismissOverlays(page);
 
     await expectProjectName(page, /Dialogue Demo/i);
+    await expectRetainedContactSheetResolves(page);
     await dismissOverlays(page);
   });
 });

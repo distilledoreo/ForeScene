@@ -17,8 +17,9 @@ const memoryBlobVersions = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
-/** Serialize fire-and-forget IDB writes — WebKit is sensitive to overlapping open/put/close. */
-let assetWriteQueue: Promise<void> = Promise.resolve();
+/** Serialize all asset-database operations — WebKit is sensitive to contention between connections and transactions. */
+let assetOperationQueue: Promise<void> = Promise.resolve();
+let assetDatabasePromise: Promise<IDBDatabase | undefined> | undefined;
 
 export interface ProjectAssetBlobWrite {
   key: string;
@@ -30,16 +31,39 @@ export interface ProjectAssetPersistenceFailure {
   error: unknown;
 }
 
+interface StoredProjectAssetRecord {
+  bytes: ArrayBuffer;
+  type: string;
+}
+
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
-  return new Promise((resolve, reject) => {
+  if (assetDatabasePromise) return assetDatabasePromise;
+
+  let connectionPromise: Promise<IDBDatabase | undefined>;
+  connectionPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('Could not open local asset storage.'));
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => {
+        database.close();
+        if (assetDatabasePromise === connectionPromise) assetDatabasePromise = undefined;
+      };
+      database.onclose = () => {
+        if (assetDatabasePromise === connectionPromise) assetDatabasePromise = undefined;
+      };
+      resolve(database);
+    };
+    request.onerror = () => {
+      if (assetDatabasePromise === connectionPromise) assetDatabasePromise = undefined;
+      reject(request.error ?? new Error('Could not open local asset storage.'));
+    };
   });
+  assetDatabasePromise = connectionPromise;
+  return connectionPromise;
 }
 
 function makeObjectUrl(key: string, blob: Blob): string {
@@ -128,62 +152,77 @@ async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]
     for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
     return;
   }
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      for (const entry of entries) store.put(entry.blob, entry.key);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not store local project assets.'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset storage was cancelled.'));
+  const storedEntries: Array<{ key: string; value: StoredProjectAssetRecord }> = [];
+  for (const entry of entries) {
+    storedEntries.push({
+      key: entry.key,
+      value: { bytes: await entry.blob.arrayBuffer(), type: entry.blob.type },
     });
-    for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
-  } finally {
-    db.close();
   }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    for (const entry of storedEntries) store.put(entry.value, entry.key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error('Could not store local project assets.'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset storage was cancelled.'));
+  });
+  for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
+}
+
+function readStoredProjectAsset(value: unknown): Blob | undefined {
+  if (value instanceof Blob) return value;
+  if (value instanceof ArrayBuffer) return new Blob([value]);
+  if (ArrayBuffer.isView(value)) {
+    return new Blob([value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)]);
+  }
+  if (!value || typeof value !== 'object' || !('bytes' in value)) return undefined;
+  const record = value as Partial<StoredProjectAssetRecord>;
+  if (!(record.bytes instanceof ArrayBuffer)) return undefined;
+  return new Blob([record.bytes], { type: typeof record.type === 'string' ? record.type : '' });
+}
+
+function enqueueAssetDatabaseOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = assetOperationQueue.then(operation);
+  assetOperationQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 export function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
   if (entries.length === 0) return Promise.resolve();
 
-  const write = assetWriteQueue.then(() => putProjectAssetBlobsNow(entries));
-  // Keep the queue usable after a failed operation while still rejecting the
-  // current caller so persistence failures remain observable.
-  assetWriteQueue = write.catch(() => undefined);
-  return write;
+  return enqueueAssetDatabaseOperation(() => putProjectAssetBlobsNow(entries));
 }
 
 export async function getProjectAssetBlob(key: string): Promise<Blob | undefined> {
   const cached = memoryBlobs.get(key);
   if (cached) return cached;
-  const db = await openDatabase();
-  if (!db) return undefined;
-  try {
+  return enqueueAssetDatabaseOperation(async () => {
+    const cachedAfterQueue = memoryBlobs.get(key);
+    if (cachedAfterQueue) return cachedAfterQueue;
+    const db = await openDatabase();
+    if (!db) return undefined;
     const blob = await new Promise<Blob | undefined>((resolve, reject) => {
       const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
-      request.onsuccess = () => resolve(request.result instanceof Blob ? request.result : undefined);
+      request.onsuccess = () => resolve(readStoredProjectAsset(request.result));
       request.onerror = () => reject(request.error ?? new Error('Could not read local project asset.'));
     });
     if (blob) cacheProjectAssetBlob(key, blob, false);
     return blob;
-  } finally {
-    db.close();
-  }
+  });
 }
 
 /** List local keys for diagnostics and deferred, revision-aware cleanup. */
 export async function listProjectAssetBlobKeys(): Promise<string[]> {
-  const db = await openDatabase();
-  if (!db) return [...memoryBlobs.keys()];
-  try {
-    return await new Promise<string[]>((resolve, reject) => {
+  return enqueueAssetDatabaseOperation(async () => {
+    const db = await openDatabase();
+    if (!db) return [...memoryBlobs.keys()];
+    return new Promise<string[]>((resolve, reject) => {
       const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys();
       request.onsuccess = () => resolve(request.result.filter((key): key is string => typeof key === 'string'));
       request.onerror = () => reject(request.error ?? new Error('Could not list local project assets.'));
     });
-  } finally {
-    db.close();
-  }
+  });
 }
 
 export async function resolveProjectAssetUri(asset: Pick<ProjectAsset, 'uri' | 'storageKey'>): Promise<string | undefined> {
@@ -198,26 +237,27 @@ export async function resolveProjectAssetUri(asset: Pick<ProjectAsset, 'uri' | '
 }
 
 export async function deleteProjectAssetBlob(key: string): Promise<void> {
-  memoryBlobs.delete(key);
-  memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
-  const url = objectUrls.get(key);
-  if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
-  objectUrls.delete(key);
-  const db = await openDatabase();
-  if (!db) return;
-  try {
+  return enqueueAssetDatabaseOperation(async () => {
+    memoryBlobs.delete(key);
+    memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    const url = objectUrls.get(key);
+    if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+    objectUrls.delete(key);
+    const db = await openDatabase();
+    if (!db) return;
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(STORE_NAME, 'readwrite');
       transaction.objectStore(STORE_NAME).delete(key);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete local project asset.'));
     });
-  } finally {
-    db.close();
-  }
+  });
 }
 
 export function resetProjectAssetStoreForTests() {
+  const databasePromise = assetDatabasePromise;
+  assetDatabasePromise = undefined;
+  void assetOperationQueue.then(() => databasePromise?.then((database) => database?.close())).catch(() => undefined);
   if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
     for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }
@@ -226,7 +266,7 @@ export function resetProjectAssetStoreForTests() {
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;
-  assetWriteQueue = Promise.resolve();
+  assetOperationQueue = Promise.resolve();
 }
 
 /** Deterministically exercise a durable binary-write failure in regression tests. */
