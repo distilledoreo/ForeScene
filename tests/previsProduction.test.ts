@@ -582,6 +582,64 @@ describe('run-state resume', () => {
     expect(updated.state.phases.locations).toBe('complete');
   });
 
+  it('invalidates changed motion videos while retaining unchanged motion videos', () => {
+    const previous = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
+    const motion = (x: number) => ({
+      durationSeconds: 2,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0 },
+        {
+          timeSeconds: 2,
+          camera: {
+            position: [x, 2, 4] as [number, number, number],
+            target: [0, 1, 0] as [number, number, number],
+          },
+        },
+      ],
+    });
+    previous.shots[0]!.motion = motion(0);
+    previous.shots[1]!.motion = motion(1);
+
+    let state = createInitialRunState({
+      manifestHash: hashPrevisManifest(previous),
+      shotNumbers: previous.shots.map((shot) => shot.shotNumber),
+    });
+    state = upsertShotState(state, '010', {
+      compile: 'complete', render: 'complete', validation: 'passed',
+      video: 'complete', videoPath: 'shots/010.mp4', videoAssetId: 'asset_010',
+    });
+    state = upsertShotState(state, '020', {
+      compile: 'complete', render: 'complete', validation: 'passed',
+      video: 'complete', videoPath: 'shots/020.mp4', videoAssetId: 'asset_020',
+    });
+
+    const next = structuredClone(previous);
+    next.shots[0]!.motion!.keyframes[1]!.camera!.position = [2, 2, 4];
+    const updated = applyManifestUpdateToRunState({
+      state,
+      previousManifest: previous,
+      nextManifest: next,
+      nextManifestHash: hashPrevisManifest(next),
+    });
+
+    expect(updated.diff.shotsToInvalidate).toEqual(['010']);
+    expect(updated.state.shots['010']).toMatchObject({
+      compile: 'pending',
+      render: 'pending',
+      video: 'pending',
+    });
+    expect(updated.state.shots['010']?.videoPath).toBeUndefined();
+    expect(updated.state.shots['010']?.videoAssetId).toBeUndefined();
+    expect(updated.state.shots['020']).toMatchObject({
+      compile: 'complete',
+      render: 'complete',
+      video: 'complete',
+      videoPath: 'shots/020.mp4',
+      videoAssetId: 'asset_020',
+    });
+  });
+
   it('update-manifest removes deleted shots from run-state', () => {
     const previous = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
     let state = createInitialRunState({
