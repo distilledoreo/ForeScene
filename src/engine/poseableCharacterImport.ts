@@ -8,12 +8,14 @@ import {
   ProjectAsset,
   SceneObject,
   Vec3,
+  ImportedHumanoidRigBinding,
+  HumanJointId,
 } from '../domain/types';
 import { createTransform } from '../domain/defaults';
 import { createId } from '../utils/ids';
 import { HUMAN_JOINT_IDS } from './humanPose';
 import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
-import { putModelAsset } from './modelAssetStore';
+import { deleteModelAsset, putModelAsset } from './modelAssetStore';
 import { registerAutoriggedPoseableCharacter } from './poseableCharacter';
 import { createAutoriggedPoseableCharacterShell } from './autoriggedPoseableCharacter';
 import {
@@ -22,6 +24,12 @@ import {
   CURRENT_AUTORIG_RIG_GENERATION_VERSION,
 } from './poseableRigNormalize';
 import { prepareCanonicalAutorigMesh } from './autorigCanonicalMesh';
+import { loadPoseableSource, type LoadedPoseableSource } from './poseableSourceLoader';
+import { analyzeHumanoidSkeleton, type HumanoidMappingAnalysis } from './importedRig/analyzeSkeleton';
+import { validateHumanoidMapping } from './importedRig/mappingValidation';
+import { calculateCanonicalPoseBases, validateCanonicalPoseBases } from './importedRig/canonicalFrames';
+import { fingerprintImportedMapping, fingerprintImportedRestPose, fingerprintImportedSkeleton } from './importedRig/fingerprints';
+import { buildBonePathMap } from './importedRig/bonePaths';
 
 export {
   DEFAULT_POSEABLE_HEIGHT_METERS,
@@ -35,8 +43,8 @@ export {
   normalizePoseableRigAsset,
 } from './poseableRigNormalize';
 
-export const POSEABLE_CHARACTER_IMPORT_ACCEPT = '.glb,.gltf';
-export const POSEABLE_CHARACTER_IMPORT_EXTENSIONS = ['glb', 'gltf'] as const;
+export const POSEABLE_CHARACTER_IMPORT_ACCEPT = '.glb,.gltf,.fbx';
+export const POSEABLE_CHARACTER_IMPORT_EXTENSIONS = ['glb', 'gltf', 'fbx'] as const;
 export type PoseableCharacterImportFormat = typeof POSEABLE_CHARACTER_IMPORT_EXTENSIONS[number];
 
 export interface PoseableCharacterImportPreview {
@@ -46,6 +54,11 @@ export interface PoseableCharacterImportPreview {
   meshCount: number;
   hasSkinnedMeshes: boolean;
   warnings: string[];
+  rigAnalysis?: HumanoidMappingAnalysis;
+  animationCount?: number;
+  boneCount?: number;
+  skinnedMeshCount?: number;
+  boneOptions?: Array<{ path: string; name: string }>;
 }
 
 export interface PoseableCharacterImportOptions {
@@ -53,6 +66,8 @@ export interface PoseableCharacterImportOptions {
   orientation: PoseableCharacterOrientation;
   approximateHeightMeters: number;
   poseHint?: 'a-pose' | 't-pose';
+  mode?: 'autorig' | 'preserveExistingRig';
+  mappingOverrides?: Partial<Record<HumanJointId, string>>;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }
@@ -67,6 +82,18 @@ export interface PoseableCharacterImportResult {
   vertexCount: number;
 }
 
+export interface RiggedCharacterImportAnalysis {
+  sourceFormat: PoseableCharacterImportFormat;
+  sourceBytes: ArrayBuffer;
+  source: LoadedPoseableSource;
+  mapping: HumanoidMappingAnalysis;
+  canonicalPoseBases: ImportedHumanoidRigBinding['canonicalPoseBases'];
+  skeletonHash: string;
+  restPoseHash: string;
+  mappingHash: string;
+  warnings: string[];
+}
+
 function extensionOf(fileName: string): string {
   const parts = fileName.toLowerCase().split('.');
   return parts.length > 1 ? parts[parts.length - 1]! : '';
@@ -75,6 +102,59 @@ function extensionOf(fileName: string): string {
 export function isPoseableCharacterImportFile(file: File): boolean {
   const extension = extensionOf(file.name);
   return (POSEABLE_CHARACTER_IMPORT_EXTENSIONS as readonly string[]).includes(extension);
+}
+
+function temporarySourceAsset(file: File, format: PoseableCharacterImportFormat): ProjectAsset {
+  return {
+    id: 'pending-poseable-source',
+    type: 'model',
+    name: file.name,
+    uri: 'panoref-model:pending',
+    createdAt: new Date(0).toISOString(),
+    metadata: { format },
+  };
+}
+
+export async function analyzeRiggedCharacterImport(params: {
+  file: File;
+  orientation?: PoseableCharacterOrientation;
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
+}): Promise<RiggedCharacterImportAnalysis> {
+  const format = extensionOf(params.file.name) as PoseableCharacterImportFormat;
+  if (!isPoseableCharacterImportFile(params.file)) throw new Error('Poseable character import accepts GLB, embedded glTF, or FBX.');
+  params.onProgress?.('Reading source file…');
+  const sourceBytes = await params.file.arrayBuffer();
+  if (params.signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
+  params.onProgress?.('Analyzing deformation rig…');
+  const source = await loadPoseableSource(temporarySourceAsset(params.file, format), sourceBytes, params.signal);
+  const mapping = analyzeHumanoidSkeleton(source);
+  const canonicalPoseBases = calculateCanonicalPoseBases({ root: source.root, boneMap: mapping.boneMap });
+  const mappingValidation = validateHumanoidMapping({ root: source.root, boneMap: mapping.boneMap });
+  const canonicalWarnings = validateCanonicalPoseBases(canonicalPoseBases);
+  const [skeletonHash, restPoseHash, mappingHash] = await Promise.all([
+    fingerprintImportedSkeleton(source.root, source.bones),
+    fingerprintImportedRestPose(source.root, source.bones),
+    fingerprintImportedMapping(mapping.boneMap),
+  ]);
+  const warnings = [
+    ...source.warnings,
+    ...mapping.warnings,
+    ...mappingValidation.warnings,
+    ...canonicalWarnings,
+  ];
+  if (!mappingValidation.ok) warnings.push('Automatic mapping cannot be used until required joints are corrected.');
+  return {
+    sourceFormat: format,
+    sourceBytes,
+    source,
+    mapping,
+    canonicalPoseBases,
+    skeletonHash,
+    restPoseHash,
+    mappingHash,
+    warnings: [...new Set(warnings)],
+  };
 }
 
 /** Build a rotation that maps source front/up axes onto ForeScene +Z / +Y. */
@@ -87,14 +167,14 @@ function measureObjectSize(root: THREE.Object3D): { size: Vec3; box: THREE.Box3 
   return { size: [size.x, size.y, size.z], box };
 }
 
-/** Load a GLB/glTF for poseable preview without stripping materials or textures. */
+/** Load a GLB/glTF/FBX for poseable preview without stripping materials or textures. */
 export async function loadPoseableCharacterPreview(
   file: File,
   signal?: AbortSignal,
 ): Promise<PoseableCharacterImportPreview> {
   if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
   if (!isPoseableCharacterImportFile(file)) {
-    throw new Error('Poseable character import accepts GLB or embedded glTF only.');
+    throw new Error('Poseable character import accepts GLB, embedded glTF, or FBX.');
   }
   const format = extensionOf(file.name) as PoseableCharacterImportFormat;
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
@@ -102,6 +182,14 @@ export async function loadPoseableCharacterPreview(
   const buffer = await file.arrayBuffer();
   if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
 
+  let root: THREE.Object3D;
+  let animationCount = 0;
+  let sourceLoaded: LoadedPoseableSource | undefined;
+  if (format === 'fbx') {
+    sourceLoaded = await loadPoseableSource(temporarySourceAsset(file, format), buffer, signal);
+    root = sourceLoaded.root;
+    animationCount = sourceLoaded.animationClips.length;
+  } else {
   let gltf: Awaited<ReturnType<InstanceType<typeof GLTFLoader>['parseAsync']>>;
   try {
     if (format === 'gltf') {
@@ -121,7 +209,9 @@ export async function loadPoseableCharacterPreview(
     );
   }
 
-  const root = gltf.scene;
+  root = gltf.scene;
+  animationCount = gltf.animations.length;
+  }
   let meshCount = 0;
   let hasSkinnedMeshes = false;
   root.traverse((node) => {
@@ -134,10 +224,21 @@ export async function loadPoseableCharacterPreview(
 
   const { size } = measureObjectSize(root);
   const suggestedHeightMeters = Math.max(size[0], size[1], size[2], MIN_POSEABLE_HEIGHT_METERS);
-  const warnings: string[] = [];
-  if (hasSkinnedMeshes) {
-    warnings.push('Existing skinning/animation will be ignored. Autorigging starts from the rest mesh.');
-  }
+  const sourceBones = sourceLoaded?.bones ?? (() => {
+    const bones = new Set<THREE.Bone>();
+    root.traverse((node) => {
+      const mesh = node as THREE.SkinnedMesh;
+      if (mesh.isSkinnedMesh) mesh.skeleton.bones.forEach((bone) => bones.add(bone));
+    });
+    return [...bones];
+  })();
+  const warnings: string[] = [...(sourceLoaded?.warnings ?? [])];
+  const rigAnalysis = hasSkinnedMeshes && sourceBones.length > 0
+    ? analyzeHumanoidSkeleton({ root, bones: sourceBones })
+    : undefined;
+  const boneOptions = sourceBones.length > 0
+    ? [...buildBonePathMap(root, sourceBones).entries()].map(([path, bone]) => ({ path, name: bone.name }))
+    : undefined;
   if (meshCount > 1) {
     warnings.push('Multiple meshes detected. The first import treats them as one primary humanoid asset.');
   }
@@ -148,7 +249,12 @@ export async function loadPoseableCharacterPreview(
     suggestedHeightMeters: Math.min(MAX_POSEABLE_HEIGHT_METERS, suggestedHeightMeters),
     meshCount,
     hasSkinnedMeshes,
-    warnings,
+    warnings: [...new Set(warnings)],
+    ...(rigAnalysis ? { rigAnalysis } : {}),
+    animationCount,
+    boneCount: sourceBones.length,
+    skinnedMeshCount: sourceLoaded?.skinnedMeshes.length ?? (hasSkinnedMeshes ? 1 : 0),
+    ...(boneOptions ? { boneOptions } : {}),
   };
 }
 
@@ -200,6 +306,122 @@ function applyOrientationAndHeight(
   };
 }
 
+async function importExistingRigCharacter(
+  options: PoseableCharacterImportOptions & { approximateHeightMeters: number },
+): Promise<PoseableCharacterImportResult> {
+  const { file, orientation, signal, onProgress } = options;
+  const analysis = await analyzeRiggedCharacterImport({ file, orientation, signal, onProgress });
+  const boneMap = { ...analysis.mapping.boneMap, ...(options.mappingOverrides ?? {}) };
+  const validation = validateHumanoidMapping({ root: analysis.source.root, boneMap });
+  if (!validation.ok) throw new Error(`The existing rig mapping is incomplete: ${validation.warnings.join(' ')}`);
+  const canonicalPoseBases = calculateCanonicalPoseBases({ root: analysis.source.root, boneMap });
+  const sourceAssetId = createId('poseable_source');
+  const sourceKey = `poseable-source-${sourceAssetId}`;
+  const format = extensionOf(file.name) as PoseableCharacterImportFormat;
+  const sourceAsset: ProjectAsset = {
+    id: sourceAssetId,
+    type: 'model',
+    name: file.name,
+    uri: `${MODEL_ASSET_URI_PREFIX}${sourceKey}`,
+    storageKey: sourceKey,
+    mimeType: format === 'fbx' ? 'application/octet-stream' : format === 'gltf' ? 'model/gltf+json' : 'model/gltf-binary',
+    createdAt: new Date().toISOString(),
+    metadata: {
+      poseableSource: true,
+      preservesRig: true,
+      originalFileName: file.name,
+      format,
+    },
+  };
+  const rigId = createId('poseable_rig');
+  const rigAssetId = createId('asset_poseable_rig');
+  const pathMap = buildBonePathMap(analysis.source.root, analysis.source.bones);
+  const rootBone = analysis.source.bones.find((bone) => !(bone.parent instanceof THREE.Bone));
+  const rootBonePath = [...pathMap.entries()].find(([, bone]) => bone === rootBone)?.[0];
+  const requiredCount = analysis.mapping.requiredMapped.length;
+  const optionalCount = analysis.mapping.optionalMapped.length;
+  const binding: ImportedHumanoidRigBinding = {
+    version: 1,
+    id: rigId,
+    sourceAssetId,
+    sourceFormat: format,
+    profile: analysis.mapping.detectedProfile,
+    boneMap,
+    canonicalPoseBases,
+    skeletonHash: analysis.skeletonHash,
+    restPoseHash: analysis.restPoseHash,
+    ...(rootBonePath ? { rootBonePath } : {}),
+    hipsBonePath: boneMap.hips ?? boneMap.chest!,
+    orientation: { ...orientation },
+    approximateHeightMeters: options.approximateHeightMeters,
+    requiredJointCoverage: requiredCount / 15,
+    optionalJointCoverage: optionalCount / Math.max(1, HUMAN_JOINT_IDS.length - 15),
+    ...(analysis.source.animationClips.length > 0
+      ? { sourceAnimationClips: analysis.source.animationClips.map((clip) => ({ name: clip.name, durationSeconds: clip.duration })) }
+      : {}),
+    warnings: analysis.warnings,
+  };
+  const fitted = prepareCanonicalAutorigMesh({
+    source: analysis.source.root,
+    orientation,
+    targetHeightMeters: options.approximateHeightMeters,
+  });
+  const rig: PoseableRigAsset = {
+    version: 1,
+    id: rigId,
+    skeletonJoints: Object.keys(boneMap) as HumanJointId[],
+    rigGenerationVersion: CURRENT_AUTORIG_RIG_GENERATION_VERSION,
+    requiresRerigging: false,
+    originalSourceAssetId: sourceAssetId,
+    sourceMeshAssetId: sourceAssetId,
+    orientation: { ...orientation },
+    restTransform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    generationSettings: {
+      approximateHeightMeters: options.approximateHeightMeters,
+      ...(options.poseHint ? { poseHint: options.poseHint } : {}),
+      notes: ['Existing deformation skeleton, skin weights, inverse bind matrices, and source meshes are preserved.'],
+    },
+    importedRigBinding: binding,
+  };
+  const rigAsset: ProjectAsset = {
+    id: rigAssetId,
+    type: 'poseable_rig',
+    name: `${file.name.replace(/\.(glb|gltf|fbx)$/i, '') || 'Poseable character'} preserved rig`,
+    uri: `data:application/json,${encodeURIComponent(JSON.stringify({ poseableRigId: rigId }))}`,
+    mimeType: 'application/json',
+    createdAt: new Date().toISOString(),
+    metadata: { poseableRig: rig },
+  };
+  const height = fitted.size[1] || options.approximateHeightMeters;
+  const object: SceneObject = {
+    id: createId('obj'),
+    type: 'human_dummy',
+    name: file.name.replace(/\.(glb|gltf|fbx)$/i, '') || 'Poseable character',
+    category: 'helper',
+    transform: createTransform([0, Math.max(orientation.groundLevelMeters + height / 2, height / 2), 0]),
+    dimensions: fitted.size[0] > 0 ? fitted.size : [0.55, options.approximateHeightMeters, 0.55],
+    visible: true,
+    locked: false,
+    stagingRole: 'person',
+    poseableCharacter: { kind: 'importedRig', assetId: rigAssetId, rigId },
+  };
+  onProgress?.('Writing original rigged source asset…');
+  try {
+    await putModelAsset(sourceKey, analysis.sourceBytes, signal);
+  } catch (error) {
+    await deleteModelAsset(sourceKey).catch(() => undefined);
+    throw error;
+  }
+  return {
+    sourceAsset,
+    rigAsset,
+    object,
+    rig,
+    warnings: analysis.warnings,
+    vertexCount: 0,
+  };
+}
+
 /**
  * Import a poseable character shell: preserve original source bytes, write a
  * poseable_rig asset, and create a scene object. Skin weights are deferred.
@@ -214,7 +436,10 @@ export async function importPoseableCharacter(
   );
   if (signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
   if (!isPoseableCharacterImportFile(file)) {
-    throw new Error('Poseable character import accepts GLB or embedded glTF only.');
+    throw new Error('Poseable character import accepts GLB, embedded glTF, or FBX.');
+  }
+  if (options.mode === 'preserveExistingRig') {
+    return importExistingRigCharacter({ ...options, approximateHeightMeters });
   }
 
   onProgress?.('Reading source file…');
@@ -235,6 +460,7 @@ export async function importPoseableCharacter(
     type: 'model',
     name: file.name,
     uri: `${MODEL_ASSET_URI_PREFIX}${sourceKey}`,
+    storageKey: sourceKey,
     mimeType: format === 'gltf' ? 'model/gltf+json' : 'model/gltf-binary',
     createdAt: new Date().toISOString(),
     metadata: {

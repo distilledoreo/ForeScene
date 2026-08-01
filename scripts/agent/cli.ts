@@ -49,6 +49,10 @@ function parseArgs(argv: string[]) {
     output: undefined as string | undefined,
     screenshot: undefined as string | undefined,
     input: undefined as string | undefined,
+    file: undefined as string | undefined,
+    mapping: undefined as string | undefined,
+    rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto',
+    name: undefined as string | undefined,
     profile: undefined as string | undefined,
     shotIds: [] as string[],
     timeSeconds: undefined as number | undefined,
@@ -90,6 +94,18 @@ function parseArgs(argv: string[]) {
       args.screenshot = argv[++index];
     } else if (token === '--input') {
       args.input = argv[++index];
+    } else if (token === '--file') {
+      args.file = argv[++index];
+    } else if (token === '--mapping') {
+      args.mapping = argv[++index];
+    } else if (token === '--rig-mode') {
+      const mode = argv[++index];
+      if (mode !== 'preserve' && mode !== 'autorig' && mode !== 'auto') {
+        throw new Error('--rig-mode must be preserve, autorig, or auto');
+      }
+      args.rigMode = mode;
+    } else if (token === '--name') {
+      args.name = argv[++index];
     } else if (token === '--profile') {
       args.profile = argv[++index];
     } else if (token === '--shot') {
@@ -115,6 +131,78 @@ function parseArgs(argv: string[]) {
   }
 
   return args;
+}
+
+async function runCharacterAnalysis(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  file: string;
+  output?: string;
+}) {
+  const target = path.resolve(options.file);
+  const bytes = await readFile(target);
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(async (input) => {
+      const file = new File([new Uint8Array(input.bytes)], input.name);
+      return window.foreScene!.analyzeCharacterImport({ file, mode: 'auto' });
+    }, { name: path.basename(target), bytes: [...bytes] });
+    if (options.output) {
+      const output = path.resolve(options.output);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    }
+    printJson({ ...result, ...(options.output ? { output: path.resolve(options.output) } : {}) });
+  });
+}
+
+async function runCharacterImport(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  file: string;
+  mapping?: string;
+  rigMode: 'preserve' | 'autorig' | 'auto';
+  name?: string;
+}) {
+  requireExplicitWrite('agent:import-character', options.writeAccess);
+  const target = path.resolve(options.file);
+  const bytes = await readFile(target);
+  let mappingOverrides: Record<string, string> | undefined;
+  if (options.mapping) {
+    const mappingPath = options.mapping;
+    const parsed = JSON.parse(await readFile(path.resolve(mappingPath), 'utf8')) as unknown;
+    const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    const candidate = record.mappingOverrides && typeof record.mappingOverrides === 'object'
+      ? record.mappingOverrides as Record<string, unknown>
+      : record;
+    mappingOverrides = Object.fromEntries(
+      Object.entries(candidate).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  }
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(async (input) => {
+      const file = new File([new Uint8Array(input.bytes)], input.fileName);
+      const analysis = await window.foreScene!.analyzeCharacterImport({ file, mode: input.rigMode === 'auto' ? 'auto' : input.rigMode === 'preserve' ? 'preserveExistingRig' : 'autorig' });
+      const mode = input.rigMode === 'autorig' ? 'autorig' : 'preserveExistingRig';
+      return window.foreScene!.importCharacter({
+        analysisId: analysis.analysisId,
+        mode,
+        mappingOverrides: input.mappingOverrides,
+        name: input.characterName,
+      });
+    }, {
+      fileName: path.basename(target),
+      bytes: [...bytes],
+      rigMode: options.rigMode,
+      mappingOverrides,
+      characterName: options.name,
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
+  });
 }
 
 async function runFrame(options: {
@@ -414,6 +502,34 @@ async function runPackage(options: {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   printErr(`[agent] command=${args.command}`);
+
+  if (args.command === 'analyze-character') {
+    if (!args.file) throw new Error('analyze-character requires --file <path>.');
+    await runCharacterAnalysis({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      file: args.file,
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'import-character') {
+    if (!args.file) throw new Error('import-character requires --file <path>.');
+    await runCharacterImport({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      file: args.file,
+      mapping: args.mapping,
+      rigMode: args.rigMode,
+      name: args.name,
+    });
+    return;
+  }
 
   if (args.command === 'inspect') {
     await withSession({

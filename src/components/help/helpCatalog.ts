@@ -183,7 +183,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'More', description: 'Reveals less-frequent primitive types, Generate set from description, and the 3D scene importer.' },
           { label: 'Generate set from description', description: 'Opens the SetBlueprint workflow: describe a set, paste validated JSON from an external model, review spatial blocking, and replace the project safely.' },
           { label: 'Import 3D model or scene', description: 'Opens the geometry-only import workflow described below.' },
-          { label: 'Import poseable character', description: 'Opens the separate poseable-character wizard for upright humanoid GLB/glTF. Preserves materials/textures and original source bytes; marker-assisted autorigging follows later.' },
+          { label: 'Import poseable character', description: 'Opens the separate poseable-character wizard for upright humanoid GLB, embedded glTF, or FBX. Existing skeletons and skin weights can be preserved, or the mesh can use the ForeScene autorig path.' },
         ],
       },
       {
@@ -286,7 +286,7 @@ export const helpSections: readonly HelpSection[] = [
         title: 'Import poseable character',
         summary: 'A separate import path from graybox geometry. Establishes the poseable_rig asset lifecycle and the guided Joints → Pose & Fix wizard.',
         controls: [
-          { label: 'Choose GLB / glTF', description: 'Loads one primary upright humanoid and previews the original mesh with materials and textures preserved when possible.' },
+          { label: 'Choose GLB / glTF / FBX', description: 'Loads one upright humanoid and previews its source meshes, deformation skeleton, mapping profile, materials, and textures when possible.' },
           { label: 'Front / Up', description: 'Declares which source axes should face the camera (+Z) and world up (+Y).' },
           { label: 'Ground (m)', description: 'Sets the ground contact height after orientation.' },
           { label: 'Approx. height (m)', description: 'Scales the character to an approximate real-world height.' },
@@ -297,7 +297,8 @@ export const helpSections: readonly HelpSection[] = [
         ],
         notes: [
           'First version expects two arms, two legs, and one head with no extra limbs, tails, wings, or complex attached props.',
-          'The original source asset is retained so autorigging can be retried without re-picking the file.',
+          'Use existing rig preserves source bones, skin indices, skin weights, inverse bind matrices, and multiple skinned meshes. Imported animation clips are recorded as metadata but are not played on the ForeScene timeline.',
+          'The original source asset is retained so preserved-rig validation or autorigging can be retried without re-picking the file.',
           'Applying the rig stores markers, bind matrices, body-part labels, and skin weights for posing.',
           'Autorigged characters reload with the project. Missing or corrupt skin payloads fall back to an undeformed mesh instead of breaking the scene.',
         ],

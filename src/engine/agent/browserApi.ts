@@ -79,6 +79,12 @@ import type {
   ForeSceneBrowserApi,
 } from './protocol';
 import { FORESCENE_AGENT_API_VERSION } from './protocol';
+import {
+  analyzeCharacterImport,
+  cancelCharacterImport,
+  getCharacterImportProgress,
+  importCharacter,
+} from './characterImport';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -403,6 +409,37 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     cancelPackageExport(): AgentPackageExportResult {
       return cancelAgentPackageExport();
+    },
+
+    analyzeCharacterImport(input) {
+      const blocked = requireInspectionAccess();
+      if (blocked) return Promise.reject(new AgentApiError(blocked[0]!.code, blocked[0]!.message));
+      return analyzeCharacterImport(input);
+    },
+
+    importCharacter(input) {
+      const controlMode = useAgentControlStore.getState().controlMode;
+      if (controlMode !== 'read-write') {
+        return Promise.resolve({
+          ok: false,
+          warnings: [],
+          diagnostics: [
+            agentError(
+              AGENT_DIAGNOSTIC_CODES.writeAccessRequired,
+              'Write access is required to import a character.',
+            ),
+          ],
+        });
+      }
+      return importCharacter(input);
+    },
+
+    getCharacterImportProgress() {
+      return getCharacterImportProgress();
+    },
+
+    cancelCharacterImport() {
+      return cancelCharacterImport();
     },
 
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {

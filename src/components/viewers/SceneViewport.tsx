@@ -30,6 +30,11 @@ import {
   subscribeAutoriggedCharacterReady,
 } from '../../engine/autoriggedPoseableCharacter';
 import {
+  ensureImportedRiggedCharactersForProject,
+  getImportedRiggedCharacterRevision,
+  subscribeImportedRiggedCharacterReady,
+} from '../../engine/importedRiggedPoseableCharacter';
+import {
   buildSceneObjectNodeMap,
   diffAndApplySceneObjectUpdates,
   type ObjectSyncSnapshot,
@@ -1790,6 +1795,9 @@ export function SceneViewport({
   const hasAutoriggedCharacter = project.scene.objects.some((object) => (
     object.visible && object.poseableCharacter?.kind === 'autorigged'
   ));
+  const hasImportedRiggedCharacter = project.scene.objects.some((object) => (
+    object.visible && object.poseableCharacter?.kind === 'importedRig'
+  ));
 
   useEffect(() => {
     if (!hasVisibleHumanMannequin) return;
@@ -1849,6 +1857,14 @@ export function SceneViewport({
       setMannequinRevision(getAutoriggedCharacterRevision());
     });
   }, [hasAutoriggedCharacter]);
+
+  useEffect(() => {
+    if (!hasImportedRiggedCharacter) return;
+    void ensureImportedRiggedCharactersForProject(projectRef.current).catch(() => undefined);
+    return subscribeImportedRiggedCharacterReady(() => {
+      setMannequinRevision(getImportedRiggedCharacterRevision());
+    });
+  }, [hasImportedRiggedCharacter, project.assets.assets]);
 
   useEffect(() => {
     if (!shotFraming?.flyActive && !freeCameraActive) {

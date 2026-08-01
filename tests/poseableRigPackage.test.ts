@@ -12,7 +12,7 @@ import {
   POSEABLE_RIG_PACKAGE_FORMAT,
   POSEABLE_RIG_PACKAGE_VERSION,
 } from '../src/engine/poseableRigPackage';
-import { putModelAsset } from '../src/engine/modelAssetStore';
+import { getModelAsset, putModelAsset } from '../src/engine/modelAssetStore';
 import { MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMeshConstants';
 
 function sampleRig(overrides: Partial<PoseableRigAsset> = {}): PoseableRigAsset {
@@ -137,6 +137,55 @@ describe('poseable rig package IO', () => {
     const imported = await parsePoseableRigPackageFile(file);
     expect(imported.manifest.format).toBe(LEGACY_POSEABLE_RIG_PACKAGE_FORMAT);
     expect(imported.rig.skeletonJoints).toContain('hips');
+  });
+
+  it('round-trips preserved-rig source bytes alongside the compact binding', async () => {
+    const sourceBytes = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0]).buffer;
+    await putModelAsset('poseable-source-imported', sourceBytes);
+    const importedBinding = {
+      version: 1 as const,
+      id: 'imported-rig',
+      sourceAssetId: 'source_imported',
+      sourceFormat: 'glb' as const,
+      profile: 'mixamo' as const,
+      boneMap: { hips: 'Armature[0]/Hips[0]' as string },
+      canonicalPoseBases: { hips: [0, 0, 0, 1] as [number, number, number, number] },
+      skeletonHash: 'skeleton',
+      restPoseHash: 'rest',
+      hipsBonePath: 'Armature[0]/Hips[0]',
+      orientation: { frontAxis: '+z' as const, upAxis: '+y' as const, groundLevelMeters: 0 },
+      approximateHeightMeters: 1.75,
+      requiredJointCoverage: 1,
+      optionalJointCoverage: 0,
+    };
+    const rig = sampleRig({
+      id: 'imported-rig',
+      bindMatrices: undefined,
+      skin: undefined,
+      regionMap: undefined,
+      originalSourceAssetId: 'source_imported',
+      sourceMeshAssetId: 'source_imported',
+      importedRigBinding: importedBinding,
+    });
+    const assets = {
+      assets: {
+        source_imported: {
+          id: 'source_imported',
+          name: 'character.glb',
+          type: 'model' as const,
+          uri: `${MODEL_ASSET_URI_PREFIX}poseable-source-imported`,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          metadata: { format: 'glb' },
+        },
+      },
+    };
+    const built = await buildPoseableRigPackage({ rig, assets, characterName: 'Imported Hero' });
+    expect(built.manifest.sourceFile).toBe('source.glb');
+    const imported = await parsePoseableRigPackageFile(new File([built.blob], built.fileName, { type: 'application/zip' }));
+    expect(imported.sourceAsset?.metadata?.preservesRig).toBe(true);
+    expect(imported.rig.importedRigBinding?.sourceAssetId).toBe(imported.sourceAsset?.id);
+    const restoredBytes = await getModelAsset(imported.sourceAsset!.uri.slice(MODEL_ASSET_URI_PREFIX.length));
+    expect([...new Uint8Array(restoredBytes ?? [])]).toEqual([...new Uint8Array(sourceBytes)]);
   });
 
   it('rejects a manifest that mixes a format id with the wrong version', async () => {

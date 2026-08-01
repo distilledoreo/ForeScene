@@ -135,7 +135,40 @@ export type PoseableCharacterSource =
       kind: 'autorigged';
       assetId: string;
       rigId: string;
+    }
+  | {
+      kind: 'importedRig';
+      assetId: string;
+      rigId: string;
     };
+
+export type ImportedRigSourceFormat = 'glb' | 'gltf' | 'fbx';
+export type ImportedHumanoidRigProfile = 'mixamo' | 'maya-humanik' | 'generic';
+
+/**
+ * A compact binding from ForeScene semantic joints to an existing source rig.
+ * Meshes, skeletons, skin weights, and inverse bind matrices stay in the
+ * original binary model asset; only stable mapping metadata is persisted.
+ */
+export interface ImportedHumanoidRigBinding {
+  version: 1;
+  id: string;
+  sourceAssetId: string;
+  sourceFormat: ImportedRigSourceFormat;
+  profile: ImportedHumanoidRigProfile;
+  boneMap: Partial<Record<HumanJointId, string>>;
+  canonicalPoseBases: Partial<Record<HumanJointId, QuaternionTuple>>;
+  skeletonHash: string;
+  restPoseHash: string;
+  rootBonePath?: string;
+  hipsBonePath: string;
+  orientation: PoseableCharacterOrientation;
+  approximateHeightMeters: number;
+  requiredJointCoverage: number;
+  optionalJointCoverage: number;
+  sourceAnimationClips?: Array<{ name: string; durationSeconds: number }>;
+  warnings?: string[];
+  };
 
 /**
  * Marker used by Milestone B marker-assisted autorigging.
@@ -255,6 +288,8 @@ export interface PoseableRigAsset {
   generationSettings?: PoseableRigGenerationSettings;
   /** Optional correction metadata from later marker/weight passes. */
   correctionMetadata?: Record<string, unknown>;
+  /** Preserved source-rig mapping; absent means this is a generated autorig. */
+  importedRigBinding?: ImportedHumanoidRigBinding;
 }
 
 export interface ShotObjectOverride {

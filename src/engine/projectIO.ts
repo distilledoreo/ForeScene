@@ -11,6 +11,7 @@ import { ensureProjectExportConfiguration } from './exportConfiguration';
 import { normalizeHumanPose, normalizePoseableCharacterSource } from './humanPose';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { hydrateAutoriggedCharactersFromAssets } from './autoriggedPoseableCharacter';
+import { hydrateImportedRiggedCharactersFromAssets } from './importedRiggedPoseableCharacter';
 import { stripInlineSkinArraysFromRig } from './autorigSkinWeights';
 import type { PoseableRigAsset } from '../domain/types';
 import JSZip from 'jszip';
@@ -175,6 +176,7 @@ export function parseProject(json: string): LocationProject {
     };
     const migrated = ensureProjectExportConfiguration(migrateProjectToCurrent(normalized));
     hydrateAutoriggedCharactersFromAssets(migrated.assets);
+    hydrateImportedRiggedCharactersFromAssets(migrated.assets);
     return migrated;
   } catch (error) {
     throw new Error(

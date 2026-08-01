@@ -20,9 +20,14 @@ import {
   type ImportedPoseableRigPackage,
 } from '../../engine/poseableRigPackage';
 import { hydrateAutoriggedCharactersFromAssets } from '../../engine/autoriggedPoseableCharacter';
+import { hydrateImportedRiggedCharactersFromAssets } from '../../engine/importedRiggedPoseableCharacter';
+import { deleteModelAsset } from '../../engine/modelAssetStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
+import { ImportedRigMappingDialog } from './ImportedRigMappingDialog';
+import type { HumanoidMappingAnalysis } from '../../engine/importedRig/analyzeSkeleton';
+import type { HumanJointId } from '../../domain/types';
 
 const AXIS_OPTIONS: PoseableAxisHint[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
 
@@ -56,6 +61,11 @@ export function PoseableCharacterImportDialog({
   const [heightMeters, setHeightMeters] = useState(DEFAULT_POSEABLE_HEIGHT_METERS);
   const [poseHint, setPoseHint] = useState<'a-pose' | 't-pose'>('a-pose');
   const [previewSummary, setPreviewSummary] = useState<string>();
+  const [importMode, setImportMode] = useState<'preserveExistingRig' | 'autorig'>('preserveExistingRig');
+  const [mappingAnalysis, setMappingAnalysis] = useState<HumanoidMappingAnalysis>();
+  const [boneOptions, setBoneOptions] = useState<Array<{ path: string; name: string }>>([]);
+  const [mappingOverrides, setMappingOverrides] = useState<Partial<Record<HumanJointId, string>>>({});
+  const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
   const abortRef = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
@@ -72,6 +82,11 @@ export function PoseableCharacterImportDialog({
       setHeightMeters(DEFAULT_POSEABLE_HEIGHT_METERS);
       setPoseHint('a-pose');
       setPreviewSummary(undefined);
+      setImportMode('preserveExistingRig');
+      setMappingAnalysis(undefined);
+      setBoneOptions([]);
+      setMappingOverrides({});
+      setMappingDialogOpen(false);
     }
   }, [open]);
 
@@ -95,10 +110,18 @@ export function PoseableCharacterImportDialog({
     try {
       const preview = await loadPoseableCharacterPreview(next, abortRef.current.signal);
       setHeightMeters(preview.suggestedHeightMeters);
-      setWarnings(preview.warnings);
+      setWarnings([...preview.warnings, ...(preview.rigAnalysis?.warnings ?? [])]);
+      setMappingAnalysis(preview.rigAnalysis);
+      setBoneOptions(preview.boneOptions ?? []);
+      setMappingOverrides(preview.rigAnalysis?.boneMap ?? {});
+      const canPreserve = preview.hasSkinnedMeshes
+        && (preview.rigAnalysis?.requiredMissing.length ?? 1) === 0
+        && (preview.rigAnalysis?.confidence ?? 0) >= 0.7;
+      setImportMode(canPreserve ? 'preserveExistingRig' : 'autorig');
       setPreviewSummary(
         `${preview.meshCount} mesh${preview.meshCount === 1 ? '' : 'es'} · `
-        + `bounds ${preview.size.map((v) => v.toFixed(2)).join(' × ')} m`,
+        + `bounds ${preview.size.map((v) => v.toFixed(2)).join(' × ')} m`
+        + (preview.hasSkinnedMeshes ? ` · ${preview.boneCount ?? 0} bones · ${preview.rigAnalysis?.detectedProfile ?? 'generic'} rig` : ''),
       );
     } catch (err) {
       setFile(undefined);
@@ -126,6 +149,7 @@ export function PoseableCharacterImportDialog({
 
   const importSelected = async () => {
     if (!file || busy) return;
+    let writtenSourceKey: string | undefined;
     setBusy(true);
     setError(undefined);
     abortRef.current = new AbortController();
@@ -135,9 +159,13 @@ export function PoseableCharacterImportDialog({
         orientation,
         approximateHeightMeters: heightMeters,
         poseHint,
+        mode: importMode,
+        mappingOverrides: importMode === 'preserveExistingRig' ? mappingOverrides : undefined,
         signal: abortRef.current.signal,
         onProgress: setProgress,
       });
+      writtenSourceKey = result.sourceAsset.storageKey
+        ?? (result.sourceAsset.uri.startsWith('panoref-model:') ? result.sourceAsset.uri.slice('panoref-model:'.length) : undefined);
       if (!runDestructiveProjectMutation) {
         throw new Error('Local recovery is still starting. Please wait before importing a poseable character.');
       }
@@ -203,6 +231,9 @@ export function PoseableCharacterImportDialog({
               assets: {
                 assets: {
                   ...current.project.assets.assets,
+                  ...(pendingPackage.sourceAsset
+                    ? { [pendingPackage.sourceAsset.id]: pendingPackage.sourceAsset }
+                    : {}),
                   ...(pendingPackage.skinAsset
                     ? { [pendingPackage.skinAsset.id]: pendingPackage.skinAsset }
                     : {}),
@@ -214,6 +245,7 @@ export function PoseableCharacterImportDialog({
             },
           }));
           hydrateAutoriggedCharactersFromAssets(useProjectStore.getState().project.assets);
+          hydrateImportedRiggedCharactersFromAssets(useProjectStore.getState().project.assets);
           appliedSavedRig = true;
           importWarnings = [
             ...importWarnings,
@@ -228,10 +260,15 @@ export function PoseableCharacterImportDialog({
         const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
         await ensureAutoriggedCharactersForProject(useProjectStore.getState().project);
       }
+      if (importMode === 'preserveExistingRig') {
+        const { ensureImportedRiggedCharactersForProject } = await import('../../engine/importedRiggedPoseableCharacter');
+        await ensureImportedRiggedCharactersForProject(useProjectStore.getState().project);
+      }
 
       setWarnings(importWarnings);
       onClose();
     } catch (err) {
+      if (writtenSourceKey) await deleteModelAsset(writtenSourceKey).catch(() => undefined);
       if (err instanceof DOMException && err.name === 'AbortError') {
         setError('Import cancelled.');
       } else {
@@ -255,8 +292,8 @@ export function PoseableCharacterImportDialog({
     >
       <div className="space-y-4" data-poseable-character-import-dialog>
         <p className="text-sm text-secondary">
-          Separate from ordinary graybox import. Accepts one upright A-pose or T-pose humanoid GLB/glTF.
-          Materials and textures are preserved. Optionally attach a previously saved ForeScene
+          Separate from ordinary graybox import. Accepts one upright A-pose or T-pose humanoid GLB, embedded glTF, or FBX.
+          Materials and textures are preserved. Existing skeletons and weights can be kept intact. Optionally attach a previously saved ForeScene
           .fsrig rig to skip the wizard when the mesh matches.
         </p>
 
@@ -288,11 +325,49 @@ export function PoseableCharacterImportDialog({
           data-poseable-import-choose-file
         >
           <Upload className="h-4 w-4" />
-          {file ? file.name : 'Choose GLB / glTF'}
+          {file ? file.name : 'Choose GLB / glTF / FBX'}
         </button>
 
         {previewSummary && (
           <p className="text-xs text-muted" data-poseable-import-preview-summary>{previewSummary}</p>
+        )}
+
+        {file && previewSummary && (
+          <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-poseable-import-mode>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Import mode</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={busy || !file || !mappingAnalysis}
+                onClick={() => setImportMode('preserveExistingRig')}
+                className={`rounded-lg border px-3 py-2 text-left text-xs ${importMode === 'preserveExistingRig' ? 'border-accent bg-accent/10 text-primary' : 'border-subtle text-secondary'}`}
+                data-poseable-import-preserve-rig
+              >
+                <span className="block font-semibold">Use existing rig</span>
+                <span className="mt-0.5 block">Preserve source skeleton, skin weights, meshes, and materials.</span>
+              </button>
+              <button
+                type="button"
+                disabled={busy || !file}
+                onClick={() => setImportMode('autorig')}
+                className={`rounded-lg border px-3 py-2 text-left text-xs ${importMode === 'autorig' ? 'border-accent bg-accent/10 text-primary' : 'border-subtle text-secondary'}`}
+                data-poseable-import-autorig
+              >
+                <span className="block font-semibold">Re-rig from mesh</span>
+                <span className="mt-0.5 block">Use the existing ForeScene autorig wizard and generated skin.</span>
+              </button>
+            </div>
+            {previewSummary && importMode === 'preserveExistingRig' && (
+              <p className="text-[11px] text-secondary" data-poseable-import-rig-summary>
+                Existing animation clips are recorded as metadata only; timeline playback remains deferred.
+              </p>
+            )}
+            {mappingAnalysis && boneOptions.length > 0 && (
+              <button type="button" onClick={() => setMappingDialogOpen(true)} disabled={busy} className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:border-accent hover:text-accent" data-poseable-import-review-mapping>
+                Review mapping
+              </button>
+            )}
+          </div>
         )}
 
         <div className="space-y-2 rounded-xl border border-subtle bg-surface-muted/40 p-3" data-poseable-import-rig-attach>
@@ -457,10 +532,25 @@ export function PoseableCharacterImportDialog({
             data-poseable-import-confirm
           >
             <UserRound className="h-4 w-4" />
-            {rigFile ? 'Import with rig' : 'Import character'}
+            {rigFile ? 'Import with rig' : importMode === 'preserveExistingRig' ? 'Import using existing rig' : 'Import character'}
           </button>
         </div>
       </div>
+      {mappingAnalysis && (
+        <ImportedRigMappingDialog
+          open={mappingDialogOpen}
+          profile={mappingAnalysis.detectedProfile}
+          confidence={mappingAnalysis.confidence}
+          initialMapping={mappingOverrides}
+          boneOptions={boneOptions}
+          onCancel={() => setMappingDialogOpen(false)}
+          onConfirm={(mapping) => {
+            setMappingOverrides(mapping);
+            setImportMode('preserveExistingRig');
+            setMappingDialogOpen(false);
+          }}
+        />
+      )}
     </Modal>
   );
 }

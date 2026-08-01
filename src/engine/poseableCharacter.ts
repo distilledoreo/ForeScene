@@ -65,6 +65,9 @@ export function resolvePoseableCharacter(
     // Registry populated by builtinMannequinCharacter side-effect import.
     return builtinPoseableCharacters.get(source.characterId);
   }
+  if (source.kind === 'importedRig') {
+    return importedRigPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
+  }
   // Adapters are registered at import time and re-hydrated on project parse /
   // ensureAutoriggedCharactersForProject (see autoriggedPoseableCharacter.ts).
   return autoriggedPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
@@ -79,6 +82,7 @@ export function resolvePoseableCharacterForObject(
 
 const builtinPoseableCharacters = new Map<string, PoseableCharacter>();
 const autoriggedPoseableCharacters = new Map<string, PoseableCharacter>();
+const importedRigPoseableCharacters = new Map<string, PoseableCharacter>();
 
 /** Register the built-in mannequin adapter (called from builtinMannequinCharacter). */
 export function registerBuiltinPoseableCharacter(
@@ -95,6 +99,14 @@ export function registerAutoriggedPoseableCharacter(
   character: PoseableCharacter,
 ): void {
   autoriggedPoseableCharacters.set(`${assetId}:${rigId}`, character);
+}
+
+export function registerImportedRigPoseableCharacter(
+  assetId: string,
+  rigId: string,
+  character: PoseableCharacter,
+): void {
+  importedRigPoseableCharacters.set(`${assetId}:${rigId}`, character);
 }
 
 export const SKINNED_MESHES_USERDATA_KEY = 'panorefSkinnedMeshes';

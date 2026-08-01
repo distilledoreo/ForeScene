@@ -296,6 +296,17 @@ export function normalizePoseableCharacterSource(
         rigId: (raw as { rigId: string }).rigId,
       };
     }
+    if (
+      raw.kind === 'importedRig'
+      && typeof (raw as { assetId?: unknown }).assetId === 'string'
+      && typeof (raw as { rigId?: unknown }).rigId === 'string'
+    ) {
+      return {
+        kind: 'importedRig',
+        assetId: (raw as { assetId: string }).assetId,
+        rigId: (raw as { rigId: string }).rigId,
+      };
+    }
   }
   // Legacy human_dummy objects without an explicit source are the builtin mannequin.
   if (objectType === 'human_dummy') {

@@ -17,6 +17,8 @@
     "test:changed": "vitest run --config vitest.fast.config.ts --changed=origin/main",
     "goal:smoke": "node scripts/goal-workflow-smoke.mjs",
     "agent:inspect": "tsx scripts/agent/cli.ts inspect",
+    "agent:analyze-character": "tsx scripts/agent/cli.ts analyze-character",
+    "agent:import-character": "tsx scripts/agent/cli.ts import-character",
     "agent:preview": "tsx scripts/agent/cli.ts preview",
     "agent:apply": "tsx scripts/agent/cli.ts apply",
     "agent:screenshot": "tsx scripts/agent/cli.ts screenshot",

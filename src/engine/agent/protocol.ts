@@ -14,6 +14,8 @@ import type {
   Transform,
   ShotObjectOverrides,
   Workspace,
+  HumanJointId,
+  PoseableCharacterOrientation,
 } from '../../domain/types';
 import type {
   ExportPackageType,
@@ -644,6 +646,72 @@ export interface AgentWaitForViewportReadyResult {
   diagnostics?: AgentDiagnostic[];
 }
 
+export type AgentCharacterImportMode = 'auto' | 'preserveExistingRig' | 'autorig';
+
+export interface AgentCharacterImportAnalysis {
+  analysisId: string;
+  sourceFormat: 'glb' | 'gltf' | 'fbx';
+  hasSkeleton: boolean;
+  hasSkinning: boolean;
+  detectedProfile?: 'mixamo' | 'maya-humanik' | 'generic';
+  mappingConfidence?: number;
+  requiredMapped: HumanJointId[];
+  requiredMissing: HumanJointId[];
+  ambiguousMappings: unknown[];
+  skinnedMeshCount: number;
+  boneCount: number;
+  animationClips: Array<{ name: string; durationSeconds: number }>;
+  estimatedMemoryBytes: number;
+  requiresConsent: boolean;
+  warnings: string[];
+}
+
+export interface AgentCharacterImportResult {
+  ok: boolean;
+  objectId?: string;
+  objectRef?: AgentEntityReference;
+  sourceAssetId?: string;
+  rigAssetId?: string;
+  poseable?: boolean;
+  importedRigPreserved?: boolean;
+  verifiedRevisionId?: string;
+  warnings: string[];
+  diagnostics?: AgentDiagnostic[];
+}
+
+export type AgentCharacterImportPhase =
+  | 'reading'
+  | 'parsing'
+  | 'analyzing'
+  | 'mapping'
+  | 'validating'
+  | 'writing'
+  | 'registering'
+  | 'saving'
+  | 'complete';
+
+export interface AgentCharacterImportProgress {
+  active: boolean;
+  phase?: AgentCharacterImportPhase;
+  analysisId?: string;
+  message?: string;
+}
+
+export interface AgentCharacterImportInput {
+  file: File;
+  mode?: AgentCharacterImportMode;
+  orientation?: PoseableCharacterOrientation;
+  approximateHeightMeters?: number;
+}
+
+export interface AgentCharacterImportCommitInput {
+  analysisId: string;
+  mode: Exclude<AgentCharacterImportMode, 'auto'>;
+  mappingOverrides?: Partial<Record<HumanJointId, string>>;
+  consentToken?: string;
+  name?: string;
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -705,4 +773,9 @@ export interface ForeSceneBrowserApi {
   exportPackage(input?: AgentPackageExportRequest): Promise<AgentPackageExportResult>;
   getPackageExportProgress(): AgentPackageExportProgressSnapshot | null;
   cancelPackageExport(): AgentPackageExportResult;
+
+  analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis>;
+  importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;
+  getCharacterImportProgress(): AgentCharacterImportProgress | null;
+  cancelCharacterImport(): { ok: boolean; cancelled: boolean };
 }

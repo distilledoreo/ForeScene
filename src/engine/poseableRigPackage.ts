@@ -40,6 +40,7 @@ export interface PoseableRigPackageManifest {
   rig: PoseableRigAsset;
   skinFile?: string;
   regionFile?: string;
+  sourceFile?: string;
 }
 
 export interface PoseableRigPackageBytes {
@@ -59,6 +60,7 @@ export interface ImportedPoseableRigPackage {
   rig: PoseableRigAsset;
   skinAsset?: ProjectAsset;
   regionAsset?: ProjectAsset;
+  sourceAsset?: ProjectAsset;
 }
 
 function isPoseableRigPackageManifest(value: unknown): value is PoseableRigPackageManifest {
@@ -110,6 +112,12 @@ export function detachPoseableRigForPackage(rig: PoseableRigAsset): PoseableRigA
       sourceAssetId: 'package',
     };
   }
+  if (rig.importedRigBinding) {
+    next.importedRigBinding = {
+      ...rig.importedRigBinding,
+      sourceAssetId: 'package-source',
+    };
+  }
   delete next.originalSourceAssetId;
   delete next.sourceMeshAssetId;
   delete next.meshAssetId;
@@ -124,6 +132,13 @@ export async function buildPoseableRigPackage(params: {
   const detached = detachPoseableRigForPackage(params.rig);
   const skinBytes = await readAssetBytes(params.rig.skin?.skinAssetId, params.assets);
   const regionBytes = await readAssetBytes(params.rig.regionMap?.regionAssetId, params.assets);
+  const sourceId = params.rig.importedRigBinding?.sourceAssetId
+    ?? params.rig.originalSourceAssetId;
+  const sourceBytes = await readAssetBytes(sourceId, params.assets);
+  const sourceAsset = sourceId ? params.assets.assets[sourceId] : undefined;
+  const sourceExtension = sourceAsset?.metadata?.format === 'fbx'
+    ? 'fbx'
+    : sourceAsset?.metadata?.format === 'gltf' ? 'gltf' : 'glb';
 
   const manifest: PoseableRigPackageManifest = {
     format: POSEABLE_RIG_PACKAGE_FORMAT,
@@ -134,12 +149,14 @@ export async function buildPoseableRigPackage(params: {
     rig: detached,
     ...(skinBytes ? { skinFile: 'skin.bin' } : {}),
     ...(regionBytes ? { regionFile: 'region.bin' } : {}),
+    ...(sourceBytes ? { sourceFile: `source.${sourceExtension}` } : {}),
   };
 
   const zip = new JSZip();
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   if (skinBytes) zip.file('skin.bin', skinBytes);
   if (regionBytes) zip.file('region.bin', regionBytes);
+  if (sourceBytes) zip.file(`source.${sourceExtension}`, sourceBytes);
 
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   const safeName = (params.characterName || 'character')
@@ -190,6 +207,7 @@ export async function parsePoseableRigPackageFile(file: File): Promise<ImportedP
   const nextRigId = createId('poseable_rig');
   let skinAsset: ProjectAsset | undefined;
   let regionAsset: ProjectAsset | undefined;
+  let sourceAsset: ProjectAsset | undefined;
   const rig: PoseableRigAsset = {
     ...baseRig,
     id: nextRigId,
@@ -245,11 +263,40 @@ export async function parsePoseableRigPackageFile(file: File): Promise<ImportedP
     delete rig.regionMap;
   }
 
+  if (manifestJson.sourceFile) {
+    const sourceEntry = zip.file(manifestJson.sourceFile);
+    if (!sourceEntry) throw new Error(`Rig package is missing ${manifestJson.sourceFile}.`);
+    const sourceBytes = await sourceEntry.async('arraybuffer');
+    const sourceAssetId = createId('poseable_source');
+    const extension = manifestJson.sourceFile.split('.').pop()?.toLowerCase() as 'glb' | 'gltf' | 'fbx' | undefined;
+    const key = `poseable-source-${sourceAssetId}`;
+    await putModelAsset(key, sourceBytes);
+    sourceAsset = {
+      id: sourceAssetId,
+      name: `${manifestJson.characterName ?? 'Character'} source.${extension ?? 'glb'}`,
+      type: 'model',
+      uri: `${MODEL_ASSET_URI_PREFIX}${key}`,
+      storageKey: key,
+      mimeType: extension === 'fbx' ? 'application/octet-stream' : extension === 'gltf' ? 'model/gltf+json' : 'model/gltf-binary',
+      createdAt: new Date().toISOString(),
+      metadata: { poseableSource: true, preservesRig: true, format: extension ?? 'glb' },
+    };
+    if (rig.importedRigBinding) {
+      rig.importedRigBinding = {
+        ...rig.importedRigBinding,
+        sourceAssetId,
+      };
+    }
+    rig.originalSourceAssetId = sourceAssetId;
+    rig.sourceMeshAssetId = sourceAssetId;
+  }
+
   return {
     manifest: manifestJson,
     rig,
     skinAsset,
     regionAsset,
+    sourceAsset,
   };
 }
 
@@ -273,9 +320,18 @@ export function canApplyPoseableRigPackage(params: {
     };
   }
   if (!params.imported.rig.bindMatrices || !params.imported.rig.skin) {
+    if (!params.imported.rig.importedRigBinding) {
+      return {
+        ok: false,
+        reason: 'This rig package is incomplete (missing bind pose or skin weights).',
+      };
+    }
+  }
+  if (params.targetRig.importedRigBinding && params.imported.rig.importedRigBinding
+    && params.targetRig.importedRigBinding.skeletonHash !== params.imported.rig.importedRigBinding.skeletonHash) {
     return {
       ok: false,
-      reason: 'This rig package is incomplete (missing bind pose or skin weights).',
+      reason: 'This rig package was built for a different source skeleton.',
     };
   }
   const packageVertexCount = poseableRigPackageVertexCount(params.imported);
@@ -344,6 +400,12 @@ export function mergeImportedRigOntoTarget(params: {
     orientation: imported.rig.orientation ?? targetRig.orientation,
     restTransform: imported.rig.restTransform ?? targetRig.restTransform,
     generationSettings: imported.rig.generationSettings ?? targetRig.generationSettings,
+    importedRigBinding: imported.rig.importedRigBinding
+      ? {
+        ...imported.rig.importedRigBinding,
+        ...(targetRig.importedRigBinding ? { sourceAssetId: targetRig.importedRigBinding.sourceAssetId } : {}),
+      }
+      : targetRig.importedRigBinding,
     requiresRerigging: false,
   };
 }

@@ -1051,7 +1051,7 @@ function describeLoadedRoot(root: THREE.Object3D): LoadedModel {
       sawMorph = true;
     }
   });
-  if (sawSkinned) warnings.push('Skinned geometry was imported in its static bind pose.');
+  if (sawSkinned) warnings.push('This file contains a rigged character. Use “Import poseable character” to preserve its skeleton and skin weights; ordinary model import keeps static geometry only.');
   if (sawMorph) warnings.push('Morph target animation was ignored; base geometry was imported.');
   return {
     root,

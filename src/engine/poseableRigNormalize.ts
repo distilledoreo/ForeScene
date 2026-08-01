@@ -5,9 +5,10 @@ import type {
   PoseableRestTransform,
   PoseableRigAsset,
   PoseableRigGenerationSettings,
+  ImportedHumanoidRigBinding,
   Vec3,
 } from '../domain/types';
-import { HUMAN_JOINT_IDS } from './humanPose';
+import { HUMAN_JOINT_IDS, normalizeQuaternion } from './humanPose';
 
 export const DEFAULT_POSEABLE_HEIGHT_METERS = 1.75;
 export const MIN_POSEABLE_HEIGHT_METERS = 0.5;
@@ -80,6 +81,76 @@ export function normalizePoseableRigGenerationSettings(value: unknown): Poseable
     approximateHeightMeters: height,
     ...(poseHint ? { poseHint } : {}),
     ...(notes && notes.length > 0 ? { notes } : {}),
+  };
+}
+
+function normalizeImportedHumanoidRigBinding(value: unknown): ImportedHumanoidRigBinding | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Partial<ImportedHumanoidRigBinding>;
+  if (
+    raw.version !== 1
+    || typeof raw.id !== 'string' || !raw.id
+    || typeof raw.sourceAssetId !== 'string' || !raw.sourceAssetId
+    || (raw.sourceFormat !== 'glb' && raw.sourceFormat !== 'gltf' && raw.sourceFormat !== 'fbx')
+    || (raw.profile !== 'mixamo' && raw.profile !== 'maya-humanik' && raw.profile !== 'generic')
+    || typeof raw.hipsBonePath !== 'string' || !raw.hipsBonePath
+    || typeof raw.skeletonHash !== 'string' || !raw.skeletonHash
+    || typeof raw.restPoseHash !== 'string' || !raw.restPoseHash
+  ) return undefined;
+
+  const boneMap: ImportedHumanoidRigBinding['boneMap'] = {};
+  if (raw.boneMap && typeof raw.boneMap === 'object') {
+    for (const jointId of HUMAN_JOINT_IDS) {
+      const path = raw.boneMap[jointId];
+      if (typeof path === 'string' && path.trim()) boneMap[jointId] = path;
+    }
+  }
+  const canonicalPoseBases: ImportedHumanoidRigBinding['canonicalPoseBases'] = {};
+  if (raw.canonicalPoseBases && typeof raw.canonicalPoseBases === 'object') {
+    for (const jointId of HUMAN_JOINT_IDS) {
+      const basis = normalizeQuaternion(raw.canonicalPoseBases[jointId]);
+      if (basis) canonicalPoseBases[jointId] = basis;
+    }
+  }
+  const orientation = normalizePoseableCharacterOrientation(raw.orientation);
+  if (!orientation || !raw.boneMap || Object.keys(boneMap).length === 0) return undefined;
+  const coverage = (candidate: unknown): number => (
+    typeof candidate === 'number' && Number.isFinite(candidate)
+      ? Math.min(1, Math.max(0, candidate))
+      : 0
+  );
+  const clips = Array.isArray(raw.sourceAnimationClips)
+    ? raw.sourceAnimationClips.flatMap((clip) => {
+      if (!clip || typeof clip !== 'object') return [];
+      const item = clip as { name?: unknown; durationSeconds?: unknown };
+      if (typeof item.name !== 'string' || typeof item.durationSeconds !== 'number' || !Number.isFinite(item.durationSeconds)) return [];
+      return [{ name: item.name, durationSeconds: Math.max(0, item.durationSeconds) }];
+    })
+    : undefined;
+  const warnings = Array.isArray(raw.warnings)
+    ? raw.warnings.filter((warning): warning is string => typeof warning === 'string')
+    : undefined;
+  const approximateHeightMeters = typeof raw.approximateHeightMeters === 'number' && Number.isFinite(raw.approximateHeightMeters)
+    ? Math.min(MAX_POSEABLE_HEIGHT_METERS, Math.max(MIN_POSEABLE_HEIGHT_METERS, raw.approximateHeightMeters))
+    : DEFAULT_POSEABLE_HEIGHT_METERS;
+  return {
+    version: 1,
+    id: raw.id,
+    sourceAssetId: raw.sourceAssetId,
+    sourceFormat: raw.sourceFormat,
+    profile: raw.profile,
+    boneMap,
+    canonicalPoseBases,
+    skeletonHash: raw.skeletonHash,
+    restPoseHash: raw.restPoseHash,
+    ...(typeof raw.rootBonePath === 'string' && raw.rootBonePath ? { rootBonePath: raw.rootBonePath } : {}),
+    hipsBonePath: raw.hipsBonePath,
+    orientation,
+    approximateHeightMeters,
+    requiredJointCoverage: coverage(raw.requiredJointCoverage),
+    optionalJointCoverage: coverage(raw.optionalJointCoverage),
+    ...(clips && clips.length > 0 ? { sourceAnimationClips: clips } : {}),
+    ...(warnings && warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -206,5 +277,10 @@ export function normalizePoseableRigAsset(value: unknown): PoseableRigAsset | un
     ...(raw.correctionMetadata && typeof raw.correctionMetadata === 'object'
       ? { correctionMetadata: raw.correctionMetadata }
       : {}),
+    ...(normalizeImportedHumanoidRigBinding(raw.importedRigBinding)
+      ? { importedRigBinding: normalizeImportedHumanoidRigBinding(raw.importedRigBinding) }
+      : {}),
   };
 }
+
+export { normalizeImportedHumanoidRigBinding };
