@@ -139,6 +139,7 @@ export default function App() {
   const isStudioMode = appMode === 'studio';
   const showModeChooser = splashDone && appMode === null && !helpOpen;
   const projectIsBlank = isEffectivelyBlankProject(project);
+  const projectReplacementReady = projectLifecycleReady && !criticalProjectWrite;
   const showProjectLauncher =
     splashDone
     && isStudioMode
@@ -687,7 +688,7 @@ export default function App() {
       {showProjectLauncher && (
         <ProjectLauncher
           onAction={handleLauncherAction}
-          projectLifecycleReady={projectLifecycleReady}
+          projectLifecycleReady={projectReplacementReady}
         />
       )}
       <SplashScreen onDismissed={() => setSplashDone(true)} />

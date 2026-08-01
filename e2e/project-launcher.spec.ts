@@ -8,6 +8,8 @@ import { goToWorkspace, workspaceTab } from './workspace-navigation';
 
 /** Project name lives inside the brand menu — open it first. */
 async function openProjectMenu(page: Page) {
+  await dismissOverlays(page);
+
   const trigger = page.locator('[data-brand-menu-trigger]');
   await expect(trigger).toBeVisible();
   // Menu may already be open from a prior step.

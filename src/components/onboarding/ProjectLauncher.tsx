@@ -24,8 +24,9 @@ export interface ProjectLauncherProps {
   /** When true, show the manual sub-panel immediately. */
   initialManualOpen?: boolean;
   /**
-   * False while local project recovery/persistence is still starting.
-   * Project-replacement actions are disabled until ready (underlying lifecycle still awaits).
+   * False while local project recovery/persistence is still starting or a
+   * critical local write is in flight. Project-replacement actions are disabled
+   * until ready (underlying lifecycle still awaits).
    */
   projectLifecycleReady?: boolean;
 }

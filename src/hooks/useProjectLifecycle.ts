@@ -79,6 +79,22 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     return controllerReadyPromiseRef.current;
   };
 
+  /** Wait for the live controller and any critical local write to become idle. */
+  const awaitProjectWriteIdle = async (): Promise<void> => {
+    await awaitPersistenceController();
+
+    if (!useProjectSafetyStore.getState().criticalWrite) return;
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = useProjectSafetyStore.subscribe((state) => {
+        if (!state.criticalWrite) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  };
+
   const openProjectPicker = () => {
     if (criticalProjectWrite) {
       setProjectImportStatus({
@@ -102,6 +118,7 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     reason: string,
     successMessage: string,
   ) => {
+    await awaitProjectWriteIdle();
     const controller = await awaitPersistenceController();
     const current = useProjectStore.getState().project;
     await controller.createSnapshot(current, `Before: ${reason}`);
@@ -165,13 +182,6 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
    * @returns true when the sample was activated successfully.
    */
   const loadSampleProject = async (sampleId: string): Promise<boolean> => {
-    if (criticalProjectWrite) {
-      setProjectImportStatus({
-        tone: 'error',
-        message: 'Please wait for the current local save to finish before loading a sample.',
-      });
-      return false;
-    }
     setProjectImportStatus(undefined);
     try {
       const sample = loadBundledSample(sampleId);
