@@ -244,6 +244,14 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-surface-base text-primary">
+      <input
+        type="file"
+        accept=".glb,.gltf,.fbx"
+        data-agent-character-import-input
+        tabIndex={-1}
+        aria-hidden="true"
+        className="hidden"
+      />
       <main className="absolute inset-0">
         <Suspense
           fallback={(

@@ -152,7 +152,7 @@ Imports above the encoded mesh or source-file safety limits stop with a clear er
 
 ## Character Rigging and Posing
 
-Open **Build > More > Import poseable character** and choose a `.glb` or embedded `.gltf`. External `.bin` sidecars are rejected. At import you set the canonical orientation — front axis, up axis, ground level, approximate height (0.5–3.5 m) — and a rest-pose hint (A-pose or T-pose). Unlike ordinary model import, this path keeps materials and textures and stores the unmodified source bytes, so re-rigging never degrades the mesh. Any existing skinning or animation in the source is ignored in favor of ForeScene's own bind.
+Open **Build > More > Import poseable character** and choose a `.glb` or embedded `.gltf`. External `.bin` sidecars are rejected. At import you set the canonical orientation — front axis, up axis, ground level, approximate height (0.5–3.5 m) — and a rest-pose hint (A-pose or T-pose). Unlike ordinary model import, this path keeps materials and textures and stores the unmodified source bytes, so reloading and posing do not degrade the mesh. When the source contains a valid humanoid skeleton and skinning, **Use existing rig** preserves its deformation data; otherwise choose the autorig path.
 
 If you already have a saved rig for that mesh, attach a `.fsrig` (or legacy `.panorig`) during import. When the topology hash and vertex count match, the rig is applied and the wizard is skipped.
 

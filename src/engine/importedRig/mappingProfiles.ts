@@ -31,6 +31,18 @@ export function normalizeBoneName(name: string): string {
   return name.toLowerCase().replace(/^.*:/, '').replace(/[^a-z0-9]/g, '');
 }
 
+/** Detect explicit side tokens without treating names such as Root or Radius as left/right. */
+export function sourceBoneSide(name: string): 'left' | 'right' | undefined {
+  const value = name.trim().toLowerCase().replace(/^.*:/, '');
+  if (/(^|[:._\-\s])left($|[:._\-\s])/.test(value) || /^left(?:arm|forearm|hand|leg|foot|thigh|shin|shoulder|clavicle|up)/.test(value)
+    || /(^|[:._\-\s])l($|[:._\-\s])/.test(value) || /^l_(?:arm|forearm|hand|leg|foot|thigh|shin|shoulder|clavicle|up)/.test(value)
+    || /[:._\-]l$/.test(value)) return 'left';
+  if (/(^|[:._\-\s])right($|[:._\-\s])/.test(value) || /^right(?:arm|forearm|hand|leg|foot|thigh|shin|shoulder|clavicle|up)/.test(value)
+    || /(^|[:._\-\s])r($|[:._\-\s])/.test(value) || /^r_(?:arm|forearm|hand|leg|foot|thigh|shin|shoulder|clavicle|up)/.test(value)
+    || /[:._\-]r$/.test(value)) return 'right';
+  return undefined;
+}
+
 export function mappingNamesForProfile(profile: ImportedHumanoidRigProfile): MappingNameTable {
   return profile === 'mixamo' ? MIXAMO : profile === 'maya-humanik' ? HUMANIK : GENERIC;
 }
@@ -38,4 +50,3 @@ export function mappingNamesForProfile(profile: ImportedHumanoidRigProfile): Map
 export function allMappingProfiles(): readonly ImportedHumanoidRigProfile[] {
   return ['mixamo', 'maya-humanik', 'generic'];
 }
-

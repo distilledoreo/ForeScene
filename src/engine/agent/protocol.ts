@@ -69,6 +69,7 @@ export interface ForeSceneAgentBusyState {
   grayboxRender: boolean;
   packageExport: boolean;
   videoRender: boolean;
+  characterImport: boolean;
 }
 
 export interface ForeSceneAgentPersistenceStatus {
@@ -103,6 +104,7 @@ export interface ForeSceneAgentCapabilities {
   inspection: boolean;
   mutations: boolean;
   packageExport: boolean;
+  characterImport: boolean;
   projectReplacement: boolean;
   timelineInspection: boolean;
   timelineSampling: boolean;
@@ -778,4 +780,5 @@ export interface ForeSceneBrowserApi {
   importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;
   getCharacterImportProgress(): AgentCharacterImportProgress | null;
   cancelCharacterImport(): { ok: boolean; cancelled: boolean };
+  discardCharacterImportAnalysis(analysisId: string): { ok: boolean; discarded: boolean };
 }

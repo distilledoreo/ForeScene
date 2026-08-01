@@ -7,6 +7,7 @@
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { isAgentShotVideoRenderActive } from './videoRenderState';
+import { isCharacterImportActive } from './characterImport';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -42,6 +43,9 @@ export function collectAgentBusyDiagnostics(): AgentDiagnostic[] {
   }
   if (isAgentShotVideoRenderActive()) {
     return [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Shot video rendering is in progress.')];
+  }
+  if (isCharacterImportActive()) {
+    return [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Character import is in progress.')];
   }
   return [];
 }

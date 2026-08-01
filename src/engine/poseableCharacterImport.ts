@@ -28,7 +28,7 @@ import { loadPoseableSource, type LoadedPoseableSource } from './poseableSourceL
 import { analyzeHumanoidSkeleton, type HumanoidMappingAnalysis } from './importedRig/analyzeSkeleton';
 import { validateHumanoidMapping } from './importedRig/mappingValidation';
 import { calculateCanonicalPoseBases, validateCanonicalPoseBases } from './importedRig/canonicalFrames';
-import { fingerprintImportedMapping, fingerprintImportedRestPose, fingerprintImportedSkeleton } from './importedRig/fingerprints';
+import { fingerprintImportedRestPose, fingerprintImportedSkeleton } from './importedRig/fingerprints';
 import { buildBonePathMap } from './importedRig/bonePaths';
 
 export {
@@ -90,7 +90,6 @@ export interface RiggedCharacterImportAnalysis {
   canonicalPoseBases: ImportedHumanoidRigBinding['canonicalPoseBases'];
   skeletonHash: string;
   restPoseHash: string;
-  mappingHash: string;
   warnings: string[];
 }
 
@@ -132,10 +131,9 @@ export async function analyzeRiggedCharacterImport(params: {
   const canonicalPoseBases = calculateCanonicalPoseBases({ root: source.root, boneMap: mapping.boneMap });
   const mappingValidation = validateHumanoidMapping({ root: source.root, boneMap: mapping.boneMap });
   const canonicalWarnings = validateCanonicalPoseBases(canonicalPoseBases);
-  const [skeletonHash, restPoseHash, mappingHash] = await Promise.all([
+  const [skeletonHash, restPoseHash] = await Promise.all([
     fingerprintImportedSkeleton(source.root, source.bones),
     fingerprintImportedRestPose(source.root, source.bones),
-    fingerprintImportedMapping(mapping.boneMap),
   ]);
   const warnings = [
     ...source.warnings,
@@ -152,7 +150,6 @@ export async function analyzeRiggedCharacterImport(params: {
     canonicalPoseBases,
     skeletonHash,
     restPoseHash,
-    mappingHash,
     warnings: [...new Set(warnings)],
   };
 }

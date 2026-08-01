@@ -3,7 +3,7 @@ import type { HumanJointId, ImportedHumanoidRigProfile } from '../../domain/type
 import type { LoadedPoseableSource } from '../poseableSourceLoader';
 import { HUMAN_JOINT_IDS } from '../humanPose';
 import { buildBonePathMap, getRootRelativeNodePath } from './bonePaths';
-import { allMappingProfiles, mappingNamesForProfile, normalizeBoneName } from './mappingProfiles';
+import { allMappingProfiles, mappingNamesForProfile, normalizeBoneName, sourceBoneSide } from './mappingProfiles';
 
 export interface HumanoidMappingAnalysis {
   detectedProfile: ImportedHumanoidRigProfile;
@@ -38,17 +38,10 @@ function expectedSide(jointId: HumanJointId): 'left' | 'right' | undefined {
   return undefined;
 }
 
-function sourceSide(name: string): 'left' | 'right' | undefined {
-  const normalized = normalizeBoneName(name);
-  if (normalized.includes('left') || normalized.startsWith('l')) return 'left';
-  if (normalized.includes('right') || normalized.startsWith('r')) return 'right';
-  return undefined;
-}
-
 function scoreBone(jointId: HumanJointId, boneName: string, aliases: readonly string[]): number {
   const normalized = normalizeBoneName(boneName);
   const side = expectedSide(jointId);
-  if (side && sourceSide(boneName) && sourceSide(boneName) !== side) return 0;
+  if (side && sourceBoneSide(boneName) && sourceBoneSide(boneName) !== side) return 0;
   const normalizedAliases = aliases.map(normalizeBoneName);
   const exact = normalizedAliases.findIndex((alias) => normalized === alias);
   if (exact >= 0) return 1 - exact * 0.025;
@@ -126,10 +119,10 @@ export function analyzeHumanoidSkeleton(
     if (previous) warnings.push(`Semantic joints ${previous} and ${jointId} resolve to the same source bone.`);
     seenPaths.set(path, jointId);
   }
-  if (sourceSide('LeftArm') && SIDE_REQUIRED.left.some((jointId) => boneMap[jointId] && sourceSide(pathMap.get(boneMap[jointId]!)?.name ?? '') === 'right')) {
+  if (SIDE_REQUIRED.left.some((jointId) => boneMap[jointId] && sourceBoneSide(pathMap.get(boneMap[jointId]!)?.name ?? '') === 'right')) {
     warnings.push('At least one left semantic joint maps to a right-sided source bone.');
   }
-  if (sourceSide('RightArm') && SIDE_REQUIRED.right.some((jointId) => boneMap[jointId] && sourceSide(pathMap.get(boneMap[jointId]!)?.name ?? '') === 'left')) {
+  if (SIDE_REQUIRED.right.some((jointId) => boneMap[jointId] && sourceBoneSide(pathMap.get(boneMap[jointId]!)?.name ?? '') === 'left')) {
     warnings.push('At least one right semantic joint maps to a left-sided source bone.');
   }
   if (requiredMissing.length > 0) warnings.push(`Missing required humanoid joints: ${requiredMissing.join(', ')}.`);

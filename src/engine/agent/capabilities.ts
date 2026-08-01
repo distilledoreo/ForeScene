@@ -23,6 +23,8 @@ export const AGENT_INSPECT_COMMANDS = [
   'export.plan',
   'viewport.waitReady',
   'shot.renderFrame',
+  'character.analyze',
+  'character.progress',
 ] as const;
 
 /** Mutation / plan commands available when write access is enabled. */
@@ -66,10 +68,12 @@ export const AGENT_MUTATE_COMMANDS = [
   'export.shotOverrides.promote',
   'export.package',
   'project.reset',
+  'character.import',
 ] as const;
 
 export const AGENT_DEFERRED_COMMANDS = [
   'file.import',
+  'character.cancel',
 ] as const;
 
 export const AGENT_RUNTIME_COMMANDS = [
@@ -89,6 +93,7 @@ export function buildAgentCapabilities(
     inspection: controlMode !== 'off',
     mutations: writeAccess,
     packageExport: true,
+    characterImport: true,
     projectReplacement: writeAccess,
     timelineInspection: controlMode !== 'off',
     timelineSampling: controlMode !== 'off',

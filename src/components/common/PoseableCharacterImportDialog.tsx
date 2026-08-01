@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
 import { AlertTriangle, LoaderCircle, Upload, UserRound } from 'lucide-react';
 import type { PoseableAxisHint, PoseableCharacterOrientation, SceneObject } from '../../domain/types';
 import {
@@ -27,6 +28,7 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { Modal } from './Modal';
 import { ImportedRigMappingDialog } from './ImportedRigMappingDialog';
 import type { HumanoidMappingAnalysis } from '../../engine/importedRig/analyzeSkeleton';
+import { validateHumanoidMapping } from '../../engine/importedRig/mappingValidation';
 import type { HumanJointId } from '../../domain/types';
 
 const AXIS_OPTIONS: PoseableAxisHint[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
@@ -63,6 +65,7 @@ export function PoseableCharacterImportDialog({
   const [previewSummary, setPreviewSummary] = useState<string>();
   const [importMode, setImportMode] = useState<'preserveExistingRig' | 'autorig'>('preserveExistingRig');
   const [mappingAnalysis, setMappingAnalysis] = useState<HumanoidMappingAnalysis>();
+  const [previewRoot, setPreviewRoot] = useState<THREE.Object3D>();
   const [boneOptions, setBoneOptions] = useState<Array<{ path: string; name: string }>>([]);
   const [mappingOverrides, setMappingOverrides] = useState<Partial<Record<HumanJointId, string>>>({});
   const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
@@ -84,6 +87,7 @@ export function PoseableCharacterImportDialog({
       setPreviewSummary(undefined);
       setImportMode('preserveExistingRig');
       setMappingAnalysis(undefined);
+      setPreviewRoot(undefined);
       setBoneOptions([]);
       setMappingOverrides({});
       setMappingDialogOpen(false);
@@ -112,9 +116,14 @@ export function PoseableCharacterImportDialog({
       setHeightMeters(preview.suggestedHeightMeters);
       setWarnings([...preview.warnings, ...(preview.rigAnalysis?.warnings ?? [])]);
       setMappingAnalysis(preview.rigAnalysis);
+      setPreviewRoot(preview.root);
       setBoneOptions(preview.boneOptions ?? []);
       setMappingOverrides(preview.rigAnalysis?.boneMap ?? {});
+      const validated = preview.rigAnalysis
+        ? validateHumanoidMapping({ root: preview.root, boneMap: preview.rigAnalysis.boneMap })
+        : undefined;
       const canPreserve = preview.hasSkinnedMeshes
+        && Boolean(validated?.ok)
         && (preview.rigAnalysis?.requiredMissing.length ?? 1) === 0
         && (preview.rigAnalysis?.confidence ?? 0) >= 0.7;
       setImportMode(canPreserve ? 'preserveExistingRig' : 'autorig');
@@ -146,6 +155,13 @@ export function PoseableCharacterImportDialog({
     setRigFile(next);
     setRigPackageLabel(next.name);
   };
+
+  const mappingValidation = previewRoot && mappingAnalysis
+    ? validateHumanoidMapping({
+      root: previewRoot,
+      boneMap: { ...mappingAnalysis.boneMap, ...mappingOverrides },
+    })
+    : undefined;
 
   const importSelected = async () => {
     if (!file || busy) return;
@@ -338,7 +354,7 @@ export function PoseableCharacterImportDialog({
             <div className="grid gap-2 sm:grid-cols-2">
               <button
                 type="button"
-                disabled={busy || !file || !mappingAnalysis}
+                disabled={busy || !file || !mappingAnalysis || !mappingValidation?.ok}
                 onClick={() => setImportMode('preserveExistingRig')}
                 className={`rounded-lg border px-3 py-2 text-left text-xs ${importMode === 'preserveExistingRig' ? 'border-accent bg-accent/10 text-primary' : 'border-subtle text-secondary'}`}
                 data-poseable-import-preserve-rig
@@ -363,7 +379,7 @@ export function PoseableCharacterImportDialog({
               </p>
             )}
             {mappingAnalysis && boneOptions.length > 0 && (
-              <button type="button" onClick={() => setMappingDialogOpen(true)} disabled={busy} className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:border-accent hover:text-accent" data-poseable-import-review-mapping>
+            <button type="button" onClick={() => setMappingDialogOpen(true)} disabled={busy} className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs font-semibold text-secondary hover:border-accent hover:text-accent" data-poseable-import-review-mapping>
                 Review mapping
               </button>
             )}
@@ -526,7 +542,7 @@ export function PoseableCharacterImportDialog({
           </button>
           <button
             type="button"
-            disabled={!file || busy}
+            disabled={!file || busy || (importMode === 'preserveExistingRig' && !mappingValidation?.ok)}
             onClick={() => void importSelected()}
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
             data-poseable-import-confirm

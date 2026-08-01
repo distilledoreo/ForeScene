@@ -208,6 +208,17 @@ npm run agent:package -- --write --shot <shotId> --output artifacts/one-shot.zip
 
 Project menu → **Agent Console** opens an in-app dialog that calls the same `window.foreScene` methods (preview / apply / undo / export / cancel). Enabling writes uses the UI store path; disabling uses `disableWrites()`.
 
+## Character import
+
+Character analysis and import are exposed through the Agent API and appear in capability reporting as `characterImport`. The CLI stages the file through a browser file input, so binary model bytes are not serialized through `page.evaluate` arguments:
+
+```bash
+npm run agent:analyze-character -- --file path/to/actor.glb
+npm run agent:import-character -- --file path/to/actor.glb --rig-mode auto --write
+```
+
+Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. Large imports use the device-aware model-import budget and require an explicit consent token. Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
+
 ## Visual CLI
 
 ```bash

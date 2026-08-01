@@ -30,10 +30,12 @@ import { resolveRootRelativeNodePath } from './importedRig/bonePaths';
 import { canonicalOrientationQuaternion } from './autorigCanonicalMesh';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { degreesToRadians } from './sync';
+import { fingerprintImportedRestPose, fingerprintImportedSkeleton } from './importedRig/fingerprints';
 
 const templates = new Map<string, THREE.Object3D>();
 const sourceHeights = new Map<string, number>();
 const loadPromises = new Map<string, Promise<void>>();
+const sourceFingerprints = new Map<string, { skeletonHash: string; restPoseHash: string }>();
 const prototypes = new Map<string, THREE.Object3D>();
 let assetsContext: AssetRegistry | undefined;
 let revision = 0;
@@ -58,8 +60,45 @@ async function resolveSourceBytes(sourceAssetId: string, assets?: AssetRegistry)
   return { asset: source, bytes };
 }
 
-async function ensureTemplateLoaded(sourceAssetId: string, assets?: AssetRegistry): Promise<void> {
-  if (templates.has(sourceAssetId)) return;
+export class ImportedRigCompatibilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImportedRigCompatibilityError';
+  }
+}
+
+export async function verifyImportedRigBindingFingerprint(params: {
+  binding: NonNullable<PoseableRigAsset['importedRigBinding']>;
+  root: THREE.Object3D;
+  bones: readonly THREE.Bone[];
+}): Promise<{ skeletonHash: string; restPoseHash: string }> {
+  const actual = {
+    skeletonHash: await fingerprintImportedSkeleton(params.root, params.bones),
+    restPoseHash: await fingerprintImportedRestPose(params.root, params.bones),
+  };
+  if (params.binding.skeletonHash !== actual.skeletonHash || params.binding.restPoseHash !== actual.restPoseHash) {
+    throw new ImportedRigCompatibilityError(
+      `Imported rig binding ${params.binding.id} is incompatible with the current source asset (fingerprint mismatch).`,
+    );
+  }
+  return actual;
+}
+
+async function ensureTemplateLoaded(
+  sourceAssetId: string,
+  assets?: AssetRegistry,
+  binding?: NonNullable<PoseableRigAsset['importedRigBinding']>,
+): Promise<void> {
+  const cachedFingerprint = sourceFingerprints.get(sourceAssetId);
+  if (templates.has(sourceAssetId)) {
+    if (binding && cachedFingerprint && (
+      binding.skeletonHash !== cachedFingerprint.skeletonHash
+      || binding.restPoseHash !== cachedFingerprint.restPoseHash
+    )) {
+      throw new ImportedRigCompatibilityError(`Imported rig binding ${binding.id} does not match source asset ${sourceAssetId}.`);
+    }
+    return;
+  }
   const existing = loadPromises.get(sourceAssetId);
   if (existing) return existing;
   const promise = (async () => {
@@ -69,6 +108,16 @@ async function ensureTemplateLoaded(sourceAssetId: string, assets?: AssetRegistr
       throw new Error('Preserved-rig mode requires at least one skinned mesh and one deformation skeleton.');
     }
     if (loaded.skeletonRoots.length > 1) throw new Error('Preserved-rig mode supports one unrelated skeleton.');
+    const actual = binding
+      ? await verifyImportedRigBindingFingerprint({ binding, root: loaded.root, bones: loaded.bones })
+      : {
+        skeletonHash: await fingerprintImportedSkeleton(loaded.root, loaded.bones),
+        restPoseHash: await fingerprintImportedRestPose(loaded.root, loaded.bones),
+      };
+    sourceFingerprints.set(sourceAssetId, {
+      skeletonHash: actual.skeletonHash,
+      restPoseHash: actual.restPoseHash,
+    });
     templates.set(sourceAssetId, loaded.root);
     sourceHeights.set(sourceAssetId, loaded.heightMeters);
     notifyReady();
@@ -144,7 +193,7 @@ export function createImportedRiggedPoseableCharacter(params: {
     source: { kind: 'importedRig', assetId: params.assetId, rigId: params.rigId },
     skeleton: createCanonicalHumanoidSkeleton(),
     async ensureLoaded() {
-      await ensureTemplateLoaded(params.sourceAssetId, assetsContext ?? params.assets);
+      await ensureTemplateLoaded(params.sourceAssetId, assetsContext ?? params.assets, params.binding);
       await ensureSkeletonCloneReady();
     },
     isReady() {
@@ -240,14 +289,14 @@ export async function ensureImportedRiggedCharactersForProject(project: {
 }): Promise<void> {
   assetsContext = project.assets;
   hydrateImportedRiggedCharactersFromAssets(project.assets);
-  const sources = new Set<string>();
+  const sources = new Map<string, NonNullable<PoseableRigAsset['importedRigBinding']>>();
   for (const object of project.scene.objects) {
     if (object.poseableCharacter?.kind !== 'importedRig') continue;
     const rig = project.assets.assets[object.poseableCharacter.assetId]?.metadata?.poseableRig;
     const binding = rig?.importedRigBinding;
-    if (binding?.sourceAssetId) sources.add(binding.sourceAssetId);
+    if (binding?.sourceAssetId) sources.set(binding.sourceAssetId, binding);
   }
-  await Promise.all([...sources].map((sourceAssetId) => ensureTemplateLoaded(sourceAssetId, project.assets).catch(() => undefined)));
+  await Promise.all([...sources.entries()].map(([sourceAssetId, binding]) => ensureTemplateLoaded(sourceAssetId, project.assets, binding)));
   await ensureSkeletonCloneReady();
 }
 
@@ -255,6 +304,7 @@ export function resetImportedRigRuntimeCachesForTests(): void {
   templates.clear();
   sourceHeights.clear();
   loadPromises.clear();
+  sourceFingerprints.clear();
   prototypes.clear();
   assetsContext = undefined;
   revision = 0;

@@ -53,6 +53,7 @@ function parseArgs(argv: string[]) {
     mapping: undefined as string | undefined,
     rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto',
     name: undefined as string | undefined,
+    consentToken: undefined as string | undefined,
     profile: undefined as string | undefined,
     shotIds: [] as string[],
     timeSeconds: undefined as number | undefined,
@@ -106,6 +107,8 @@ function parseArgs(argv: string[]) {
       args.rigMode = mode;
     } else if (token === '--name') {
       args.name = argv[++index];
+    } else if (token === '--consent-token') {
+      args.consentToken = argv[++index];
     } else if (token === '--profile') {
       args.profile = argv[++index];
     } else if (token === '--shot') {
@@ -142,12 +145,14 @@ async function runCharacterAnalysis(options: {
   output?: string;
 }) {
   const target = path.resolve(options.file);
-  const bytes = await readFile(target);
   await withSession(options, async (session) => {
+    await session.page.locator('[data-agent-character-import-input]').setInputFiles(target);
     const result = await session.page.evaluate(async (input) => {
-      const file = new File([new Uint8Array(input.bytes)], input.name);
+      const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
+      const file = fileInput?.files?.[0];
+      if (!file) throw new Error('Character file was not staged in the browser.');
       return window.foreScene!.analyzeCharacterImport({ file, mode: 'auto' });
-    }, { name: path.basename(target), bytes: [...bytes] });
+    }, undefined);
     if (options.output) {
       const output = path.resolve(options.output);
       await mkdir(path.dirname(output), { recursive: true });
@@ -166,10 +171,10 @@ async function runCharacterImport(options: {
   mapping?: string;
   rigMode: 'preserve' | 'autorig' | 'auto';
   name?: string;
+  consentToken?: string;
 }) {
   requireExplicitWrite('agent:import-character', options.writeAccess);
   const target = path.resolve(options.file);
-  const bytes = await readFile(target);
   let mappingOverrides: Record<string, string> | undefined;
   if (options.mapping) {
     const mappingPath = options.mapping;
@@ -183,22 +188,34 @@ async function runCharacterImport(options: {
     );
   }
   await withSession(options, async (session) => {
+    await session.page.locator('[data-agent-character-import-input]').setInputFiles(target);
     const result = await session.page.evaluate(async (input) => {
-      const file = new File([new Uint8Array(input.bytes)], input.fileName);
+      const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
+      const file = fileInput?.files?.[0];
+      if (!file) throw new Error('Character file was not staged in the browser.');
       const analysis = await window.foreScene!.analyzeCharacterImport({ file, mode: input.rigMode === 'auto' ? 'auto' : input.rigMode === 'preserve' ? 'preserveExistingRig' : 'autorig' });
-      const mode = input.rigMode === 'autorig' ? 'autorig' : 'preserveExistingRig';
+      const mode = input.rigMode === 'autorig'
+        ? 'autorig'
+        : input.rigMode === 'preserve'
+          ? 'preserveExistingRig'
+          : analysis.hasSkeleton
+            && analysis.hasSkinning
+            && analysis.requiredMissing.length === 0
+            && (analysis.mappingConfidence ?? 0) >= 0.7
+            ? 'preserveExistingRig'
+            : 'autorig';
       return window.foreScene!.importCharacter({
         analysisId: analysis.analysisId,
         mode,
         mappingOverrides: input.mappingOverrides,
         name: input.characterName,
+        consentToken: input.consentToken,
       });
     }, {
-      fileName: path.basename(target),
-      bytes: [...bytes],
       rigMode: options.rigMode,
       mappingOverrides,
       characterName: options.name,
+      consentToken: options.consentToken,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

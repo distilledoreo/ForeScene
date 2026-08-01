@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { HumanJointId } from '../../domain/types';
 import { REQUIRED_IMPORTED_HUMANOID_JOINTS } from './analyzeSkeleton';
 import { resolveRootRelativeNodePath } from './bonePaths';
-import { normalizeBoneName } from './mappingProfiles';
+import { sourceBoneSide } from './mappingProfiles';
 
 export interface HumanoidMappingValidation {
   ok: boolean;
@@ -10,13 +10,6 @@ export interface HumanoidMappingValidation {
   duplicateAssignments: Array<{ path: string; joints: HumanJointId[] }>;
   sideMismatches: HumanJointId[];
   warnings: string[];
-}
-
-function sourceSide(name: string): 'left' | 'right' | undefined {
-  const normalized = normalizeBoneName(name);
-  if (normalized.includes('left') || normalized.startsWith('l')) return 'left';
-  if (normalized.includes('right') || normalized.startsWith('r')) return 'right';
-  return undefined;
 }
 
 function expectedSide(jointId: HumanJointId): 'left' | 'right' | undefined {
@@ -46,7 +39,7 @@ export function validateHumanoidMapping(params: {
     joints.push(jointId);
     byPath.set(path, joints);
     const expected = expectedSide(jointId);
-    const actual = sourceSide(bone.name);
+    const actual = sourceBoneSide(bone.name);
     if (expected && actual && expected !== actual) sideMismatches.push(jointId);
   }
   const duplicateAssignments = [...byPath.entries()]

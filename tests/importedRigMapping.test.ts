@@ -7,6 +7,7 @@ import { analyzeHumanoidSkeleton } from '../src/engine/importedRig/analyzeSkelet
 import { calculateCanonicalPoseBases, validateCanonicalPoseBases } from '../src/engine/importedRig/canonicalFrames';
 import { getRootRelativeNodePath, resolveRootRelativeNodePath } from '../src/engine/importedRig/bonePaths';
 import { validateHumanoidMapping } from '../src/engine/importedRig/mappingValidation';
+import { sourceBoneSide } from '../src/engine/importedRig/mappingProfiles';
 
 function createSourceRig(): { root: THREE.Group; bones: THREE.Bone[] } {
   const root = new THREE.Group();
@@ -49,6 +50,16 @@ function createSourceRig(): { root: THREE.Group; bones: THREE.Bone[] } {
 }
 
 describe('imported rig mapping', () => {
+  it('uses token-aware side detection', () => {
+    expect(sourceBoneSide('Leg_R')).toBe('right');
+    expect(sourceBoneSide('LowerLeg.R')).toBe('right');
+    expect(sourceBoneSide('arm_L')).toBe('left');
+    expect(sourceBoneSide('mixamorig:LeftArm')).toBe('left');
+    expect(sourceBoneSide('L_Arm')).toBe('left');
+    expect(sourceBoneSide('Root')).toBeUndefined();
+    expect(sourceBoneSide('Radius')).toBeUndefined();
+  });
+
   it('maps namespaced Mixamo bones and resolves indexed paths', () => {
     const source = createSourceRig();
     const analysis = analyzeHumanoidSkeleton(source);
@@ -90,5 +101,27 @@ describe('imported rig mapping', () => {
     expect(boneMap.get('leftUpperArm')!.quaternion.equals(rests.get('leftUpperArm')!.quaternion)).toBe(false);
     applySemanticPoseToBones({ bones: boneMap, rests, pose: createEmptyHumanPose(), canonicalPoseBases: bases });
     expect(boneMap.get('leftUpperArm')!.quaternion.equals(rests.get('leftUpperArm')!.quaternion)).toBe(true);
+  });
+
+  it('deforms a skinned vertex while preserving source weights', () => {
+    const source = createSourceRig();
+    const analysis = analyzeHumanoidSkeleton(source);
+    const leftArm = resolveRootRelativeNodePath(source.root, analysis.boneMap.leftUpperArm!) as THREE.Bone;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0], 4));
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0], 4));
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.add(leftArm.clone());
+    const instanceBone = mesh.children[0] as THREE.Bone;
+    mesh.bind(new THREE.Skeleton([instanceBone]));
+    const weightsBefore = [...(geometry.getAttribute('skinWeight').array as Float32Array)];
+    const before = mesh.getVertexPosition(0, new THREE.Vector3()).clone();
+    instanceBone.rotation.z = Math.PI / 2;
+    mesh.updateMatrixWorld(true);
+    mesh.skeleton.update();
+    const after = mesh.getVertexPosition(0, new THREE.Vector3());
+    expect(after.distanceTo(before)).toBeGreaterThan(0.01);
+    expect([...((geometry.getAttribute('skinWeight').array) as Float32Array)]).toEqual(weightsBefore);
   });
 });

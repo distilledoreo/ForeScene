@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { HumanJointId, PoseableCharacterOrientation } from '../../domain/types';
 import { createId } from '../../utils/ids';
 import {
@@ -14,6 +15,7 @@ import { deleteModelAsset } from '../modelAssetStore';
 import { ensureImportedRiggedCharactersForProject } from '../importedRiggedPoseableCharacter';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
+import { detectImportDeviceProfile, estimateModelImportBudget, type ImportGeometryStats } from '../modelImportBudget';
 import type {
   AgentCharacterImportAnalysis,
   AgentCharacterImportCommitInput,
@@ -32,11 +34,59 @@ interface StoredAnalysis {
   orientation: PoseableCharacterOrientation;
   approximateHeightMeters: number;
   mode: AgentCharacterImportMode;
+  createdAt: number;
+  lastUsedAt: number;
 }
 
 let activeAbortController: AbortController | undefined;
 let progress: AgentCharacterImportProgress | null = null;
 const analyses = new Map<string, StoredAnalysis>();
+const ANALYSIS_TTL_MS = 5 * 60_000;
+const MAX_ANALYSES = 2;
+let activeAnalysisId: string | undefined;
+
+function evictExpiredAnalyses(now = Date.now()): void {
+  for (const [id, entry] of analyses) {
+    if (now - entry.lastUsedAt > ANALYSIS_TTL_MS) analyses.delete(id);
+  }
+  while (analyses.size > MAX_ANALYSES) {
+    const oldest = [...analyses.values()].sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+    if (!oldest) break;
+    analyses.delete(oldest.id);
+  }
+}
+
+function importBudget(analysis: RiggedCharacterImportAnalysis) {
+  let loadedVertexCount = 0;
+  let triangleCount = 0;
+  let meshNodeCount = 0;
+  let uniquePositionBytes = 0;
+  let uniqueIndexBytes = 0;
+  analysis.source.root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    meshNodeCount += 1;
+    const position = mesh.geometry.getAttribute('position');
+    const index = mesh.geometry.getIndex();
+    loadedVertexCount += position?.count ?? 0;
+    triangleCount += index ? index.count / 3 : (position?.count ?? 0) / 3;
+    uniquePositionBytes += position?.array.byteLength ?? 0;
+    uniqueIndexBytes += index?.array.byteLength ?? 0;
+  });
+  const stats: ImportGeometryStats = {
+    loadedVertexCount,
+    triangleCount,
+    meshNodeCount,
+    instanceCount: 1,
+    expandedInstanceCount: 1,
+    uniquePositionBytes,
+    uniqueIndexBytes,
+    outputPositionBytes: uniquePositionBytes,
+    outputIndexBytes: uniqueIndexBytes,
+    mode: 'separate',
+  };
+  return estimateModelImportBudget(stats, detectImportDeviceProfile());
+}
 
 function phaseForMessage(message: string): AgentCharacterImportPhase {
   const normalized = message.toLowerCase();
@@ -77,6 +127,7 @@ function formatOf(file: File): PoseableCharacterImportFormat {
 function publicAnalysis(id: string, analysis: RiggedCharacterImportAnalysis): AgentCharacterImportAnalysis {
   const hasSkeleton = analysis.source.bones.length > 0;
   const hasSkinning = analysis.source.skinnedMeshes.length > 0;
+  const budget = importBudget(analysis);
   return {
     analysisId: id,
     sourceFormat: analysis.sourceFormat,
@@ -92,13 +143,18 @@ function publicAnalysis(id: string, analysis: RiggedCharacterImportAnalysis): Ag
     skinnedMeshCount: analysis.source.skinnedMeshes.length,
     boneCount: analysis.source.bones.length,
     animationClips: analysis.source.animationClips.map((clip) => ({ name: clip.name, durationSeconds: clip.duration })),
-    estimatedMemoryBytes: analysis.sourceBytes.byteLength,
-    requiresConsent: false,
-    warnings: [...analysis.warnings],
+    estimatedMemoryBytes: budget.estimatedPeakHeapBytes,
+    requiresConsent: budget.tier === 'heavy' || budget.tier === 'extreme',
+    warnings: [
+      ...analysis.warnings,
+      ...(budget.tier === 'heavy' || budget.tier === 'extreme' ? ['This import is above the standard memory tier and requires explicit consent.'] : []),
+      ...(budget.tier === 'reject' ? [`Import exceeds the device-aware safety budget: ${budget.exceeded.join(', ')}.`] : []),
+    ],
   };
 }
 
 export async function analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis> {
+  evictExpiredAnalyses();
   const format = formatOf(input.file);
   const controller = startOperation();
   const id = createId('character_analysis');
@@ -111,6 +167,7 @@ export async function analyzeCharacterImport(input: AgentCharacterImportInput): 
       onProgress: (message) => setProgress({ active: true, analysisId: id, phase: phaseForMessage(message), message }),
     });
     if (analysis.sourceFormat !== format) throw new Error('Character source format could not be determined.');
+    const now = Date.now();
     analyses.set(id, {
       id,
       file: input.file,
@@ -118,7 +175,10 @@ export async function analyzeCharacterImport(input: AgentCharacterImportInput): 
       orientation: input.orientation ?? defaultPoseableOrientation(),
       approximateHeightMeters: input.approximateHeightMeters ?? DEFAULT_POSEABLE_HEIGHT_METERS,
       mode: input.mode ?? 'auto',
+      createdAt: now,
+      lastUsedAt: now,
     });
+    evictExpiredAnalyses(now);
     const result = publicAnalysis(id, analysis);
     finishOperation();
     return result;
@@ -129,6 +189,7 @@ export async function analyzeCharacterImport(input: AgentCharacterImportInput): 
 }
 
 export async function importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult> {
+  evictExpiredAnalyses();
   const stored = analyses.get(input.analysisId);
   if (!stored) {
     return {
@@ -136,6 +197,11 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
       warnings: [],
       diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `Character analysis "${input.analysisId}" is missing or expired.`, { path: 'analysisId' })],
     };
+  }
+  stored.lastUsedAt = Date.now();
+  const budget = importBudget(stored.analysis);
+  if (budget.tier === 'reject') {
+    return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `Character import exceeds the device-aware safety budget: ${budget.exceeded.join(', ')}.`)] };
   }
   const projectState = useProjectStore.getState();
   if (!projectState.project?.id) {
@@ -147,10 +213,14 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
   if (input.consentToken && input.consentToken.length === 0) {
     return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'consentToken must not be empty.', { path: 'consentToken' })] };
   }
+  if ((budget.tier === 'heavy' || budget.tier === 'extreme') && !input.consentToken) {
+    return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'This character import requires explicit consent because it exceeds the standard memory tier.', { path: 'consentToken' })] };
+  }
 
   let controller: AbortController;
   try {
     controller = startOperation(input.analysisId);
+    activeAnalysisId = input.analysisId;
   } catch (error) {
     return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, error instanceof Error ? error.message : 'Another character import is already in progress.')] };
   }
@@ -186,6 +256,7 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
     await ensureImportedRiggedCharactersForProject(useProjectStore.getState().project);
     finishOperation();
     analyses.delete(input.analysisId);
+    activeAnalysisId = undefined;
     return {
       ok: true,
       objectId: result.object.id,
@@ -200,6 +271,8 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
   } catch (error) {
     if (result?.sourceAsset.storageKey) await deleteModelAsset(result.sourceAsset.storageKey).catch(() => undefined);
     finishOperation();
+    analyses.delete(input.analysisId);
+    activeAnalysisId = undefined;
     return {
       ok: false,
       warnings: result?.warnings ?? [],
@@ -212,15 +285,25 @@ export function getCharacterImportProgress(): AgentCharacterImportProgress | nul
   return progress ? { ...progress } : null;
 }
 
+export function isCharacterImportActive(): boolean {
+  return Boolean(activeAbortController);
+}
+
+export function discardCharacterImportAnalysis(analysisId: string): { ok: boolean; discarded: boolean } {
+  return { ok: true, discarded: analyses.delete(analysisId) };
+}
+
 export function cancelCharacterImport(): { ok: boolean; cancelled: boolean } {
   if (!activeAbortController) return { ok: true, cancelled: false };
   activeAbortController.abort();
+  if (activeAnalysisId) analyses.delete(activeAnalysisId);
   return { ok: true, cancelled: true };
 }
 
 export function resetCharacterImportAgentStateForTests(): void {
   activeAbortController?.abort();
   activeAbortController = undefined;
+  activeAnalysisId = undefined;
   progress = null;
   analyses.clear();
 }

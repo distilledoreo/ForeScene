@@ -82,8 +82,10 @@ import { FORESCENE_AGENT_API_VERSION } from './protocol';
 import {
   analyzeCharacterImport,
   cancelCharacterImport,
+  discardCharacterImportAnalysis,
   getCharacterImportProgress,
   importCharacter,
+  isCharacterImportActive,
 } from './characterImport';
 
 function readInspectionContext(): AgentInspectionContext {
@@ -104,6 +106,7 @@ function isBusy(status: ForeSceneAgentStatus): boolean {
     || status.busy.grayboxRender
     || status.busy.packageExport
     || status.busy.videoRender
+    || status.busy.characterImport
   );
 }
 
@@ -172,6 +175,7 @@ export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
       grayboxRender: projectState.isRenderingGraybox,
       packageExport: projectState.isExportingPackage,
       videoRender: isAgentShotVideoRenderActive(),
+      characterImport: isCharacterImportActive(),
     },
     persistence: {
       ready: typeof safety.flushProject === 'function',
@@ -440,6 +444,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     cancelCharacterImport() {
       return cancelCharacterImport();
+    },
+
+    discardCharacterImportAnalysis(analysisId) {
+      return discardCharacterImportAnalysis(analysisId);
     },
 
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {

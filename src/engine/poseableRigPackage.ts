@@ -422,7 +422,7 @@ export function resolvePoseableRigForObject(
   assets: AssetRegistry,
 ): { rigAsset: ProjectAsset; rig: PoseableRigAsset } | undefined {
   const source = object?.poseableCharacter;
-  if (!source || source.kind !== 'autorigged') return undefined;
+  if (!source || (source.kind !== 'autorigged' && source.kind !== 'importedRig')) return undefined;
   const rigAsset = assets.assets[source.assetId];
   const rig = rigAsset?.metadata?.poseableRig;
   if (!rigAsset || !rig) return undefined;
