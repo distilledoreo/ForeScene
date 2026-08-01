@@ -42,9 +42,45 @@ export const helpSections: readonly HelpSection[] = [
         defaultOpen: true,
         controls: [
           { label: 'Skip intro', description: 'Dismisses the opening video. Clicking the video, pressing Escape, Enter, or Space also dismisses it. The choice is remembered in this browser.' },
-          { label: 'Open ForeScene', description: 'Opens the complete Build → Reference → Shots → Export workflow: sets, characters, shots, continuity tools, and export handoffs.' },
+          { label: 'Open ForeScene', description: 'Opens the complete Build → Reference → Shots → Export workflow: sets, characters, shots, continuity tools, and export handoffs. When the active project is blank, the first-project launcher appears next.' },
           { label: 'Just view a 360 pano', description: 'Opens the independent panorama viewer. This mode does not modify the current ForeScene project.' },
           { label: 'Switch modes later', description: 'Open the top-left brand menu and choose Simple 360 Viewer or Open ForeScene.' },
+        ],
+      },
+      {
+        id: 'first-project-launcher',
+        title: 'First project launcher',
+        summary: 'After you open ForeScene Studio with a blank project, a production-oriented launcher asks how you want to start so you never land in an unexplained empty Build workspace.',
+        defaultOpen: true,
+        controls: [
+          {
+            label: 'Automated Previs',
+            description: 'Start from a shot list and let a coding agent build the production. Opens the agent workflow entry (Agent Console today; a guided setup wizard is planned).',
+          },
+          {
+            label: 'Build Manually',
+            description: 'Create a blank graybox set, open the temple starter courtyard, or import an existing project backup — then build shots yourself.',
+          },
+          {
+            label: 'Explore a Sample',
+            description: 'Opens the Dialogue Demo: one room, styled panorama, two characters, a table prop, four coverage shots, and export settings. Safe to experiment; use Reset sample to restore the baseline.',
+          },
+          {
+            label: 'Open Existing Project',
+            description: 'Import a ForeScene backup (.fsp / .zip / .json). Locally recovered projects remain available under Project Safety & Recovery.',
+          },
+          {
+            label: 'Skip to Build',
+            description: 'Dismisses the launcher for this blank session and opens Build directly. Advanced users can always skip guidance.',
+          },
+          {
+            label: 'Reset sample',
+            description: 'When the Dialogue Demo is open, Project menu → Reset Sample reloads the bundled baseline so experiments stay reversible.',
+          },
+        ],
+        notes: [
+          'The launcher only appears when the active project is effectively blank (origin / floor scaffolding only). Real projects and the sample never re-show it unexpectedly.',
+          'Recovered local projects open in Studio without the launcher because they are not blank.',
         ],
       },
       {

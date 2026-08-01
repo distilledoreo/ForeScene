@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { LocationProject } from '../domain/types';
 import { createDefaultProject } from '../domain/defaults';
+import { createBlankGrayboxProject } from '../engine/previs/blankProject';
+import { loadSampleProject as loadBundledSample } from '../engine/sampleProjects';
 import type { CompiledSetBlueprint } from '../engine/setBlueprintCompiler';
 import type { ProjectPersistenceController } from '../engine/projectPersistenceController';
 import { useAppModeStore } from '../state/useAppModeStore';
@@ -75,8 +77,39 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   };
 
   /**
+   * Replace the live project with a committed document (snapshot → commit → set).
+   * Shared by new project, sample load, and launcher manual starts.
+   */
+  const commitAndActivateProject = async (
+    next: LocationProject,
+    reason: string,
+    successMessage: string,
+  ) => {
+    const controller = persistenceControllerRef.current;
+    if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
+    const current = useProjectStore.getState().project;
+    await controller.createSnapshot(current, `Before: ${reason}`);
+    await controller.commitProject(next, {
+      kind: 'import',
+      reason,
+    });
+    controller.ignoreNextProjectChange(next);
+    setProject(next);
+    useProjectStore.getState().clearObjectSelection();
+    setWorkspace('build');
+    setAppMode('studio');
+    closeProjectOverlays();
+    setNewProjectConfirmOpen(false);
+    setProjectImportStatus({
+      tone: 'success',
+      message: successMessage,
+    });
+  };
+
+  /**
    * Start a blank ForeScene project. Snapshots the current autosaved project
-   * so Project Safety can restore it, then swaps in createDefaultProject().
+   * so Project Safety can restore it, then swaps in a blank graybox shell
+   * (launcher can reappear for first-project guidance).
    */
   const startNewProject = async () => {
     if (criticalProjectWrite || isCreatingNewProject) {
@@ -89,25 +122,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     setIsCreatingNewProject(true);
     setProjectImportStatus(undefined);
     try {
-      const controller = persistenceControllerRef.current;
-      if (!controller) throw new Error('Project recovery is still starting. Please try again in a moment.');
-      const current = useProjectStore.getState().project;
-      await controller.createSnapshot(current, `Before starting a new project (from “${current.name}”)`);
-      const fresh = createDefaultProject();
-      await controller.commitProject(fresh, {
-        kind: 'import',
-        reason: `Started new project: ${fresh.name}`,
+      const fresh = createBlankGrayboxProject({
+        name: 'Untitled Production',
+        description: '',
+        aspectRatio: '16:9',
       });
-      controller.ignoreNextProjectChange(fresh);
-      setProject(fresh);
-      setWorkspace('build');
-      setAppMode('studio');
-      closeProjectOverlays();
-      setNewProjectConfirmOpen(false);
-      setProjectImportStatus({
-        tone: 'success',
-        message: `Started a new project: ${fresh.name}. Your previous project was saved as a local recovery point.`,
-      });
+      await commitAndActivateProject(
+        fresh,
+        `Started new project: ${fresh.name}`,
+        `Started a new project: ${fresh.name}. Your previous project was saved as a local recovery point.`,
+      );
     } catch (error) {
       setProjectImportStatus({
         tone: 'error',
@@ -117,6 +141,115 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       });
     } finally {
       setIsCreatingNewProject(false);
+    }
+  };
+
+  /**
+   * Load a bundled sample production (fresh factory copy every time).
+   * @returns true when the sample was activated successfully.
+   */
+  const loadSampleProject = async (sampleId: string): Promise<boolean> => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before loading a sample.',
+      });
+      return false;
+    }
+    setProjectImportStatus(undefined);
+    try {
+      const sample = loadBundledSample(sampleId);
+      await commitAndActivateProject(
+        sample,
+        `Loaded sample: ${sample.name}`,
+        `Opened sample “${sample.name}”. Explore Build → Reference → Shots → Export. Use Reset sample anytime to restore the baseline.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not load sample: ${error.message}`
+          : 'Could not load sample.',
+      });
+      return false;
+    }
+  };
+
+  /** Reset the active sample from the canonical factory. */
+  const resetSampleProject = async (sampleId: string): Promise<boolean> => {
+    return loadSampleProject(sampleId);
+  };
+
+  /**
+   * Start the temple starter set (legacy default project content).
+   * @returns true when activated successfully.
+   */
+  const startStarterProject = async (): Promise<boolean> => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before starting a project.',
+      });
+      return false;
+    }
+    setProjectImportStatus(undefined);
+    try {
+      const fresh = createDefaultProject();
+      fresh.name = 'Temple Starter';
+      fresh.description = 'Courtyard starter set with scale figure — ready to frame shots.';
+      await commitAndActivateProject(
+        fresh,
+        `Started temple starter: ${fresh.name}`,
+        `Started “${fresh.name}”. Build on the courtyard set or replace geometry as needed.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not start starter project: ${error.message}`
+          : 'Could not start starter project.',
+      });
+      return false;
+    }
+  };
+
+  /**
+   * Start a blank graybox without the new-project confirm flow (launcher path).
+   * Stays effectively blank — callers that need Build without the launcher should
+   * dismiss only after this returns true.
+   * @returns true when activated successfully.
+   */
+  const startBlankProject = async (): Promise<boolean> => {
+    if (criticalProjectWrite) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: 'Please wait for the current local save to finish before starting a project.',
+      });
+      return false;
+    }
+    setProjectImportStatus(undefined);
+    try {
+      const fresh = createBlankGrayboxProject({
+        name: 'Untitled Production',
+        description: '',
+        aspectRatio: '16:9',
+      });
+      await commitAndActivateProject(
+        fresh,
+        `Started blank project: ${fresh.name}`,
+        `Started a blank graybox set. Add architecture, characters, and shots from Build.`,
+      );
+      return true;
+    } catch (error) {
+      setProjectImportStatus({
+        tone: 'error',
+        message: error instanceof Error
+          ? `Could not start blank project: ${error.message}`
+          : 'Could not start blank project.',
+      });
+      return false;
     }
   };
 
@@ -387,6 +520,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
     importProject,
     saveProject,
     startNewProject,
+    startBlankProject,
+    startStarterProject,
+    loadSampleProject,
+    resetSampleProject,
     createProjectSnapshot,
     restoreProjectSnapshot,
     openLocalProjectHistory,

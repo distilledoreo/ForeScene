@@ -1,0 +1,1025 @@
+{
+  "schemaVersion": "1.0",
+  "productVersion": "0.1.0",
+  "sampleId": "dialogue-demo",
+  "note": "Frozen snapshot of the Dialogue Demo sample. Runtime load/reset uses createDialogueDemoSample() for fresh IDs.",
+  "project": {
+    "schemaVersion": "1.0",
+    "productVersion": "0.1.0",
+    "id": "project_ms9ub2i7_t1jcfj",
+    "name": "Dialogue Demo",
+    "description": "Bundled ForeScene sample: one interior room, styled panorama, two characters, table prop, and four shots (wide two-shot, medium, OTS, close-up). Safe to experiment — use Reset sample to restore the baseline.",
+    "units": "meters",
+    "createdAt": "2026-08-01T03:56:56.045Z",
+    "updatedAt": "2026-08-01T03:56:56.045Z",
+    "scene": {
+      "worldUp": "Y",
+      "objects": [
+        {
+          "id": "obj_ms9ub2i7_qlgjp4",
+          "name": "Room Floor",
+          "type": "floor",
+          "transform": {
+            "position": [
+              0,
+              -0.04,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            8,
+            0.08,
+            7
+          ],
+          "category": "architecture",
+          "locked": true,
+          "visible": true,
+          "stagingRole": "set"
+        },
+        {
+          "id": "obj_ms9ub2i7_g9dv30",
+          "name": "Back Wall",
+          "type": "wall",
+          "transform": {
+            "position": [
+              0,
+              1.5,
+              -3.4
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            7.7,
+            3,
+            0.18
+          ],
+          "category": "architecture",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "set"
+        },
+        {
+          "id": "obj_ms9ub2i7_lqq575",
+          "name": "Left Wall",
+          "type": "wall",
+          "transform": {
+            "position": [
+              -3.9,
+              1.5,
+              0
+            ],
+            "rotation": [
+              0,
+              90,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            6.7,
+            3,
+            0.18
+          ],
+          "category": "architecture",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "set"
+        },
+        {
+          "id": "obj_ms9ub2i7_mfc8ej",
+          "name": "Right Wall",
+          "type": "wall",
+          "transform": {
+            "position": [
+              3.9,
+              1.5,
+              0
+            ],
+            "rotation": [
+              0,
+              -90,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            6.7,
+            3,
+            0.18
+          ],
+          "category": "architecture",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "set"
+        },
+        {
+          "id": "obj_ms9ub2i7_knv51o",
+          "name": "Doorway",
+          "type": "doorway",
+          "transform": {
+            "position": [
+              0,
+              1.2,
+              3.35
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            1.8,
+            2.4,
+            0.22
+          ],
+          "category": "architecture",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "set"
+        },
+        {
+          "id": "obj_ms9ub2i7_jtdf9b",
+          "name": "Table",
+          "type": "box",
+          "transform": {
+            "position": [
+              0,
+              0.4,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            1.2,
+            0.8,
+            0.7
+          ],
+          "category": "architecture",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "prop",
+          "color": "#78716c",
+          "surfaceStyle": "solid",
+          "metadata": {
+            "samplePropId": "table"
+          }
+        },
+        {
+          "id": "obj_ms9ub2i7_m7hujr",
+          "name": "Alex",
+          "type": "human_dummy",
+          "transform": {
+            "position": [
+              -1.1,
+              0.875,
+              0.15
+            ],
+            "rotation": [
+              0,
+              25,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            0.55,
+            1.75,
+            0.55
+          ],
+          "category": "helper",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "person",
+          "poseableCharacter": {
+            "kind": "builtin",
+            "characterId": "adult-male"
+          },
+          "color": "#60a5fa",
+          "surfaceStyle": "solid",
+          "metadata": {
+            "sampleCastId": "alex",
+            "height": 1.75
+          }
+        },
+        {
+          "id": "obj_ms9ub2i7_gyzv6y",
+          "name": "Blair",
+          "type": "human_dummy",
+          "transform": {
+            "position": [
+              1.1,
+              0.84,
+              0.15
+            ],
+            "rotation": [
+              0,
+              -25,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            0.55,
+            1.68,
+            0.55
+          ],
+          "category": "helper",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "person",
+          "poseableCharacter": {
+            "kind": "builtin",
+            "characterId": "adult-male"
+          },
+          "color": "#f472b6",
+          "surfaceStyle": "solid",
+          "metadata": {
+            "sampleCastId": "blair",
+            "height": 1.68
+          }
+        },
+        {
+          "id": "obj_ms9ub2i7_75vlpr",
+          "name": "Key Light",
+          "type": "sun_marker",
+          "transform": {
+            "position": [
+              3.5,
+              4.5,
+              -2.5
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "scale": [
+              1,
+              1,
+              1
+            ]
+          },
+          "dimensions": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "category": "helper",
+          "locked": false,
+          "visible": true,
+          "stagingRole": "set"
+        }
+      ],
+      "panoOrigin": [
+        0,
+        1.65,
+        0
+      ],
+      "panoRotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "panoRefs": [
+      {
+        "id": "pano_ms9ub2i7_4e7w61",
+        "name": "Room Graybox Capture",
+        "imageAssetId": "asset_ms9ub2i7_09j70r",
+        "type": "graybox_render",
+        "projection": "equirectangular",
+        "origin": [
+          0,
+          1.65,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "width": 4,
+        "height": 2,
+        "isCanonical": false,
+        "notes": "Bundled sample graybox panorama (inline PNG) so Export has no missing-graybox gaps.",
+        "createdAt": "2026-08-01T03:56:56.047Z"
+      },
+      {
+        "id": "pano_ms9ub2i7_2km4v0",
+        "name": "Room Style Reference",
+        "imageAssetId": "asset_ms9ub2i7_dce70s",
+        "type": "ai_global_reference",
+        "projection": "equirectangular",
+        "origin": [
+          0,
+          1.65,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "width": 4,
+        "height": 2,
+        "isCanonical": true,
+        "sourcePanoId": "pano_ms9ub2i7_4e7w61",
+        "notes": "Bundled sample styled panorama (inline PNG). Align or replace in Reference when experimenting.",
+        "createdAt": "2026-08-01T03:56:56.047Z"
+      }
+    ],
+    "landmarks": [
+      {
+        "id": "landmark_ms9ub2i7_17d4tl",
+        "name": "room_center",
+        "displayName": "Room Center",
+        "position": [
+          0,
+          1.2,
+          0
+        ],
+        "description": "Center of the dialogue room stage.",
+        "tags": [],
+        "promptCritical": true,
+        "visible": true
+      }
+    ],
+    "shots": [
+      {
+        "id": "shot_ms9ub2i7_bktkjy",
+        "shotNumber": "010",
+        "name": "Wide two-shot",
+        "description": "Alex and Blair standing across from each other in the dialogue room.",
+        "camera": {
+          "position": [
+            0,
+            1.55,
+            4.2
+          ],
+          "target": [
+            0,
+            1.35,
+            0
+          ],
+          "fovDegrees": 55,
+          "aspectRatio": 1.7777777777777777,
+          "near": 0.1,
+          "far": 100
+        },
+        "cameraKeyframes": [],
+        "objectOverrides": {
+          "obj_ms9ub2i7_m7hujr": {
+            "transform": {
+              "position": [
+                -1.1,
+                0.875,
+                0.15
+              ],
+              "rotation": [
+                0,
+                25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_gyzv6y": {
+            "transform": {
+              "position": [
+                1.1,
+                0.84,
+                0.15
+              ],
+              "rotation": [
+                0,
+                -25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_jtdf9b": {
+            "transform": {
+              "position": [
+                0,
+                0.4,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          }
+        },
+        "linkedPanoId": "pano_ms9ub2i7_2km4v0",
+        "landmarkIds": [],
+        "exportSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "exportOverrides": {},
+        "promptOverrides": {},
+        "status": "planned",
+        "assets": {},
+        "createdAt": "2026-08-01T03:56:56.047Z",
+        "updatedAt": "2026-08-01T03:56:56.047Z"
+      },
+      {
+        "id": "shot_ms9ub2i7_x3bpbs",
+        "shotNumber": "020",
+        "name": "Alex medium",
+        "description": "Medium on Alex listening.",
+        "camera": {
+          "position": [
+            -0.35,
+            1.5,
+            2.6
+          ],
+          "target": [
+            -1.05,
+            1.45,
+            0.15
+          ],
+          "fovDegrees": 40,
+          "aspectRatio": 1.7777777777777777,
+          "near": 0.1,
+          "far": 100
+        },
+        "cameraKeyframes": [],
+        "objectOverrides": {
+          "obj_ms9ub2i7_m7hujr": {
+            "transform": {
+              "position": [
+                -1.1,
+                0.875,
+                0.15
+              ],
+              "rotation": [
+                0,
+                25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_gyzv6y": {
+            "transform": {
+              "position": [
+                1.1,
+                0.84,
+                0.15
+              ],
+              "rotation": [
+                0,
+                -25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_jtdf9b": {
+            "transform": {
+              "position": [
+                0,
+                0.4,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          }
+        },
+        "linkedPanoId": "pano_ms9ub2i7_2km4v0",
+        "landmarkIds": [],
+        "exportSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "exportOverrides": {},
+        "promptOverrides": {},
+        "status": "planned",
+        "assets": {},
+        "createdAt": "2026-08-01T03:56:56.047Z",
+        "updatedAt": "2026-08-01T03:56:56.047Z"
+      },
+      {
+        "id": "shot_ms9ub2i7_bh03og",
+        "shotNumber": "030",
+        "name": "Blair OTS",
+        "description": "Over Blair's shoulder onto Alex.",
+        "camera": {
+          "position": [
+            0.85,
+            1.52,
+            1.35
+          ],
+          "target": [
+            -1,
+            1.5,
+            0.1
+          ],
+          "fovDegrees": 38,
+          "aspectRatio": 1.7777777777777777,
+          "near": 0.1,
+          "far": 100
+        },
+        "cameraKeyframes": [],
+        "objectOverrides": {
+          "obj_ms9ub2i7_m7hujr": {
+            "transform": {
+              "position": [
+                -1.1,
+                0.875,
+                0.15
+              ],
+              "rotation": [
+                0,
+                25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_gyzv6y": {
+            "transform": {
+              "position": [
+                1.1,
+                0.84,
+                0.15
+              ],
+              "rotation": [
+                0,
+                -25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_jtdf9b": {
+            "transform": {
+              "position": [
+                0,
+                0.4,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          }
+        },
+        "linkedPanoId": "pano_ms9ub2i7_2km4v0",
+        "landmarkIds": [],
+        "exportSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "exportOverrides": {},
+        "promptOverrides": {},
+        "status": "planned",
+        "assets": {},
+        "createdAt": "2026-08-01T03:56:56.047Z",
+        "updatedAt": "2026-08-01T03:56:56.047Z"
+      },
+      {
+        "id": "shot_ms9ub2i7_gjy42p",
+        "shotNumber": "040",
+        "name": "Alex close-up",
+        "description": "Close-up reaction on Alex.",
+        "camera": {
+          "position": [
+            -0.55,
+            1.55,
+            1.55
+          ],
+          "target": [
+            -1.1,
+            1.55,
+            0.15
+          ],
+          "fovDegrees": 28,
+          "aspectRatio": 1.7777777777777777,
+          "near": 0.1,
+          "far": 100
+        },
+        "cameraKeyframes": [],
+        "objectOverrides": {
+          "obj_ms9ub2i7_m7hujr": {
+            "transform": {
+              "position": [
+                -1.1,
+                0.875,
+                0.15
+              ],
+              "rotation": [
+                0,
+                25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          },
+          "obj_ms9ub2i7_gyzv6y": {
+            "transform": {
+              "position": [
+                1.1,
+                0.84,
+                0.15
+              ],
+              "rotation": [
+                0,
+                -25,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": false
+          },
+          "obj_ms9ub2i7_jtdf9b": {
+            "transform": {
+              "position": [
+                0,
+                0.4,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0
+              ],
+              "scale": [
+                1,
+                1,
+                1
+              ]
+            },
+            "visible": true
+          }
+        },
+        "linkedPanoId": "pano_ms9ub2i7_2km4v0",
+        "landmarkIds": [],
+        "exportSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "exportOverrides": {},
+        "promptOverrides": {},
+        "status": "planned",
+        "assets": {},
+        "createdAt": "2026-08-01T03:56:56.047Z",
+        "updatedAt": "2026-08-01T03:56:56.047Z"
+      }
+    ],
+    "assets": {
+      "assets": {
+        "asset_ms9ub2i7_dce70s": {
+          "id": "asset_ms9ub2i7_dce70s",
+          "type": "image",
+          "name": "Dialogue Room Styled Pano",
+          "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNIWPoLjhiQOQDK4g/5aoZNPAAAAABJRU5ErkJggg==",
+          "mimeType": "image/png",
+          "width": 4,
+          "height": 2,
+          "createdAt": "2026-08-01T03:56:56.047Z",
+          "metadata": {
+            "sample": true,
+            "role": "styled-panorama",
+            "note": "Inline placeholder equirectangular — no external file dependency."
+          }
+        },
+        "asset_ms9ub2i7_09j70r": {
+          "id": "asset_ms9ub2i7_09j70r",
+          "type": "image",
+          "name": "Dialogue Room Graybox Pano",
+          "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNIWPoLjhiQOQDK4g/5aoZNPAAAAABJRU5ErkJggg==",
+          "mimeType": "image/png",
+          "width": 4,
+          "height": 2,
+          "createdAt": "2026-08-01T03:56:56.047Z",
+          "metadata": {
+            "sample": true,
+            "role": "graybox-panorama",
+            "note": "Inline placeholder graybox equirectangular for sample Export readiness."
+          }
+        },
+        "asset_ms9ub2i7_ee6e2v": {
+          "id": "asset_ms9ub2i7_ee6e2v",
+          "type": "image",
+          "name": "Dialogue Demo Contact Sheet",
+          "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNIWPoLjhiQOQDK4g/5aoZNPAAAAABJRU5ErkJggg==",
+          "mimeType": "image/png",
+          "width": 4,
+          "height": 2,
+          "createdAt": "2026-08-01T03:56:56.047Z",
+          "metadata": {
+            "sample": true,
+            "role": "contact-sheet",
+            "note": "Pre-generated contact-sheet stand-in for the sample production.",
+            "sampleProjectId": "dialogue-demo"
+          }
+        }
+      }
+    },
+    "settings": {
+      "defaultShotWidth": 3840,
+      "defaultShotHeight": 2160,
+      "defaultShotFovDegrees": 32.26880217111643,
+      "defaultCameraLensMm": 35,
+      "defaultCameraHeightMeters": 1.65,
+      "panoGoodMatchMeters": 1.5,
+      "panoModerateMatchMeters": 4,
+      "panoLetterboxExports169": true,
+      "projectedStyle": {
+        "panoId": "pano_ms9ub2i7_2km4v0",
+        "blendMode": "primary_only",
+        "opacity": 1,
+        "exposure": 1,
+        "lightingContribution": 0,
+        "fallbackMode": "clay",
+        "occlusionEnabled": true,
+        "occlusionBiasMeters": 0.04,
+        "occlusionSoftness": 1,
+        "occlusionFilterMode": "soft",
+        "occlusionDebugMode": "off"
+      }
+    },
+    "workflow": {
+      "shotFramingAcceptedAtByShotId": {
+        "shot_ms9ub2i7_bktkjy": "2026-08-01T03:56:56.045Z",
+        "shot_ms9ub2i7_x3bpbs": "2026-08-01T03:56:56.045Z",
+        "shot_ms9ub2i7_bh03og": "2026-08-01T03:56:56.045Z",
+        "shot_ms9ub2i7_gjy42p": "2026-08-01T03:56:56.045Z"
+      },
+      "aiBriefSentAtByShotId": {},
+      "finalPackageExportedAtByShotId": {}
+    },
+    "exportConfiguration": {
+      "schemaVersion": 2,
+      "activeProfileId": "ai-generation",
+      "defaults": {
+        "width": 3840,
+        "height": 2160,
+        "peopleExportMode": "with_people",
+        "characterPass": {
+          "enabled": false,
+          "includeStill": true,
+          "includeMotion": true,
+          "motionFormat": "green_mp4",
+          "backgroundColor": "#00FF00",
+          "includeAttachedProps": true
+        },
+        "includeViewport": true,
+        "includeProjectedViewport": true,
+        "includeProjectedCameraMoveReferenceFrames": true,
+        "includeProjectedCameraMoveVideo": true,
+        "includeAiResultFrame": true,
+        "includePanoCrop": true,
+        "includeFullPano": true,
+        "includeGrayboxPano": true,
+        "includeCameraMoveVideo": true,
+        "includeCameraMoveReferenceFrames": true,
+        "includeMetadata": true,
+        "includePrompt": true,
+        "depth": {
+          "enabled": false,
+          "includeViewportStill": true,
+          "includeReferenceFrames": true,
+          "includeCameraMoveVideo": true,
+          "rangeMode": "auto",
+          "invert": false
+        }
+      },
+      "packageFormat": "legacy-v1"
+    }
+  }
+}

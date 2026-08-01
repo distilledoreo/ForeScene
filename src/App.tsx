@@ -23,7 +23,12 @@ import {
   Upload,
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
+import { isEffectivelyBlankProject } from './domain/blankProject';
 import type { ProjectSaveStatus } from './engine/projectSafety';
+import {
+  DIALOGUE_DEMO_SAMPLE_ID,
+  isDialogueDemoSample,
+} from './engine/sampleProjects';
 import { BRAND, projectBackupAcceptAttribute, readMigratedPreference } from './config/brand';
 import { useAppModeStore } from './state/useAppModeStore';
 import { useAgentControlStore } from './state/useAgentControlStore';
@@ -37,6 +42,10 @@ import { ModeChooser } from './components/common/ModeChooser';
 import SplashScreen from './components/common/SplashScreen';
 import { TextInput } from './components/common/Field';
 import { WorkspaceErrorBoundary } from './components/common/WorkspaceErrorBoundary';
+import {
+  ProjectLauncher,
+  type ProjectLauncherAction,
+} from './components/onboarding/ProjectLauncher';
 
 const BuildWorkspace = lazy(() => import('./components/workspaces/BuildWorkspace').then((m) => ({ default: m.BuildWorkspace })));
 const ReferenceWorkspace = lazy(() => import('./components/workspaces/ReferenceWorkspace').then((m) => ({ default: m.ReferenceWorkspace })));
@@ -76,6 +85,8 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
   const [agentConsoleOpen, setAgentConsoleOpen] = useState(false);
+  /** Session flag: advanced users can dismiss the first-project launcher. */
+  const [launcherDismissed, setLauncherDismissed] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
@@ -105,6 +116,10 @@ export default function App() {
     importProject,
     saveProject,
     startNewProject,
+    startBlankProject,
+    startStarterProject,
+    loadSampleProject,
+    resetSampleProject,
     createProjectSnapshot,
     restoreProjectSnapshot,
     openLocalProjectHistory,
@@ -122,6 +137,67 @@ export default function App() {
   const isPanoViewer = appMode === 'panoViewer';
   const isStudioMode = appMode === 'studio';
   const showModeChooser = splashDone && appMode === null && !helpOpen;
+  const projectIsBlank = isEffectivelyBlankProject(project);
+  const showProjectLauncher =
+    splashDone
+    && isStudioMode
+    && !helpOpen
+    && !showModeChooser
+    && projectIsBlank
+    && !launcherDismissed;
+  const activeSample = isDialogueDemoSample(project);
+
+  // When the user leaves a blank project (sample, import, starter), clear the
+  // dismiss flag so a later blank project can show the launcher again.
+  useEffect(() => {
+    if (!projectIsBlank) setLauncherDismissed(false);
+  }, [projectIsBlank, project.id]);
+
+  const handleLauncherAction = (action: ProjectLauncherAction) => {
+    switch (action.type) {
+      case 'dismiss':
+        setLauncherDismissed(true);
+        setWorkspace('build');
+        break;
+      case 'automated-previs':
+        // Phase 2 will ship the full setup wizard. Until then, Agent Console
+        // is the production handoff surface for external coding agents.
+        // Dismiss so the console is reachable; project remains blank until the agent builds it.
+        setLauncherDismissed(true);
+        setAgentConsoleOpen(true);
+        setProjectImportStatus({
+          tone: 'success',
+          message:
+            'Automated Previs: use the Agent Console (or an external coding agent with a production manifest) to build from a shot list. A guided wizard is planned next.',
+        });
+        break;
+      case 'build-blank':
+        // Blank stays effectively blank — dismiss only after a successful start
+        // so a failed commit does not leave an unexplained empty Build.
+        void startBlankProject().then((ok) => {
+          if (ok) setLauncherDismissed(true);
+        });
+        break;
+      case 'build-starter':
+        // Non-blank starter hides the launcher via isEffectivelyBlankProject;
+        // do not dismiss early so a failed start keeps the launcher visible.
+        void startStarterProject();
+        break;
+      case 'open-existing':
+        // Do not dismiss before the picker resolves. Cancel leaves the blank
+        // project with the launcher still up; a successful import is non-blank
+        // and hides the launcher automatically.
+        openProjectPicker();
+        break;
+      case 'load-sample':
+        // Dismiss only via non-blank gating after a successful load. A failed
+        // commit must keep the launcher so the user is not stranded on empty Build.
+        void loadSampleProject(action.sampleId);
+        break;
+      default:
+        break;
+    }
+  };
 
   const navigateWorkspace = (nextWorkspace: Workspace) => {
     if (criticalProjectWrite) {
@@ -318,12 +394,41 @@ export default function App() {
                         }}
                       />
                       <ProjectMenuButton
+                        icon={<Clapperboard className="h-4 w-4" />}
+                        label="Explore Sample Production"
+                        onClick={() => {
+                          void loadSampleProject(DIALOGUE_DEMO_SAMPLE_ID);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-project-load-sample
+                      />
+                      {activeSample && (
+                        <ProjectMenuButton
+                          icon={<RotateCcw className="h-4 w-4" />}
+                          label="Reset Sample"
+                          onClick={() => {
+                            void resetSampleProject(DIALOGUE_DEMO_SAMPLE_ID);
+                            setProjectMenuOpen(false);
+                          }}
+                          data-project-reset-sample
+                        />
+                      )}
+                      <ProjectMenuButton
                         icon={<ShieldCheck className="h-4 w-4" />}
                         label="Project Safety & Recovery"
                         onClick={() => {
                           setProjectSafetyOpen(true);
                           setProjectMenuOpen(false);
                         }}
+                      />
+                      <ProjectMenuButton
+                        icon={<Terminal className="h-4 w-4" />}
+                        label="Automated Previs (Agent)"
+                        onClick={() => {
+                          setAgentConsoleOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-project-automated-previs
                       />
                       <ProjectMenuButton
                         icon={<Terminal className="h-4 w-4" />}
@@ -578,7 +683,10 @@ export default function App() {
       )}
 
       <ModeChooser visible={showModeChooser} />
-  <SplashScreen onDismissed={() => setSplashDone(true)} />
+      {showProjectLauncher && (
+        <ProjectLauncher onAction={handleLauncherAction} />
+      )}
+      <SplashScreen onDismissed={() => setSplashDone(true)} />
     </div>
   );
 }
