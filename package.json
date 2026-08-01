@@ -36,7 +36,8 @@
     "test:e2e:visual": "playwright test --project=desktop-chromium --project=tablet-chromium --project=phone-390 --grep \"@visual\"",
     "test:e2e:heavy": "playwright test --project=desktop-chromium --grep \"@heavy\"",
     "test:e2e:previs": "playwright test --project=desktop-chromium --grep \"autonomous previs dialogue\"",
-    "test:e2e:full": "playwright test"
+    "test:e2e:full": "playwright test",
+    "sample:generate": "node scripts/generate-sample-assets.mjs && tsx scripts/generate-dialogue-sample.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

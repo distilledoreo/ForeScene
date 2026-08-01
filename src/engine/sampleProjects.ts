@@ -1,6 +1,7 @@
 /**
  * Bundled sample productions for the first-project launcher.
  * Samples are self-contained LocationProject documents with no external asset deps.
+ * Visual assets: run `npm run sample:generate` (factory is canonical; JSON is a snapshot).
  */
 
 import type {
@@ -25,16 +26,10 @@ import {
   normalizeShotExportSettings,
 } from '../domain/defaults';
 import { createId } from '../utils/ids';
+import { DIALOGUE_DEMO_ASSETS } from '../samples/dialogueDemoAssets';
 
-/** Stable sample id used by the launcher and help catalog. */
+/** Stable sample id used by the launcher, reset, and help catalog. */
 export const DIALOGUE_DEMO_SAMPLE_ID = 'dialogue-demo';
-
-/**
- * Tiny solid-color PNG (4×2) used as a stand-in equirect / contact-sheet asset.
- * No network or filesystem dependency.
- */
-export const SAMPLE_INLINE_PNG_DATA_URI =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNIWPoLjhiQOQDK4g/5aoZNPAAAAABJRU5ErkJggg==';
 
 export interface SampleProjectDefinition {
   id: string;
@@ -64,16 +59,41 @@ function objectAt(
   return object;
 }
 
+function makeImageAsset(params: {
+  name: string;
+  dataUri: string;
+  width: number;
+  height: number;
+  role: string;
+  extraMeta?: Record<string, unknown>;
+}): ProjectAsset {
+  const asset = createPanoAsset({
+    name: params.name,
+    uri: params.dataUri,
+    width: params.width,
+    height: params.height,
+    metadata: {
+      sample: true,
+      sampleProjectId: DIALOGUE_DEMO_SAMPLE_ID,
+      role: params.role,
+      ...params.extraMeta,
+    },
+  });
+  return {
+    ...asset,
+    type: 'image',
+    mimeType: 'image/png',
+  };
+}
+
 /**
  * Build the Dialogue Demo sample: one interior room, two characters, a table
- * prop, four production shots, a styled panorama reference (inline PNG),
- * complete export configuration, and a pre-generated contact-sheet asset.
+ * prop, four production shots, graybox + styled panoramas, contact sheet,
+ * per-shot viewport thumbnails, and complete export configuration.
  */
 export function createDialogueDemoSample(): LocationProject {
   const now = new Date().toISOString();
   const settings = { ...defaultProjectSettings };
-  // Full AI-generation defaults; graybox + styled panos are both bundled below
-  // so Export preflight has no missing-graybox / missing-projector gaps.
   const exportConfiguration = createDefaultExportConfiguration(
     normalizeShotExportSettings({ ...defaultShotExportSettings }),
   );
@@ -133,48 +153,41 @@ export function createDialogueDemoSample(): LocationProject {
 
   const objects = [floor, backWall, leftWall, rightWall, doorway, table, alex, blair, sun];
 
-  const styledPanoAsset = createPanoAsset({
-    name: 'Dialogue Room Styled Pano',
-    uri: SAMPLE_INLINE_PNG_DATA_URI,
-    width: 4,
-    height: 2,
-    metadata: {
-      sample: true,
-      role: 'styled-panorama',
-      note: 'Inline placeholder equirectangular — no external file dependency.',
-    },
-  });
-
-  const grayboxPanoAsset = createPanoAsset({
+  const grayboxPanoAsset = makeImageAsset({
     name: 'Dialogue Room Graybox Pano',
-    uri: SAMPLE_INLINE_PNG_DATA_URI,
-    width: 4,
-    height: 2,
-    metadata: {
-      sample: true,
-      role: 'graybox-panorama',
-      note: 'Inline placeholder graybox equirectangular for sample Export readiness.',
-    },
+    dataUri: DIALOGUE_DEMO_ASSETS.grayboxPano.dataUri,
+    width: DIALOGUE_DEMO_ASSETS.grayboxPano.width,
+    height: DIALOGUE_DEMO_ASSETS.grayboxPano.height,
+    role: 'graybox-panorama',
   });
 
-  const contactSheetAsset = createPanoAsset({
+  const styledPanoAsset = makeImageAsset({
+    name: 'Dialogue Room Styled Pano',
+    dataUri: DIALOGUE_DEMO_ASSETS.styledPano.dataUri,
+    width: DIALOGUE_DEMO_ASSETS.styledPano.width,
+    height: DIALOGUE_DEMO_ASSETS.styledPano.height,
+    role: 'styled-panorama',
+  });
+
+  const contactSheet = makeImageAsset({
     name: 'Dialogue Demo Contact Sheet',
-    uri: SAMPLE_INLINE_PNG_DATA_URI,
-    width: 4,
-    height: 2,
-    metadata: {
-      sample: true,
-      role: 'contact-sheet',
-      note: 'Pre-generated contact-sheet stand-in for the sample production.',
-    },
+    dataUri: DIALOGUE_DEMO_ASSETS.contactSheet.dataUri,
+    width: DIALOGUE_DEMO_ASSETS.contactSheet.width,
+    height: DIALOGUE_DEMO_ASSETS.contactSheet.height,
+    role: 'contact-sheet',
   });
 
-  // Contact sheet is not a pano; force type metadata while reusing helper shape.
-  const contactSheet: ProjectAsset = {
-    ...contactSheetAsset,
-    type: 'image',
-    mimeType: 'image/png',
-  };
+  const shotThumbAssets: Record<string, ProjectAsset> = {};
+  for (const [shotNumber, thumb] of Object.entries(DIALOGUE_DEMO_ASSETS.shotThumbnails)) {
+    shotThumbAssets[shotNumber] = makeImageAsset({
+      name: `Shot ${shotNumber} Thumbnail`,
+      dataUri: thumb.dataUri,
+      width: thumb.width,
+      height: thumb.height,
+      role: 'shot-thumbnail',
+      extraMeta: { shotNumber },
+    });
+  }
 
   const grayboxPano = createPanoReference({
     name: 'Room Graybox Capture',
@@ -182,10 +195,10 @@ export function createDialogueDemoSample(): LocationProject {
     type: 'graybox_render',
     origin: [0, DEFAULT_CAMERA_HEIGHT_METERS, 0],
     rotation: [0, 0, 0],
-    width: 4,
-    height: 2,
+    width: grayboxPanoAsset.width ?? 1024,
+    height: grayboxPanoAsset.height ?? 512,
     isCanonical: false,
-    notes: 'Bundled sample graybox panorama (inline PNG) so Export has no missing-graybox gaps.',
+    notes: 'Bundled sample graybox panorama of the dialogue room.',
   });
 
   const styledPano = createPanoReference({
@@ -194,11 +207,11 @@ export function createDialogueDemoSample(): LocationProject {
     type: 'ai_global_reference',
     origin: [0, DEFAULT_CAMERA_HEIGHT_METERS, 0],
     rotation: [0, 0, 0],
-    width: 4,
-    height: 2,
+    width: styledPanoAsset.width ?? 1024,
+    height: styledPanoAsset.height ?? 512,
     isCanonical: true,
     sourcePanoId: grayboxPano.id,
-    notes: 'Bundled sample styled panorama (inline PNG). Align or replace in Reference when experimenting.',
+    notes: 'Bundled sample styled panorama of the same room — projection target for Reference.',
   });
 
   const scene = {
@@ -225,7 +238,7 @@ export function createDialogueDemoSample(): LocationProject {
     name: string,
     description: string,
     camera: ReturnType<typeof createCameraData>,
-    overrides: Shot['objectOverrides'],
+    overrides: NonNullable<Shot['objectOverrides']>,
   ): Shot => {
     const shot = createShot({
       index,
@@ -236,15 +249,25 @@ export function createDialogueDemoSample(): LocationProject {
     shot.shotNumber = shotNumber;
     shot.name = name;
     shot.description = description;
-    shot.objectOverrides = overrides;
+    // Deep-clone so per-shot staging never shares object identity.
+    shot.objectOverrides = structuredClone(overrides);
     shot.status = 'planned';
     shot.exportSettings = { ...shotExport };
     shot.exportOverrides = {};
+    const thumb = shotThumbAssets[shotNumber];
+    if (thumb) {
+      shot.assets = {
+        ...shot.assets,
+        viewportRenderAssetId: thumb.id,
+      };
+    }
+    shot.metadata = {
+      sampleProjectId: DIALOGUE_DEMO_SAMPLE_ID,
+    };
     return shot;
   };
 
-  // Staging: keep both characters + table visible with dialogue blocking.
-  const dialogueStaging: Shot['objectOverrides'] = {
+  const dialogueStaging: NonNullable<Shot['objectOverrides']> = {
     [alex.id]: {
       transform: { ...alex.transform, position: [...alex.transform.position] as Vec3 },
       visible: true,
@@ -259,7 +282,7 @@ export function createDialogueDemoSample(): LocationProject {
     },
   };
 
-  const alexSoloStaging: Shot['objectOverrides'] = {
+  const alexSoloStaging: NonNullable<Shot['objectOverrides']> = {
     [alex.id]: {
       transform: { ...alex.transform, position: [...alex.transform.position] as Vec3 },
       visible: true,
@@ -314,13 +337,39 @@ export function createDialogueDemoSample(): LocationProject {
   center.displayName = 'Room Center';
   center.description = 'Center of the dialogue room stage.';
 
+  const registryAssets: Record<string, ProjectAsset> = {
+    [grayboxPanoAsset.id]: grayboxPanoAsset,
+    [styledPanoAsset.id]: styledPanoAsset,
+    [contactSheet.id]: contactSheet,
+  };
+  for (const thumb of Object.values(shotThumbAssets)) {
+    registryAssets[thumb.id] = thumb;
+  }
+
+  // Stable project-level sample marker asset (survives rename / shot edits).
+  const sampleMarker = makeImageAsset({
+    name: 'Dialogue Demo Sample Marker',
+    dataUri: DIALOGUE_DEMO_ASSETS.contactSheet.dataUri,
+    width: 1,
+    height: 1,
+    role: 'sample-marker',
+    extraMeta: {
+      sampleProjectId: DIALOGUE_DEMO_SAMPLE_ID,
+      sampleVersion: 1,
+    },
+  });
+  // Keep marker 1×1 logical but reuse contact sheet bytes only if needed — use tiny unique metadata.
+  sampleMarker.width = DIALOGUE_DEMO_ASSETS.contactSheet.width;
+  sampleMarker.height = DIALOGUE_DEMO_ASSETS.contactSheet.height;
+  registryAssets[sampleMarker.id] = sampleMarker;
+
   const project: LocationProject = {
     schemaVersion: '1.0',
     productVersion: '0.1.0',
     id: createId('project'),
     name: 'Dialogue Demo',
     description:
-      'Bundled ForeScene sample: one interior room, styled panorama, two characters, table prop, and four shots (wide two-shot, medium, OTS, close-up). Safe to experiment — use Reset sample to restore the baseline.',
+      'Bundled ForeScene sample: one interior room, graybox + styled panoramas, two characters, table prop, four shots (wide two-shot, medium, OTS, close-up), contact sheet, and export settings. Safe to experiment — use Reset sample to restore the baseline.',
     units: 'meters',
     createdAt: now,
     updatedAt: now,
@@ -328,13 +377,7 @@ export function createDialogueDemoSample(): LocationProject {
     panoRefs: [grayboxPano, styledPano],
     landmarks: [center],
     shots,
-    assets: {
-      assets: {
-        [styledPanoAsset.id]: styledPanoAsset,
-        [grayboxPanoAsset.id]: grayboxPanoAsset,
-        [contactSheet.id]: contactSheet,
-      },
-    },
+    assets: { assets: registryAssets },
     settings: {
       ...settings,
       projectedStyle: {
@@ -347,21 +390,13 @@ export function createDialogueDemoSample(): LocationProject {
     },
     workflow: {
       ...defaultProjectWorkflow,
-      // Mark framing accepted so Export guidance is not blocked for the sample.
+      grayboxApprovedForReferenceAt: now,
+      referenceAlignmentAcceptedForPanoId: styledPano.id,
       shotFramingAcceptedAtByShotId: Object.fromEntries(
         shots.map((shot) => [shot.id, now]),
       ),
     },
     exportConfiguration,
-  };
-
-  // Tag for reset detection without changing schema.
-  project.assets.assets[contactSheet.id] = {
-    ...contactSheet,
-    metadata: {
-      ...contactSheet.metadata,
-      sampleProjectId: DIALOGUE_DEMO_SAMPLE_ID,
-    },
   };
 
   return project;
@@ -373,7 +408,7 @@ export const SAMPLE_PROJECTS: readonly SampleProjectDefinition[] = [
     title: 'Dialogue Demo',
     summary: 'Two-character interior dialogue with four classic coverage shots.',
     outcome:
-      'A complete mini production: room set, styled panorama, Alex & Blair, table prop, wide / medium / OTS / close-up shots, and export settings ready to open.',
+      'A complete mini production: room set, graybox + styled panoramas, Alex & Blair, table prop, wide / medium / OTS / close-up shots with thumbnails, and export settings ready to open.',
     create: createDialogueDemoSample,
   },
 ];
@@ -399,12 +434,23 @@ export function resetSampleProject(sampleId: string): LocationProject {
   return loadSampleProject(sampleId);
 }
 
-/** True when the project looks like the Dialogue Demo sample (for UI affordances). */
+/**
+ * True when the project carries the Dialogue Demo sample marker
+ * (`metadata.sampleProjectId` on any asset). Survives rename and shot edits.
+ */
 export function isDialogueDemoSample(project: LocationProject): boolean {
-  if (project.name !== 'Dialogue Demo') return false;
-  const shotNumbers = project.shots.map((shot) => shot.shotNumber).sort();
-  if (shotNumbers.join(',') !== '010,020,030,040') return false;
-  const people = project.scene.objects.filter((object) => object.stagingRole === 'person');
-  if (people.length < 2) return false;
-  return project.panoRefs.some((pano) => pano.type === 'ai_global_reference');
+  return getSampleProjectId(project) === DIALOGUE_DEMO_SAMPLE_ID;
+}
+
+/** Resolve the stable sample id from asset markers, if present. */
+export function getSampleProjectId(project: LocationProject): string | undefined {
+  for (const asset of Object.values(project.assets?.assets ?? {})) {
+    const id = asset.metadata?.sampleProjectId;
+    if (typeof id === 'string' && id.length > 0) return id;
+  }
+  for (const shot of project.shots ?? []) {
+    const id = shot.metadata?.sampleProjectId;
+    if (typeof id === 'string' && id.length > 0) return id;
+  }
+  return undefined;
 }

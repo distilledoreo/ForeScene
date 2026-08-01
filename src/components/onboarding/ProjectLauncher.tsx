@@ -4,7 +4,6 @@ import {
   Clapperboard,
   FolderOpen,
   Hammer,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { BRAND } from '../../config/brand';
@@ -29,6 +28,8 @@ export interface ProjectLauncherProps {
 /**
  * Production-oriented first-project launcher shown when Studio is active
  * and the live project is effectively blank.
+ *
+ * Layout: three primary paths + one featured sample (no duplicate sample card).
  */
 export function ProjectLauncher({
   onAction,
@@ -45,7 +46,7 @@ export function ProjectLauncher({
       aria-labelledby="project-launcher-title"
       data-project-launcher
     >
-      <div className="relative w-full max-w-3xl space-y-5 rounded-[var(--radius-card)] border border-subtle bg-surface-raised p-5 shadow-soft sm:p-7">
+      <div className="relative max-h-[min(92vh,52rem)] w-full max-w-3xl space-y-4 overflow-y-auto rounded-[var(--radius-card)] border border-subtle bg-surface-raised p-5 shadow-soft sm:p-7">
         <button
           type="button"
           onClick={() => onAction({ type: 'dismiss' })}
@@ -64,38 +65,29 @@ export function ProjectLauncher({
             How do you want to start?
           </h1>
           <p className="text-sm text-secondary">
-            Choose a path into a complete production. Every option below states what you will get —
+            Choose a path into a complete production. Every option states what you will get —
             nothing leaves you in an empty workspace without context.
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <LauncherCard
             icon={<Bot className="h-6 w-6" />}
             title="Automated Previs"
-            outcome="Start from a shot list and let a coding agent build the production."
-            detail="Opens the agent workflow entry so an external coding agent can assemble sets, characters, and cameras for you."
+            badge="Advanced"
+            outcome="Opens the Agent Console for use with an external coding agent."
+            detail="Paste or apply a production plan from Grok Build, Codex, Claude Code, or a generic agent. A guided setup wizard is planned next."
             onClick={() => onAction({ type: 'automated-previs' })}
             dataOption="automated-previs"
           />
           <LauncherCard
             icon={<Hammer className="h-6 w-6" />}
             title="Build Manually"
-            outcome="Create a blank set, generate one from a description, or start from the temple starter geometry."
-            detail="Stay in control: pick a blank stage or a ready-made starter set and build shot by shot."
+            outcome="Create a blank set, start from the temple starter, or import a backup."
+            detail="Stay in control: pick a blank stage or ready-made starter and build shot by shot."
             onClick={() => setManualOpen((open) => !open)}
             dataOption="build-manually"
             active={manualOpen}
-          />
-          <LauncherCard
-            icon={<Sparkles className="h-6 w-6" />}
-            title="Explore a Sample"
-            outcome={primarySample?.outcome ?? 'Open a complete example production.'}
-            detail={primarySample?.summary}
-            onClick={() => {
-              if (primarySample) onAction({ type: 'load-sample', sampleId: primarySample.id });
-            }}
-            dataOption="explore-sample"
           />
           <LauncherCard
             icon={<FolderOpen className="h-6 w-6" />}
@@ -144,6 +136,7 @@ export function ProjectLauncher({
 function LauncherCard({
   icon,
   title,
+  badge,
   outcome,
   detail,
   onClick,
@@ -152,6 +145,7 @@ function LauncherCard({
 }: {
   icon: React.ReactNode;
   title: string;
+  badge?: string;
   outcome: string;
   detail?: string;
   onClick: () => void;
@@ -174,7 +168,14 @@ function LauncherCard({
         {icon}
       </span>
       <div className="space-y-1.5">
-        <span className="text-base font-semibold text-primary">{title}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-base font-semibold text-primary">{title}</span>
+          {badge && (
+            <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-secondary">
+              {badge}
+            </span>
+          )}
+        </div>
         <p className="text-sm font-medium leading-snug text-primary/90">{outcome}</p>
         {detail && <p className="text-xs leading-snug text-secondary">{detail}</p>}
       </div>

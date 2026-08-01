@@ -54,16 +54,16 @@ export const helpSections: readonly HelpSection[] = [
         defaultOpen: true,
         controls: [
           {
-            label: 'Automated Previs',
-            description: 'Start from a shot list and let a coding agent build the production. Opens the agent workflow entry (Agent Console today; a guided setup wizard is planned).',
+            label: 'Automated Previs (Advanced)',
+            description: 'Opens the Agent Console for use with an external coding agent. A guided shot-list wizard is planned; today this is the advanced agent handoff surface.',
           },
           {
             label: 'Build Manually',
             description: 'Create a blank graybox set, open the temple starter courtyard, or import an existing project backup — then build shots yourself.',
           },
           {
-            label: 'Explore a Sample',
-            description: 'Opens the Dialogue Demo: one room, styled panorama, two characters, a table prop, four coverage shots, and export settings. Safe to experiment; use Reset sample to restore the baseline.',
+            label: 'Featured sample (Dialogue Demo)',
+            description: 'Opens the Dialogue Demo: one room, graybox + styled panoramas, two characters, a table prop, four coverage shots with thumbnails, contact sheet, and export settings. Safe to experiment; use Reset sample to restore the baseline.',
           },
           {
             label: 'Open Existing Project',

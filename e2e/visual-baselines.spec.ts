@@ -47,9 +47,31 @@ async function dismissOverlays(page: Page) {
   }
 }
 
+/** Dismiss first-project launcher so Build/Shots baselines capture the workspace, not the modal. */
+async function dismissProjectLauncher(page: Page) {
+  const launcher = page.locator('[data-project-launcher]');
+  if (await launcher.isVisible().catch(() => false)) {
+    await page.locator('[data-project-launcher-dismiss]').click();
+    await expect(launcher).toBeHidden({ timeout: 10_000 });
+  }
+}
+
 test.describe('@visual screenshot baselines', () => {
+  test('launcher baseline', async ({ page }, testInfo) => {
+    await enterStudio(page);
+    await dismissOverlays(page);
+    const launcher = page.locator('[data-project-launcher]');
+    await expect(launcher).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot(`launcher-${testInfo.project.name}.png`, {
+      fullPage: false,
+    });
+  });
+
   test('build workspace baseline', async ({ page }, testInfo) => {
     await enterStudio(page);
+    await dismissOverlays(page);
+    await dismissProjectLauncher(page);
     await dismissOverlays(page);
     await page.waitForTimeout(400);
     await expect(page).toHaveScreenshot(`build-${testInfo.project.name}.png`, {
@@ -60,6 +82,7 @@ test.describe('@visual screenshot baselines', () => {
   test('shots workspace baseline', async ({ page }, testInfo) => {
     await enterStudio(page);
     await dismissOverlays(page);
+    await dismissProjectLauncher(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await dismissOverlays(page);
     // Let the viewfinder finish settling so the screenshot matches the baseline.

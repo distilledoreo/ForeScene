@@ -14,6 +14,7 @@ import {
   defaultProjectSettings,
   defaultProjectWorkflow,
 } from '../../domain/defaults';
+import { tagObjectAsScaffold, tagShotAsScaffold } from '../../domain/scaffold';
 import { createId } from '../../utils/ids';
 import type { PrevisAspectRatio } from './manifest';
 import { aspectRatioValue } from './manifest';
@@ -38,10 +39,12 @@ export function createBlankGrayboxProject(
   floor.locked = true;
   floor.dimensions = [20, 0.08, 20];
   floor.transform.position = [0, -0.04, 0];
+  tagObjectAsScaffold(floor, 'initial-floor');
 
   const sun = createSceneObject('sun_marker', 1);
   sun.name = 'Key Light';
   sun.transform.position = [4, 6, -3];
+  tagObjectAsScaffold(sun, 'initial-light');
 
   const settings = {
     ...defaultProjectSettings,
@@ -71,6 +74,7 @@ export function createBlankGrayboxProject(
   origin.name = 'Origin';
   origin.description = 'Blank graybox origin shot — replaced by previs shot list.';
   origin.shotNumber = '000';
+  tagShotAsScaffold(origin);
 
   const center = createLandmark(1, [0, 1.2, 0]);
   center.name = 'world_center';
