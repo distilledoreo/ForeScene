@@ -26,6 +26,60 @@ async function expectProjectName(page: Page, pattern: RegExp) {
   });
 }
 
+async function expectRetainedContactSheetResolves(page: Page) {
+  await expect.poll(async () => page.evaluate(async () => {
+    const open = (name: string) => new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error(`Could not open ${name}.`));
+    });
+    const read = <T>(database: IDBDatabase, storeName: string, key: IDBValidKey) => new Promise<T | undefined>((resolve, reject) => {
+      const request = database.transaction(storeName, 'readonly').objectStore(storeName).get(key);
+      request.onsuccess = () => resolve(request.result as T | undefined);
+      request.onerror = () => reject(request.error ?? new Error(`Could not read ${storeName}.`));
+    });
+
+    const revisions = await open('panoref-project-revisions');
+    const heads = await new Promise<Array<{ activeRevisionId: string }>>((resolve, reject) => {
+      const request = revisions.transaction('heads', 'readonly').objectStore('heads').getAll();
+      request.onsuccess = () => resolve(request.result as Array<{ activeRevisionId: string }>);
+      request.onerror = () => reject(request.error ?? new Error('Could not list project heads.'));
+    });
+    const revisionRecords = await new Promise<Array<{ id: string; manifest: string }>>((resolve, reject) => {
+      const request = revisions.transaction('revisions', 'readonly').objectStore('revisions').getAll();
+      request.onsuccess = () => resolve(request.result as Array<{ id: string; manifest: string }>);
+      request.onerror = () => reject(request.error ?? new Error('Could not list project revisions.'));
+    });
+    revisions.close();
+    const activeRevisionIds = new Set(heads.map((head) => head.activeRevisionId));
+    const manifests = revisionRecords
+      .filter((revision) => activeRevisionIds.has(revision.id))
+      .map((revision) => JSON.parse(revision.manifest) as {
+      assets?: { assets?: Record<string, { storageKey?: string; uri?: string; metadata?: Record<string, unknown> }> };
+      });
+    const manifest = manifests.find((candidate) => Object.values(candidate.assets?.assets ?? {}).some((asset) =>
+      asset.metadata?.role === 'contact-sheet' && asset.metadata?.retainInProject === true
+    ));
+    const contactSheet = Object.values(manifest?.assets?.assets ?? {}).find((asset) => (
+      asset.metadata?.role === 'contact-sheet' && asset.metadata?.retainInProject === true
+    ));
+    const key = contactSheet?.storageKey ?? contactSheet?.uri?.replace('panoref-asset:', '');
+    if (!key) return false;
+
+    const assets = await open('panoref-project-assets');
+    const blob = await read<Blob>(assets, 'binary-assets', key);
+    assets.close();
+    if (!(blob instanceof Blob)) return false;
+    const url = URL.createObjectURL(blob);
+    try {
+      const response = await fetch(url);
+      return response.ok && (await response.blob()).size > 0;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }).catch(() => false), { timeout: 30_000 }).toBe(true);
+}
+
 test.describe('@smoke first-project launcher', () => {
   test('opens Dialogue Demo sample and reaches Reference + Export', async ({ page }) => {
     await enterStudioExpectingLauncher(page);
@@ -36,6 +90,7 @@ test.describe('@smoke first-project launcher', () => {
     await openSample.click();
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await expect(page.locator('[data-project-import-status="success"]')).toBeVisible({ timeout: 15_000 }).catch(() => undefined);
+    await expect(page.locator('[data-project-save-status]')).toHaveAttribute('data-project-save-status', 'saved', { timeout: 30_000 });
     // Workflow guidance / objective modals often appear after a project swap.
     await dismissOverlays(page);
 
@@ -60,6 +115,7 @@ test.describe('@smoke first-project launcher', () => {
       { shotNumber: '030', name: 'Blair OTS' },
       { shotNumber: '040', name: 'Alex close-up' },
     ]);
+    await expectRetainedContactSheetResolves(page);
 
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
     await expect(page.locator('[data-shots-camera-shell]')).toBeVisible();

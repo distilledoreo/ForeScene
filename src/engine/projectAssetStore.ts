@@ -56,16 +56,12 @@ function makeObjectUrl(key: string, blob: Blob): string {
 }
 
 function persistProjectAssetBlob(key: string, blob: Blob) {
-  // Chain writes so concurrent storeProjectAssetDataUrl calls do not open
-  // overlapping IndexedDB transactions (Safari/WebKit is especially sensitive).
-  assetWriteQueue = assetWriteQueue
-    .then(() => putProjectAssetBlobs([{ key, blob }]))
-    .catch((error) => {
-      // The in-memory blob remains usable for the current session, but this is
-      // now observable by the project safety controller instead of being a
-      // silent durability failure.
-      for (const listener of persistenceFailureListeners) listener({ key, error });
-    });
+  void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
+    // The in-memory blob remains usable for the current session, but this is
+    // now observable by the project safety controller instead of being a
+    // silent durability failure.
+    for (const listener of persistenceFailureListeners) listener({ key, error });
+  });
 }
 
 /** Observe asynchronous cache-write failures from synchronous asset actions. */
@@ -121,8 +117,7 @@ export function getProjectAssetBlobVersion(key: string): number | undefined {
   return memoryBlobVersions.get(key);
 }
 
-export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
-  if (entries.length === 0) return;
+async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
   if (nextBlobWriteFailureForTests) {
     const error = nextBlobWriteFailureForTests;
     nextBlobWriteFailureForTests = undefined;
@@ -146,6 +141,16 @@ export async function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWri
   } finally {
     db.close();
   }
+}
+
+export function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
+  if (entries.length === 0) return Promise.resolve();
+
+  const write = assetWriteQueue.then(() => putProjectAssetBlobsNow(entries));
+  // Keep the queue usable after a failed operation while still rejecting the
+  // current caller so persistence failures remain observable.
+  assetWriteQueue = write.catch(() => undefined);
+  return write;
 }
 
 export async function getProjectAssetBlob(key: string): Promise<Blob | undefined> {
