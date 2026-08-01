@@ -16,6 +16,7 @@ import { ensureImportedRiggedCharactersForProject } from '../importedRiggedPosea
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { detectImportDeviceProfile, estimateModelImportBudget, type ImportGeometryStats } from '../modelImportBudget';
+import { collectAgentBusyDiagnostics } from './busy';
 import type {
   AgentCharacterImportAnalysis,
   AgentCharacterImportCommitInput,
@@ -215,6 +216,11 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
   }
   if ((budget.tier === 'heavy' || budget.tier === 'extreme') && !input.consentToken) {
     return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'This character import requires explicit consent because it exceeds the standard memory tier.', { path: 'consentToken' })] };
+  }
+
+  const busy = collectAgentBusyDiagnostics();
+  if (busy.length > 0) {
+    return { ok: false, warnings: [], diagnostics: busy };
   }
 
   let controller: AbortController;

@@ -40,7 +40,7 @@ describe('imported rig persistence', () => {
     };
     project.assets.assets['rig-asset'] = {
       id: 'rig-asset', type: 'poseable_rig', name: 'actor rig', uri: 'data:,{}', createdAt: '',
-      metadata: { poseableRig: { id: 'rig-1', skeletonJoints: ['hips'], importedRigBinding: roundTripBinding } },
+      metadata: { poseableRig: { version: 1, id: 'rig-1', skeletonJoints: ['hips'], importedRigBinding: roundTripBinding } },
     };
     project.scene.objects.push({
       id: 'object-1', name: 'Actor', type: 'human_dummy', transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
