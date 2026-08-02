@@ -27,53 +27,12 @@ export interface ProjectLauncherProps {
    * False while local project recovery/persistence is still starting or a
    * critical local write is in flight. Project-replacement actions are disabled
    * until ready (underlying lifecycle still awaits).
-   */
+  */
   projectLifecycleReady?: boolean;
-}
-
-let sampleOpenRequestToken = 0;
-
-/**
- * A failed first project swap can remount the launcher, so component-local
- * effects and refs cannot reliably coordinate a retry. Observe the persisted
- * busy → stable-ready transition from the DOM and retry the deterministic
- * bundled sample exactly once while the launcher is still present.
- */
-function scheduleSampleRetry(
-  onAction: (action: ProjectLauncherAction) => void,
-  sampleId: string,
-  requestToken: number,
-) {
-  const startedAt = Date.now();
-  let observedBusy = false;
-  let readySince: number | undefined;
-
-  const poll = () => {
-    if (requestToken !== sampleOpenRequestToken) return;
-
-    const launcher = document.querySelector<HTMLElement>('[data-project-launcher]');
-    if (!launcher) return;
-
-    const ready = launcher.dataset.projectLifecycleReady === 'true';
-    if (!ready) {
-      observedBusy = true;
-      readySince = undefined;
-    } else if (observedBusy) {
-      readySince ??= Date.now();
-      if (Date.now() - readySince >= 500) {
-        // Invalidate this coordinator before issuing the single retry.
-        sampleOpenRequestToken += 1;
-        onAction({ type: 'load-sample', sampleId });
-        return;
-      }
-    }
-
-    if (Date.now() - startedAt < 15_000) {
-      window.setTimeout(poll, 100);
-    }
-  };
-
-  window.setTimeout(poll, 100);
+  /** True while the featured sample is being snapshotted, committed, and activated. */
+  sampleLoading?: boolean;
+  /** The latest persistence error from a failed sample activation. */
+  sampleError?: string;
 }
 
 /**
@@ -86,15 +45,15 @@ export function ProjectLauncher({
   onAction,
   initialManualOpen = false,
   projectLifecycleReady = true,
+  sampleLoading = false,
+  sampleError,
 }: ProjectLauncherProps) {
   const [manualOpen, setManualOpen] = useState(initialManualOpen);
   const primarySample = SAMPLE_PROJECTS[0];
-  const replacementReady = projectLifecycleReady;
+  const replacementReady = projectLifecycleReady && !sampleLoading;
 
   const openPrimarySample = () => {
-    if (!primarySample) return;
-    const requestToken = ++sampleOpenRequestToken;
-    scheduleSampleRetry(onAction, primarySample.id, requestToken);
+    if (!primarySample || sampleLoading) return;
     onAction({ type: 'load-sample', sampleId: primarySample.id });
   };
 
@@ -104,6 +63,7 @@ export function ProjectLauncher({
       role="dialog"
       aria-modal="true"
       aria-labelledby="project-launcher-title"
+      aria-busy={sampleLoading}
       data-project-launcher
       data-project-lifecycle-ready={replacementReady ? 'true' : 'false'}
     >
@@ -111,6 +71,7 @@ export function ProjectLauncher({
         <button
           type="button"
           onClick={() => onAction({ type: 'dismiss' })}
+          disabled={sampleLoading}
           className="absolute right-3 top-3 rounded-xl border border-transparent p-2 text-secondary transition hover:border-subtle hover:bg-surface-muted hover:text-primary"
           aria-label="Dismiss launcher and go to Build"
           data-project-launcher-dismiss
@@ -138,6 +99,24 @@ export function ProjectLauncher({
               Preparing local recovery…
             </p>
           )}
+          {sampleLoading && (
+            <p
+              className="text-xs font-medium text-accent"
+              role="status"
+              data-sample-loading
+            >
+              Opening {primarySample?.title ?? 'sample'}… Saving and activating the verified local project.
+            </p>
+          )}
+          {!sampleLoading && sampleError && (
+            <p
+              className="text-xs font-medium text-red-600 dark:text-red-400"
+              role="alert"
+              data-sample-load-error
+            >
+              {sampleError}
+            </p>
+          )}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -149,6 +128,7 @@ export function ProjectLauncher({
             detail="Paste or apply a production plan from Grok Build, Codex, Claude Code, or a generic agent. A guided setup wizard is planned next."
             onClick={() => onAction({ type: 'automated-previs' })}
             dataOption="automated-previs"
+            disabled={sampleLoading}
           />
           <LauncherCard
             icon={<Hammer className="h-6 w-6" />}
@@ -167,7 +147,7 @@ export function ProjectLauncher({
             detail="Load a .fsp / .zip / .json project backup from disk. Local recovery remains available from Project Safety."
             onClick={() => onAction({ type: 'open-existing' })}
             dataOption="open-existing"
-            disabled={!replacementReady}
+            disabled={!replacementReady || sampleLoading}
           />
         </div>
 
@@ -176,7 +156,7 @@ export function ProjectLauncher({
             onBlank={() => onAction({ type: 'build-blank' })}
             onStarter={() => onAction({ type: 'build-starter' })}
             onImport={() => onAction({ type: 'open-existing' })}
-            disabled={!replacementReady}
+            disabled={!replacementReady || sampleLoading}
           />
         )}
 
@@ -184,7 +164,8 @@ export function ProjectLauncher({
           <SampleProjectCard
             sample={primarySample}
             onOpen={openPrimarySample}
-            disabled={!replacementReady}
+            disabled={!replacementReady || sampleLoading}
+            loading={sampleLoading}
           />
         )}
 
@@ -195,6 +176,7 @@ export function ProjectLauncher({
           <button
             type="button"
             onClick={() => onAction({ type: 'dismiss' })}
+            disabled={sampleLoading}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-subtle bg-surface-muted px-4 py-2 text-sm font-medium text-primary transition hover:border-[var(--accent)] hover:bg-accent-soft/40"
             data-project-launcher-skip
           >

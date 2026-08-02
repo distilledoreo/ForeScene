@@ -26,6 +26,18 @@ async function expectProjectName(page: Page, pattern: RegExp) {
   });
 }
 
+/** Wait for activation through the product's Agent API and report persistence failures. */
+async function expectDialogueDemoActive(page: Page) {
+  await expect.poll(async () => page.evaluate(() => {
+    const failure = document.querySelector('[data-sample-load-error]')?.textContent?.trim();
+    if (failure) return `Sample activation failed: ${failure}`;
+    return window.foreScene?.getStatus().projectName ?? 'Agent API is not ready';
+  }), {
+    timeout: 30_000,
+    message: 'Expected the Agent API to report Dialogue Demo before hiding the launcher.',
+  }).toBe('Dialogue Demo');
+}
+
 async function expectRetainedContactSheetResolves(page: Page) {
   await expect.poll(async () => page.evaluate(async () => {
     const open = (name: string) => new Promise<IDBDatabase>((resolve, reject) => {
@@ -93,6 +105,7 @@ test.describe('@smoke first-project launcher', () => {
     const openSample = page.locator('[data-sample-open]');
     await expect(openSample).toBeEnabled({ timeout: 30_000 });
     await openSample.click();
+    await expectDialogueDemoActive(page);
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await expect(page.locator('[data-project-import-status="success"]')).toBeVisible({ timeout: 15_000 }).catch(() => undefined);
     await expect(page.locator('[data-project-save-status]')).toHaveAttribute('data-project-save-status', 'saved', { timeout: 30_000 });
@@ -157,6 +170,7 @@ test.describe('@smoke first-project launcher', () => {
     const openSample = page.locator('[data-sample-open]');
     await expect(openSample).toBeEnabled({ timeout: 30_000 });
     await openSample.click();
+    await expectDialogueDemoActive(page);
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await dismissOverlays(page);
     await expectProjectName(page, /Dialogue Demo/i);

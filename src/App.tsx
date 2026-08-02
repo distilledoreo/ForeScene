@@ -87,6 +87,7 @@ export default function App() {
   const [agentConsoleOpen, setAgentConsoleOpen] = useState(false);
   /** Session flag: advanced users can dismiss the first-project launcher. */
   const [launcherDismissed, setLauncherDismissed] = useState(false);
+  const [sampleLoading, setSampleLoading] = useState(false);
   const [splashDone, setSplashDone] = useState(() => hasSeenSplash());
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
@@ -145,7 +146,7 @@ export default function App() {
     && isStudioMode
     && !helpOpen
     && !showModeChooser
-    && projectIsBlank
+    && (projectIsBlank || sampleLoading)
     && !launcherDismissed;
   const activeSample = isDialogueDemoSample(project);
 
@@ -192,9 +193,15 @@ export default function App() {
         openProjectPicker();
         break;
       case 'load-sample':
-        // Dismiss only via non-blank gating after a successful load. A failed
-        // commit must keep the launcher so the user is not stranded on empty Build.
-        void loadSampleProject(action.sampleId);
+        if (sampleLoading) break;
+        setSampleLoading(true);
+        // Dismiss only after snapshot, commit, and project activation all
+        // complete successfully. A failed load keeps the launcher visible.
+        void loadSampleProject(action.sampleId).then((ok) => {
+          if (ok) setLauncherDismissed(true);
+        }).finally(() => {
+          setSampleLoading(false);
+        });
         break;
       default:
         break;
@@ -697,6 +704,8 @@ export default function App() {
         <ProjectLauncher
           onAction={handleLauncherAction}
           projectLifecycleReady={projectReplacementReady}
+          sampleLoading={sampleLoading}
+          sampleError={projectImportStatus?.tone === 'error' ? projectImportStatus.message : undefined}
         />
       )}
       <SplashScreen onDismissed={() => setSplashDone(true)} />

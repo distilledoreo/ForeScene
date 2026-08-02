@@ -33,10 +33,10 @@ describe('Project launcher wiring (Phase 1 polish)', () => {
     expect(launcher).toContain('data-project-launcher-dismiss');
   });
 
-  it('does not dismiss the launcher before open-existing or sample load resolve', () => {
+  it('dismisses the launcher only after sample load resolves successfully', () => {
     const app = readSrc('src/App.tsx');
     const openExisting = app.match(/case 'open-existing':[\s\S]*?break;/);
-    const loadSample = app.match(/case 'load-sample':[\s\S]*?break;/);
+    const loadSample = app.match(/case 'load-sample':[\s\S]*?void loadSampleProject\(action\.sampleId\)[\s\S]*?break;/);
     const buildBlank = app.match(/case 'build-blank':[\s\S]*?break;/);
 
     expect(openExisting?.[0]).toBeTruthy();
@@ -44,11 +44,17 @@ describe('Project launcher wiring (Phase 1 polish)', () => {
     expect(openExisting![0]).toContain('openProjectPicker()');
 
     expect(loadSample?.[0]).toBeTruthy();
-    expect(loadSample![0]).not.toContain('setLauncherDismissed(true)');
-    expect(loadSample![0]).toContain('loadSampleProject');
+    expect(loadSample![0]).toMatch(/if \(sampleLoading\) break;/);
+    expect(loadSample![0]).toMatch(/void loadSampleProject\(action\.sampleId\)\.then\(\(ok\) => \{[\s\S]*if \(ok\) setLauncherDismissed\(true\);/);
+    expect(app).toContain('setSampleLoading(true)');
+    expect(app).toContain('setSampleLoading(false)');
 
     expect(buildBlank?.[0]).toMatch(/startBlankProject\(\)\.then/);
     expect(buildBlank![0]).toMatch(/if \(ok\) setLauncherDismissed\(true\)/);
+
+    const launcher = readSrc('src/components/onboarding/ProjectLauncher.tsx');
+    expect(launcher).toContain('data-sample-loading');
+    expect(launcher).toContain('data-sample-load-error');
   });
 
   it('gates launcher visibility with scaffold-based blank detection', () => {
