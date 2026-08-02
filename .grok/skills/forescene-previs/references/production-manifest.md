@@ -19,9 +19,9 @@ entries use a local source path and rig mode:
 
 ```json
 {
-  "id": "joseph",
+  "id": "lead_actor",
   "type": "imported_character",
-  "source": "./characters/joseph.glb",
+  "source": "./characters/lead-actor.glb",
   "rigMode": "preserve-existing"
 }
 ```
@@ -37,11 +37,11 @@ For an explicit source/package pair, use:
 
 ```json
 {
-  "id": "joseph",
+  "id": "lead_actor",
   "type": "imported_character",
-  "source": "./characters/joseph.glb",
+  "source": "./characters/lead-actor.glb",
   "rigMode": "saved-rig",
-  "rigPackage": "./characters/joseph.fsrig"
+  "rigPackage": "./characters/lead-actor.fsrig"
 }
 ```
 

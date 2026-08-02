@@ -35,7 +35,7 @@ A failed shot blocks the next batch. A passing command, file existence, or numer
       "framingMatchesDescription": false,
       "requiredPassesPresent": true,
       "decision": "fail",
-      "reasons": ["Joseph is outside the camera frame."]
+      "reasons": ["The intended primary subject is outside the camera frame."]
     }
   ]
 }

@@ -51,16 +51,16 @@ Derive final summaries from verified artifact records and passed review records,
 3. Its associated visual review record passed.
 4. Its latest render occurred after the latest relevant scene change.
 
-Never claim four successful videos when logs show four failures, creatures refined when the refinement log applied no commands, or all 31 shots complete when some are visually empty. A required failed artifact makes `productionComplete: false`.
+Never claim successful videos when their logs show failures, a creature refinement when the refinement log applied no commands, or all requested shots complete when any are visually empty. A required failed artifact makes `productionComplete: false`.
 
 ```json
 {
-  "requestedShots": 31,
-  "visuallyApprovedShots": 22,
-  "failedShots": 9,
-  "requiredArtifacts": 186,
-  "verifiedArtifacts": 158,
-  "failedArtifacts": 28,
+  "requestedShots": 12,
+  "visuallyApprovedShots": 9,
+  "failedShots": 3,
+  "requiredArtifacts": 72,
+  "verifiedArtifacts": 61,
+  "failedArtifacts": 11,
   "productionComplete": false
 }
 ```

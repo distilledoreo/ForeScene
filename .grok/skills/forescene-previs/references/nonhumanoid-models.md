@@ -1,6 +1,6 @@
 # Proxy-to-creature replacement
 
-Use this process when a hand monster, spider, or other nonhumanoid final asset replaces an existing proxy. It applies to retained projects; do not reset the project to perform the replacement.
+Use this process when any nonhumanoid final asset replaces an existing proxy. It applies to retained projects; do not reset the project to perform the replacement.
 
 1. Inspect and record the proxy object ID and every shot that stages or animates it.
 2. Import the real GLB and record the resolved real-object ID.
@@ -13,8 +13,8 @@ Use this process when a hand monster, spider, or other nonhumanoid final asset r
 
 ```json
 {
-  "proxyId": "obj_hand_proxy",
-  "replacementId": "obj_hand_monster",
+  "proxyId": "obj_creature_proxy",
+  "replacementId": "obj_creature_final",
   "affectedShots": ["12", "13", "14"],
   "commandsApplied": 18,
   "rerenderedShots": ["12", "13", "14"],

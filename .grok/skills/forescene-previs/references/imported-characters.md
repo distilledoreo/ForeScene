@@ -6,9 +6,9 @@ cast phase:
 
 ```json
 {
-  "id": "joseph",
+  "id": "lead_actor",
   "type": "imported_character",
-  "source": "./characters/joseph.glb",
+  "source": "./characters/lead-actor.glb",
   "rigMode": "preserve-existing"
 }
 ```
@@ -16,7 +16,7 @@ cast phase:
 `source` is resolved relative to the manifest file and must be a local GLB,
 embedded glTF, or FBX. `name` is optional and defaults to the cast ID.
 Supported modes are `preserve-existing`, `auto`, `autorig`, and `saved-rig`.
-After import, the live object ID is persisted as `cast.joseph` in
+After import, the live object ID is persisted as `cast.lead_actor` in
 `run-state.json`, and shot compilation uses that mapping directly.
 
 ### Matching saved rigs
@@ -26,11 +26,11 @@ package as one cast entry:
 
 ```json
 {
-  "id": "joseph",
+  "id": "lead_actor",
   "type": "imported_character",
-  "source": "./characters/joseph.glb",
+  "source": "./characters/lead-actor.glb",
   "rigMode": "saved-rig",
-  "rigPackage": "./characters/joseph.fsrig"
+  "rigPackage": "./characters/lead-actor.fsrig"
 }
 ```
 

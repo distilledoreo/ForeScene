@@ -12,7 +12,7 @@ Before any write, run `npm run agent:inspect -- --url <url>` and capture the ful
 {
   "operatingMode": "existing-project-refinement",
   "projectId": "project_123",
-  "projectName": "What I'm Fighting For",
+  "projectName": "Existing project",
   "preserve": {
     "sceneGeometry": true,
     "panoramas": true,
@@ -21,15 +21,15 @@ Before any write, run `npm run agent:inspect -- --url <url>` and capture the ful
     "existingTimeline": true
   },
   "counts": {
-    "objects": 84,
+    "objects": 24,
     "panoramas": 2,
-    "shots": 31
+    "shots": 8
   },
   "resetAuthorized": false,
   "plannedReplacements": [
-    "Joseph placeholder characters",
-    "Hand-monster proxy",
-    "Spider proxy"
+    "placeholder cast model",
+    "creature proxy",
+    "environment stand-in"
   ],
   "preservedIds": {
     "shots": ["shot_001", "shot_002"],
@@ -71,7 +71,7 @@ After the last write, read a fresh `getProjectDocument()` snapshot and write `ar
   },
   "missingIds": [],
   "substitutedIds": [],
-  "finalCounts": { "objects": 87, "panoramas": 2, "shots": 31 }
+  "finalCounts": { "objects": 27, "panoramas": 2, "shots": 8 }
 }
 ```
 

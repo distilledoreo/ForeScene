@@ -7,7 +7,7 @@
  * hand_monster proxy props already placed.
  *
  * Usage:
- *   node scripts/agent/creature-refine.mjs \
+ *   node production/what-im-fighting-for/tools/creature-refine.mjs \
  *     --url https://forescene.distilledlabs.org \
  *     --profile .forescene-agent/music-video-v2-pilot \
  *     --output artifacts/music-video/pilot \
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '../..');
+const REPO_ROOT = path.resolve(__dirname, '../../..');
 
 function parseArgs(argv) {
   const args = {

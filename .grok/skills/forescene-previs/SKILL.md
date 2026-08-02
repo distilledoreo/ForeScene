@@ -54,7 +54,7 @@ Keep these stages distinct:
 | Stage | Responsible for | Existing-project rule |
 | --- | --- | --- |
 | **A — structural previs** | locations, shot list, basic cameras, broad blocking, proxy objects, and coarse motion | Skip it unless the user identifies a structural problem. |
-| **B — production-asset refinement** | saved-rig Joseph variants, per-shot variant mapping, real creature models, proxy replacement, pose/framing repair, and affected-output rerendering | Run incrementally against the preserved project. |
+| **B — production-asset refinement** | saved-rig character variants, per-shot variant mapping, real nonhumanoid models, proxy replacement, pose/framing repair, and affected-output rerendering | Run incrementally against the preserved project. |
 
 Do not rebuild Stage A just to perform Stage B. Use the standalone `agent:analyze-character` and `agent:import-character` flow for imported assets in a retained project, then stage them in selected existing shots. For proxy replacements, follow [nonhumanoid-models.md](references/nonhumanoid-models.md).
 
@@ -97,7 +97,7 @@ Use this for any live project with valuable work:
 
 1. Complete the preservation preflight; retain the original document snapshot and all required IDs.
 2. Determine the affected shots and whether the request is Stage B asset refinement or export-only. Do not create replacement locations/shots for work that already exists.
-3. Import one saved-rig character variant or real creature at a time. Use a read-only analysis first and an explicit write only for the import.
+3. Import one saved-rig character variant or real nonhumanoid model at a time. Use a read-only analysis first and an explicit write only for the import.
 4. Map the imported asset to the affected existing shot IDs. Apply staging, camera, or timeline repairs through small Agent plans; preview the plan before applying it.
 5. Replace each creature proxy using [nonhumanoid-models.md](references/nonhumanoid-models.md), retaining a nonzero refinement log and before/after review evidence.
 6. Process 3–5 shots at a time under [batch-review.md](references/batch-review.md). A failed shot blocks the next batch.
@@ -215,4 +215,3 @@ Wait for idle before starting another package, graybox, character-import, or vid
 - [dialogue-motion.json](examples/dialogue-motion.json)
 - [imported-character-workflow.md](examples/imported-character-workflow.md)
 - [dialogue.json](examples/dialogue.json)
-- [music-video.json](examples/music-video.json)

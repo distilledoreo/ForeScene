@@ -29,6 +29,8 @@ const batchReviewPath = path.join(skillRoot, 'references', 'batch-review.md');
 const visualAcceptancePath = path.join(skillRoot, 'references', 'visual-acceptance.md');
 const nonhumanoidModelsPath = path.join(skillRoot, 'references', 'nonhumanoid-models.md');
 const errorRecoveryPath = path.join(skillRoot, 'references', 'error-recovery.md');
+const importedCharactersPath = path.join(skillRoot, 'references', 'imported-characters.md');
+const importedCharacterWorkflowPath = path.join(skillRoot, 'examples', 'imported-character-workflow.md');
 const aiControlFullPlanPath = path.join(skillRoot, 'examples', 'ai-control-full-export-plan.json');
 
 const skill = readFileSync(skillPath, 'utf8');
@@ -40,6 +42,8 @@ const batchReview = readFileSync(batchReviewPath, 'utf8');
 const visualAcceptance = readFileSync(visualAcceptancePath, 'utf8');
 const nonhumanoidModels = readFileSync(nonhumanoidModelsPath, 'utf8');
 const errorRecovery = readFileSync(errorRecoveryPath, 'utf8');
+const importedCharacters = readFileSync(importedCharactersPath, 'utf8');
+const importedCharacterWorkflow = readFileSync(importedCharacterWorkflowPath, 'utf8');
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>;
 };
@@ -150,6 +154,28 @@ describe('ForeScene previs skill contract', () => {
     }
   });
 
+  it('uses neutral examples in its reusable operating materials', () => {
+    const reusableMaterials = [
+      skill,
+      productionManifest,
+      existingProjectRefinement,
+      batchReview,
+      nonhumanoidModels,
+      errorRecovery,
+      importedCharacters,
+      importedCharacterWorkflow,
+    ].join('\n');
+    for (const productionSpecificPhrase of [
+      'Joseph',
+      "What I'm Fighting For",
+      'Hand Monster',
+      'Spider proxy',
+    ]) {
+      expect(reusableMaterials).not.toContain(productionSpecificPhrase);
+    }
+    expect(skill).not.toContain('music-video.json');
+  });
+
   it('keeps every linked local reference and example present', () => {
     const links = [...skill.matchAll(/\]\(([^)]+)\)/g)].map((match) => match[1]!);
     expect(links.length).toBeGreaterThan(0);
@@ -194,9 +220,8 @@ describe('ForeScene previs skill contract', () => {
     expect(parsed.errors, parsed.errors.map((error) => error.message).join('\n')).toEqual([]);
     expect(example.shots?.some((shot) => shot.motion?.keyframes && shot.motion.keyframes.length >= 2)).toBe(true);
     expect(example.cast?.every((character) => character.type === 'human_dummy')).toBe(true);
-    const importedWorkflow = readFileSync(path.join(skillRoot, 'examples', 'imported-character-workflow.md'), 'utf8');
-    expect(importedWorkflow).toContain('agent:previs');
-    expect(importedWorkflow).toContain('imported_character');
-    expect(importedWorkflow).toContain('preserve-existing');
+    expect(importedCharacterWorkflow).toContain('agent:previs');
+    expect(importedCharacterWorkflow).toContain('imported_character');
+    expect(importedCharacterWorkflow).toContain('preserve-existing');
   });
 });

@@ -12,21 +12,21 @@ in one operation:
   ],
   "cast": [
     {
-      "id": "joseph",
+      "id": "lead",
       "type": "imported_character",
-      "source": "./characters/joseph.glb",
+      "source": "./characters/lead-actor.glb",
       "rigMode": "preserve-existing"
     }
   ],
   "shots": [
     {
-      "id": "joseph-medium",
+      "id": "lead-medium",
       "shotNumber": "010",
-      "name": "Joseph medium",
-      "description": "Joseph holds a guarded stance.",
+      "name": "Lead medium",
+      "description": "The lead holds a guarded stance.",
       "locationId": "room",
-      "subjects": ["joseph"],
-      "camera": { "template": "medium", "subjects": ["joseph"] }
+      "subjects": ["lead"],
+      "camera": { "template": "medium", "subjects": ["lead"] }
     }
   ]
 }
