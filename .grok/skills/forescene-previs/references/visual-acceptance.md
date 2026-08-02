@@ -5,12 +5,12 @@
 For each final still, compare the opened frame with its shot description. Confirm that:
 
 - The intended primary subject is visible.
-- The camera frames the intended anatomical region and composition.
-- Required props and real creatures actually appear.
+- The camera frames the intended subject region and composition.
+- Required scene elements and replacement assets actually appear.
 - The correct character variant is staged where required.
 - Required clay, projected, clean-plate, character-only, and depth passes are meaningful and present.
 
-Empty rooms, irrelevant body fragments, a missing required prop, an obscured primary subject, and a proxy counting as the final creature automatically fail. A contact sheet is required for human-readable coverage but never replaces opening suspicious individual frames.
+Empty rooms, irrelevant fragments, a missing required scene element, an obscured intended subject, and a proxy counting as the final replacement asset automatically fail. A contact sheet is required for human-readable coverage but never replaces opening suspicious individual frames.
 
 For motion shots, inspect start, midpoint, and endpoint frames and open or sample the MP4. Confirm the motion preserves the intended framing and subject visibility across the move.
 

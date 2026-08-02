@@ -27,6 +27,7 @@ import {
   resolveRefinementFinalizationScope,
   resolveReviewedShotIds,
   resolveRefinementDeliverablesProfile,
+  validateRefinementState,
   type RefinementPlan,
 } from '../src/engine/agent/refinement';
 import { createExportPlan } from '../src/engine/exportPlan';
@@ -52,12 +53,12 @@ function plan(): RefinementPlan {
     },
     characterImports: [],
     characterAssignments: [],
-    modelImports: [{ id: 'spider-model', batchId: 'batch-01', file: 'spider.glb' }],
+    modelImports: [{ id: 'replacement-object-model', batchId: 'batch-01', file: 'replacement-object.glb' }],
     proxyReplacements: [{
-      id: 'replace-spider',
+      id: 'replace-object',
       batchId: 'batch-01',
-      proxyObjectId: 'proxy-spider',
-      replacementImportId: 'spider-model',
+      proxyObjectId: 'proxy-object',
+      replacementImportId: 'replacement-object-model',
       shots: ['01'],
     }],
     batches: [
@@ -110,6 +111,10 @@ describe('agent refinement guardrails', () => {
 
     const invalid = parseRefinementPlan({ ...plan(), mode: 'greenfield', batches: [] });
     expect(invalid).toMatchObject({ ok: false });
+    expect(parseRefinementPlan({ ...plan(), version: 1 })).toMatchObject({
+      ok: false,
+      errors: ['Refinement schema version 1 used fixed review fields and cannot be resumed. Create a version-2 plan and a new refinement output directory.'],
+    });
   });
 
   it('preserves original identity, cameras, and timelines while allowing new imported objects', () => {
@@ -117,7 +122,7 @@ describe('agent refinement guardrails', () => {
     const baseline = captureRefinementSnapshot(project);
     const next = structuredClone(project);
     const imported = createSceneObject('imported_model');
-    imported.name = 'Imported spider';
+    imported.name = 'Imported object';
     next.scene.objects.push(imported);
 
     expect(compareRefinementSnapshot(baseline, next, plan().preserve)).toMatchObject({ ok: true });
@@ -158,6 +163,14 @@ describe('agent refinement guardrails', () => {
     expect(resolveReviewedShotIds(plan(), state)).toEqual(['shot-a', 'shot-shared', 'shot-b']);
     expect(resolveRefinementFinalizationScope(plan())).toBe('reviewed_shots');
     expect(resolveRefinementFinalizationScope({ finalization: { scope: 'entire_project' } })).toBe('entire_project');
+  });
+
+  it('refuses a legacy state instead of silently converting its fixed review fields', () => {
+    const state = createRefinementState(plan(), createDefaultProject());
+    (state as unknown as { version: number }).version = 1;
+    expect(validateRefinementState(plan(), state)).toContain(
+      'Refinement schema version 1 used fixed review fields and cannot be resumed. Create a version-2 plan and a new refinement output directory.',
+    );
   });
 
   it('does not accept an incomplete review matrix as a completed batch review', () => {

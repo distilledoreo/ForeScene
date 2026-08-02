@@ -34,7 +34,7 @@ Call `createExportPlan()` after changing export settings. If a required projecte
 
 ## Visual or batch review failed
 
-Read the batch review and correct the actual visual cause: subject selection, character variant, real-creature replacement, staging, camera, timeline, required prop, or output pass. Let ForeScene’s numeric repair system handle only the mechanical framing issue after the creative selection is correct.
+Read the batch review and correct the actual visual cause: subject selection, asset variant, replacement-object staging, camera, timeline, required scene element, or output pass. Let ForeScene’s numeric repair system handle only the mechanical framing issue after the creative selection is correct.
 
 Do not advance to the next batch until every shot in the current batch passes a fresh visual review. If the frame is visually unusable despite a passing `validation.json`, the shot remains failed.
 
@@ -51,7 +51,7 @@ Derive final summaries from verified artifact records and passed review records,
 3. Its associated visual review record passed.
 4. Its latest render occurred after the latest relevant scene change.
 
-Never claim successful videos when their logs show failures, a creature refinement when the refinement log applied no commands, or all requested shots complete when any are visually empty. A required failed artifact makes `productionComplete: false`.
+Never claim successful videos when their logs show failures, a replacement refinement when the refinement log applied no commands, or all requested shots complete when any are visually empty. A required failed artifact makes `productionComplete: false`.
 
 ```json
 {

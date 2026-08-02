@@ -1,4 +1,4 @@
-# Proxy-to-creature replacement
+# Proxy-to-replacement-object workflow
 
 Use this process when any nonhumanoid final asset replaces an existing proxy. It applies to retained projects; do not reset the project to perform the replacement.
 
@@ -13,8 +13,8 @@ Use this process when any nonhumanoid final asset replaces an existing proxy. It
 
 ```json
 {
-  "proxyId": "obj_creature_proxy",
-  "replacementId": "obj_creature_final",
+  "proxyId": "obj_proxy",
+  "replacementId": "obj_replacement",
   "affectedShots": ["12", "13", "14"],
   "commandsApplied": 18,
   "rerenderedShots": ["12", "13", "14"],
@@ -24,4 +24,4 @@ Use this process when any nonhumanoid final asset replaces an existing proxy. It
 }
 ```
 
-A replacement log with zero `commandsApplied` or zero `affectedShots` is a failure, not a successful refinement. A visible proxy cannot count as a final creature. The batch review must confirm the real creature is visible in every required shot.
+A replacement log with zero `commandsApplied` or zero `affectedShots` is a failure, not a successful refinement. A visible proxy cannot count as the final replacement asset. The batch review must confirm the replacement asset is visible in every required shot.

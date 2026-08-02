@@ -7,12 +7,12 @@ import { resolveProjectForShot } from '../src/engine/shotSceneState';
 function replacementProject() {
   const project = createDefaultProject();
   const proxy = createSceneObject('box', 1, [2, 1, -4]);
-  proxy.name = 'Spider proxy';
+  proxy.name = 'Object proxy';
   proxy.transform.rotation = [0, 32, 0];
   proxy.transform.scale = [1.2, 1.2, 1.2];
   const replacement = createSceneObject('imported_model', 2, [-10, 0, 5]);
-  replacement.name = 'Hand Monster';
-  replacement.modelAssetId = 'model_hand_monster';
+  replacement.name = 'Replacement object';
+  replacement.modelAssetId = 'model_replacement_object';
   project.scene.objects.push(proxy, replacement);
 
   const shot = project.shots[0]!;
@@ -51,11 +51,11 @@ describe('proxy replacement planning', () => {
     const project = createDefaultProject();
     const placeholder = createSceneObject('human_dummy', 1, [1, 0, -3]);
     const intact = createSceneObject('human_dummy', 2, [-4, 0, 1]);
-    const amputated = createSceneObject('human_dummy', 3, [-5, 0, 1]);
-    intact.name = 'Joseph — intact';
-    amputated.name = 'Joseph — amputated';
-    amputated.visible = false;
-    project.scene.objects.push(placeholder, intact, amputated);
+    const alternate = createSceneObject('human_dummy', 3, [-5, 0, 1]);
+    intact.name = 'Subject variant A';
+    alternate.name = 'Subject variant B';
+    alternate.visible = false;
+    project.scene.objects.push(placeholder, intact, alternate);
     const shot = project.shots[0]!;
     shot.objectOverrides = {
       [placeholder.id]: {
@@ -80,7 +80,7 @@ describe('proxy replacement planning', () => {
     const resolved = resolveProjectForShot(prepared.prepared.nextProject, prepared.prepared.nextProject.shots[0]!);
     expect(resolved.scene.objects.find((object) => object.id === intact.id)?.visible).toBe(true);
     expect(resolved.scene.objects.find((object) => object.id === placeholder.id)?.visible).toBe(false);
-    expect(resolved.scene.objects.find((object) => object.id === amputated.id)?.visible).toBe(false);
+    expect(resolved.scene.objects.find((object) => object.id === alternate.id)?.visible).toBe(false);
   });
 
   it('copies global, per-shot, and keyframe transforms while hiding the proxy', () => {
@@ -214,7 +214,7 @@ describe('proxy replacement planning', () => {
       proxyObjectId: proxy.id,
       replacementObjectId: replacement.id,
     });
-    expect(empty).toEqual({ ok: false, errors: ['Proxy "Spider proxy" is not staged or animated in any shot.'] });
+    expect(empty).toEqual({ ok: false, errors: ['Proxy "Object proxy" is not staged or animated in any shot.'] });
   });
 
   it('rejects incomplete intended occurrence lists before globally hiding a proxy', () => {

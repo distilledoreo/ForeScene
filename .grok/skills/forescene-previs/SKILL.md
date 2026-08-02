@@ -99,7 +99,7 @@ Use this for any live project with valuable work:
 2. Determine the affected shots and whether the request is Stage B asset refinement or export-only. Do not create replacement locations/shots for work that already exists.
 3. Import one saved-rig character variant or real nonhumanoid model at a time. Use a read-only analysis first and an explicit write only for the import.
 4. Map the imported asset to the affected existing shot IDs. Apply staging, camera, or timeline repairs through small Agent plans; preview the plan before applying it.
-5. Replace each creature proxy using [nonhumanoid-models.md](references/nonhumanoid-models.md), retaining a nonzero refinement log and before/after review evidence.
+5. Replace each nonhumanoid proxy using [nonhumanoid-models.md](references/nonhumanoid-models.md), retaining a nonzero refinement log and before/after review evidence.
 6. Process 3–5 shots at a time under [batch-review.md](references/batch-review.md). A failed shot blocks the next batch.
 7. Rerender only affected outputs, verify their timestamps/revision against the latest scene change, then run the final preservation check.
 
@@ -123,7 +123,7 @@ See [deliverables.md](references/deliverables.md) for the output matrix, expecte
 
 Use a default batch size of **3–5 shots**. Render review frames, inspect every frame, write a batch review, repair failures, and only then continue. A successful command or `validation.json` does not authorize the next batch. Use [batch-review.md](references/batch-review.md).
 
-Visual QA is authoritative: compare the final frame with the shot description, make sure the intended primary subject/anatomical framing/props/real creatures are present, and open or sample every MP4. Empty rooms, irrelevant body fragments, and proxies standing in for final creatures fail automatically. If visual evidence conflicts with `validation.json`, mark the shot failed. Full criteria: [visual-acceptance.md](references/visual-acceptance.md).
+Visual QA is authoritative: compare the final frame with the shot description, make sure the intended subjects/framing/scene elements/replacement assets are present, and open or sample every MP4. Empty rooms, irrelevant fragments, and proxies standing in for final assets fail automatically. If visual evidence conflicts with `validation.json`, mark the shot failed. Full criteria: [visual-acceptance.md](references/visual-acceptance.md).
 
 ## Command inventory
 

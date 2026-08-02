@@ -72,7 +72,7 @@ test.describe('Agent API inspection @smoke', () => {
         {
           op: 'object.create',
           ref: 'actorA',
-          object: { type: 'human_dummy', name: 'Actor A', position: [-1.2, 0, 0] },
+          object: { type: 'human_dummy', name: 'Subject A', position: [-1.2, 0, 0] },
         },
         {
           op: 'object.update',
@@ -82,7 +82,7 @@ test.describe('Agent API inspection @smoke', () => {
       ],
     }));
     expect(preview.ok).toBe(true);
-    expect(preview.summary?.createdRefs.actorA?.name).toBe('Actor A');
+    expect(preview.summary?.createdRefs.actorA?.name).toBe('Subject A');
     expect(preview.diff?.objectsCreated).toHaveLength(1);
 
     const objectCountAfterPreview = await page.evaluate(() => window.foreScene!.inspectProject().objectCount);
@@ -178,12 +178,12 @@ test.describe('Agent API transactions @smoke', () => {
           {
             op: 'object.create',
             ref: 'actorA',
-            object: { type: 'human_dummy', name: 'Actor A', position: [-1.2, 0, 0] },
+            object: { type: 'human_dummy', name: 'Subject A', position: [-1.2, 0, 0] },
           },
           {
             op: 'object.create',
             ref: 'actorB',
-            object: { type: 'human_dummy', name: 'Actor B', position: [1.2, 0, 0] },
+            object: { type: 'human_dummy', name: 'Subject B', position: [1.2, 0, 0] },
           },
           {
             op: 'shot.create',

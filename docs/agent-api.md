@@ -394,7 +394,7 @@ Auto mode preserves an existing rig only when the analysis reports skeleton and 
 npm run agent:import-model -- --file input/model.glb --write
 npm run agent:replace-proxy -- \
   --proxy proxy-id --replacement imported-model-id --shots 08,09,10 \
-  --output artifacts/refinement/hand-monster.json --write
+  --output artifacts/refinement/replacement-object.json --write
 ```
 
 `agent:import-model` calls `window.foreScene.importModel()` and the exact shared

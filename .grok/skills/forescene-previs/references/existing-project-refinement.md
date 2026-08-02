@@ -28,7 +28,7 @@ Before any write, run `npm run agent:inspect -- --url <url>` and capture the ful
   "resetAuthorized": false,
   "plannedReplacements": [
     "placeholder cast model",
-    "creature proxy",
+    "replacement-object proxy",
     "environment stand-in"
   ],
   "preservedIds": {
