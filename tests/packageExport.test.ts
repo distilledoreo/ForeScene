@@ -22,7 +22,12 @@ import {
   listPlannedFiles,
   planHasBlockingErrors,
 } from '../src/engine/exportPlan';
-import { type BlobImageRenderResult, renderPanoCubemapFacesAsBlobs, renderShotCameraMoveMp4 } from '../src/engine/renderers';
+import {
+  type BlobImageRenderResult,
+  renderPanoCubemapFacesAsBlobs,
+  renderPanoPerspectiveCrop,
+  renderShotCameraMoveMp4,
+} from '../src/engine/renderers';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 
 vi.mock('../src/engine/renderers', async (importOriginal) => {
@@ -31,6 +36,7 @@ vi.mock('../src/engine/renderers', async (importOriginal) => {
     ...actual,
     renderShotCameraMoveMp4: vi.fn(actual.renderShotCameraMoveMp4),
     renderPanoCubemapFacesAsBlobs: vi.fn(actual.renderPanoCubemapFacesAsBlobs),
+    renderPanoPerspectiveCrop: vi.fn(actual.renderPanoPerspectiveCrop),
   };
 });
 
@@ -98,6 +104,7 @@ describe('package export', () => {
       throw new Error('renderShotCameraMoveMp4 should be mocked in camera-move package tests');
     });
     vi.mocked(renderPanoCubemapFacesAsBlobs).mockReset();
+    vi.mocked(renderPanoPerspectiveCrop).mockReset();
     vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockReset();
   });
 
@@ -499,6 +506,41 @@ describe('package export', () => {
 
     expect(zipFilePaths).toEqual(planned);
     expect(result.fileName).toBe(plan.archiveFileName);
+  });
+
+  it('includes a planned pano crop in the package', async () => {
+    const project = withGrayboxAndShot();
+    const shot = project.shots[0];
+    const linkedPano = project.panoRefs[0]!;
+    shot.linkedPanoId = linkedPano.id;
+    shot.panoCrop = {
+      panoId: linkedPano.id,
+      yawDegrees: 0,
+      pitchDegrees: 0,
+      rollDegrees: 0,
+      fovDegrees: 70,
+      aspectRatio: 2,
+      width: 4,
+      height: 2,
+    };
+    shot.exportSettings = { ...shot.exportSettings, includePanoCrop: true };
+    vi.mocked(renderPanoPerspectiveCrop).mockResolvedValue({
+      dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+      width: 4,
+      height: 2,
+    });
+
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    const result = await buildShotPackage(project, shot, { plan });
+    const paths = (await zipPaths(result.blob)).filter((path) => !path.endsWith('/'));
+
+    expect(listPlannedFiles(plan).some((file) => file.path.endsWith('/inputs/pano_crop.png'))).toBe(true);
+    expect(paths.some((path) => path.endsWith('/inputs/pano_crop.png'))).toBe(true);
+    expect(renderPanoPerspectiveCrop).toHaveBeenCalledWith(
+      project.assets.assets[linkedPano.imageAssetId]!.uri,
+      shot.panoCrop,
+      linkedPano.rotation,
+    );
   });
 
   it('does not claim missing-asset deliverables in the plan or ZIP', async () => {

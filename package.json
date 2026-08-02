@@ -24,6 +24,7 @@
     "agent:render-passes": "tsx scripts/agent/cli.ts render-passes",
     "agent:plan-exports": "tsx scripts/agent/cli.ts plan-exports",
     "agent:verify-package": "tsx scripts/agent/cli.ts verify-package",
+    "agent:refine": "tsx scripts/agent/cli.ts refine",
     "agent:preview": "tsx scripts/agent/cli.ts preview",
     "agent:apply": "tsx scripts/agent/cli.ts apply",
     "agent:screenshot": "tsx scripts/agent/cli.ts screenshot",

@@ -186,6 +186,24 @@ describe('project persistence controller', () => {
     expect(verified?.revision.id).toBeTruthy();
   });
 
+  it('flushes the supplied live project when persistence has not observed its change yet', async () => {
+    const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: () => undefined });
+    const initial = createDefaultProject();
+    initial.name = 'Initial controller state';
+    controller.start(initial);
+    await controller.flushAndLoadActiveRevision('Initial local save');
+
+    const liveStoreProject = structuredClone(initial);
+    liveStoreProject.name = 'Normalized live store state';
+    const verified = await controller.flushCurrentProject(
+      liveStoreProject,
+      'Verified save before package export',
+    );
+
+    expect(verified?.project.name).toBe('Normalized live store state');
+    expect((await recoverLatestProject())?.project.name).toBe('Normalized live store state');
+  });
+
   it('keeps prior save metadata visible when a later write fails', async () => {
     const states: ProjectPersistenceState[] = [];
     const controller = new ProjectPersistenceController({ debounceMs: 1, onStateChange: (state) => states.push(state) });

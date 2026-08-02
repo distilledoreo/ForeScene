@@ -145,6 +145,59 @@ plate, projected with characters, projected clean plate, characters only, and
 depth — plus `review-manifest.json`. The manifest records each renderer source,
 pixel/depth inspection data, and a SHA-256 for comparison before packaging.
 
+## Existing-project refinement
+
+`agent:refine` is intentionally separate from the greenfield previs manifest.
+It captures a durable preservation baseline before the first mutation, then
+permits one batch at a time. The baseline protects project, shot, panorama,
+existing-object, camera, and timeline identities; import/replacement work may
+add objects and alter only the required staging overrides.
+
+```json
+{
+  "version": 1,
+  "mode": "existing-project-refinement",
+  "preserve": {
+    "project": true, "shots": true, "panoramas": true,
+    "environmentObjects": true, "cameras": true, "timelines": true
+  },
+  "characterImports": [
+    { "id": "joseph-intact", "batchId": "batch-01", "file": "assets/joseph.glb", "rigPackage": "assets/joseph.fsrig", "rigMode": "saved-rig" }
+  ],
+  "modelImports": [
+    { "id": "spider-model", "batchId": "batch-01", "file": "assets/spider.glb" }
+  ],
+  "proxyReplacements": [
+    { "id": "replace-spider", "batchId": "batch-01", "proxyObjectId": "proxy-spider", "replacementImportId": "spider-model", "shots": ["01"] }
+  ],
+  "batches": [{ "id": "batch-01", "shots": ["01"] }],
+  "deliverablesProfile": "ai-control-full"
+}
+```
+
+Run a batch, complete a semantic visual review, approve it explicitly, then
+advance or finalize:
+
+```bash
+npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
+npm run agent:refine -- --plan production/refinement-plan.json --approve batch-01 --output artifacts/refinement
+npm run agent:refine -- --plan production/refinement-plan.json --finalize --write --output artifacts/refinement
+```
+
+A batch ends in `awaiting_visual_review` only if every required still pass,
+temporal sample (for motion shots), and preservation check succeeds. The next
+batch is blocked until `--approve` records that review. Finalization refuses
+unapproved batches, failed/missing replacement work, visible proxies, any
+preservation drift, or a package that omits a planned artifact.
+
+For a production copy, start from
+`examples/refinement/six-shot-pilot.template.json`, replace every placeholder
+object/shot id with IDs from that copied project, and run the pilot before
+adding later production batches. It requires three saved-rig Joseph variants,
+spider and hand-monster replacements, and a sixth motion shot. Motion shots
+also emit start/mid/end clay frames plus a downloaded 720p MP4 preview, so
+framing and temporal output can be reviewed together.
+
 ## Preview
 
 `previewPlan` works in read-only mode. It never writes the live project.

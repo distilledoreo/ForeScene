@@ -243,6 +243,22 @@ export class ProjectPersistenceController {
     return this.enqueue(() => this.persistPending(reason));
   }
 
+  /**
+   * Flush the supplied live-store snapshot. This closes the small startup
+   * window where store normalization has completed but its subscription has
+   * not yet reached `noteProjectChange`.
+   */
+  async flushCurrentProject(
+    project: LocationProject,
+    reason = 'Manual save',
+  ): Promise<VerifiedProjectRevision | undefined> {
+    if (this.disposed) return undefined;
+    this.clearTimer();
+    this.latestProject = project;
+    this.pendingSave = true;
+    return this.enqueue(() => this.persistPending(reason));
+  }
+
   get hasPendingChanges(): boolean {
     return this.hasUnsavedChanges || this.pendingSave || this.pendingSnapshots.length > 0;
   }

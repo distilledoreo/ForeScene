@@ -16,6 +16,7 @@
  *   npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
  *   npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
  *   npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
+ *   npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
  *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
@@ -36,6 +37,7 @@ import {
   verifyProxyReplacement,
 } from '../../src/engine/agent/proxyReplacement';
 import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
+import { runRefinementCli } from './refinement';
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -81,6 +83,9 @@ function parseArgs(argv: string[]) {
     noDownload: false,
     allowHeavyCharacterImports: false,
     allowHeavyModelImports: false,
+    batch: undefined as string | undefined,
+    approveBatch: undefined as string | undefined,
+    finalize: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -142,6 +147,12 @@ function parseArgs(argv: string[]) {
       args.consentToken = argv[++index];
     } else if (token === '--profile') {
       args.profile = argv[++index];
+    } else if (token === '--batch') {
+      args.batch = argv[++index];
+    } else if (token === '--approve') {
+      args.approveBatch = argv[++index];
+    } else if (token === '--finalize') {
+      args.finalize = true;
     } else if (token === '--shot') {
       const shotId = argv[++index];
       if (shotId) args.shotIds.push(shotId);
@@ -1076,6 +1087,27 @@ async function main() {
     if (!args.plan) throw new Error('verify-package requires --plan <deliverables-plan.json>.');
     if (!args.packagePath) throw new Error('verify-package requires --package <package.zip>.');
     await runVerifyPackage({ plan: args.plan, packagePath: args.packagePath });
+    return;
+  }
+
+  if (args.command === 'refine') {
+    if (!args.plan) throw new Error('refine requires --plan <refinement-plan.json>.');
+    if (!args.output) throw new Error('refine requires --output <directory>.');
+    const result = await runRefinementCli({
+      planPath: args.plan,
+      batchId: args.batch,
+      approveBatchId: args.approveBatch,
+      finalize: args.finalize,
+      output: args.output,
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      allowHeavyModelImports: args.allowHeavyModelImports,
+    });
+    printJson(result);
     return;
   }
 

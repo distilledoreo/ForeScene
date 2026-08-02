@@ -114,6 +114,12 @@ function readInspectionContext(): AgentInspectionContext {
   };
 }
 
+/** A clean plate may legitimately be a nearly uniform wall or floor. */
+function rejectFrameStats(stats: RenderPixelStats | undefined, allowFlatFrame: boolean) {
+  const rejection = rejectRenderPixelStats(stats);
+  return allowFlatFrame && rejection?.code === 'frame_zero_variance' ? null : rejection;
+}
+
 function isBusy(status: ForeSceneAgentStatus): boolean {
   return (
     status.busy.criticalWrite
@@ -959,13 +965,14 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
         // Prefer WebGL readPixels stats; fall back to decoding the PNG data URL
         // when readback is flaky (preserveDrawingBuffer races, partial buffers).
-        let rejection = content === 'characters_only' ? null : rejectRenderPixelStats(pixelStats);
+        const allowFlatFrame = content === 'characters_only' || peopleVariant === 'clean_plate';
+        let rejection = rejectFrameStats(pixelStats, allowFlatFrame);
         if ((!pixelStats || rejection) && pngDataUrl) {
           try {
             const fromDataUrl = await computePixelStatsFromDataUrl(pngDataUrl);
-            const second = rejectRenderPixelStats(fromDataUrl);
+            const second = rejectFrameStats(fromDataUrl, allowFlatFrame);
             pixelStats = fromDataUrl;
-            rejection = content === 'characters_only' ? null : second;
+            rejection = second;
           } catch {
             // Keep original rejection.
           }

@@ -19,6 +19,7 @@ npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 0
 npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
 npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
 npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
+npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
@@ -42,6 +43,17 @@ the manifest keeps that diagnostic rather than disguising a clay fallback.
 `agent:plan-exports` persists the exact shared Export workspace plan.
 `agent:verify-package` then checks every planned `produce` file against the
 actual ZIP and exits nonzero with the missing shot, pass kind, and path.
+
+`agent:refine` is the guarded existing-project workflow. It creates
+`refinement-state.json` beside the evidence, captures the first preservation
+snapshot, imports/replaces only the named batch, previews proxy mutations,
+renders the six-pass review matrix, and stops in `awaiting_visual_review`.
+Use `--approve batch-id` after semantic review; the following batch is rejected
+until that explicit state transition exists. `--finalize --write` runs the
+final preservation comparison, export plan, package download, and ZIP
+verification. It cannot set production complete while a proxy remains visible,
+an import/replacement did no work, a review is incomplete, or preserved IDs,
+cameras, or timelines changed.
 
 ## Write authorization
 

@@ -41,6 +41,7 @@ vi.mock('../src/engine/previs/renderPixelStats', async () => {
 });
 
 import { createForeSceneBrowserApi } from '../src/engine/agent/browserApi';
+import { computePixelStatsFromDataUrl } from '../src/engine/previs/renderPixelStats';
 import {
   renderShotCharacterFrame,
   renderShotFrame,
@@ -99,5 +100,23 @@ describe('agent multipass frame rendering', () => {
 
     expect(result.ok).toBe(false);
     expect(result.diagnostics?.[0]?.code).toBe('invalid_argument');
+  });
+
+  it('accepts a low-variance clean plate while still reporting canonical stats', async () => {
+    const lowVarianceStats = { ...validStats, luminanceVariance: 0.00001, sampledUniqueColorCount: 1 };
+    vi.mocked(renderShotFrame).mockResolvedValueOnce({
+      dataUrl: 'data:image/png;base64,Y2xheQ==',
+      ...lowVarianceStats,
+      pixelStats: lowVarianceStats,
+    });
+    vi.mocked(computePixelStatsFromDataUrl).mockResolvedValueOnce(lowVarianceStats);
+
+    const result = await createForeSceneBrowserApi().renderShotFrame({
+      shotId: useProjectStore.getState().project.shots[0]!.id,
+      appearance: 'clay',
+      peopleVariant: 'clean_plate',
+    });
+
+    expect(result).toMatchObject({ ok: true, peopleVariant: 'clean_plate', pixelStats: lowVarianceStats });
   });
 });
