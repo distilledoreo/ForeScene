@@ -276,6 +276,22 @@ export function compileCastPhase(
   };
 }
 
+/**
+ * Recompile cast during a resumable agent run using only persisted live
+ * entities. The freshly compiled production context contains plan-local
+ * placeholders, which must not be treated as already-created objects.
+ */
+export function compileCastPhaseWithPersistedEntities(
+  manifest: PrevisProductionManifestV1,
+  context: CompiledProductionContext,
+  persistedEntities: Record<string, PrevisEntityMapping>,
+): CompilePhaseResult {
+  return compileCastPhase(manifest, {
+    ...context,
+    entities: { ...persistedEntities },
+  });
+}
+
 export function compilePropsPhase(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,

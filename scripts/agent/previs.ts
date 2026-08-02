@@ -25,7 +25,7 @@ import {
   buildRepairPlan,
   buildShotCompositionTelemetry,
   compileProduction,
-  compileCastPhase,
+  compileCastPhaseWithPersistedEntities,
   compileShotList,
   contactSheetHtml,
   createInitialRunState,
@@ -689,10 +689,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
 
     if (state.phases.cast !== 'complete') {
-      const castCompilation = compileCastPhase(manifest, {
-        ...compiled.context,
-        entities: { ...compiled.context.entities, ...state.entities },
-      });
+      const castCompilation = compileCastPhaseWithPersistedEntities(
+        manifest,
+        compiled.context,
+        state.entities,
+      );
       state = setPhase(state, 'cast', 'in_progress');
       let applied: Awaited<ReturnType<typeof applyPlanOnPage>> | undefined;
       if (castCompilation.plan.commands.length > 0) {

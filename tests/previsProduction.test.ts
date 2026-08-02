@@ -7,6 +7,7 @@ import {
   compileProduction,
   createBlankGrayboxProject,
   createInitialRunState,
+  compileCastPhaseWithPersistedEntities,
   firstIncompletePhase,
   hashPrevisManifest,
   parsePrevisProductionManifest,
@@ -222,6 +223,67 @@ describe('previs compilers', () => {
       && command.object.id === 'obj_imported_joseph'
     ));
     expect(stage).toBeTruthy();
+  });
+
+  function compileCastRebuild(cast: Array<Record<string, unknown>>) {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Cast rebuild', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast,
+      shots: [{
+        id: 's1',
+        shotNumber: '010',
+        name: 'Cast rebuild shot',
+        description: 'A cast rebuild regression case.',
+        locationId: 'room',
+        subjects: cast.map((entry) => String(entry.id)),
+        camera: { template: 'wide', subjects: cast.map((entry) => String(entry.id)) },
+      }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+    return compileCastPhaseWithPersistedEntities(manifest, compiled.context, {});
+  }
+
+  it('recompiles a dummy-only cast without mistaking planned refs for live entities', () => {
+    const rebuilt = compileCastRebuild([
+      { id: 'alex', name: 'Alex', type: 'human_dummy' },
+    ]);
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.importedCharacters).toEqual([]);
+  });
+
+  it('recompiles an imported-only cast without creating a dummy placeholder', () => {
+    const rebuilt = compileCastRebuild([
+      {
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      },
+    ]);
+
+    expect(rebuilt.plan.commands).toEqual([]);
+    expect(rebuilt.importedCharacters).toHaveLength(1);
+    expect(rebuilt.importedCharacters?.[0]?.entityKey).toBe('cast.joseph');
+  });
+
+  it('recompiles a mixed cast with dummy creation and imported staging metadata', () => {
+    const rebuilt = compileCastRebuild([
+      { id: 'alex', name: 'Alex', type: 'human_dummy' },
+      {
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      },
+    ]);
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.importedCharacters?.map((entry) => entry.entityKey)).toEqual(['cast.joseph']);
   });
 
   it('merges partial motion transforms with each actor\'s static shot transform', () => {
