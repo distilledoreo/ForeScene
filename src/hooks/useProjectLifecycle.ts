@@ -49,7 +49,7 @@ export interface UseProjectLifecycleOptions {
 export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycleOptions) {
   const fileRef = useRef<HTMLInputElement>(null);
   const persistenceControllerRef = useRef<ProjectPersistenceController | undefined>(undefined);
-  /** Resolves once the persistence controller has started (or is already live). */
+  /** Resolves once the persistence controller has a verified startup baseline. */
   const controllerReadyPromiseRef = useRef<Promise<ProjectPersistenceController> | undefined>(undefined);
   const resolveControllerReadyRef = useRef<((controller: ProjectPersistenceController) => void) | undefined>(undefined);
   const [projectLifecycleReady, setProjectLifecycleReady] = useState(false);
@@ -488,9 +488,16 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
           });
         } else {
           controller.start(currentProject);
+          // Do not expose project-replacement actions during the scheduled
+          // initial-save window. Establish a verified recovery baseline first.
+          const verified = await controller.flushAndLoadActiveRevision(
+            'Initial local recovery save',
+          );
+          if (!active || !verified) return;
         }
 
-        // Unblock sample load / import / new-project callers waiting on readiness.
+        // Unblock sample load / import / new-project callers only after the
+        // controller is started and the initial project revision is verified.
         resolveControllerReadyRef.current?.(controller);
         setProjectLifecycleReady(true);
 
