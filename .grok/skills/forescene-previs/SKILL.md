@@ -23,6 +23,14 @@ The output is an editable ForeScene project and an evidence-backed handoff packa
 
 **Developing ForeScene**: edit application source only when the user explicitly asks to change the app itself. This skill does not add Agent API capabilities; use the current documented API and commands.
 
+## Agent primitives versus the optional refinement runner
+
+The individual Agent API operations and CLI commands are ForeScene's reusable, first-class primitives. Use them independently whenever the task calls for ordinary project operation, simple asset replacement, normal shot correction, rendering, package planning, or export verification.
+
+`agent:refine` is an optional advanced runner for high-risk, resumable modification of a valuable existing project. It is not required for ordinary ForeScene operation, simple asset replacement, normal shot corrections, rendering, or export, and it must not become a prerequisite for the existing-project workflow below.
+
+The skill owns production interpretation, visual judgment, repair strategy, and the decision to continue or stop. ForeScene and the Agent API provide the operations, validation, preservation mechanisms, and export capabilities that the skill uses.
+
 ## Operating mode is a required first decision
 
 Before any write, inspect the live project and select one operating mode. Record the choice in the preservation preflight or export record.
@@ -133,6 +141,11 @@ These commands are available in the ForeScene checkout:
 npm run agent:inspect
 npm run agent:analyze-character
 npm run agent:import-character
+npm run agent:import-model
+npm run agent:replace-proxy
+npm run agent:render-passes
+npm run agent:plan-exports
+npm run agent:verify-package
 npm run agent:preview
 npm run agent:apply
 npm run agent:screenshot
@@ -147,6 +160,16 @@ npm run agent:package
 ```
 
 Use `agent:frame` for clean clay samples and `agent:video` for a direct shot render. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
+
+The commands above remain independently available primitives.
+
+Optional advanced runner (not a primitive):
+
+```bash
+npm run agent:refine
+```
+
+Use this only for high-risk, resumable modification of a valuable existing project; do not route an ordinary existing-project workflow through it by default.
 
 ## Artifact layout and evidence
 
