@@ -6,12 +6,14 @@ import {
   LEGACY_PANOREF_MESH_VERSION,
   MAX_PACKED_MESH_BYTES,
   MODEL_ASSET_URI_PREFIX,
+  MISSING_ASSET_URI_PREFIX,
 } from './importedMeshConstants';
 export {
   LEGACY_PANOREF_MESH_MIME,
   LEGACY_PANOREF_MESH_VERSION,
   MAX_PACKED_MESH_BYTES,
   MODEL_ASSET_URI_PREFIX,
+  MISSING_ASSET_URI_PREFIX,
 } from './importedMeshConstants';
 
 const HEADER_BYTES = 40;
@@ -111,8 +113,12 @@ export function createImportedMeshNode(
   assets: AssetRegistry | undefined,
   material: THREE.Material,
 ): THREE.Object3D {
+  const root = new THREE.Group();
   const asset = object.modelAssetId ? assets?.assets[object.modelAssetId] : undefined;
-  if (!asset) return createMissingMeshPlaceholder(object, material, 'The imported mesh asset is missing.');
+  if (!asset) return createMissingMeshPlaceholder(root, object, undefined, 'The imported mesh asset is missing.');
+  if (asset.resolutionStatus && asset.resolutionStatus !== 'available') {
+    return createMissingMeshPlaceholder(root, object, asset, `The ${asset.resolutionStatus} model asset is unavailable.`);
+  }
 
   try {
     const geometry = acquireGeometry(asset);
@@ -124,11 +130,18 @@ export function createImportedMeshNode(
       safeDimensionRatio(object.dimensions[1], sourceSize.y) * object.transform.scale[1],
       safeDimensionRatio(object.dimensions[2], sourceSize.z) * object.transform.scale[2],
     );
-    return mesh;
+    root.add(mesh);
+    root.userData.importedModelAssetId = asset.id;
+    // Keep the historical geometry/material surface available to importer
+    // integrations while the scene graph now uses a stable root node.
+    Object.defineProperty(root, 'geometry', { configurable: true, get: () => mesh.geometry });
+    Object.defineProperty(root, 'material', { configurable: true, get: () => mesh.material });
+    return root;
   } catch (error) {
     return createMissingMeshPlaceholder(
+      root,
       object,
-      material,
+      asset,
       error instanceof Error ? error.message : 'The imported mesh asset is invalid.',
     );
   }
@@ -265,14 +278,60 @@ function computeIndexedNormals(positions: Float32Array, indices: Uint32Array): F
 }
 
 function createMissingMeshPlaceholder(
+  root: THREE.Group,
   object: SceneObject,
-  material: THREE.Material,
+  asset: ProjectAsset | undefined,
   error: string,
-): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(...object.dimensions), material);
+): THREE.Group {
+  const dimensions = asset?.dimensions ?? object.dimensions;
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(...dimensions),
+    new THREE.MeshStandardMaterial({
+      color: 0xd97706,
+      emissive: 0x4a2600,
+      emissiveIntensity: 0.45,
+      transparent: true,
+      opacity: 0.82,
+      wireframe: true,
+    }),
+  );
   mesh.scale.fromArray(object.transform.scale);
   mesh.userData.importedModelError = error;
-  return mesh;
+  mesh.userData.missingAssetPlaceholder = true;
+  if (asset) mesh.userData.missingAssetId = asset.id;
+  root.add(mesh);
+  Object.defineProperty(root, 'geometry', { configurable: true, get: () => mesh.geometry });
+  Object.defineProperty(root, 'material', { configurable: true, get: () => mesh.material });
+  root.userData.missingAssetPlaceholder = true;
+  if (asset) root.userData.missingAssetId = asset.id;
+  const label = createMissingAssetLabel(asset?.originalFileName ?? asset?.name ?? object.name);
+  if (label) {
+    label.position.y = Math.max(dimensions[1], 0.5) * 0.65;
+    root.add(label);
+  }
+  return root;
+}
+
+function createMissingAssetLabel(name: string): THREE.Sprite | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 96;
+  const context = canvas.getContext('2d');
+  if (!context) return undefined;
+  context.fillStyle = 'rgba(78, 45, 8, 0.9)';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#fff7ed';
+  context.font = 'bold 28px sans-serif';
+  context.fillText(`Missing asset: ${name}`, 18, 58);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas),
+    transparent: true,
+    depthTest: false,
+  }));
+  sprite.scale.set(2.4, 0.45, 1);
+  sprite.userData.missingAssetLabel = true;
+  return sprite;
 }
 
 function safeDimensionRatio(current: number, source: number) {

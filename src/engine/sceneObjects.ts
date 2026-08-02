@@ -18,6 +18,7 @@ import {
   resolvePoseableCharacterForObject,
 } from './poseableCharacter';
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
+import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians } from './sync';
 
@@ -286,6 +287,8 @@ export function buildScene(
     /** When 'projected' and projected options are valid, style architecture with the pano. */
     appearance?: 'clay' | 'projected';
     projected?: ProjectedSceneOptions;
+    /** Interactive scenes show recoverable placeholders; final exports omit them. */
+    showMissingPlaceholders?: boolean;
   } = {},
 ) {
   const theme = options.theme ?? 'light';
@@ -344,6 +347,7 @@ export function buildScene(
   for (const object of project.scene.objects) {
     if (!object.visible) continue;
     if (hiddenTypes.has(object.type)) continue;
+    if (options.showMissingPlaceholders === false && isMissingSceneObject(object, project)) continue;
     const mesh = createObject3D(
       object,
       Boolean(options.selectedObjectIds?.includes(object.id)),

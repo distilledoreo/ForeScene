@@ -32,7 +32,7 @@ function loadProjectSafety() {
 const IMPORT_STATUS_DISMISS_MS = 4000;
 
 export interface ProjectImportStatus {
-  tone: 'success' | 'error';
+  tone: 'success' | 'warning' | 'error';
   message: string;
 }
 
@@ -282,12 +282,13 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
-      const { readProjectFile } = await loadProjectIo();
+      const { readProjectFileWithWarnings } = await loadProjectIo();
       const controller = await awaitPersistenceController();
       await controller.createSnapshot(useProjectStore.getState().project, 'Before opening another project');
-      const importedProject = await readProjectFile(file);
-      // The imported package has been validated before this point. Stage its
-      // recovery revision before replacing the live Zustand project.
+      const opened = await readProjectFileWithWarnings(file);
+      const importedProject = opened.project;
+      // Stage the parsed project and any recoverable asset warnings before
+      // replacing the live Zustand project.
       await controller.commitProject(importedProject, {
         kind: 'import',
         reason: `Imported project: ${importedProject.name}`,
@@ -296,8 +297,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       setProject(importedProject);
       setAppMode('studio');
       setProjectImportStatus({
-        tone: 'success',
-        message: `Project opened: ${importedProject.name}. Verified locally for recovery.`,
+        tone: opened.warnings.length > 0 ? 'warning' : 'success',
+        message: opened.warnings.length > 0
+          ? `Project opened with ${opened.warnings.length} missing or unavailable asset${opened.warnings.length === 1 ? '' : 's'}. References were preserved; review Missing Assets.`
+          : `Project opened: ${importedProject.name}. Verified locally for recovery.`,
       });
     } catch (error) {
       setProjectImportStatus({

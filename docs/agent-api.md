@@ -441,3 +441,6 @@ npm run agent:previs -- \
   --write --reset-project \
   --output artifacts/previs
 ```
+## Missing assets
+
+`foreScene.getStatus()` and `foreScene.inspectProject()` expose `missingAssetCount`. `foreScene.listMissingAssets()` returns each stable asset ID, original filename, resolution status, affected scene instances, and affected shots. With read-write control, `foreScene.relinkAsset({ assetId, file, mode: 'locate' | 'replace' })` reconnects or intentionally replaces the binary without recreating scene objects; `foreScene.removeMissingAsset(assetId)` removes the unresolved asset and its explicit instances. Package export omits missing placeholders and returns warning strings while keeping the project document intact.

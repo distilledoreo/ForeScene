@@ -87,6 +87,7 @@ import { BuildMode, useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useThemeStore } from '../../state/useThemeStore';
 import { ContextualPanel } from '../common/ContextualPanel';
+import { MissingAssetsPanel } from '../common/MissingAssetsPanel';
 import { Field, Select, TextInput } from '../common/Field';
 import { ModelImportDialog } from '../common/ModelImportDialog';
 import { PoseableCharacterImportDialog } from '../common/PoseableCharacterImportDialog';
@@ -681,6 +682,7 @@ useEffect(() => {
   return (
     <FullBleedLayout>
       <div className={`relative h-full min-h-0 ${selectionToolsDocked && selectionToolsVisible ? 'flex' : ''}`}>
+        <MissingAssetsPanel project={project} runDestructiveProjectMutation={runDestructiveProjectMutation} />
         <div className={`relative min-h-0 ${selectionToolsDocked && selectionToolsVisible ? 'min-w-0 flex-1' : 'h-full'}`}>
         <SceneViewport
           project={project}

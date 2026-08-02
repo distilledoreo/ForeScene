@@ -33,19 +33,19 @@ describe('schema migrations', () => {
   it('lists ordered path 0.1 → 0.2 → 1.0', () => {
     const path = listMigrationPath('0.1', '1.0');
     expect(path.map((step) => `${step.from}->${step.to}`)).toEqual(['0.1->0.2', '0.2->1.0']);
-    expect(CURRENT_SCHEMA_VERSION).toBe('1.0');
+    expect(CURRENT_SCHEMA_VERSION).toBe('1.1');
   });
 
   it('migrates fixture 0.1 → current, save → reopen → export', async () => {
     const raw = readFileSync(join(fixturesDir, 'project-schema-0.1.json'), 'utf8');
     const loaded = parseProject(raw);
-    expect(loaded.schemaVersion).toBe('1.0');
+    expect(loaded.schemaVersion).toBe('1.1');
     expect(loaded.productVersion).toBe('0.1.0');
     expect(loaded.shots[0]?.camera.position[1]).toBeCloseTo(1.6, 5);
 
     const saved = serializeProject(loaded);
     const reopened = parseProject(saved);
-    expect(reopened.schemaVersion).toBe('1.0');
+    expect(reopened.schemaVersion).toBe('1.1');
     expect(reopened.name).toBe(loaded.name);
     expect(reopened.shots.length).toBe(loaded.shots.length);
 
@@ -57,7 +57,7 @@ describe('schema migrations', () => {
     expect(Object.keys(manifest as object).length).toBeGreaterThan(0);
     expect(getShotPackageBaseName(shot).length).toBeGreaterThan(0);
     // Portable JSON after migration must remain parseable for package handoff.
-    expect(JSON.parse(serializeProject(reopened)).schemaVersion).toBe('1.0');
+    expect(JSON.parse(serializeProject(reopened)).schemaVersion).toBe('1.1');
   });
 
   it('parse/migrate leave local asset storage untouched (pure validators)', async () => {
@@ -125,7 +125,7 @@ describe('schema migrations', () => {
     };
 
     const migrated = migrateProjectToCurrent(project);
-    expect(migrated.schemaVersion).toBe('1.0');
+    expect(migrated.schemaVersion).toBe('1.1');
     const kf = migrated.shots[0]?.cameraKeyframes[0];
     expect(kf?.previewAssetId).toBeTruthy();
     expect(migrated.assets.assets[kf!.previewAssetId!]).toBeTruthy();

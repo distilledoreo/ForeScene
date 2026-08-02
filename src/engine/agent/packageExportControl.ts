@@ -18,6 +18,7 @@ import {
   formatPlanBlockingErrors,
   planHasBlockingErrors,
 } from '../exportPlan';
+import { listMissingProjectAssetWarnings } from '../projectAssetRecovery';
 import { awaitAgentNotBusy } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
@@ -275,6 +276,7 @@ export async function exportAgentPackage(
       manifestPaths: result.manifestPaths,
       shotIds: shots.map((shot) => shot.id),
       diagnostics: [],
+      warnings: listMissingProjectAssetWarnings(exportProject).map((warning) => warning.message),
       progress: latestProgress,
     };
   } catch (error) {

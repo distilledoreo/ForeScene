@@ -1,7 +1,7 @@
 export type Vec3 = [number, number, number];
 export type Euler = [number, number, number];
 /** Supported project schema versions (load migrates older → current). */
-export type ProjectVersion = '0.1' | '0.2' | '1.0';
+export type ProjectVersion = '0.1' | '0.2' | '1.0' | '1.1';
 
 export type SceneObjectType =
   | 'floor'
@@ -325,6 +325,8 @@ export interface SceneObject {
   secondaryColor?: string;
   /** Canonical texture-free mesh asset used by imported graybox geometry. */
   modelAssetId?: string;
+  /** Optional stable parent node for preserving hierarchy across asset recovery. */
+  parentId?: string;
   importedModel?: ImportedModelInfo;
   /**
    * Poseable-character identity. Distinct from `transform` (set placement)
@@ -645,6 +647,17 @@ export interface ProjectAsset {
   uri: string;
   /** IndexedDB key for local-first image/video payloads; portable packages include this binary separately. */
   storageKey?: string;
+  /** Stable source identity retained even when the local binary is unavailable. */
+  originalFileName?: string;
+  /** Optional browser File System Access handle key; never required to open a project. */
+  fileHandleKey?: string;
+  contentHash?: string;
+  byteSize?: number;
+  resolutionStatus?: 'available' | 'missing' | 'corrupt' | 'unsupported';
+  bounds?: { min: Vec3; max: Vec3 };
+  dimensions?: Vec3;
+  meshCount?: number;
+  animationNames?: string[];
   mimeType?: string;
   width?: number;
   height?: number;

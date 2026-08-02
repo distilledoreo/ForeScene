@@ -29,3 +29,10 @@ The device safety budget is `min(20% * navigator.deviceMemory, 1536 MiB desktop 
 Conversion uses an `AbortSignal`, stage callbacks, and event-loop yields between large mesh batches. Combined conversion calculates global bounds without `worldPositionsPerUnit`, then writes centered positions directly into the final combined arrays. Binary writes happen before the atomic store insertion and are removed if a write is aborted. Orphaned binary blobs are pruned safely when a project is saved, preserving undo/redo until then.
 
 Known browser limits: `navigator.deviceMemory` is coarse and unavailable in some browsers; IndexedDB quotas vary; WebGL does not expose a reliable free-GPU-memory value; loaders themselves may temporarily retain decoded source buffers. ForeScene therefore deliberately estimates conservatively.
+## Missing asset recovery
+
+Imported models are stored as stable project asset records plus local binary payloads. The record retains the original filename, byte size, content hash when available, source storage key, bounds/dimensions, mesh count, and resolution status. Scene objects reference the stable asset ID, so a missing binary does not delete an instance, transform, visibility state, or shot staging.
+
+Opening a project is staged per asset. Missing, corrupt, or unsupported binaries produce a non-blocking warning and an editable bounding-box placeholder. The Build workspace exposes the Missing Assets panel with Locate File, Replace Asset, Search Folder, Keep Placeholder, and Remove Asset actions. Locate File validates the original content hash when one is recorded; Replace Asset intentionally accepts a different source while preserving the same asset ID and all instances.
+
+Interactive scenes show placeholders so the missing object remains selectable and movable. Final stills, 360 renders, videos, and shot packages omit missing placeholders by default. Export metadata and the Agent API report omitted assets and their affected object/shot IDs.

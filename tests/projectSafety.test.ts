@@ -125,7 +125,7 @@ describe('project safety revisions', () => {
     // Exercise full recovery hydration, not parse-only migration.
     const loaded = await loadProjectRevision(revision.id);
     expect(loaded.project.name).toBe('Legacy keyframe thumbs');
-    expect(loaded.project.schemaVersion).toBe('1.0');
+    expect(loaded.project.schemaVersion).toBe('1.1');
 
     const recoveredKf = loaded.project.shots[0]?.cameraKeyframes[0];
     expect(recoveredKf?.previewAssetId).toBeTruthy();

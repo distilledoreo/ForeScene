@@ -13,3 +13,5 @@ export const LEGACY_PANOREF_MESH_VERSION = 2;
 export const MAX_PACKED_MESH_BYTES = IMPORT_BUDGET_POLICY.maxPackedAssetBytes;
 /** Legacy PanoRef IndexedDB URI scheme; kept for existing local model assets. */
 export const MODEL_ASSET_URI_PREFIX = 'panoref-idb:';
+/** Runtime-only marker for a logical asset whose binary could not be restored. */
+export const MISSING_ASSET_URI_PREFIX = 'panoref-missing:';

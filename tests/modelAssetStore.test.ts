@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { deleteModelAsset, getModelAsset, putModelAsset, resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import { createDefaultProject, createTransform } from '../src/domain/defaults';
 import { encodeBinaryGrayboxMesh, encodePackedGrayboxMesh, MODEL_ASSET_URI_PREFIX } from '../src/engine/importedMesh';
-import { createProjectPackage, readProjectFile } from '../src/engine/projectIO';
+import { createProjectPackage, readProjectFile, readProjectFileWithWarnings } from '../src/engine/projectIO';
 import JSZip from 'jszip';
 
 describe('binary model asset storage', () => {
@@ -52,7 +52,10 @@ describe('binary model asset storage', () => {
     const project = createDefaultProject();
     project.assets.assets.mesh = { id: 'mesh', type: 'model', name: 'missing.panoref-mesh', uri: `${MODEL_ASSET_URI_PREFIX}missing/key`, createdAt: new Date(0).toISOString() };
     project.scene.objects.push({ id: 'model-object', name: 'Model', type: 'imported_model', transform: createTransform(), dimensions: [1, 1, 0.001], category: 'architecture', locked: false, visible: true, modelAssetId: 'mesh' });
-    await expect(createProjectPackage(project)).rejects.toThrow('binary model asset missing.panoref-mesh is missing');
+    const zip = await JSZip.loadAsync(await (await createProjectPackage(project)).arrayBuffer());
+    const reopened = JSON.parse(await zip.file('project.json')!.async('text')) as { assets: { assets: Record<string, { resolutionStatus?: string; uri: string }> } };
+    expect(reopened.assets.assets.mesh?.resolutionStatus).toBe('missing');
+    expect(reopened.assets.assets.mesh?.uri).toBe('panoref-missing:mesh');
   });
 
   it('does not overwrite existing model storage when another package binary is missing', async () => {
@@ -76,9 +79,11 @@ describe('binary model asset storage', () => {
     zip.file('project.json', JSON.stringify(project));
     zip.file(`model-assets/${encodeURIComponent('existing/key')}.bin`, new Uint8Array([1, 2, 3]));
 
-    await expect(readProjectFile(new File([
+    const opened = await readProjectFileWithWarnings(new File([
       await zip.generateAsync({ type: 'blob' }),
-    ], 'broken.panoref-project'))).rejects.toThrow('binary model asset second.panoref-mesh');
+    ], 'broken.panoref-project'));
+    expect(opened.warnings[0]?.assetId).toBe('second');
+    expect(opened.project.assets.assets.second?.resolutionStatus).toBe('missing');
 
     expect(Array.from(new Uint8Array((await getModelAsset('existing/key'))!))).toEqual([9]);
   });

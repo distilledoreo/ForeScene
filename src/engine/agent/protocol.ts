@@ -100,6 +100,7 @@ export interface ForeSceneAgentStatus {
   appMode?: 'studio' | 'panoViewer' | null;
   busy: ForeSceneAgentBusyState;
   persistence: ForeSceneAgentPersistenceStatus;
+  missingAssetCount?: number;
 }
 
 export interface ForeSceneAgentCapabilities {
@@ -110,6 +111,7 @@ export interface ForeSceneAgentCapabilities {
   packageExport: boolean;
   characterImport: boolean;
   projectReplacement: boolean;
+  missingAssetRecovery: boolean;
   timelineInspection: boolean;
   timelineSampling: boolean;
   commands: {
@@ -141,6 +143,17 @@ export interface AgentProjectInspection {
   selectedObjectIds: string[];
   selectedShotId?: string;
   revisionId?: string;
+  missingAssetCount: number;
+  missingAssets: AgentMissingAssetSummary[];
+}
+
+export interface AgentMissingAssetSummary {
+  assetId: string;
+  name: string;
+  originalFileName?: string;
+  status: 'missing' | 'corrupt' | 'unsupported';
+  instanceObjectIds: string[];
+  affectedShotIds: string[];
 }
 
 export interface AgentObjectQuery {
@@ -162,6 +175,7 @@ export interface AgentObjectSummary {
   position: [number, number, number];
   hasHumanPose: boolean;
   isPoseable: boolean;
+  assetStatus?: 'available' | 'missing' | 'corrupt' | 'unsupported';
 }
 
 export interface AgentObjectInspection extends AgentObjectSummary {
@@ -530,6 +544,7 @@ export interface AgentPackageExportResult {
   shotIds?: string[];
   diagnostics: AgentDiagnostic[];
   progress?: AgentPackageExportProgressSnapshot;
+  warnings?: string[];
 }
 
 export interface AgentPlanHistoryEntry {
@@ -811,6 +826,9 @@ export interface ForeSceneBrowserApi {
   getCapabilities(): ForeSceneAgentCapabilities;
 
   inspectProject(): AgentProjectInspection;
+  listMissingAssets(): AgentMissingAssetSummary[];
+  relinkAsset(input: { assetId: string; file: File; mode?: 'locate' | 'replace' }): Promise<{ ok: boolean; assetId?: string; diagnostics: AgentDiagnostic[] }>;
+  removeMissingAsset(assetId: string): Promise<{ ok: boolean; diagnostics: AgentDiagnostic[] }>;
   /**
    * Read-only structuredClone of the live LocationProject (for offline validation /
    * autonomous previs). Does not expose write handles.

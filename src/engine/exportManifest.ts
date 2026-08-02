@@ -7,6 +7,7 @@ import {
   type ShotPackageManifest,
 } from './exportPlan';
 import { generateImagePrompt, generateVideoPrompt } from './prompts';
+import { listMissingProjectAssetWarnings } from './projectAssetRecovery';
 
 export type { ShotPackageManifest } from './exportPlan';
 
@@ -41,9 +42,10 @@ export function createShotPackageManifest(
   const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
   const shotPlan = getPlannedShot(plan, shot.id);
   if (!shotPlan) {
-    return { rootFolder, files: [] };
+    return { rootFolder, files: [], missingAssets: listMissingProjectAssetWarnings(project) };
   }
   const manifest = createLegacyShotManifest(shotPlan);
+  const missingAssets = listMissingProjectAssetWarnings(project);
   // Preserve caller-supplied root folder when explicitly provided (collision suffixes).
   if (rootFolder !== shotPlan.rootFolder) {
     const rewrite = (path: string) => (
@@ -54,9 +56,10 @@ export function createShotPackageManifest(
     return {
       rootFolder,
       files: manifest.files.map((file) => ({ ...file, path: rewrite(file.path) })),
+      missingAssets,
     };
   }
-  return manifest;
+  return { ...manifest, missingAssets };
 }
 
 export function buildShotMetadata(project: LocationProject, shot: Shot, linkedPano?: PanoReference) {
@@ -69,6 +72,7 @@ export function buildShotMetadata(project: LocationProject, shot: Shot, linkedPa
     },
     shot,
     linkedPano,
+    missingAssets: listMissingProjectAssetWarnings(project),
     landmarks: project.landmarks.filter((landmark) => shot.landmarkIds.includes(landmark.id)),
     prompts: {
       image: generateImagePrompt(project, shot),

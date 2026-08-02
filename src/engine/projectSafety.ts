@@ -1,6 +1,6 @@
 import type { LocationProject, ProjectAsset } from '../domain/types';
 import { dataUrlToBlob } from './fileTransfers';
-import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
+import { MISSING_ASSET_URI_PREFIX, MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import {
   deleteModelAsset,
   getModelAsset,
@@ -130,6 +130,15 @@ function copyProject(project: LocationProject): LocationProject {
 
 function isRasterOrVideoAsset(asset: ProjectAsset): boolean {
   return asset.type === 'image' || asset.type === 'video';
+}
+
+function isRecoverableAssetFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes('cannot be resolved')
+    || message.includes('unavailable')
+    || message.includes('missing binary')
+    || message.includes('empty')
+    || message.includes('invalid');
 }
 
 function storageKeyFromAsset(asset: Pick<ProjectAsset, 'storageKey' | 'uri'>): string | undefined {
@@ -342,6 +351,7 @@ async function estimateNewRevisionBytes(project: LocationProject): Promise<numbe
   for (const asset of Object.values(pruneUnreferencedProjectAssets(project).assets.assets)) {
     const source = project.assets.assets[asset.id] ?? asset;
     if (isRasterOrVideoAsset(asset)) {
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
       const key = storageKeyFromAsset(source);
       if (key?.startsWith(PROJECT_ASSET_RESOURCE_PREFIX)) continue;
       const blob = await resolveAssetBlob(source);
@@ -349,6 +359,7 @@ async function estimateNewRevisionBytes(project: LocationProject): Promise<numbe
       continue;
     }
     if (asset.type === 'model') {
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
       const key = source.uri.startsWith(MODEL_ASSET_URI_PREFIX)
         ? source.uri.slice(MODEL_ASSET_URI_PREFIX.length)
         : undefined;
@@ -440,18 +451,32 @@ async function createRevisionRecord(
   for (const asset of Object.values(portable.assets.assets)) {
     const sourceAsset = project.assets.assets[asset.id] ?? asset;
     if (isRasterOrVideoAsset(asset)) {
-      const resource = await ensureProjectAssetResource(sourceAsset);
-      asset.storageKey = resource.key;
-      asset.uri = `${PROJECT_ASSET_URI_PREFIX}${resource.key}`;
-      projectAssetKeys.push(resource.key);
-      projectAssets.push(resource);
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      try {
+        const resource = await ensureProjectAssetResource(sourceAsset);
+        asset.storageKey = resource.key;
+        asset.uri = `${PROJECT_ASSET_URI_PREFIX}${resource.key}`;
+        projectAssetKeys.push(resource.key);
+        projectAssets.push(resource);
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
       continue;
     }
     if (asset.type === 'model') {
-      const resource = await ensureModelResource(sourceAsset);
-      asset.uri = `${MODEL_ASSET_URI_PREFIX}${resource.key}`;
-      modelAssetKeys.push(resource.key);
-      models.push(resource);
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      try {
+        const resource = await ensureModelResource(sourceAsset);
+        asset.uri = `${MODEL_ASSET_URI_PREFIX}${resource.key}`;
+        modelAssetKeys.push(resource.key);
+        models.push(resource);
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
     }
   }
 
@@ -560,18 +585,30 @@ async function hydrateRevision(record: ProjectRevisionRecord): Promise<LocationP
         }
         continue;
       }
-      const key = storageKeyFromAsset(asset);
-      if (!key) throw new Error(`Recovery revision is missing a storage key for ${asset.name}.`);
-      await verifyProjectAssetResource(asset, key, resourceMetadataFor(record, 'projectAsset', key));
-      const uri = await resolveProjectAssetUri(asset);
-      if (!uri) throw new Error(`Recovery revision is missing binary asset ${asset.name}.`);
-      asset.storageKey = key;
-      asset.uri = uri;
+      try {
+        const key = storageKeyFromAsset(asset);
+        if (!key) throw new Error(`Recovery revision is missing a storage key for ${asset.name}.`);
+        await verifyProjectAssetResource(asset, key, resourceMetadataFor(record, 'projectAsset', key));
+        const uri = await resolveProjectAssetUri(asset);
+        if (!uri) throw new Error(`Recovery revision is missing binary asset ${asset.name}.`);
+        asset.storageKey = key;
+        asset.uri = uri;
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
       continue;
     }
     if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
       const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
-      await verifyModelResource(asset, key, resourceMetadataFor(record, 'model', key));
+      try {
+        await verifyModelResource(asset, key, resourceMetadataFor(record, 'model', key));
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
     }
   }
   return project;

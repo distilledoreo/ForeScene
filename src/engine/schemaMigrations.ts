@@ -12,9 +12,9 @@ import { dataUrlToBlob } from './fileTransfers';
 import { createProjectAssetStorageKey } from './projectAssetStore';
 
 /** Product schema lineage (manifest field). */
-export const SCHEMA_VERSIONS = ['0.1', '0.2', '1.0'] as const;
+export const SCHEMA_VERSIONS = ['0.1', '0.2', '1.0', '1.1'] as const;
 export type MigratableSchemaVersion = (typeof SCHEMA_VERSIONS)[number];
-export const CURRENT_SCHEMA_VERSION: ProjectVersion = '1.0';
+export const CURRENT_SCHEMA_VERSION: ProjectVersion = '1.1';
 
 /** Binary payloads produced by pure migration; stage only after the project is accepted. */
 export interface PendingProjectAsset {
@@ -130,9 +130,57 @@ export function migrateProject02To10(project: LocationProject): LocationProject 
   };
 }
 
+/** 1.0 → 1.1: give every registry entry a durable logical id and source metadata. */
+export function migrateProject10To11(project: LocationProject): LocationProject {
+  const assets: Record<string, ProjectAsset> = {};
+  const idsByLegacyKey = new Map<string, string>();
+  for (const [legacyKey, rawAsset] of Object.entries(project.assets.assets)) {
+    const id = typeof rawAsset.id === 'string' && rawAsset.id.trim() ? rawAsset.id : createId('asset');
+    idsByLegacyKey.set(legacyKey, id);
+    idsByLegacyKey.set(rawAsset.id, id);
+    assets[id] = {
+      ...rawAsset,
+      id,
+      originalFileName: rawAsset.originalFileName ?? rawAsset.name,
+      resolutionStatus: rawAsset.resolutionStatus ?? 'available',
+      storageKey: rawAsset.storageKey ?? (rawAsset.uri.startsWith('panoref-idb:')
+        ? rawAsset.uri.slice('panoref-idb:'.length)
+        : undefined),
+    };
+  }
+  const remap = (value: string | undefined) => value ? idsByLegacyKey.get(value) ?? value : value;
+  return {
+    ...project,
+    schemaVersion: '1.1',
+    assets: { ...project.assets, assets },
+    scene: {
+      ...project.scene,
+      objects: project.scene.objects.map((object) => ({
+        ...object,
+        modelAssetId: remap(object.modelAssetId),
+      })),
+    },
+    panoRefs: project.panoRefs.map((pano) => ({ ...pano, imageAssetId: remap(pano.imageAssetId) ?? pano.imageAssetId })),
+    shots: project.shots.map((shot) => ({
+      ...shot,
+      assets: {
+        ...shot.assets,
+        finalBaseFrameAssetId: remap(shot.assets.finalBaseFrameAssetId),
+        aiResultFrameAssetId: remap(shot.assets.aiResultFrameAssetId),
+        viewportProjectedAssetId: remap(shot.assets.viewportProjectedAssetId),
+      },
+      cameraKeyframes: (shot.cameraKeyframes ?? []).map((keyframe) => ({
+        ...keyframe,
+        previewAssetId: remap(keyframe.previewAssetId),
+      })),
+    })),
+  };
+}
+
 export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
   { from: '0.1', to: '0.2', migrate: migrateProject01To02 },
   { from: '0.2', to: '1.0', migrate: migrateProject02To10 },
+  { from: '1.0', to: '1.1', migrate: migrateProject10To11 },
 ];
 
 export function listMigrationPath(

@@ -653,7 +653,9 @@ export default function App() {
           className={`pointer-events-none absolute right-7 top-20 z-50 max-w-sm rounded-[var(--radius-card)] border px-3 py-2 text-sm shadow-card backdrop-blur ${
             projectImportStatus.tone === 'success'
               ? 'border-[var(--accent)] bg-surface-overlay text-primary'
-              : 'border-red-400/70 bg-surface-overlay text-primary'
+              : projectImportStatus.tone === 'warning'
+                ? 'border-amber-400/70 bg-amber-50/95 text-amber-950'
+                : 'border-red-400/70 bg-surface-overlay text-primary'
           }`}
           role={projectImportStatus.tone === 'error' ? 'alert' : 'status'}
           aria-live="polite"

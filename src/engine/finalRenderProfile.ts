@@ -19,6 +19,7 @@ export interface FinalRenderSceneOptions {
   hideShotFrustums: true;
   fog: false;
   hiddenObjectTypes: SceneObjectType[];
+  showMissingPlaceholders: false;
 }
 
 /** Clay / projected still + video exports share this clean scene profile. */
@@ -37,5 +38,6 @@ export function createFinalRenderSceneOptions(
     hideShotFrustums: true,
     fog: false,
     hiddenObjectTypes: [...hidden],
+    showMissingPlaceholders: false,
   };
 }
