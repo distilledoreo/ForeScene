@@ -245,6 +245,12 @@ The finalization report records `reviewedShotIds`, `plannedShotIds`,
 and `productionComplete`. Direct export API calls reject unknown, duplicate,
 or explicitly empty `shotIds` selections.
 
+Approval also stores an `approval-record.json` containing the exact manifest
+hash, semantic-review hash, reviewed shot ids, criterion ids, and artifact
+count. Approval recomputes the manifest and semantic hashes and reads every
+still and temporal output from disk; finalization repeats those checks before
+it can produce a package.
+
 For a production copy, start from
 `examples/refinement/six-shot-pilot.template.json`, replace every placeholder
 object/shot id with IDs from that copied project, and run the pilot before

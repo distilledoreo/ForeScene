@@ -83,6 +83,11 @@ interface TemporalShotEvidence {
   temporal: TemporalEvidence;
 }
 
+interface ReviewEvidenceVerification {
+  errors: string[];
+  artifactCount: number;
+}
+
 function dataUrlBytes(dataUrl: string): Buffer {
   const comma = dataUrl.indexOf(',');
   if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
@@ -426,22 +431,47 @@ async function renderTemporalSamples(
   return samples;
 }
 
-async function filesInReviewManifestExist(manifest: unknown): Promise<string[]> {
-  if (!manifest || typeof manifest !== 'object' || !Array.isArray((manifest as { shots?: unknown[] }).shots)) return ['Review manifest has no shots.'];
-  const missing: string[] = [];
-  for (const shot of (manifest as { shots: Array<{ passes?: Array<{ ok?: boolean; output?: string; fileName?: string }> }> }).shots) {
-    for (const pass of shot.passes ?? []) {
-      if (pass.ok && pass.output && !await exists(pass.output)) missing.push(pass.output);
+async function verifyReviewEvidenceOnDisk(manifest: unknown): Promise<ReviewEvidenceVerification> {
+  if (!manifest || typeof manifest !== 'object' || !Array.isArray((manifest as { shots?: unknown[] }).shots)) {
+    return { errors: ['Review manifest has no shots.'], artifactCount: 0 };
+  }
+  const errors: string[] = [];
+  let artifactCount = 0;
+  const verify = async (shotId: string, label: string, artifact: unknown) => {
+    const value = artifact as { output?: unknown; sha256?: unknown } | null;
+    if (!value || typeof value.output !== 'string' || typeof value.sha256 !== 'string') {
+      errors.push(`Review evidence ${label} for shot ${shotId} is missing its output or SHA-256.`);
+      return;
     }
-    const temporal = (shot as { temporal?: { renderable?: boolean; start?: { output?: string }; mid?: { output?: string }; end?: { output?: string }; video?: { output?: string } } }).temporal;
-    if (temporal?.renderable) {
-      for (const key of ['start', 'mid', 'end', 'video'] as const) {
-        const output = temporal[key]?.output;
-        if (output && !await exists(output)) missing.push(output);
-      }
+    artifactCount += 1;
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(value.output);
+    } catch {
+      errors.push(`Review evidence file is missing: ${value.output}.`);
+      return;
+    }
+    if (bytes.length === 0) {
+      errors.push(`Review evidence file is empty: ${value.output}.`);
+      return;
+    }
+    const actual = sha256(bytes);
+    if (actual !== value.sha256) {
+      errors.push(`Review evidence hash does not match ${label} for shot ${shotId}.`);
+    }
+  };
+  for (const shot of (manifest as { shots: Array<{ id?: unknown; passes?: unknown[]; temporal?: unknown }> }).shots) {
+    const shotId = typeof shot.id === 'string' ? shot.id : '<unknown>';
+    for (const pass of shot.passes ?? []) {
+      const value = pass as { ok?: unknown; fileName?: unknown };
+      if (value.ok === true) await verify(shotId, typeof value.fileName === 'string' ? value.fileName : 'still pass', pass);
+    }
+    const temporal = shot.temporal as { renderable?: unknown; [key: string]: unknown } | undefined;
+    if (temporal?.renderable === true) {
+      for (const key of ['start', 'mid', 'end', 'video']) await verify(shotId, `temporal ${key}`, temporal[key]);
     }
   }
-  return missing;
+  return { errors, artifactCount };
 }
 
 async function approveBatch(
@@ -457,7 +487,13 @@ async function approveBatch(
   const shots = await resolveShots(session, batch.shots);
   const manifestPath = state.batches[batchId]!.reviewManifestPath;
   if (!manifestPath || !await exists(manifestPath)) throw new Error(`Batch ${batchId} review manifest is missing.`);
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown;
+  const manifestBytes = await readFile(manifestPath);
+  const manifestSha256 = sha256(manifestBytes);
+  const recordedManifestSha256 = state.batches[batchId]!.reviewManifestSha256;
+  if (recordedManifestSha256 && recordedManifestSha256 !== manifestSha256) {
+    throw new Error(`Batch ${batchId} review manifest bytes changed after rendering.`);
+  }
+  const manifest = JSON.parse(manifestBytes.toString('utf8')) as unknown;
   const review = checkReviewMatrix(manifest, shots.map((shot) => shot.id));
   if (!review.ok) throw new Error(`Batch ${batchId} cannot be approved: ${review.errors.join(' ')}`);
   if (!semanticReviewPath) {
@@ -465,24 +501,109 @@ async function approveBatch(
   }
   const semanticPath = path.resolve(semanticReviewPath);
   if (!await exists(semanticPath)) throw new Error(`Batch ${batchId} semantic review is missing: ${semanticPath}.`);
-  const semantic = JSON.parse(await readFile(semanticPath, 'utf8')) as unknown;
-  const semanticCheck = checkSemanticReview(semantic, manifest, shots.map((shot) => shot.id));
+  const semanticBytes = await readFile(semanticPath);
+  const semanticSha256 = sha256(semanticBytes);
+  const semantic = JSON.parse(semanticBytes.toString('utf8')) as unknown;
+  const semanticCheck = checkSemanticReview(semantic, manifest, shots.map((shot) => shot.id), manifestSha256);
   if (!semanticCheck.ok) throw new Error(`Batch ${batchId} semantic review failed: ${semanticCheck.errors.join(' ')}`);
-  const filesMissing = await filesInReviewManifestExist(manifest);
-  if (filesMissing.length > 0) throw new Error(`Batch ${batchId} review files are missing: ${filesMissing.join(', ')}`);
+  const evidence = await verifyReviewEvidenceOnDisk(manifest);
+  if (evidence.errors.length > 0) throw new Error(`Batch ${batchId} review evidence failed: ${evidence.errors.join(' ')}`);
   const generatedAt = (manifest as { generatedAt?: string }).generatedAt;
   if (!generatedAt || generatedAt < (state.batches[batchId]!.mutationCompletedAt ?? '')) {
     throw new Error(`Batch ${batchId} review manifest is older than its mutations.`);
   }
   assertPreserved(plan, state, await readProject(session));
+  const criterionIds = [...new Set((manifest as { shots: Array<{ requiredCriteria?: Array<{ id?: unknown }> }> }).shots
+    .flatMap((shot) => (shot.requiredCriteria ?? []).map((criterion) => criterion.id))
+    .filter((id): id is string => typeof id === 'string'))].sort();
+  const approvalRecordPath = path.join(path.dirname(manifestPath), 'approval-record.json');
+  const approvalRecord = {
+    schemaVersion: 1,
+    batchId,
+    approvedAt: now(),
+    manifestSha256,
+    semanticReviewSha256: semanticSha256,
+    shotIds: shots.map((shot) => shot.id),
+    criterionIds,
+    artifactCount: evidence.artifactCount,
+  };
+  await writeJson(approvalRecordPath, approvalRecord);
+  const approvalRecordSha256 = sha256(await readFile(approvalRecordPath));
   state.batches[batchId]!.status = 'approved';
   state.batches[batchId]!.semanticReviewPath = semanticPath;
+  state.batches[batchId]!.semanticReviewSha256 = semanticSha256;
+  state.batches[batchId]!.reviewManifestSha256 = manifestSha256;
+  state.batches[batchId]!.approvalRecordPath = approvalRecordPath;
+  state.batches[batchId]!.approvalRecordSha256 = approvalRecordSha256;
   state.batches[batchId]!.approvedAt = now();
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
+}
+
+async function verifyApprovedBatchEvidence(
+  plan: RefinementPlan,
+  state: RefinementState,
+  batchId: string,
+): Promise<void> {
+  const batchState = state.batches[batchId]!;
+  const expectedShotIds = batchState.resolvedShotIds ?? [];
+  if (!batchState.reviewManifestPath || !batchState.semanticReviewPath || !batchState.approvalRecordPath
+    || !batchState.reviewManifestSha256 || !batchState.semanticReviewSha256 || !batchState.approvalRecordSha256) {
+    throw new Error(`Approved batch ${batchId} is missing its immutable approval record.`);
+  }
+  if (!await exists(batchState.reviewManifestPath) || !await exists(batchState.semanticReviewPath) || !await exists(batchState.approvalRecordPath)) {
+    throw new Error(`Approved batch ${batchId} is missing referenced review evidence.`);
+  }
+  const manifestBytes = await readFile(batchState.reviewManifestPath);
+  const semanticBytes = await readFile(batchState.semanticReviewPath);
+  const approvalBytes = await readFile(batchState.approvalRecordPath);
+  const manifestSha256 = sha256(manifestBytes);
+  const semanticReviewSha256 = sha256(semanticBytes);
+  const approvalRecordSha256 = sha256(approvalBytes);
+  if (manifestSha256 !== batchState.reviewManifestSha256 || semanticReviewSha256 !== batchState.semanticReviewSha256
+    || approvalRecordSha256 !== batchState.approvalRecordSha256) {
+    throw new Error(`Approved batch ${batchId} evidence bytes no longer match its approval record.`);
+  }
+  const manifest = JSON.parse(manifestBytes.toString('utf8')) as unknown;
+  const semantic = JSON.parse(semanticBytes.toString('utf8')) as unknown;
+  const approvalRecord = JSON.parse(approvalBytes.toString('utf8')) as {
+    schemaVersion?: unknown;
+    batchId?: unknown;
+    manifestSha256?: unknown;
+    semanticReviewSha256?: unknown;
+    shotIds?: unknown;
+    criterionIds?: unknown;
+    artifactCount?: unknown;
+  };
+  const approvalErrors: string[] = [];
+  if (approvalRecord.schemaVersion !== 1 || approvalRecord.batchId !== batchId) approvalErrors.push('approval record identity is invalid');
+  if (approvalRecord.manifestSha256 !== manifestSha256) approvalErrors.push('manifest hash is not bound');
+  if (approvalRecord.semanticReviewSha256 !== semanticReviewSha256) approvalErrors.push('semantic review hash is not bound');
+  if (!Array.isArray(approvalRecord.shotIds) || !sameStringSet(approvalRecord.shotIds.filter((id): id is string => typeof id === 'string'), expectedShotIds)) {
+    approvalErrors.push('reviewed shot ids are not bound');
+  }
+  const criterionIds = [...new Set((manifest as { shots: Array<{ requiredCriteria?: Array<{ id?: unknown }> }> }).shots
+    .flatMap((shot) => (shot.requiredCriteria ?? []).map((criterion) => criterion.id))
+    .filter((id): id is string => typeof id === 'string'))].sort();
+  if (!Array.isArray(approvalRecord.criterionIds) || !sameStringSet(approvalRecord.criterionIds.filter((id): id is string => typeof id === 'string'), criterionIds)) {
+    approvalErrors.push('criterion ids are not bound');
+  }
+  const matrix = checkReviewMatrix(manifest, expectedShotIds);
+  if (!matrix.ok) approvalErrors.push(...matrix.errors);
+  const semanticCheck = checkSemanticReview(semantic, manifest, expectedShotIds, manifestSha256);
+  if (!semanticCheck.ok) approvalErrors.push(...semanticCheck.errors);
+  const evidence = await verifyReviewEvidenceOnDisk(manifest);
+  if (approvalRecord.artifactCount !== evidence.artifactCount) approvalErrors.push('artifact count is not bound');
+  approvalErrors.push(...evidence.errors);
+  if (approvalErrors.length > 0) throw new Error(`Approved batch ${batchId} evidence is no longer valid: ${approvalErrors.join(' ')}`);
 }
 
 async function finalize(plan: RefinementPlan, state: RefinementState, options: RefinementCliOptions, outputRoot: string, session: AgentBrowserSession) {
   const gate = canFinalizeRefinement(plan, state);
   if (gate.length > 0) throw new Error(gate.join(' '));
+  for (const batch of plan.batches) await verifyApprovedBatchEvidence(plan, state, batch.id);
   assertPreserved(plan, state, await readProject(session));
   const scope = resolveRefinementFinalizationScope(plan);
   const reviewedShotIds = resolveReviewedShotIds(plan, state);
@@ -779,6 +900,7 @@ export async function runRefinementCli(options: RefinementCliOptions): Promise<{
         temporal,
       );
       state.batches[batchId]!.reviewManifestPath = reviews.manifestPath;
+      state.batches[batchId]!.reviewManifestSha256 = reviews.manifestSha256;
       state.batches[batchId]!.status = reviews.report.ok ? 'awaiting_visual_review' : 'failed';
       report.reviewManifestPath = reviews.manifestPath;
       report.temporalSamples = temporal;

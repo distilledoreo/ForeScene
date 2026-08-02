@@ -139,6 +139,9 @@ export interface RefinementBatchState {
   reviewManifestPath?: string;
   reviewManifestSha256?: string;
   semanticReviewPath?: string;
+  semanticReviewSha256?: string;
+  approvalRecordPath?: string;
+  approvalRecordSha256?: string;
   mutationCompletedAt?: string;
   approvedAt?: string;
   failure?: string;
@@ -805,11 +808,22 @@ export function checkSemanticReview(
       errors.push(`Semantic review criteria do not exactly match the manifest for shot ${shotId}.`);
     }
     const reviewedArtifacts = Array.isArray(verdict.reviewedArtifacts) ? verdict.reviewedArtifacts.filter(isRecord) : [];
+    if (!Array.isArray(verdict.reviewedArtifacts)) {
+      errors.push(`Semantic review is missing reviewedArtifacts for shot ${shotId}.`);
+    }
+    for (const artifact of reviewedArtifacts) {
+      if (typeof artifact.path !== 'string' || typeof artifact.sha256 !== 'string') {
+        errors.push(`Semantic review contains an invalid reviewed artifact for shot ${shotId}.`);
+      }
+    }
     const reviewedHashes = new Map(
       reviewedArtifacts
         .filter((artifact) => typeof artifact.path === 'string' && typeof artifact.sha256 === 'string')
         .map((artifact) => [artifact.path as string, artifact.sha256 as string]),
     );
+    if (reviewedHashes.size !== reviewedArtifacts.filter((artifact) => typeof artifact.path === 'string').length) {
+      errors.push(`Semantic review repeats or omits a reviewed artifact path for shot ${shotId}.`);
+    }
     const temporal = manifestShot && isRecord(manifestShot.temporal) ? manifestShot.temporal : undefined;
     if (!temporal || typeof temporal.renderable !== 'boolean') {
       errors.push(`Review manifest is missing temporal evidence for shot ${shotId}.`);
