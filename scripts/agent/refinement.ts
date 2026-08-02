@@ -14,6 +14,7 @@ import {
   checkRefinementDeliverables,
   compareRefinementSnapshot,
   createRefinementState,
+  listRefinementVisibilityTargets,
   listAuthorizedRefinementValueChanges,
   parseRefinementPlan,
   resolveRefinementDeliverablesProfile,
@@ -58,10 +59,35 @@ interface ResolvedShot {
   shotNumber: string;
 }
 
+interface TemporalArtifactEvidence {
+  fileName: string;
+  output: string;
+  sha256: string;
+  durationSeconds?: number;
+}
+
+interface TemporalEvidence {
+  renderable: boolean;
+  start?: TemporalArtifactEvidence;
+  mid?: TemporalArtifactEvidence;
+  end?: TemporalArtifactEvidence;
+  video?: TemporalArtifactEvidence;
+}
+
+interface TemporalShotEvidence {
+  shotId: string;
+  shotNumber: string;
+  temporal: TemporalEvidence;
+}
+
 function dataUrlBytes(dataUrl: string): Buffer {
   const comma = dataUrl.indexOf(',');
   if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
   return Buffer.from(dataUrl.slice(comma + 1), 'base64');
+}
+
+function sha256(bytes: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 function now(): string {
@@ -296,13 +322,15 @@ async function renderReviewMatrix(
   shots: ResolvedShot[],
   outputRoot: string,
   authorizedMutations: ReturnType<typeof listAuthorizedRefinementValueChanges>,
+  temporalEvidence: readonly TemporalShotEvidence[],
 ) {
   const report: {
     ok: boolean;
     generatedAt: string;
-    shots: Array<{ id: string; shotNumber: string; passes: Array<Record<string, unknown>> }>;
+    shots: Array<{ id: string; shotNumber: string; passes: Array<Record<string, unknown>>; temporal: TemporalEvidence }>;
     authorizedMutations: ReturnType<typeof listAuthorizedRefinementValueChanges>;
   } = { ok: true, generatedAt: now(), shots: [], authorizedMutations };
+  const temporalByShot = new Map(temporalEvidence.map((evidence) => [evidence.shotId, evidence.temporal]));
   for (const shot of shots) {
     const passes: Array<Record<string, unknown>> = [];
     for (const pass of REVIEW_PASSES) {
@@ -326,18 +354,26 @@ async function renderReviewMatrix(
         depth: result.depth,
       });
     }
-    report.shots.push({ ...shot, passes });
+    report.shots.push({ ...shot, passes, temporal: temporalByShot.get(shot.id) ?? { renderable: false } });
   }
   const manifestPath = path.join(outputRoot, 'review-manifest.json');
   await writeJson(manifestPath, report);
   return { report, manifestPath };
 }
 
-async function renderTemporalSamples(session: AgentBrowserSession, shots: ResolvedShot[], outputRoot: string) {
-  const samples: Array<Record<string, unknown>> = [];
+async function renderTemporalSamples(
+  session: AgentBrowserSession,
+  shots: ResolvedShot[],
+  outputRoot: string,
+): Promise<TemporalShotEvidence[]> {
+  const samples: TemporalShotEvidence[] = [];
   for (const shot of shots) {
     const timeline = await session.page.evaluate((id) => window.foreScene!.inspectShotTimeline({ id }), shot.id);
-    if (!timeline.renderable) continue;
+    if (!timeline.renderable) {
+      samples.push({ shotId: shot.id, shotNumber: shot.shotNumber, temporal: { renderable: false } });
+      continue;
+    }
+    const temporal: TemporalEvidence = { renderable: true };
     for (const [label, timeSeconds] of [['start', 0], ['mid', timeline.durationSeconds / 2], ['end', timeline.durationSeconds]] as const) {
       const frame = await session.page.evaluate((input) => window.foreScene!.renderShotFrame(input), {
         shotId: shot.id, timeSeconds, appearance: 'clay', peopleVariant: 'with_people', content: 'full_scene',
@@ -345,8 +381,13 @@ async function renderTemporalSamples(session: AgentBrowserSession, shots: Resolv
       if (!frame.ok || !frame.pngDataUrl) throw new Error(`Temporal ${label} render failed for shot ${shot.shotNumber}.`);
       const output = path.join(outputRoot, shot.shotNumber, 'temporal', `${label}.png`);
       await mkdir(path.dirname(output), { recursive: true });
-      await writeFile(output, dataUrlBytes(frame.pngDataUrl));
-      samples.push({ shotId: shot.id, shotNumber: shot.shotNumber, label, timeSeconds, output, source: frame.source });
+      const bytes = dataUrlBytes(frame.pngDataUrl);
+      await writeFile(output, bytes);
+      temporal[label] = {
+        fileName: `temporal/${label}.png`,
+        output,
+        sha256: sha256(bytes),
+      };
     }
     const videoOutput = path.join(outputRoot, shot.shotNumber, 'temporal', 'motion-preview.mp4');
     const downloadPromise = session.page.waitForEvent('download', { timeout: 600_000 }).catch(() => null);
@@ -363,7 +404,14 @@ async function renderTemporalSamples(session: AgentBrowserSession, shots: Resolv
     const download = await downloadPromise;
     if (!download) throw new Error(`Motion video render for shot ${shot.shotNumber} did not produce a download.`);
     await download.saveAs(videoOutput);
-    samples.push({ shotId: shot.id, shotNumber: shot.shotNumber, label: 'motion-video', output: videoOutput, mimeType: video.mimeType, durationSeconds: video.durationSeconds });
+    const videoBytes = await readFile(videoOutput);
+    temporal.video = {
+      fileName: 'temporal/motion-preview.mp4',
+      output: videoOutput,
+      sha256: sha256(videoBytes),
+      durationSeconds: video.durationSeconds ?? timeline.durationSeconds,
+    };
+    samples.push({ shotId: shot.id, shotNumber: shot.shotNumber, temporal });
   }
   return samples;
 }
@@ -374,6 +422,13 @@ async function filesInReviewManifestExist(manifest: unknown): Promise<string[]> 
   for (const shot of (manifest as { shots: Array<{ passes?: Array<{ ok?: boolean; output?: string; fileName?: string }> }> }).shots) {
     for (const pass of shot.passes ?? []) {
       if (pass.ok && pass.output && !await exists(pass.output)) missing.push(pass.output);
+    }
+    const temporal = (shot as { temporal?: { renderable?: boolean; start?: { output?: string }; mid?: { output?: string }; end?: { output?: string }; video?: { output?: string } } }).temporal;
+    if (temporal?.renderable) {
+      for (const key of ['start', 'mid', 'end', 'video'] as const) {
+        const output = temporal[key]?.output;
+        if (output && !await exists(output)) missing.push(output);
+      }
     }
   }
   return missing;
@@ -419,25 +474,25 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   const gate = canFinalizeRefinement(plan, state);
   if (gate.length > 0) throw new Error(gate.join(' '));
   assertPreserved(plan, state, await readProject(session));
-  const visibleProxies = await session.page.evaluate((replacements) => {
+  const visibleProxies = await session.page.evaluate((visibilityTargets) => {
     const api = window.foreScene!;
     const project = api.getProjectDocument();
     const visible: string[] = [];
-    for (const replacement of replacements) {
-      const proxy = project.scene.objects.find((object) => object.id === replacement.proxyObjectId);
-      if (proxy?.visible) visible.push(replacement.proxyObjectId);
+    for (const target of visibilityTargets) {
+      const proxy = project.scene.objects.find((object) => object.id === target.proxyObjectId);
+      if (proxy?.visible) visible.push(target.proxyObjectId);
       for (const shot of project.shots) {
         const document = api.getShotDocument({ id: shot.id });
-        const shotVisible = document.objectOverrides?.[replacement.proxyObjectId]?.visible ?? proxy?.visible ?? false;
-        if (shotVisible) visible.push(`${replacement.proxyObjectId}@${shot.id}`);
+        const shotVisible = document.objectOverrides?.[target.proxyObjectId]?.visible ?? proxy?.visible ?? false;
+        if (shotVisible) visible.push(`${target.proxyObjectId}@${shot.id}`);
         for (const keyframe of document.cameraKeyframes) {
-          const keyframeVisible = keyframe.objectOverrides?.[replacement.proxyObjectId]?.visible ?? proxy?.visible ?? false;
-          if (keyframeVisible) visible.push(`${replacement.proxyObjectId}@${shot.id}:${keyframe.id}`);
+          const keyframeVisible = keyframe.objectOverrides?.[target.proxyObjectId]?.visible ?? proxy?.visible ?? false;
+          if (keyframeVisible) visible.push(`${target.proxyObjectId}@${shot.id}:${keyframe.id}`);
         }
       }
     }
     return [...new Set(visible)];
-  }, state.replacements);
+  }, listRefinementVisibilityTargets(state));
   if (visibleProxies.length > 0) throw new Error(`Visible proxies prevent finalization: ${visibleProxies.join(', ')}`);
 
   await applyDeliverablesProfile(session, plan.deliverablesProfile);
@@ -659,8 +714,14 @@ export async function runRefinementCli(options: RefinementCliOptions): Promise<{
       const currentProject = await readProject(session);
       const authorizedMutations = listAuthorizedRefinementValueChanges(state.preservation, currentProject, plan.allowMutations)
         .filter((change) => batchShotIds.has(change.shotId));
-      const reviews = await renderReviewMatrix(session, shots, path.join(outputRoot, 'reviews', batchId), authorizedMutations);
       const temporal = await renderTemporalSamples(session, shots, path.join(outputRoot, 'reviews', batchId));
+      const reviews = await renderReviewMatrix(
+        session,
+        shots,
+        path.join(outputRoot, 'reviews', batchId),
+        authorizedMutations,
+        temporal,
+      );
       state.batches[batchId]!.reviewManifestPath = reviews.manifestPath;
       state.batches[batchId]!.status = reviews.report.ok ? 'awaiting_visual_review' : 'failed';
       report.reviewManifestPath = reviews.manifestPath;

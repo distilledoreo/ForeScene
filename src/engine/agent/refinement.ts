@@ -228,15 +228,55 @@ export function checkRefinementDeliverables(
 ): string[] {
   const errors: string[] = [];
   for (const shot of exportPlan.shots) {
-    for (const expected of profile.requiredArtifacts) {
-      const artifact = shot.artifacts.find((candidate) => candidate.kind === expected.kind && candidate.variant === expected.variant);
-      if (!artifact || artifact.disposition !== 'produce' || artifact.files.length === 0) {
+    const requiredArtifacts = [...profile.requiredArtifacts];
+    if (shot.renderableCameraMove) {
+      requiredArtifacts.push(
+        { kind: 'clay-camera-move' },
+        { kind: 'projected-camera-move' },
+        { kind: 'depth-camera-move' },
+        { kind: 'clay-reference-frames' },
+        { kind: 'projected-reference-frames' },
+        { kind: 'depth-reference-frames' },
+      );
+      if (shot.hasVisibleCharacters) {
+        const characterPass = shot.resolvedSettings.characterPass;
+        if (characterPass && (characterPass.motionFormat === 'green_mp4'
+          || characterPass.motionFormat === 'both')) {
+          requiredArtifacts.push({ kind: 'character-motion' });
+        }
+        if (characterPass && (characterPass.motionFormat === 'transparent_png_sequence'
+          || characterPass.motionFormat === 'both')) {
+          requiredArtifacts.push({ kind: 'character-sequence' });
+        }
+      }
+    }
+    for (const expected of requiredArtifacts) {
+      const artifact = shot.artifacts.find((candidate) => candidate.kind === expected.kind);
+      const expectedFile = expected.variant ? requiredVariantFile(expected.kind, expected.variant) : undefined;
+      const hasExpectedFile = !expectedFile
+        || Boolean(artifact?.files.some((file) => file.path.endsWith(`/${expectedFile}`)));
+      if (!artifact || artifact.disposition !== 'produce' || artifact.files.length === 0 || !hasExpectedFile) {
         const variant = expected.variant ? ` (${expected.variant})` : '';
         errors.push(`Deliverables profile ${profile.id} omits ${expected.kind}${variant} for shot ${shot.shotId}.`);
       }
     }
   }
   return errors;
+}
+
+function requiredVariantFile(
+  kind: PlannedArtifactKind,
+  variant: 'with_people' | 'clean_plate',
+): string | undefined {
+  const prefix = kind === 'clay-viewport'
+    ? 'viewport_clay'
+    : kind === 'projected-viewport'
+      ? 'viewport_projected'
+      : kind === 'depth-viewport'
+        ? 'viewport_depth'
+        : undefined;
+  if (!prefix) return undefined;
+  return `${prefix}_${variant}.png`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -508,6 +548,16 @@ export function canFinalizeRefinement(plan: RefinementPlan, state: RefinementSta
   return errors;
 }
 
+/** Objects whose effective visibility must be checked before finalization. */
+export function listRefinementVisibilityTargets(
+  state: Pick<RefinementState, 'replacements' | 'assignments'>,
+): Array<{ proxyObjectId: string }> {
+  return [
+    ...state.replacements.map((replacement) => ({ proxyObjectId: replacement.proxyObjectId })),
+    ...(state.assignments ?? []).map((assignment) => ({ proxyObjectId: assignment.placeholderObjectId })),
+  ];
+}
+
 export interface ReviewMatrixCheck {
   ok: boolean;
   errors: string[];
@@ -542,9 +592,6 @@ export function checkSemanticReview(
     for (const key of ['primarySubject', 'correctVariant', 'framing', 'creature', 'proxyAbsent', 'props']) {
       if (verdict[key] !== true) errors.push(`Semantic review must affirm ${key} for shot ${shotId}.`);
     }
-    if (verdict.motionDecision !== 'approved' && verdict.motionDecision !== 'not_applicable') {
-      errors.push(`Semantic review must record a motion decision for shot ${shotId}.`);
-    }
     const hasAuthorizedChanges = Array.isArray(manifest.authorizedMutations)
       && manifest.authorizedMutations.some((change) => isRecord(change) && change.shotId === shotId);
     if (hasAuthorizedChanges && verdict.authorizedMutationDecision !== 'approved') {
@@ -560,11 +607,34 @@ export function checkSemanticReview(
         .map((artifact) => [artifact.fileName as string, artifact.sha256 as string]),
     );
     const manifestShot = manifestByShot.get(shotId);
+    const temporal = manifestShot && isRecord(manifestShot.temporal) ? manifestShot.temporal : undefined;
+    if (!temporal || typeof temporal.renderable !== 'boolean') {
+      errors.push(`Review manifest is missing temporal evidence for shot ${shotId}.`);
+    } else if (temporal.renderable) {
+      if (verdict.motionDecision !== 'approved') {
+        errors.push(`Semantic review must approve motion for renderable shot ${shotId}.`);
+      }
+    } else if (verdict.motionDecision !== 'not_applicable') {
+      errors.push(`Semantic review must mark motion not_applicable for non-renderable shot ${shotId}.`);
+    }
     const passRecords = manifestShot && Array.isArray(manifestShot.passes) ? manifestShot.passes.filter(isRecord) : [];
     for (const pass of passRecords) {
       if (pass.ok !== true || typeof pass.fileName !== 'string' || typeof pass.sha256 !== 'string') continue;
       if (reviewedHashes.get(pass.fileName) !== pass.sha256) {
         errors.push(`Semantic review hash does not match ${pass.fileName} for shot ${shotId}.`);
+      }
+    }
+    if (temporal?.renderable === true) {
+      for (const key of ['start', 'mid', 'end', 'video']) {
+        const artifact = isRecord(temporal[key]) ? temporal[key] : undefined;
+        const fileName = artifact && typeof artifact.fileName === 'string' ? artifact.fileName : undefined;
+        const output = artifact && typeof artifact.output === 'string' ? artifact.output : undefined;
+        const sha256 = artifact && typeof artifact.sha256 === 'string' ? artifact.sha256 : undefined;
+        const reviewedHash = (fileName && reviewedHashes.get(fileName))
+          ?? (output && reviewedHashes.get(output));
+        if (!fileName || !output || !sha256 || reviewedHash !== sha256) {
+          errors.push(`Semantic review hash does not match temporal ${key} evidence for shot ${shotId}.`);
+        }
       }
     }
   }
@@ -598,6 +668,23 @@ export function checkReviewMatrix(manifest: unknown, expectedShotIds: readonly s
     );
     for (const fileName of REQUIRED_REVIEW_FILES) {
       if (!rendered.has(fileName)) errors.push(`Review matrix is missing ${fileName} for shot ${id}.`);
+    }
+    const temporal = isRecord(shot.temporal) ? shot.temporal : undefined;
+    if (!temporal || typeof temporal.renderable !== 'boolean') {
+      errors.push(`Review matrix is missing temporal evidence for shot ${id}.`);
+    } else if (temporal.renderable) {
+      for (const key of ['start', 'mid', 'end', 'video']) {
+        const artifact = isRecord(temporal[key]) ? temporal[key] : undefined;
+        if (!artifact
+          || typeof artifact.fileName !== 'string'
+          || typeof artifact.output !== 'string'
+          || typeof artifact.sha256 !== 'string') {
+          errors.push(`Review matrix is missing temporal ${key} evidence for shot ${id}.`);
+        }
+        if (key === 'video' && (!artifact || typeof artifact.durationSeconds !== 'number' || artifact.durationSeconds <= 0)) {
+          errors.push(`Review matrix is missing temporal video duration for shot ${id}.`);
+        }
+      }
     }
   }
   return { ok: errors.length === 0, errors };

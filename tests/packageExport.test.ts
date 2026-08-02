@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
-import { createDefaultProject, createPanoAsset, createPanoReference, createSceneObject } from '../src/domain/defaults';
+import {
+  createDefaultProject,
+  createPanoAsset,
+  createPanoReference,
+  createSceneObject,
+  defaultCharacterPassExportSettings,
+} from '../src/domain/defaults';
 import { getShotPackageBaseName } from '../src/engine/exportNaming';
 import { setTwoPointCameraKeyframe } from '../src/engine/cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES, type CameraMoveCubemapFaceId } from '../src/engine/cameraMoveCubemap';
@@ -27,6 +33,7 @@ import {
   renderPanoCubemapFacesAsBlobs,
   renderPanoPerspectiveCrop,
   renderShotCameraMoveMp4,
+  renderShotCharacterFrame,
 } from '../src/engine/renderers';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 
@@ -37,6 +44,7 @@ vi.mock('../src/engine/renderers', async (importOriginal) => {
     renderShotCameraMoveMp4: vi.fn(actual.renderShotCameraMoveMp4),
     renderPanoCubemapFacesAsBlobs: vi.fn(actual.renderPanoCubemapFacesAsBlobs),
     renderPanoPerspectiveCrop: vi.fn(actual.renderPanoPerspectiveCrop),
+    renderShotCharacterFrame: vi.fn(actual.renderShotCharacterFrame),
   };
 });
 
@@ -105,7 +113,34 @@ describe('package export', () => {
     });
     vi.mocked(renderPanoCubemapFacesAsBlobs).mockReset();
     vi.mocked(renderPanoPerspectiveCrop).mockReset();
+    vi.mocked(renderShotCharacterFrame).mockReset();
     vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockReset();
+  });
+
+  it('packs a transparent character still when the enabled pass has no visible cast', async () => {
+    const project = withGrayboxAndShot();
+    project.scene.objects = project.scene.objects.filter((object) => object.type !== 'human_dummy');
+    const shot = project.shots[0]!;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeProjectedViewport: false,
+      characterPass: {
+        ...defaultCharacterPassExportSettings,
+        enabled: true,
+        includeStill: true,
+        includeMotion: false,
+      },
+    };
+    vi.mocked(renderShotCharacterFrame).mockResolvedValue({
+      blob: new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' }),
+      width: shot.exportSettings.width,
+      height: shot.exportSettings.height,
+    });
+
+    const result = await buildShotPackage(project, shot);
+    const paths = await zipPaths(result.blob);
+    expect(paths.some((path) => path.endsWith('/inputs/characters/viewport_clay_characters.png'))).toBe(true);
+    expect(renderShotCharacterFrame).toHaveBeenCalledTimes(1);
   });
 
   it('generates camera move MP4 during packaging when keyframes exist without a pre-exported asset', () => {

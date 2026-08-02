@@ -122,6 +122,10 @@ export interface PlannedShotExport {
   shotId: string;
   rootFolder: string;
   resolvedSettings: ShotExportSettings;
+  /** True when the shot has at least two ordered camera keyframes. */
+  renderableCameraMove?: boolean;
+  /** True when the character pass contains at least one visible character. */
+  hasVisibleCharacters?: boolean;
   hasOverrides: boolean;
   artifacts: PlannedArtifact[];
   workUnits: number;
@@ -227,7 +231,7 @@ function planShotArtifacts(
   shot: Shot,
   rootFolder: string,
   settings: ShotExportSettings,
-): { artifacts: PlannedArtifact[]; issues: ExportPlanIssue[] } {
+): { artifacts: PlannedArtifact[]; issues: ExportPlanIssue[]; hasVisibleCharacters: boolean } {
   const artifacts: PlannedArtifact[] = [];
   const issues: ExportPlanIssue[] = [];
 
@@ -601,15 +605,31 @@ function planShotArtifacts(
   }
 
   const characterPass = normalizeCharacterPassExportSettings(settings.characterPass);
+  const hasCharacters = characterPass.enabled
+    && shotHasVisibleCharactersForPass(project, shot, characterPass);
   if (characterPass.enabled) {
-    const hasCharacters = shotHasVisibleCharactersForPass(project, shot, characterPass);
     if (!hasCharacters) {
-      artifacts.push(omitArtifact(shot.id, 'character-still', 'no-visible-characters'));
+      if (characterPass.includeStill) {
+        const files: PlannedFile[] = [
+          { path: characterStillPath(rootFolder, 'clay'), kind: 'image', required: true, manifestEntry: true },
+        ];
+        let units = 1;
+        if (settings.includeProjectedViewport && canProject) {
+          files.push({
+            path: characterStillPath(rootFolder, 'projected'),
+            kind: 'image',
+            required: false,
+            manifestEntry: true,
+          });
+          units += 1;
+        }
+        artifacts.push(produceArtifact(shot.id, 'character-still', files, units));
+      }
       issues.push({
         id: `${shot.id}-character-pass-empty`,
         code: 'character-pass-empty',
         severity: 'warning',
-        message: 'Character export is enabled, but this shot has no visible characters. Character outputs will be omitted.',
+        message: 'Character export is enabled, but this shot has no visible characters. Character still outputs will be transparent.',
         shotId: shot.id,
       });
     } else {
@@ -721,7 +741,7 @@ function planShotArtifacts(
     });
   }
 
-  return { artifacts, issues };
+  return { artifacts, issues, hasVisibleCharacters: hasCharacters };
 }
 
 function inferPackageType(shotCount: number, projectShotCount: number): ExportPackageType {
@@ -852,7 +872,7 @@ export function createExportPlan(
       ...shot,
       exportSettings: settingsForPlan,
     };
-    const { artifacts, issues: shotIssues } = planShotArtifacts(
+    const { artifacts, issues: shotIssues, hasVisibleCharacters } = planShotArtifacts(
       project,
       planningShot,
       rootFolder,
@@ -880,6 +900,8 @@ export function createExportPlan(
       shotId: shot.id,
       rootFolder,
       resolvedSettings: settingsForPlan,
+      renderableCameraMove: hasRenderableCameraMove(planningShot.cameraKeyframes),
+      hasVisibleCharacters,
       hasOverrides: shotHasExportOverrides(shot),
       artifacts,
       workUnits: adjustedWorkUnits,

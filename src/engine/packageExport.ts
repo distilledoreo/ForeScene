@@ -853,11 +853,9 @@ async function appendShotPackageToZip(
   }
 
   const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);
-  if (
-    characterPass.enabled
-    && shotHasVisibleCharactersForPass(project, shot, characterPass)
-  ) {
+  if (characterPass.enabled) {
     const canProjectCharacters = canUseProjectedAppearance(shotProject);
+    const hasVisibleCharacters = shotHasVisibleCharactersForPass(project, shot, characterPass);
 
     if (characterPass.includeStill) {
       const stillAppearances: Array<'clay' | 'projected'> = ['clay'];
@@ -891,6 +889,7 @@ async function appendShotPackageToZip(
 
     if (
       characterPass.includeMotion
+      && hasVisibleCharacters
       && hasRenderableCameraMove(shot.cameraKeyframes)
     ) {
       const motionAppearances: Array<'clay' | 'projected'> = ['clay'];
@@ -976,7 +975,7 @@ async function appendShotPackageToZip(
       }
     }
 
-    if (shot.exportSettings.includeMetadata) {
+    if (shot.exportSettings.includeMetadata && hasVisibleCharacters) {
       throwIfAborted(signal);
       emit('packaging', 'Writing character pass metadata…');
       zip.file(

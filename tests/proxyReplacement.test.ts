@@ -217,6 +217,26 @@ describe('proxy replacement planning', () => {
     expect(empty).toEqual({ ok: false, errors: ['Proxy "Spider proxy" is not staged or animated in any shot.'] });
   });
 
+  it('rejects incomplete intended occurrence lists before globally hiding a proxy', () => {
+    const { project, proxy, replacement, shot } = replacementProject();
+    const omitted = structuredClone(shot);
+    omitted.id = 'shot_omitted';
+    omitted.shotNumber = '09';
+    project.shots.push(omitted);
+
+    expect(createProxyReplacementPlan({
+      project,
+      shotDocuments: project.shots.map((item) => structuredClone(item)),
+      proxyObjectId: proxy.id,
+      replacementObjectId: replacement.id,
+      requestedShotIds: [shot.id],
+      intendedShotIds: [shot.id],
+    })).toEqual({
+      ok: false,
+      errors: ['Intended shots omit existing proxy staging in: 09.'],
+    });
+  });
+
   it('supports a proxy that appears only in its animated keyframes', () => {
     const { project, proxy, replacement, shot } = replacementProject();
     shot.objectOverrides = undefined;

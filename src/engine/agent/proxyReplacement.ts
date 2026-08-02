@@ -122,6 +122,13 @@ export function createProxyReplacementPlan(
       errors: [`Intended shots do not stage the proxy: ${intendedWithoutProxy.map((shot) => shot.shotNumber).join(', ')}.`],
     };
   }
+  const omittedActualOccurrences = allAffected.filter((shot) => !intendedIds.has(shot.id));
+  if (omittedActualOccurrences.length > 0) {
+    return {
+      ok: false,
+      errors: [`Intended shots omit existing proxy staging in: ${omittedActualOccurrences.map((shot) => shot.shotNumber).join(', ')}.`],
+    };
+  }
   const selectedOutsideIntended = selected.shots.filter((shot) => !intendedIds.has(shot.id));
   if (selectedOutsideIntended.length > 0) {
     return {

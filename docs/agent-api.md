@@ -143,6 +143,28 @@ This writes six deterministic files per shot — clay with characters, clay clea
 plate, projected with characters, projected clean plate, characters only, and
 depth — plus `review-manifest.json`. The manifest records each renderer source,
 pixel/depth inspection data, and a SHA-256 for comparison before packaging.
+`agent:refine` adds a `temporal` record for every renderable camera move to
+that same manifest:
+
+```json
+{
+  "temporal": {
+    "renderable": true,
+    "start": { "output": "temporal/start.png", "sha256": "sha256:..." },
+    "mid": { "output": "temporal/mid.png", "sha256": "sha256:..." },
+    "end": { "output": "temporal/end.png", "sha256": "sha256:..." },
+    "video": {
+      "output": "temporal/motion-preview.mp4",
+      "sha256": "sha256:...",
+      "durationSeconds": 3
+    }
+  }
+}
+```
+
+Semantic approval must approve renderable motion and provide matching hashes
+for all four temporal artifacts. A non-renderable shot must explicitly use
+`motionDecision: "not_applicable"`.
 
 ## Existing-project refinement
 
@@ -198,7 +220,11 @@ of every reviewed pass. Allowed camera or timeline changes are recorded in the
 review manifest and require an explicit `authorizedMutationDecision: "approved"`
 for the affected shot. Finalization applies `deliverablesProfile`
 (`ai-control-full`) before creating the export plan, then rejects missing
-required clay, projected, clean-plate, cast, or depth artifacts. `--profile`
+required clay, projected, clean-plate, cast, depth, or renderable-motion
+artifacts. The planner emits one artifact per viewport pass containing both
+people variants, and finalization validates those filenames inside the shared
+artifact. Character still output is also produced as a transparent image for a
+cast-free shot, keeping the package pass matrix predictable. `--profile`
 selects only the persistent Playwright browser directory, never a deliverables
 profile. Use `--retry batch-id` to restore a failed batch's starting revision
 and run it again, or `--rollback batch-id` to restore without rerunning.
