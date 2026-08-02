@@ -1,5 +1,5 @@
 import React from 'react';
-import { RotateCcw, Sparkles } from 'lucide-react';
+import { LoaderCircle, RotateCcw, Sparkles } from 'lucide-react';
 import type { SampleProjectDefinition } from '../../engine/sampleProjects';
 
 export interface SampleProjectCardProps {
@@ -10,6 +10,8 @@ export interface SampleProjectCardProps {
   isActiveSample?: boolean;
   /** Disable open/reset while project lifecycle is still preparing. */
   disabled?: boolean;
+  /** Show progress while the sample activation promise is running. */
+  loading?: boolean;
 }
 
 /**
@@ -21,6 +23,7 @@ export function SampleProjectCard({
   onReset,
   isActiveSample = false,
   disabled = false,
+  loading = false,
 }: SampleProjectCardProps) {
   return (
     <div
@@ -47,7 +50,7 @@ export function SampleProjectCard({
           <button
             type="button"
             onClick={onReset}
-            disabled={disabled}
+            disabled={disabled || loading}
             className="inline-flex items-center gap-1.5 rounded-xl border border-subtle bg-surface-raised px-3 py-2 text-xs font-semibold text-primary transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
             data-sample-reset
           >
@@ -58,12 +61,13 @@ export function SampleProjectCard({
           <button
             type="button"
             onClick={onOpen}
-            disabled={disabled}
+            disabled={disabled || loading}
+            aria-busy={loading}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
             data-sample-open
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            Open sample
+            {loading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {loading ? 'Opening sample…' : 'Open sample'}
           </button>
         )}
       </div>

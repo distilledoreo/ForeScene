@@ -26,6 +26,36 @@ async function expectProjectName(page: Page, pattern: RegExp) {
   });
 }
 
+async function expectLauncherReadyForSample(page: Page) {
+  const launcher = page.locator('[data-project-launcher]');
+  const openSample = page.locator('[data-sample-open]');
+  const saveStatus = page.locator('[data-project-save-status]');
+
+  await expect(saveStatus).toHaveAttribute(
+    'data-project-save-status',
+    'saved',
+    { timeout: 30_000 },
+  );
+  await expect(launcher).toHaveAttribute(
+    'data-project-lifecycle-ready',
+    'true',
+  );
+  await expect(openSample).toBeEnabled();
+  return openSample;
+}
+
+/** Wait for activation through the product's Agent API and report persistence failures. */
+async function expectDialogueDemoActive(page: Page) {
+  await expect.poll(async () => page.evaluate(() => {
+    const failure = document.querySelector('[data-sample-load-error]')?.textContent?.trim();
+    if (failure) return `Sample activation failed: ${failure}`;
+    return window.foreScene?.getStatus().projectName ?? 'Agent API is not ready';
+  }), {
+    timeout: 30_000,
+    message: 'Expected the Agent API to report Dialogue Demo before hiding the launcher.',
+  }).toBe('Dialogue Demo');
+}
+
 async function expectRetainedContactSheetResolves(page: Page) {
   await expect.poll(async () => page.evaluate(async () => {
     const open = (name: string) => new Promise<IDBDatabase>((resolve, reject) => {
@@ -89,10 +119,14 @@ test.describe('@smoke first-project launcher', () => {
   test('opens Dialogue Demo sample and reaches Reference + Export', async ({ page }) => {
     await enterStudioExpectingLauncher(page);
 
-    // Wait for persistence readiness — sample open is disabled until lifecycle is ready.
-    const openSample = page.locator('[data-sample-open]');
-    await expect(openSample).toBeEnabled({ timeout: 30_000 });
+    // Readiness must imply a verified initial local revision, not just a live
+    // controller whose scheduled startup save has not run yet.
+    const openSample = await expectLauncherReadyForSample(page);
     await openSample.click();
+    // Prove the click dispatched the launcher action before waiting for the
+    // resulting project state.
+    await expect(page.locator('[data-sample-loading]')).toBeVisible({ timeout: 5_000 });
+    await expectDialogueDemoActive(page);
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await expect(page.locator('[data-project-import-status="success"]')).toBeVisible({ timeout: 15_000 }).catch(() => undefined);
     await expect(page.locator('[data-project-save-status]')).toHaveAttribute('data-project-save-status', 'saved', { timeout: 30_000 });
@@ -154,9 +188,10 @@ test.describe('@smoke first-project launcher', () => {
 
   test('reset sample restores baseline after edits', async ({ page }) => {
     await enterStudioExpectingLauncher(page);
-    const openSample = page.locator('[data-sample-open]');
-    await expect(openSample).toBeEnabled({ timeout: 30_000 });
+    const openSample = await expectLauncherReadyForSample(page);
     await openSample.click();
+    await expect(page.locator('[data-sample-loading]')).toBeVisible({ timeout: 5_000 });
+    await expectDialogueDemoActive(page);
     await expect(page.locator('[data-project-launcher]')).toBeHidden({ timeout: 30_000 });
     await dismissOverlays(page);
     await expectProjectName(page, /Dialogue Demo/i);
