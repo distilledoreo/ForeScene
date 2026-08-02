@@ -11,6 +11,7 @@ import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useProjectStore } from '../src/state/useProjectStore';
 import { preservedRigGlb } from './fixtures/preservedRigGlb';
 import { savedRigFsrig } from './fixtures/savedRigFsrig';
+import { unriggedHumanoidGlb } from './fixtures/unriggedHumanoidGlb';
 
 describe('agent character import busy protection', () => {
   beforeEach(() => {
@@ -56,6 +57,18 @@ describe('agent character import busy protection', () => {
     expect(analysis.sourceVertexCount).toBe(6);
     expect(analysis.packageVertexCount).toBe(6);
     expect(analysis.diagnostics).toEqual([]);
+  });
+
+  it('recognizes an unrigged humanoid source so the saved package supplies the rig', async () => {
+    const analysis = await analyzeCharacterImport({
+      file: new File([unriggedHumanoidGlb()], 'unrigged-humanoid.glb', { type: 'model/gltf-binary' }),
+      mode: 'auto',
+    });
+
+    expect(analysis.hasSkeleton).toBe(false);
+    expect(analysis.hasSkinning).toBe(false);
+    expect(analysis.boneCount).toBe(0);
+    expect(analysis.skinnedMeshCount).toBe(0);
   });
 
   it('returns an actionable diagnostic for a corrupt saved-rig package', async () => {

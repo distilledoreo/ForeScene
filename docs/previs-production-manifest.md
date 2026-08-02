@@ -78,6 +78,9 @@ import path used by the Build tray, with package assets cleaned up on failure.
 Changing either file or the import options changes the cast fingerprint. Resume
 reuses a cast mapping only when that fingerprint still matches; otherwise run
 with `--update-manifest --reset-project` to rebuild the cast-dependent scene.
+Heavy or extreme character imports are refused unless the run explicitly opts
+in with `--allow-heavy-character-imports`; the flag supplies the same non-empty
+consent token used by the direct Agent import API.
 
 Shots may include optional temporal authoring. It is compiled into the same
 Agent timeline commands used by direct automation, so it participates in plan
@@ -161,6 +164,9 @@ npm run agent:previs -- \
   --reset-project \
   --output artifacts/previs
 ```
+
+Add `--allow-heavy-character-imports` when the manifest intentionally includes
+a character above the standard memory tier.
 
 Safety:
 

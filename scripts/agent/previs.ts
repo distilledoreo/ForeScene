@@ -69,6 +69,8 @@ export interface PrevisCliOptions {
   outputDir: string;
   skipPackage?: boolean;
   profileDir?: string;
+  /** Explicitly authorize heavy/extreme character imports for this run. */
+  allowHeavyCharacterImports?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -406,6 +408,7 @@ async function importManifestCharacter(
     entityKey: string;
     character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>;
   },
+  consentToken?: string,
 ) {
   const sourcePath = manifestCharacterSourcePath(manifestPath, entry.character.source);
   await page.locator('[data-agent-character-import-input]').setInputFiles(sourcePath);
@@ -438,12 +441,14 @@ async function importManifestCharacter(
       analysisId: analysis.analysisId,
       mode,
       name: input.name,
+      consentToken: input.consentToken,
     });
     return { analysis, result };
   }, {
     name: entry.character.name,
     height: entry.character.height,
     rigMode: entry.character.rigMode,
+    consentToken,
   });
   return { sourcePath, result };
 }
@@ -462,11 +467,17 @@ async function analyzeManifestSavedRigCharacter(
     const sourceFile = sourceInput?.files?.[0];
     const rigPackageFile = rigInput?.files?.[0];
     if (!sourceFile || !rigPackageFile) throw new Error('Saved-rig files were not staged in the browser.');
-    return window.foreScene!.analyzeSavedRigCharacter({
+    const sourceAnalysis = await window.foreScene!.analyzeCharacterImport({
+      file: sourceFile,
+      mode: 'auto',
+      ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
+    });
+    const compatibility = await window.foreScene!.analyzeSavedRigCharacter({
       sourceFile,
       rigPackageFile,
       ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
     });
+    return { ...compatibility, sourceImportRequiresConsent: sourceAnalysis.requiresConsent };
   }, { height: character.height });
 }
 
@@ -474,6 +485,7 @@ async function importManifestSavedRigCharacter(
   page: Page,
   asset: ResolvedManifestCharacterAsset,
   character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>,
+  consentToken?: string,
 ) {
   if (!asset.rigPackagePath) throw new Error(`No rig package was resolved for saved-rig character "${character.id}".`);
   await page.locator('[data-agent-character-import-input]').setInputFiles(asset.sourcePath);
@@ -488,9 +500,10 @@ async function importManifestSavedRigCharacter(
       sourceFile,
       rigPackageFile,
       name: input.name,
+      consentToken: input.consentToken,
       ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
     });
-  }, { name: character.name, height: character.height });
+  }, { name: character.name, height: character.height, consentToken });
 }
 
 async function resetProjectOnPage(
@@ -568,6 +581,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   }
 
   const manifest = parsed.manifest;
+  const consentToken = options.allowHeavyCharacterImports
+    ? 'agent:previs:allow-heavy-character-imports'
+    : undefined;
   const manifestHash = hashPrevisManifest(manifest);
   const importedCharacterCount = manifest.cast.filter((character) => character.type === 'imported_character').length;
   const characterAssets: ResolvedManifestCharacterAsset[] = [];
@@ -722,15 +738,23 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       if (!asset?.rigPackagePath) continue;
       try {
         const analysis = await analyzeManifestSavedRigCharacter(session.page, asset, character);
+        const diagnostics = [...analysis.diagnostics];
+        if (analysis.sourceImportRequiresConsent && !consentToken) {
+          diagnostics.push({
+            code: 'invalid_argument',
+            message: 'This character import requires explicit consent because it exceeds the standard memory tier.',
+            severity: 'error',
+          });
+        }
         savedRigPreflight.push({
           id: character.id,
           source: character.source,
           rigPackage: character.rigPackage!,
           sourceSha256: asset.sourceSha256,
           ...(asset.rigPackageSha256 ? { rigPackageSha256: asset.rigPackageSha256 } : {}),
-          ok: analysis.ok,
+          ok: analysis.ok && diagnostics.length === 0,
           analysis,
-          diagnostics: analysis.diagnostics,
+          diagnostics,
         });
       } catch (error) {
         savedRigPreflight.push({
@@ -962,8 +986,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
         const savedRig = entry.character.rigMode === 'saved-rig';
         const result = savedRig && asset?.rigPackagePath
-          ? await importManifestSavedRigCharacter(session.page, asset, entry.character)
-          : (await importManifestCharacter(session.page, options.manifestPath, entry)).result.result;
+          ? await importManifestSavedRigCharacter(session.page, asset, entry.character, consentToken)
+          : (await importManifestCharacter(session.page, options.manifestPath, entry, consentToken)).result.result;
         const analysis = savedRig
           ? savedRigPreflight.find((item) => item.id === entry.character.id)?.analysis
           : undefined;

@@ -41,7 +41,9 @@ data, topology, vertex count, and preserved source skeleton where available.
 Any mismatch fails the cast phase before reset and writes the diagnostics to
 `logs/saved-rig-preflight.json`. A successful import records the source/package
 hashes, `appliedSavedRig`, and `topologyVerified` in `logs/scene-cast.json` and
-`run-state.json`.
+`run-state.json`. Heavy or extreme saved-rig imports require the explicit
+`agent:previs --allow-heavy-character-imports` opt-in; without it they stop
+before reset with the same consent diagnostic as direct Agent imports.
 
 ## Analyze and import
 

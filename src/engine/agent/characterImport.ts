@@ -208,6 +208,7 @@ export async function analyzeSavedRigCharacter(input: {
       sourceFile: input.sourceFile,
       rigPackageFile: input.rigPackageFile,
       approximateHeightMeters: input.approximateHeightMeters,
+      signal: controller.signal,
     });
     if (result.diagnostics.length > 0) {
       setProgress({ active: true, phase: 'validating', message: 'Saved rig compatibility failed.' });
@@ -225,6 +226,7 @@ export async function importSavedRigCharacter(input: {
   rigPackageFile: File;
   name: string;
   approximateHeightMeters?: number;
+  consentToken?: string;
 }): Promise<AgentCharacterImportResult> {
   const projectState = useProjectStore.getState();
   if (!projectState.project?.id) {
@@ -255,11 +257,18 @@ export async function importSavedRigCharacter(input: {
     if (budget.tier === 'reject') {
       throw new Error(`Character import exceeds the device-aware safety budget: ${budget.exceeded.join(', ')}.`);
     }
+    if (input.consentToken !== undefined && input.consentToken.length === 0) {
+      throw new Error('consentToken must not be empty.');
+    }
+    if ((budget.tier === 'heavy' || budget.tier === 'extreme') && !input.consentToken) {
+      throw new Error('This character import requires explicit consent because it exceeds the standard memory tier.');
+    }
     setProgress({ active: true, phase: 'validating', message: 'Validating saved rig compatibility…' });
     const analysis = await analyzeSavedRigCompatibility({
       sourceFile: input.sourceFile,
       rigPackageFile: input.rigPackageFile,
       approximateHeightMeters: input.approximateHeightMeters,
+      signal: controller.signal,
     });
     if (!analysis.ok) {
       throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
@@ -355,7 +364,7 @@ export async function importCharacter(input: AgentCharacterImportCommitInput): P
   if (useProjectSafetyStore.getState().criticalWrite) {
     return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is busy.')] };
   }
-  if (input.consentToken && input.consentToken.length === 0) {
+  if (input.consentToken !== undefined && input.consentToken.length === 0) {
     return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'consentToken must not be empty.', { path: 'consentToken' })] };
   }
   if ((budget.tier === 'heavy' || budget.tier === 'extreme') && !input.consentToken) {

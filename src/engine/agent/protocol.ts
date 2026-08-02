@@ -724,6 +724,7 @@ export interface AgentSavedRigCharacterInput {
 }
 
 export interface AgentSavedRigCharacterImportInput extends AgentSavedRigCharacterInput {
+  consentToken?: string;
   name: string;
 }
 

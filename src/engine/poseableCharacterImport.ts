@@ -625,6 +625,7 @@ export async function analyzeSavedRigCompatibility(params: {
   sourceFile: File;
   rigPackageFile: File;
   approximateHeightMeters?: number;
+  signal?: AbortSignal;
 }): Promise<SavedRigCompatibilityAnalysis> {
   const diagnostics: CharacterImportDiagnostic[] = [];
   const warnings: string[] = [];
@@ -634,9 +635,13 @@ export async function analyzeSavedRigCompatibility(params: {
   let characterName: string | undefined;
 
   try {
-    packageData = await parsePoseableRigPackageFile(params.rigPackageFile, { persistAssets: false });
+    packageData = await parsePoseableRigPackageFile(params.rigPackageFile, {
+      signal: params.signal,
+      persistAssets: false,
+    });
     characterName = packageData.manifest.characterName;
   } catch (error) {
+    if (params.signal?.aborted) throw error;
     diagnostics.push(compatibilityDiagnostic(
       'corrupt_rig_package',
       error instanceof Error ? error.message : 'Rig package could not be parsed.',
@@ -645,10 +650,11 @@ export async function analyzeSavedRigCompatibility(params: {
 
   let sourceAnalysis: RiggedCharacterImportAnalysis | undefined;
   try {
-    sourceAnalysis = await analyzeRiggedCharacterImport({ file: params.sourceFile });
+    sourceAnalysis = await analyzeRiggedCharacterImport({ file: params.sourceFile, signal: params.signal });
     sourceVertexCount = countMeshVertices(sourceAnalysis.source.root);
     warnings.push(...sourceAnalysis.warnings);
   } catch (error) {
+    if (params.signal?.aborted) throw error;
     diagnostics.push(compatibilityDiagnostic(
       'invalid_character_source',
       error instanceof Error ? error.message : 'Character source could not be parsed.',
@@ -747,6 +753,7 @@ export async function importPoseableCharacterWithSavedRig(
       sourceFile: options.sourceFile,
       rigPackageFile: options.rigPackageFile,
       approximateHeightMeters,
+      signal: options.signal,
     });
     if (!analysis.ok) {
       throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
