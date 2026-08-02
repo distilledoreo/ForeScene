@@ -25,6 +25,7 @@ import {
   buildRepairPlan,
   buildShotCompositionTelemetry,
   compileProduction,
+  compileCastPhaseWithPersistedEntities,
   compileShotList,
   contactSheetHtml,
   createInitialRunState,
@@ -77,6 +78,7 @@ export interface PrevisCliResult {
   runStatePath?: string;
   shotsRequested?: number;
   shotsCreated?: number;
+  importedCharacters?: number;
   framesRendered?: number;
   controlVideosRendered?: number;
   controlVideosFailed?: number;
@@ -350,6 +352,57 @@ async function applyPlanOnPage(page: Page, plan: unknown) {
   return page.evaluate(async (planJson) => window.foreScene!.applyPlan(planJson), plan);
 }
 
+function manifestCharacterSourcePath(manifestPath: string, source: string): string {
+  return path.resolve(path.dirname(path.resolve(manifestPath)), source);
+}
+
+async function importManifestCharacter(
+  page: Page,
+  manifestPath: string,
+  entry: {
+    entityKey: string;
+    character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>;
+  },
+) {
+  const sourcePath = manifestCharacterSourcePath(manifestPath, entry.character.source);
+  await page.locator('[data-agent-character-import-input]').setInputFiles(sourcePath);
+  const result = await page.evaluate(async (input) => {
+    const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
+    const file = fileInput?.files?.[0];
+    if (!file) throw new Error('Character file was not staged in the browser.');
+
+    const requestedMode = input.rigMode === 'preserve-existing'
+      ? 'preserveExistingRig'
+      : input.rigMode;
+    const analysis = await window.foreScene!.analyzeCharacterImport({
+      file,
+      mode: requestedMode,
+      ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
+    });
+    const mode = input.rigMode === 'preserve-existing'
+      ? 'preserveExistingRig'
+      : input.rigMode === 'autorig'
+        ? 'autorig'
+        : analysis.hasSkeleton
+          && analysis.hasSkinning
+          && analysis.requiredMissing.length === 0
+          && (analysis.mappingConfidence ?? 0) >= 0.7
+          ? 'preserveExistingRig'
+          : 'autorig';
+    const result = await window.foreScene!.importCharacter({
+      analysisId: analysis.analysisId,
+      mode,
+      name: input.name,
+    });
+    return { analysis, result };
+  }, {
+    name: entry.character.name,
+    height: entry.character.height,
+    rigMode: entry.character.rigMode,
+  });
+  return { sourcePath, result };
+}
+
 async function resetProjectOnPage(
   page: Page,
   input: {
@@ -426,6 +479,28 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
   const manifest = parsed.manifest;
   const manifestHash = hashPrevisManifest(manifest);
+  const importedCharacterCount = manifest.cast.filter((character) => character.type === 'imported_character').length;
+
+  for (const character of manifest.cast) {
+    if (character.type !== 'imported_character') continue;
+    const sourcePath = manifestCharacterSourcePath(options.manifestPath, character.source);
+    try {
+      const info = await stat(sourcePath);
+      if (!info.isFile()) throw new Error('source is not a file');
+    } catch {
+      return {
+        ok: false,
+        phase: 'validate',
+        diagnostics: [{
+          code: 'missing_imported_character_source',
+          path: `cast[id=${character.id}].source`,
+          message: `Imported character source was not found: ${sourcePath}`,
+          severity: 'error',
+        }],
+        error: 'Manifest validation failed.',
+      };
+    }
+  }
 
   const loaded = await loadOrCreateRunState({
     outputDir,
@@ -613,32 +688,102 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       state = setPhase(state, 'locations', 'complete');
     }
 
-    if (state.phases.cast !== 'complete' && compiled.cast.plan.commands.length > 0) {
+    if (state.phases.cast !== 'complete') {
+      const castCompilation = compileCastPhaseWithPersistedEntities(
+        manifest,
+        compiled.context,
+        state.entities,
+      );
       state = setPhase(state, 'cast', 'in_progress');
-      const applied = await applyPlanOnPage(session.page, compiled.cast.plan);
-      await writeJson(path.join(outputDir, 'logs', 'scene-cast.json'), applied);
-      if (!applied.ok) {
-        state = setPhase(state, 'cast', 'failed');
-        await writeJson(runStatePath, state);
-        return {
-          ok: false,
-          phase: 'cast',
-          projectId: state.projectId,
-          manifestHash,
-          runStatePath,
-          diagnostics: applied.diagnostics,
-          error: 'Cast apply failed.',
-        };
-      }
-      for (const [key, mapping] of Object.entries(compiled.context.entities)) {
-        if (key.startsWith('cast.')) {
-          state = upsertEntity(state, key, resolveMappingIds(mapping, applied.summary?.createdRefs));
+      let applied: Awaited<ReturnType<typeof applyPlanOnPage>> | undefined;
+      if (castCompilation.plan.commands.length > 0) {
+        applied = await applyPlanOnPage(session.page, castCompilation.plan);
+        if (!applied.ok) {
+          state = setPhase(state, 'cast', 'failed');
+          await writeJson(path.join(outputDir, 'logs', 'scene-cast.json'), {
+            applied,
+            importedCharacters: [],
+          });
+          await writeJson(runStatePath, state);
+          return {
+            ok: false,
+            phase: 'cast',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: applied.diagnostics,
+            error: 'Cast apply failed.',
+          };
+        }
+        for (const [key, mapping] of Object.entries(castCompilation.context.entities)) {
+          if (key.startsWith('cast.') && mapping.objectId) {
+            state = upsertEntity(state, key, resolveMappingIds(mapping, applied.summary?.createdRefs));
+          }
         }
       }
+
+      const importedResults: Array<{
+        id: string;
+        source: string;
+        ok: boolean;
+        analysis?: unknown;
+        objectId?: string;
+        reused?: boolean;
+        warnings?: string[];
+        diagnostics?: unknown[];
+      }> = [];
+      for (const entry of castCompilation.importedCharacters ?? []) {
+        const existingObjectId = state.entities[entry.entityKey]?.objectId;
+        if (existingObjectId) {
+          importedResults.push({
+            id: entry.character.id,
+            source: entry.character.source,
+            ok: true,
+            objectId: existingObjectId,
+            reused: true,
+          });
+          continue;
+        }
+        const imported = await importManifestCharacter(session.page, options.manifestPath, entry);
+        const { analysis, result } = imported.result;
+        importedResults.push({
+          id: entry.character.id,
+          source: entry.character.source,
+          ok: result.ok,
+          analysis,
+          ...(result.objectId ? { objectId: result.objectId } : {}),
+          warnings: result.warnings,
+          diagnostics: result.diagnostics,
+        });
+        if (!result.ok || !result.objectId) {
+          state = setPhase(state, 'cast', 'failed');
+          await writeJson(path.join(outputDir, 'logs', 'scene-cast.json'), {
+            applied,
+            importedCharacters: importedResults,
+          });
+          await writeJson(runStatePath, state);
+          return {
+            ok: false,
+            phase: 'cast',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: result.diagnostics,
+            error: `Imported character "${entry.character.id}" failed.`,
+          };
+        }
+        state = upsertEntity(state, entry.entityKey, {
+          objectId: result.objectId,
+          refs: { [result.objectId]: result.objectId },
+        });
+      }
+
+      await writeJson(path.join(outputDir, 'logs', 'scene-cast.json'), {
+        applied,
+        importedCharacters: importedResults,
+      });
       state = setPhase(state, 'cast', 'complete');
       await writeJson(runStatePath, state);
-    } else if (state.phases.cast !== 'complete') {
-      state = setPhase(state, 'cast', 'complete');
     }
 
     if (state.phases.props !== 'complete') {
@@ -1230,6 +1375,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       projectId: state.projectId,
       shotsRequested: manifest.shots.length,
       shotsCreated,
+      importedCharacters: importedCharacterCount,
       framesRendered,
       controlVideosRendered,
       controlVideosFailed,

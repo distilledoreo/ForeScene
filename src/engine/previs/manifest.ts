@@ -46,6 +46,13 @@ export const PREVIS_PROP_PRIMITIVES = [
 ] as const;
 export type PrevisPropPrimitive = (typeof PREVIS_PROP_PRIMITIVES)[number];
 
+export const PREVIS_IMPORTED_CHARACTER_RIG_MODES = [
+  'preserve-existing',
+  'auto',
+  'autorig',
+] as const;
+export type PrevisImportedCharacterRigMode = (typeof PREVIS_IMPORTED_CHARACTER_RIG_MODES)[number];
+
 export const PREVIS_CAMERA_TEMPLATES = [
   'establishing',
   'wide',
@@ -146,12 +153,27 @@ export interface PrevisLocationDefinition {
   }>;
 }
 
-export interface PrevisCharacterDefinition {
+export type PrevisCharacterDefinition =
+  | PrevisHumanDummyCharacterDefinition
+  | PrevisImportedCharacterDefinition;
+
+export interface PrevisHumanDummyCharacterDefinition {
   id: string;
   name: string;
   type: 'human_dummy';
   height?: number;
   color?: string;
+  defaultPose?: string;
+}
+
+export interface PrevisImportedCharacterDefinition {
+  id: string;
+  name: string;
+  type: 'imported_character';
+  /** Local GLB, embedded glTF, or FBX path, resolved relative to the manifest. */
+  source: string;
+  rigMode: PrevisImportedCharacterRigMode;
+  height?: number;
   defaultPose?: string;
 }
 

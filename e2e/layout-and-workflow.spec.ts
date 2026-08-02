@@ -807,17 +807,23 @@ test.describe('@heavy projected optimizer and second capture', () => {
     await dismissOverlays(page);
 
     // --- Suggest B via fill-gaps fork (advance modal or Reference panel) ---
+    const fillGapsInReadyModal = page.locator('[data-reference-ready-fill-gaps]');
     const fillGapsInModal = page.locator('[data-second-capture-fork] [data-second-capture-fill-gaps]');
     const openFillGaps = page.locator('[data-open-fill-gaps]');
-    if (await fillGapsInModal.isVisible().catch(() => false)) {
+    if (await fillGapsInReadyModal.isVisible().catch(() => false)) {
+      await fillGapsInReadyModal.click();
+    } else if (await fillGapsInModal.isVisible().catch(() => false)) {
       await fillGapsInModal.click();
     } else if (await openFillGaps.isVisible().catch(() => false)) {
       await openFillGaps.click();
       await page.locator('[data-second-capture-fill-gaps]').click();
     } else {
       // Advance modal may still be opening; wait briefly then fall back to Fill gaps control.
-      await page.locator('[data-second-capture-fork]').waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
-      if (await fillGapsInModal.isVisible().catch(() => false)) {
+      await page.locator('[data-reference-ready-fill-gaps], [data-second-capture-fork]').first()
+        .waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+      if (await fillGapsInReadyModal.isVisible().catch(() => false)) {
+        await fillGapsInReadyModal.click();
+      } else if (await fillGapsInModal.isVisible().catch(() => false)) {
         await fillGapsInModal.click();
       } else {
         await page.locator('[data-reference-settings-gear]').click().catch(() => undefined);

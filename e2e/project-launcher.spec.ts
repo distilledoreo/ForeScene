@@ -117,6 +117,11 @@ async function expectRetainedContactSheetResolves(page: Page) {
 
 test.describe('@smoke first-project launcher', () => {
   test('opens Dialogue Demo sample and reaches Reference + Export', async ({ page }) => {
+    let pageCrash: string | undefined;
+    page.on('crash', () => {
+      pageCrash = 'The browser page crashed during the launcher Reference → Export flow.';
+    });
+
     await enterStudioExpectingLauncher(page);
 
     // Readiness must imply a verified initial local revision, not just a live
@@ -164,10 +169,22 @@ test.describe('@smoke first-project launcher', () => {
     await expect(page.locator('[data-styled-pano-count]')).toBeVisible();
     // Styled count should be at least 1 for the sample.
     await expect(page.locator('[data-styled-pano-count]')).not.toHaveAttribute('data-styled-pano-count', '0');
-    await dismissOverlays(page);
+
+    // Reference-ready choices stay lightweight. The planner chunk must not be
+    // requested merely because this modal opened, which protects WebKit from
+    // loading the coverage/renderer graph during a harmless dismissal.
+    const referenceReady = page.locator('[data-reference-ready-choice]');
+    await expect(referenceReady).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Loading second-capture planner…')).toHaveCount(0);
+    await page.getByRole('dialog', { name: 'Reference ready' })
+      .getByRole('button', { name: 'Close', exact: true })
+      .click();
+    await expect(referenceReady).toBeHidden({ timeout: 10_000 });
+    expect(pageCrash, pageCrash ?? 'No browser page crash reported.').toBeUndefined();
 
     await goToWorkspace(page, 'Export', '[data-export-package-panel], [data-export-settings-trigger]');
     await expect(workspaceTab(page, 'Export')).toHaveAttribute('aria-current', 'page');
+    expect(pageCrash, pageCrash ?? 'No browser page crash reported.').toBeUndefined();
 
     // Sample should not surface hard missing-graybox selection blocks.
     const grayboxBlock = page.getByText(/no graybox 360 has been rendered/i);

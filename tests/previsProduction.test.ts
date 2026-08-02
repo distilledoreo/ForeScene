@@ -7,6 +7,7 @@ import {
   compileProduction,
   createBlankGrayboxProject,
   createInitialRunState,
+  compileCastPhaseWithPersistedEntities,
   firstIncompletePhase,
   hashPrevisManifest,
   parsePrevisProductionManifest,
@@ -40,6 +41,38 @@ describe('previs production manifest', () => {
     expect(result.errors).toEqual([]);
     expect(result.manifest?.locations).toHaveLength(2);
     expect(result.manifest?.shots).toHaveLength(8);
+  });
+
+  it('parses imported cast entries and derives a name from the cast ID', () => {
+    const result = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Imported cast', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast: [{
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      }],
+      shots: [{
+        id: 's1',
+        shotNumber: '010',
+        name: 'Joseph medium',
+        description: 'A medium shot.',
+        locationId: 'room',
+        subjects: ['joseph'],
+        camera: { template: 'medium', subjects: ['joseph'] },
+      }],
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.cast[0]).toMatchObject({
+      id: 'joseph',
+      name: 'joseph',
+      type: 'imported_character',
+      source: './characters/joseph.glb',
+      rigMode: 'preserve-existing',
+    });
   });
 
   it('parses motion keyframes and rejects a duration mismatch', () => {
@@ -145,6 +178,112 @@ describe('previs compilers', () => {
       expect(command.shot.camera?.target?.every((value) => Number.isFinite(value))).toBe(true);
       expect(Number.isFinite(command.shot.camera?.fovDegrees)).toBe(true);
     }
+  });
+
+  it('leaves imported cast for the browser import phase and binds resolved IDs to shots', () => {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Imported cast', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast: [{
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      }],
+      shots: [{
+        id: 's1',
+        shotNumber: '010',
+        name: 'Joseph medium',
+        description: 'A medium shot.',
+        locationId: 'room',
+        subjects: ['joseph'],
+        camera: { template: 'medium', subjects: ['joseph'] },
+      }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+
+    expect(compiled.cast.plan.commands).toEqual([]);
+    expect(compiled.cast.importedCharacters).toHaveLength(1);
+    expect(compiled.cast.importedCharacters?.[0]?.character.source).toBe('./characters/joseph.glb');
+
+    const resolved = compileShotList(manifest, {
+      ...compiled.context,
+      entities: {
+        ...compiled.context.entities,
+        'cast.joseph': { objectId: 'obj_imported_joseph', refs: { obj_imported_joseph: 'obj_imported_joseph' } },
+      },
+    });
+    const stage = resolved.flatMap((batch) => batch.plan.commands).find((command) => (
+      command.op === 'shot.stageObject'
+      && command.visible === true
+      && 'id' in command.object
+      && command.object.id === 'obj_imported_joseph'
+    ));
+    expect(stage).toBeTruthy();
+  });
+
+  function compileCastRebuild(cast: Array<Record<string, unknown>>) {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Cast rebuild', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast,
+      shots: [{
+        id: 's1',
+        shotNumber: '010',
+        name: 'Cast rebuild shot',
+        description: 'A cast rebuild regression case.',
+        locationId: 'room',
+        subjects: cast.map((entry) => String(entry.id)),
+        camera: { template: 'wide', subjects: cast.map((entry) => String(entry.id)) },
+      }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+    return compileCastPhaseWithPersistedEntities(manifest, compiled.context, {});
+  }
+
+  it('recompiles a dummy-only cast without mistaking planned refs for live entities', () => {
+    const rebuilt = compileCastRebuild([
+      { id: 'alex', name: 'Alex', type: 'human_dummy' },
+    ]);
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.importedCharacters).toEqual([]);
+  });
+
+  it('recompiles an imported-only cast without creating a dummy placeholder', () => {
+    const rebuilt = compileCastRebuild([
+      {
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      },
+    ]);
+
+    expect(rebuilt.plan.commands).toEqual([]);
+    expect(rebuilt.importedCharacters).toHaveLength(1);
+    expect(rebuilt.importedCharacters?.[0]?.entityKey).toBe('cast.joseph');
+  });
+
+  it('recompiles a mixed cast with dummy creation and imported staging metadata', () => {
+    const rebuilt = compileCastRebuild([
+      { id: 'alex', name: 'Alex', type: 'human_dummy' },
+      {
+        id: 'joseph',
+        type: 'imported_character',
+        source: './characters/joseph.glb',
+        rigMode: 'preserve-existing',
+      },
+    ]);
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.importedCharacters?.map((entry) => entry.entityKey)).toEqual(['cast.joseph']);
   });
 
   it('merges partial motion transforms with each actor\'s static shot transform', () => {

@@ -1,6 +1,7 @@
 # Previs pipeline path-conditional + nightly/manual heavy smoke.
 # Lightweight unit coverage always runs when this workflow is triggered.
-# Heavy four-shot smoke runs on matching PRs (path-filtered), nightly, and manual.
+# Heavy four-shot and imported-character smoke runs on matching PRs
+# (path-filtered), nightly, and manual.
 name: Previs pipeline
 
 on:
@@ -15,6 +16,8 @@ on:
       - 'src/engine/renderers.ts'
       - 'examples/previs/**'
       - 'tests/previs*.ts'
+      - 'e2e/previs-imported-character.spec.ts'
+      - 'tests/fixtures/preservedRigGlb.ts'
       - '.github/workflows/ci-previs.yml'
   schedule:
     - cron: '0 7 * * *'
@@ -111,3 +114,29 @@ jobs:
         if: always()
         run: |
           if [ -f preview.pid ]; then kill "$(cat preview.pid)" || true; fi
+
+  previs-imported-character:
+    name: Imported-character Chromium E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Run imported-character manifest fixture
+        run: npx playwright test e2e/previs-imported-character.spec.ts --project=desktop-chromium
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: previs-imported-character-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
