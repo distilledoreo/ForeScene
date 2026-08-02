@@ -16,6 +16,9 @@ npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/t
 npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --write
 npm run agent:import-model -- --file path/to/set.glb --write
 npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
+npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
+npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
+npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
@@ -29,6 +32,16 @@ An extreme import additionally requires `--consent-token IMPORT`.
 JSON plan/preview/apply/verification report plus `before`/`after` clay renders
 for each requested shot; if the reread or render check fails after apply, it
 immediately asks the Agent API to undo the replacement.
+
+`agent:render-passes` is read-only and writes six review PNGs per requested
+shot plus `review-manifest.json`: clay with characters, clay clean plate,
+projected with characters, projected clean plate, characters only, and depth.
+Projected rendering fails explicitly when the project has no usable styled pano;
+the manifest keeps that diagnostic rather than disguising a clay fallback.
+
+`agent:plan-exports` persists the exact shared Export workspace plan.
+`agent:verify-package` then checks every planned `produce` file against the
+actual ZIP and exits nonzero with the missing shot, pass kind, and path.
 
 ## Write authorization
 

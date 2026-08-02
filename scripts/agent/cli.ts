@@ -13,6 +13,9 @@
  *   npm run agent:import-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig --name "Actor" --write
  *   npm run agent:import-model -- --file set.glb --write
  *   npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
+ *   npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
+ *   npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
+ *   npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
  *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
@@ -21,6 +24,7 @@
  * Project reset additionally requires `--reset-project`.
  */
 
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
@@ -31,6 +35,7 @@ import {
   createProxyReplacementPlan,
   verifyProxyReplacement,
 } from '../../src/engine/agent/proxyReplacement';
+import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -55,6 +60,7 @@ function parseArgs(argv: string[]) {
     skipPackage: false,
     workspace: undefined as string | undefined,
     output: undefined as string | undefined,
+    packagePath: undefined as string | undefined,
     screenshot: undefined as string | undefined,
     input: undefined as string | undefined,
     file: undefined as string | undefined,
@@ -67,7 +73,6 @@ function parseArgs(argv: string[]) {
     consentToken: undefined as string | undefined,
     profile: undefined as string | undefined,
     shotIds: [] as string[],
-    proxyShotIds: [] as string[],
     timeSeconds: undefined as number | undefined,
     resolution: undefined as string | undefined,
     appearance: undefined as string | undefined,
@@ -109,6 +114,8 @@ function parseArgs(argv: string[]) {
       args.workspace = argv[++index];
     } else if (token === '--output') {
       args.output = argv[++index];
+    } else if (token === '--package') {
+      args.packagePath = argv[++index];
     } else if (token === '--screenshot') {
       args.screenshot = argv[++index];
     } else if (token === '--input') {
@@ -140,7 +147,7 @@ function parseArgs(argv: string[]) {
       if (shotId) args.shotIds.push(shotId);
     } else if (token === '--shots') {
       const shotList = argv[++index];
-      if (shotList) args.proxyShotIds.push(...shotList.split(',').map((item) => item.trim()).filter(Boolean));
+      if (shotList) args.shotIds.push(...shotList.split(',').map((item) => item.trim()).filter(Boolean));
     } else if (token === '--time') {
       const value = Number(argv[++index]);
       if (!Number.isFinite(value)) throw new Error('--time must be a finite number');
@@ -348,7 +355,7 @@ async function renderProxyEvidence(
   const frames = await session.page.evaluate(async (shotIds) => Promise.all(
     shotIds.map((shotId) => window.foreScene!.renderShotFrame({
       shotId,
-      pass: 'clay',
+      appearance: 'clay',
       width: 960,
       height: 540,
     })),
@@ -487,7 +494,7 @@ async function runFrame(options: {
 }) {
   await withSession(options, async (session) => {
     const result = await session.page.evaluate(async (input) => (
-      window.foreScene!.renderShotFrame({ shotId: input.shotId, timeSeconds: input.timeSeconds, pass: 'clay' })
+      window.foreScene!.renderShotFrame({ shotId: input.shotId, timeSeconds: input.timeSeconds, appearance: 'clay' })
     ), { shotId: options.shotId, timeSeconds: options.timeSeconds });
     if (!result.ok || !result.pngDataUrl) {
       printJson(result);
@@ -501,6 +508,179 @@ async function runFrame(options: {
     await writeFile(target, Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64'));
     printJson({ ...result, pngDataUrl: undefined, output: target });
   });
+}
+
+const REVIEW_PASSES = [
+  {
+    fileName: 'clay_with-characters.png',
+    appearance: 'clay' as const,
+    peopleVariant: 'with_people' as const,
+    content: 'full_scene' as const,
+  },
+  {
+    fileName: 'clay_clean-plate.png',
+    appearance: 'clay' as const,
+    peopleVariant: 'clean_plate' as const,
+    content: 'full_scene' as const,
+  },
+  {
+    fileName: 'projected_with-characters.png',
+    appearance: 'projected' as const,
+    peopleVariant: 'with_people' as const,
+    content: 'full_scene' as const,
+  },
+  {
+    fileName: 'projected_clean-plate.png',
+    appearance: 'projected' as const,
+    peopleVariant: 'clean_plate' as const,
+    content: 'full_scene' as const,
+  },
+  {
+    fileName: 'characters-only.png',
+    appearance: 'clay' as const,
+    peopleVariant: 'with_people' as const,
+    content: 'characters_only' as const,
+  },
+  {
+    fileName: 'depth.png',
+    appearance: 'depth' as const,
+    peopleVariant: 'with_people' as const,
+    content: 'full_scene' as const,
+  },
+] as const;
+
+async function resolveShotIds(
+  session: AgentBrowserSession,
+  requestedIds: string[],
+): Promise<Array<{ id: string; shotNumber: string }>> {
+  const available = await session.page.evaluate(() => window.foreScene!.listShots());
+  const requested = requestedIds.length > 0 ? requestedIds : available.map((shot) => shot.id);
+  const resolved = requested.map((requestedId) => (
+    available.find((shot) => shot.id === requestedId || shot.shotNumber === requestedId)
+  ));
+  const missing = requested.filter((id, index) => !resolved[index]);
+  if (missing.length > 0) {
+    throw new Error(`Unknown shot id or number: ${missing.join(', ')}.`);
+  }
+  return resolved as Array<{ id: string; shotNumber: string }>;
+}
+
+function dataUrlBytes(dataUrl: string): Buffer {
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
+  return Buffer.from(dataUrl.slice(comma + 1), 'base64');
+}
+
+async function runRenderPasses(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  shotIds: string[];
+  output: string;
+}) {
+  const outputRoot = path.resolve(options.output);
+  await withSession(options, async (session) => {
+    await waitForAgentIdle(session.page);
+    const shots = await resolveShotIds(session, options.shotIds);
+    const report: {
+      schemaVersion: 1;
+      generatedAt: string;
+      shots: Array<{
+        id: string;
+        shotNumber: string;
+        passes: Array<Record<string, unknown>>;
+      }>;
+      verification: { expectedPassCount: number; renderedPassCount: number; uniquePngCount: number };
+      ok: boolean;
+    } = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      shots: [],
+      verification: { expectedPassCount: shots.length * REVIEW_PASSES.length, renderedPassCount: 0, uniquePngCount: 0 },
+      ok: true,
+    };
+    const fingerprints = new Set<string>();
+
+    for (const shot of shots) {
+      const shotDirectory = path.join(outputRoot, shot.shotNumber);
+      const passReports: Array<Record<string, unknown>> = [];
+      for (const pass of REVIEW_PASSES) {
+        const result = await session.page.evaluate((input) => (
+          window.foreScene!.renderShotFrame(input)
+        ), { shotId: shot.id, ...pass });
+        if (!result.ok || !result.pngDataUrl) {
+          report.ok = false;
+          passReports.push({
+            ...pass,
+            ok: false,
+            diagnostics: result.diagnostics ?? [{ code: 'render_failed', message: 'No PNG returned.' }],
+          });
+          continue;
+        }
+        const target = path.join(shotDirectory, pass.fileName);
+        const bytes = dataUrlBytes(result.pngDataUrl);
+        const sha256 = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+        await mkdir(shotDirectory, { recursive: true });
+        await writeFile(target, bytes);
+        fingerprints.add(sha256);
+        report.verification.renderedPassCount += 1;
+        passReports.push({
+          ...pass,
+          ok: true,
+          output: target,
+          sha256,
+          width: result.width,
+          height: result.height,
+          source: result.source,
+          pixelStats: result.pixelStats,
+          depth: result.depth,
+        });
+      }
+      report.shots.push({ id: shot.id, shotNumber: shot.shotNumber, passes: passReports });
+    }
+
+    report.verification.uniquePngCount = fingerprints.size;
+    await mkdir(outputRoot, { recursive: true });
+    const manifestPath = path.join(outputRoot, 'review-manifest.json');
+    await writeFile(manifestPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    printJson({ ...report, manifestPath });
+    if (!report.ok) process.exitCode = 1;
+  });
+}
+
+async function runPlanExports(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  shotIds: string[];
+  output: string;
+}) {
+  await withSession(options, async (session) => {
+    await waitForAgentIdle(session.page);
+    const shots = await resolveShotIds(session, options.shotIds);
+    const result = await session.page.evaluate((shotIds) => (
+      window.foreScene!.createExportPlan({ shotIds })
+    ), shots.map((shot) => shot.id));
+    const target = path.resolve(options.output);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    printJson({ ...result, output: target });
+    if (!result.ok) process.exitCode = 1;
+  });
+}
+
+async function runVerifyPackage(options: { plan: string; packagePath: string }) {
+  const planPath = path.resolve(options.plan);
+  const packagePath = path.resolve(options.packagePath);
+  const plan = JSON.parse(await readFile(planPath, 'utf8')) as Parameters<typeof verifyPackageAgainstExportPlan>[0];
+  const archive = new Blob([await readFile(packagePath)]);
+  const result = await verifyPackageAgainstExportPlan(plan, archive);
+  printJson({ ...result, planPath, packagePath });
+  if (!result.ok) process.exitCode = 1;
 }
 
 async function runVideo(options: {
@@ -733,6 +913,7 @@ async function runPackage(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   output?: string;
   shotIds: string[];
 }) {
@@ -741,12 +922,13 @@ async function runPackage(options: {
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profile: options.profile,
   }, async (session) => {
     await waitForAgentIdle(session.page);
     printErr('[agent] starting package export…');
 
     const downloadPromise = options.output
-      ? session.page.waitForEvent('download', { timeout: 300_000 })
+      ? session.page.waitForEvent('download', { timeout: 300_000 }).catch(() => null)
       : null;
 
     const result = await session.page.evaluate(async (input) => {
@@ -760,6 +942,7 @@ async function runPackage(options: {
     let savedPath: string | undefined;
     if (downloadPromise && result.ok) {
       const download = await downloadPromise;
+      if (!download) throw new Error('Package export reported success but the browser download was not received.');
       const target = path.resolve(options.output!);
       await mkdir(path.dirname(target), { recursive: true });
       await download.saveAs(target);
@@ -831,7 +1014,7 @@ async function main() {
   if (args.command === 'replace-proxy') {
     if (!args.proxy) throw new Error('replace-proxy requires --proxy <object-id>.');
     if (!args.replacement) throw new Error('replace-proxy requires --replacement <object-id>.');
-    if (args.proxyShotIds.length === 0) throw new Error('replace-proxy requires --shots <shot-id-or-number,...>.');
+    if (args.shotIds.length === 0) throw new Error('replace-proxy requires --shots <shot-id-or-number,...>.');
     if (!args.output) throw new Error('replace-proxy requires --output <report.json>.');
     await runProxyReplacement({
       url: args.url,
@@ -840,7 +1023,7 @@ async function main() {
       persistWrite: args.persistWrite,
       proxyObjectId: args.proxy,
       replacementObjectId: args.replacement,
-      shotIds: args.proxyShotIds,
+      shotIds: args.shotIds,
       output: args.output,
       profile: args.profile,
     });
@@ -858,6 +1041,41 @@ async function main() {
       printErr(`[agent] connected ${session.url}`);
       printJson(await inspectViaBrowser(session.page));
     });
+    return;
+  }
+
+  if (args.command === 'render-passes') {
+    if (!args.output) throw new Error('render-passes requires --output <directory>.');
+    await runRenderPasses({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      shotIds: args.shotIds,
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'plan-exports') {
+    if (!args.output) throw new Error('plan-exports requires --output <deliverables-plan.json>.');
+    await runPlanExports({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      shotIds: args.shotIds,
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'verify-package') {
+    if (!args.plan) throw new Error('verify-package requires --plan <deliverables-plan.json>.');
+    if (!args.packagePath) throw new Error('verify-package requires --package <package.zip>.');
+    await runVerifyPackage({ plan: args.plan, packagePath: args.packagePath });
     return;
   }
 
@@ -960,6 +1178,7 @@ async function main() {
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
+      profile: args.profile,
       output: args.output,
       shotIds: args.shotIds,
     });

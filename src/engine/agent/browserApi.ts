@@ -5,7 +5,12 @@
 
 import type { LocationProject, Shot, Workspace } from '../../domain/types';
 import { createExportPlan } from '../exportPlan';
-import { renderShotFrame as renderShotFrameEngine } from '../renderers';
+import {
+  renderShotCharacterFrame,
+  renderShotDepthFrame,
+  renderShotFrame as renderShotFrameEngine,
+  renderShotProjectedFrame,
+} from '../renderers';
 import { sampleShotTimeline } from '../shotTimeline';
 import {
   computePixelStatsFromDataUrl,
@@ -855,11 +860,81 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         },
       };
 
+      const appearance = input.appearance ?? 'clay';
+      const peopleVariant = input.peopleVariant ?? 'with_people';
+      const content = input.content ?? 'full_scene';
+      if (content === 'characters_only' && peopleVariant === 'clean_plate') {
+        return {
+          ok: false,
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'characters_only cannot be combined with the clean_plate people variant.',
+          )],
+        };
+      }
+      if (appearance === 'depth' && content === 'characters_only') {
+        return {
+          ok: false,
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'Depth stills support full_scene or clean_plate content; characters_only is a separate transparent pass.',
+          )],
+        };
+      }
+
       try {
-        // Same internal path as package export inputs/viewport_clay.png.
-        const frame = await renderShotFrameEngine(project, shotForRender, {
-          peopleVariant: 'with_people',
-        });
+        let pngDataUrl: string;
+        let renderedWidth: number;
+        let renderedHeight: number;
+        let pixelStats: RenderPixelStats | undefined;
+        let source: NonNullable<AgentRenderShotFrameResult['source']>;
+        let depth: AgentRenderShotFrameResult['depth'];
+
+        if (content === 'characters_only') {
+          const frame = await renderShotCharacterFrame(project, shotForRender, {
+            appearance: appearance === 'projected' ? 'projected' : 'clay',
+            includeAttachedProps: true,
+          });
+          pngDataUrl = await blobToDataUrl(frame.blob);
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_character_renderer';
+        } else if (appearance === 'projected') {
+          const frame = await renderShotProjectedFrame(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_projected_renderer';
+        } else if (appearance === 'depth') {
+          const frame = await renderShotDepthFrame(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_depth_renderer';
+          depth = {
+            encoding: frame.encoding,
+            nearMeters: frame.nearMeters,
+            farMeters: frame.farMeters,
+            invert: frame.invert,
+            grayscalePixelRatio: 0,
+          };
+        } else {
+          // Same internal path as package export inputs/viewport_clay.png.
+          const frame = await renderShotFrameEngine(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          pixelStats = frame.pixelStats;
+          source = 'canonical_clay_renderer';
+        }
 
         const revisionNow = useProjectSafetyStore.getState().activeRevisionId ?? '';
         if (revisionAtStart && revisionNow && revisionAtStart !== revisionNow) {
@@ -867,8 +942,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             ok: false,
             shotId: input.shotId,
             revisionId: revisionNow,
-            width: frame.width,
-            height: frame.height,
+            width: renderedWidth,
+            height: renderedHeight,
             ...(timeSample ? {
               requestedTimeSeconds: timeSample.requestedTimeSeconds,
               sampledTimeSeconds: timeSample.sampledTimeSeconds,
@@ -884,22 +959,34 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
         // Prefer WebGL readPixels stats; fall back to decoding the PNG data URL
         // when readback is flaky (preserveDrawingBuffer races, partial buffers).
-        let pixelStats: RenderPixelStats | undefined = frame.pixelStats;
-        let rejection = rejectRenderPixelStats(pixelStats);
-        if (rejection && frame.dataUrl) {
+        let rejection = content === 'characters_only' ? null : rejectRenderPixelStats(pixelStats);
+        if ((!pixelStats || rejection) && pngDataUrl) {
           try {
-            const fromDataUrl = await computePixelStatsFromDataUrl(frame.dataUrl);
+            const fromDataUrl = await computePixelStatsFromDataUrl(pngDataUrl);
             const second = rejectRenderPixelStats(fromDataUrl);
-            if (!second) {
-              pixelStats = fromDataUrl;
-              rejection = null;
-            } else {
-              // Keep the more informative of the two measurements.
-              pixelStats = fromDataUrl;
-              rejection = second;
-            }
+            pixelStats = fromDataUrl;
+            rejection = content === 'characters_only' ? null : second;
           } catch {
             // Keep original rejection.
+          }
+        }
+        if (depth) {
+          depth.grayscalePixelRatio = await grayscalePixelRatioFromDataUrl(pngDataUrl);
+          if (depth.grayscalePixelRatio < 0.995) {
+            return {
+              ok: false,
+              shotId: input.shotId,
+              revisionId: revisionNow,
+              width: renderedWidth,
+              height: renderedHeight,
+              pngDataUrl,
+              pixelStats,
+              depth,
+              diagnostics: [agentError(
+                'depth_not_grayscale',
+                `Depth renderer produced non-grayscale pixels (ratio ${depth.grayscalePixelRatio.toFixed(4)}).`,
+              )],
+            };
           }
         }
         if (rejection) {
@@ -907,10 +994,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             ok: false,
             shotId: input.shotId,
             revisionId: revisionNow,
-            width: frame.width,
-            height: frame.height,
-            pngDataUrl: frame.dataUrl,
+            width: renderedWidth,
+            height: renderedHeight,
+            pngDataUrl,
             pixelStats,
+            depth,
             diagnostics: [
               agentError(rejection.code, rejection.message),
             ],
@@ -921,15 +1009,19 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           ok: true,
           shotId: input.shotId,
           revisionId: revisionNow,
-          width: frame.width,
-          height: frame.height,
+          width: renderedWidth,
+          height: renderedHeight,
           ...(timeSample ? {
             requestedTimeSeconds: timeSample.requestedTimeSeconds,
             sampledTimeSeconds: timeSample.sampledTimeSeconds,
           } : {}),
-          pngDataUrl: frame.dataUrl,
+          pngDataUrl,
           pixelStats,
-          source: 'canonical_clay_renderer',
+          appearance,
+          peopleVariant,
+          content,
+          depth,
+          source,
         };
       } catch (error) {
         return {
@@ -985,6 +1077,48 @@ function waitAnimationFrames(count: number): Promise<void> {
       setTimeout(step, 16);
     }
   });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Could not encode rendered image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function grayscalePixelRatioFromDataUrl(dataUrl: string): Promise<number> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const next = new Image();
+    next.onload = () => resolve(next);
+    next.onerror = () => reject(new Error('Could not decode depth PNG.'));
+    next.src = dataUrl;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext('2d');
+  if (!context || canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error('Could not read depth PNG pixels.');
+  }
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let sampled = 0;
+  let grayscale = 0;
+  const stride = 8;
+  for (let y = 0; y < canvas.height; y += stride) {
+    for (let x = 0; x < canvas.width; x += stride) {
+      const index = (y * canvas.width + x) * 4;
+      if (pixels[index + 3]! <= 8) continue;
+      sampled += 1;
+      const red = pixels[index]!;
+      const green = pixels[index + 1]!;
+      const blue = pixels[index + 2]!;
+      if (Math.max(red, green, blue) - Math.min(red, green, blue) <= 1) grayscale += 1;
+    }
+  }
+  return sampled > 0 ? grayscale / sampled : 0;
 }
 
 export class AgentApiError extends Error {

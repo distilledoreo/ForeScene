@@ -25,7 +25,7 @@ Available now:
 - Project menu → **Agent Console** (same `window.foreScene` path)
 - Timeline inspection and arbitrary-time sampling without changing the live shot
 - Declarative timeline replacement, keyframe create/update/delete, staging, preview/apply, and undo
-- Arbitrary-time clay frames via `renderShotFrame({ shotId, timeSeconds })`
+- Multipass still review via `renderShotFrame({ shotId, appearance, peopleVariant, content })`
 - Controlled shot video rendering with progress and cancellation via `renderShotVideo()`
 - `getShotDocument({ id })` for exact shot staging/keyframe inspection
 - `importModel({ file })` for the same protected geometry import used by the manual dialog
@@ -107,6 +107,43 @@ copy exact staging rather than infer it from summary inspection fields.
 `createExportPlan({ shotIds?: string[] })` calls the same pure `createExportPlan()` engine used by the Export workspace. It does not render or download anything.
 
 When `shotIds` is omitted, every shot is planned (matching the Export workspace default selection).
+
+Use the CLI when a review workflow needs a persisted preflight plan and a
+post-export archive check:
+
+```bash
+npm run agent:plan-exports -- --shots 01,02,03 --output artifacts/preflight/deliverables-plan.json
+npm run agent:verify-package -- \
+  --plan artifacts/preflight/deliverables-plan.json \
+  --package artifacts/package.zip
+```
+
+`agent:verify-package` reads the ZIP and requires every file from every
+`produce` artifact in the recorded export plan. It reports each missing entry
+with its shot and artifact kind, so a requested projected, clean-plate,
+character-only, or depth pass cannot silently disappear from delivery.
+
+## Multipass still review
+
+`renderShotFrame` uses the same render paths as package export without writing
+assets or changing the live shot. `appearance` is `clay`, `projected`, or
+`depth`; `peopleVariant` is `with_people` or `clean_plate`; and `content` is
+`full_scene` or `characters_only`. Character-only is a transparent pass with
+the environment removed. Depth results include linear camera-depth metadata and
+the sampled grayscale ratio. Projected requests fail with a clear diagnostic
+when no valid styled panorama/projector is available.
+
+```bash
+npm run agent:render-passes -- \
+  --shots 01,02,03,04 \
+  --profile ai-control-full \
+  --output artifacts/reviews/batch-01
+```
+
+This writes six deterministic files per shot — clay with characters, clay clean
+plate, projected with characters, projected clean plate, characters only, and
+depth — plus `review-manifest.json`. The manifest records each renderer source,
+pixel/depth inspection data, and a SHA-256 for comparison before packaging.
 
 ## Preview
 

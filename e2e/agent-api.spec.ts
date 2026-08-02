@@ -139,7 +139,7 @@ test.describe('Agent API transactions @smoke', () => {
       }],
     }), { shotId: shot!.id, camera: detail.camera });
     expect(applied.ok).toBe(true);
-    const frame = await page.evaluate((shotId) => window.foreScene!.renderShotFrame({ shotId, timeSeconds: 1, pass: 'clay' }), shot!.id);
+    const frame = await page.evaluate((shotId) => window.foreScene!.renderShotFrame({ shotId, timeSeconds: 1, appearance: 'clay' }), shot!.id);
     expect(frame.ok).toBe(true);
     expect(frame.sampledTimeSeconds).toBe(1);
     expect(frame.pngDataUrl?.startsWith('data:image/png')).toBe(true);

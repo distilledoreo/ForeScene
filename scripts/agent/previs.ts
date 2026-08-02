@@ -197,7 +197,7 @@ async function renderCleanShotFrame(
   const result = await page.evaluate(async (id) => {
     return window.foreScene!.renderShotFrame({
       shotId: id,
-      pass: 'clay',
+      appearance: 'clay',
     });
   }, shotId);
 

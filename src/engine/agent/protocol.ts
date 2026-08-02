@@ -556,11 +556,13 @@ export interface AgentResetProjectRequest {
   resetAuthorization?: string;
 }
 
-/** Clean clay first-frame render via the shared package-export renderer. */
+/** One inspectable still pass via the same renderers used by package export. */
 export interface AgentRenderShotFrameInput {
   shotId: string;
   timeSeconds?: number;
-  pass?: 'clay';
+  appearance?: 'clay' | 'projected' | 'depth';
+  peopleVariant?: 'with_people' | 'clean_plate';
+  content?: 'full_scene' | 'characters_only';
   width?: number;
   height?: number;
 }
@@ -584,9 +586,23 @@ export interface AgentRenderShotFrameResult {
   pixelStats?: AgentRenderPixelStats;
   requestedTimeSeconds?: number;
   sampledTimeSeconds?: number;
+  appearance?: AgentRenderShotFrameInput['appearance'];
+  peopleVariant?: AgentRenderShotFrameInput['peopleVariant'];
+  content?: AgentRenderShotFrameInput['content'];
+  depth?: {
+    encoding: 'linear-camera-depth';
+    nearMeters: number;
+    farMeters: number;
+    invert: boolean;
+    grayscalePixelRatio: number;
+  };
   diagnostics?: AgentDiagnostic[];
-  /** Marks frames produced by the canonical clean clay renderer. */
-  source?: 'canonical_clay_renderer';
+  /** Marks the shared renderer used to produce this exact pass. */
+  source?:
+    | 'canonical_clay_renderer'
+    | 'canonical_projected_renderer'
+    | 'canonical_depth_renderer'
+    | 'canonical_character_renderer';
 }
 
 export interface AgentShotVideoRenderInput {
@@ -825,10 +841,7 @@ export interface ForeSceneBrowserApi {
     options?: AgentWaitForViewportReadyInput,
   ): Promise<AgentWaitForViewportReadyResult>;
 
-  /**
-   * Render a clean clay first frame for a shot using the same path as
-   * package `inputs/viewport_clay.png` (not a UI screenshot).
-   */
+  /** Render an inspectable still pass using the same paths as package export (not a UI screenshot). */
   renderShotFrame(input: AgentRenderShotFrameInput): Promise<AgentRenderShotFrameResult>;
   renderShotVideo(input: AgentShotVideoRenderInput): Promise<AgentShotVideoRenderResult>;
   getShotVideoRenderProgress(): AgentShotVideoProgress | null;
