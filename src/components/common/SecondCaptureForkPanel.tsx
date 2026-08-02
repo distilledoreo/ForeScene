@@ -4,20 +4,18 @@ import { useThemeStore } from '../../state/useThemeStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { downloadDataUrl } from '../../engine/fileTransfers';
 import { downloadPanoImage } from '../../engine/panoImage';
-import {
-  createPendingSecondCapturePlan,
-  primaryStyledPano,
-} from '../../engine/panoProjectionCore';
+import { createPendingSecondCapturePlan, primaryStyledPano } from '../../engine/panoProjectionCore';
 import {
   estimateRemainingSeconds,
   formatDurationSeconds,
-  prepareSuggestedSecondCapture,
   SUGGESTED_CAPTURE_ANALYSIS_ETA_SECONDS,
   SUGGESTED_CAPTURE_RENDER_ETA_SECONDS,
-  type SuggestedSecondCapturePhase,
-  type SuggestedSecondCaptureProgress,
-  type SuggestedSecondCaptureResult,
-  type SuggestedSecondCaptureTask,
+} from '../../engine/secondCaptureProgress';
+import type {
+  SuggestedSecondCapturePhase,
+  SuggestedSecondCaptureProgress,
+  SuggestedSecondCaptureResult,
+  SuggestedSecondCaptureTask,
 } from '../../engine/prepareSuggestedSecondCapture';
 import { ContextualPanel } from './ContextualPanel';
 import { StyledPanoImportButton } from './StyledPanoImportButton';
@@ -33,6 +31,7 @@ export function SecondCaptureForkContent({
   onAwaitingImport,
   onPlaceInBuild,
   compactIntro = false,
+  initialStep = 'choose',
 }: {
   open: boolean;
   onClose: () => void;
@@ -42,6 +41,8 @@ export function SecondCaptureForkContent({
   onPlaceInBuild?: () => void;
   /** Hide the small “Reference ready” eyebrow when the parent modal already titles the step. */
   compactIntro?: boolean;
+  /** Start after the lightweight choice when the planner was opened from guidance. */
+  initialStep?: Extract<ForkStep, 'choose' | 'place_method'>;
 }) {
   const project = useProjectStore((state) => state.project);
   const setPanoOrigin = useProjectStore((state) => state.setPanoOrigin);
@@ -52,7 +53,7 @@ export function SecondCaptureForkContent({
   const setBuildMode = useProjectStore((state) => state.setBuildMode);
   const theme = useThemeStore((state) => state.theme);
 
-  const [step, setStep] = useState<ForkStep>('choose');
+  const [step, setStep] = useState<ForkStep>(initialStep);
   const [progress, setProgress] = useState<SuggestedSecondCaptureProgress | undefined>();
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState<string | undefined>();
@@ -62,13 +63,15 @@ export function SecondCaptureForkContent({
   const [seedResult, setSeedResult] = useState<SuggestedSecondCaptureResult | undefined>();
   const [seedRedownloading, setSeedRedownloading] = useState(false);
   const taskRef = useRef<SuggestedSecondCaptureTask | undefined>(undefined);
+  const suggestionRequestRef = useRef(0);
   const startedAtRef = useRef<number>(0);
 
   useEffect(() => {
     if (!open) {
+      suggestionRequestRef.current += 1;
       taskRef.current?.cancel();
       taskRef.current = undefined;
-      setStep('choose');
+      setStep(initialStep);
       setProgress(undefined);
       setElapsedMs(0);
       setError(undefined);
@@ -78,7 +81,13 @@ export function SecondCaptureForkContent({
       setSeedResult(undefined);
       setSeedRedownloading(false);
     }
-  }, [open]);
+
+    return () => {
+      suggestionRequestRef.current += 1;
+      taskRef.current?.cancel();
+      taskRef.current = undefined;
+    };
+  }, [initialStep, open]);
 
   useEffect(() => {
     if (step !== 'running') return;
@@ -130,6 +139,8 @@ export function SecondCaptureForkContent({
   };
 
   const startAutoSuggest = () => {
+    const requestId = suggestionRequestRef.current + 1;
+    suggestionRequestRef.current = requestId;
     taskRef.current?.cancel();
     setError(undefined);
     setOptimizationSucceeded(false);
@@ -145,39 +156,44 @@ export function SecondCaptureForkContent({
     startedAtRef.current = Date.now();
     setElapsedMs(0);
 
-    const task = prepareSuggestedSecondCapture(project, theme, (next) => {
-      setProgress(next);
-    });
-    taskRef.current = task;
-
-    void task.promise.then(async (result) => {
-      // Latch frozen plan even if the panel closed between resolve and this microtask.
-      latchFrozenPlan(result.originB);
-      setOptimizationSucceeded(true);
-      setProjectedSeedReady(true);
-      setSeedResult(result);
-      if (taskRef.current !== task) return;
-      let downloadOk = false;
+    void (async () => {
       try {
-        await downloadSeed(result);
-        downloadOk = true;
-      } catch {
-        downloadOk = false;
+        const { prepareSuggestedSecondCapture } = await import('../../engine/prepareSuggestedSecondCapture');
+        if (suggestionRequestRef.current !== requestId) return;
+        const task = prepareSuggestedSecondCapture(project, theme, (next) => {
+          setProgress(next);
+        });
+        taskRef.current = task;
+
+        const result = await task.promise;
+        // Latch frozen plan even if the panel closed between resolve and this microtask.
+        latchFrozenPlan(result.originB);
+        setOptimizationSucceeded(true);
+        setProjectedSeedReady(true);
+        setSeedResult(result);
+        if (taskRef.current !== task) return;
+        let downloadOk = false;
+        try {
+          await downloadSeed(result);
+          downloadOk = true;
+        } catch {
+          downloadOk = false;
+        }
+        setSeedDownloadStatus(downloadOk ? 'succeeded' : 'failed');
+        taskRef.current = undefined;
+        setStep('awaiting_import');
+        onAwaitingImport();
+      } catch (err) {
+        if (suggestionRequestRef.current !== requestId) return;
+        taskRef.current = undefined;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Could not suggest a second vantage.');
+        setOptimizationSucceeded(false);
+        setProjectedSeedReady(false);
+        setSeedDownloadStatus('idle');
+        setStep('failed');
       }
-      setSeedDownloadStatus(downloadOk ? 'succeeded' : 'failed');
-      taskRef.current = undefined;
-      setStep('awaiting_import');
-      onAwaitingImport();
-    }).catch((err) => {
-      if (taskRef.current !== task) return;
-      taskRef.current = undefined;
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      setError(err instanceof Error ? err.message : 'Could not suggest a second vantage.');
-      setOptimizationSucceeded(false);
-      setProjectedSeedReady(false);
-      setSeedDownloadStatus('idle');
-      setStep('failed');
-    });
+    })();
   };
 
   const retrySeedDownload = async () => {
@@ -194,6 +210,7 @@ export function SecondCaptureForkContent({
   };
 
   const cancelRunning = () => {
+    suggestionRequestRef.current += 1;
     taskRef.current?.cancel();
     taskRef.current = undefined;
     setStep('place_method');

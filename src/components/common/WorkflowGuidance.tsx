@@ -122,6 +122,7 @@ export function WorkflowGuidance() {
 
   const [isDownloadingGraybox, setIsDownloadingGraybox] = useState(false);
   const [activeDialog, setActiveDialog] = useState<GuidanceDialog>('none');
+  const [secondCapturePlannerOpen, setSecondCapturePlannerOpen] = useState(false);
   const lastHandledObjectiveRequest = useRef(0);
   const lastHandledAlignmentIntroRequest = useRef(0);
   const lastHandledAlignmentRetryRequest = useRef(0);
@@ -234,6 +235,7 @@ export function WorkflowGuidance() {
       && !hasStyledCanonicalPano(project)
       && !seenObjectiveWorkspaces.includes('reference');
     dismissWorkflowAdvance(promptKey);
+    setSecondCapturePlannerOpen(false);
     setActiveDialog('none');
     setWorkspace(nextStep);
     if (shouldOpenReferenceObjective) {
@@ -245,6 +247,7 @@ export function WorkflowGuidance() {
   const handleAdvanceDismiss = () => {
     if (!advancePrompt) return;
     dismissWorkflowAdvance(advancePrompt.promptKey);
+    setSecondCapturePlannerOpen(false);
     setActiveDialog('none');
   };
 
@@ -254,6 +257,10 @@ export function WorkflowGuidance() {
     && advancePrompt.nextStep === 'shots'
     && countStyledPanoramas(project) === 1,
   );
+
+  useEffect(() => {
+    if (!showSecondCaptureFork) setSecondCapturePlannerOpen(false);
+  }, [showSecondCaptureFork]);
 
   const downloadGrayboxForAi = async () => {
     if (!grayboxAsset || !grayboxPano) return;
@@ -366,7 +373,7 @@ export function WorkflowGuidance() {
           : (advancePrompt?.title ?? 'Ready for the next step')}
         onClose={handleAdvanceDismiss}
         size={showSecondCaptureFork ? 'lg' : 'md'}
-        scrollBody={showSecondCaptureFork}
+        scrollBody={showSecondCaptureFork && secondCapturePlannerOpen}
         footer={showSecondCaptureFork ? undefined : (
           <>
             <button
@@ -388,23 +395,66 @@ export function WorkflowGuidance() {
         )}
       >
         {showSecondCaptureFork ? (
-          <Suspense fallback={<p className="text-sm text-secondary">Loading second-capture planner…</p>}>
-            <SecondCaptureForkContent
-              open={activeDialog === 'advance' && showSecondCaptureFork}
-              compactIntro
+          secondCapturePlannerOpen ? (
+            <Suspense fallback={<p className="text-sm text-secondary">Loading second-capture planner…</p>}>
+              <SecondCaptureForkContent
+                open={activeDialog === 'advance' && showSecondCaptureFork}
+                compactIntro
+                initialStep="place_method"
+                onContinue={handleAdvanceNext}
+                onClose={handleAdvanceDismiss}
+                onAwaitingImport={() => {
+                  // Frozen plan is latched inside SecondCaptureForkContent.
+                }}
+                onPlaceInBuild={handleAdvanceDismiss}
+              />
+            </Suspense>
+          ) : (
+            <ReferenceReadyChoice
               onContinue={handleAdvanceNext}
-              onClose={handleAdvanceDismiss}
-              onAwaitingImport={() => {
-                // Frozen plan is latched inside SecondCaptureForkContent.
-              }}
-              onPlaceInBuild={handleAdvanceDismiss}
+              onFillMissingAreas={() => setSecondCapturePlannerOpen(true)}
             />
-          </Suspense>
+          )
         ) : (
           <p className="text-sm text-secondary">{advancePrompt?.body}</p>
         )}
       </Modal>
     </>
+  );
+}
+
+function ReferenceReadyChoice({
+  onContinue,
+  onFillMissingAreas,
+}: {
+  onContinue: () => void;
+  onFillMissingAreas: () => void;
+}) {
+  return (
+    <div className="space-y-3" data-reference-ready-choice>
+      <p className="text-sm text-primary">
+        Continue with this capture, or add a second vantage to fill areas that look thin far from the origin.
+      </p>
+      <button
+        type="button"
+        onClick={onContinue}
+        className="w-full rounded-lg bg-[var(--accent)] px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--accent-hover)]"
+        data-reference-ready-continue
+      >
+        Continue with this reference
+      </button>
+      <button
+        type="button"
+        onClick={onFillMissingAreas}
+        className="w-full rounded-lg border border-subtle px-3 py-2.5 text-sm font-medium text-primary transition hover:border-[var(--accent)] hover:text-accent"
+        data-reference-ready-fill-gaps
+      >
+        Fill missing areas
+      </button>
+      <p className="text-[11px] leading-snug text-muted">
+        Projection is strongest near this capture. Distant walls and corners can look weak — a second vantage fills those gaps when blended.
+      </p>
+    </div>
   );
 }
 
