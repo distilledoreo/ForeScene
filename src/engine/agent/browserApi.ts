@@ -57,6 +57,8 @@ import type {
   AgentEntityTarget,
   AgentExportPlanRequest,
   AgentExportPlanResult,
+  AgentModelImportInput,
+  AgentModelImportResult,
   AgentObjectInspection,
   AgentObjectQuery,
   AgentPackageExportRequest,
@@ -89,6 +91,11 @@ import {
   importSavedRigCharacter,
   isCharacterImportActive,
 } from './characterImport';
+import {
+  ModelImportConsentRequiredError,
+  createModelImportPlan,
+} from '../modelImport';
+import { importModelIntoProject } from '../modelImportService';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -215,6 +222,20 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       }
       return structuredClone(readInspectionContext().project);
+    },
+
+    getShotDocument(target: AgentEntityTarget): Shot {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
+      if (!shot) throw new AgentApiError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${resolved.id}".`);
+      return structuredClone(shot);
     },
 
     listObjects(query?: AgentObjectQuery) {
@@ -415,6 +436,71 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     cancelPackageExport(): AgentPackageExportResult {
       return cancelAgentPackageExport();
+    },
+
+    async importModel(input: AgentModelImportInput): Promise<AgentModelImportResult> {
+      if (useAgentControlStore.getState().controlMode !== 'read-write') {
+        return {
+          ok: false,
+          warnings: [],
+          diagnostics: [
+            agentError(
+              AGENT_DIAGNOSTIC_CODES.writeAccessRequired,
+              'Write access is required to import a model.',
+            ),
+          ],
+        };
+      }
+      const plan = createModelImportPlan([input.file]);
+      if (plan.jobs.length !== 1 || plan.issues.some((issue) => issue.tone === 'error')) {
+        const diagnostics = plan.issues
+          .filter((issue) => issue.tone === 'error')
+          .map((issue) => agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, issue.message, { path: 'file' }));
+        if (plan.jobs.length !== 1 && diagnostics.length === 0) {
+          diagnostics.push(agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'Select one supported model or portable scene bundle to import.',
+            { path: 'file' },
+          ));
+        }
+        return {
+          ok: false,
+          warnings: plan.issues.filter((issue) => issue.tone === 'warning').map((issue) => issue.message),
+          diagnostics,
+        };
+      }
+      try {
+        const batch = await importModelIntoProject(plan.jobs[0]!, {
+          mode: input.mode ?? 'separate',
+          allowHeavy: input.consentToken === 'allow-heavy-model-imports' || input.consentToken === 'IMPORT',
+          extremeConfirmation: input.extremeConfirmation,
+        });
+        return {
+          ok: true,
+          objectRefs: batch.items.map(({ object }) => ({
+            kind: 'object', id: object.id, name: object.name,
+          })),
+          summary: batch.summary,
+          importBudget: batch.analysis,
+          verifiedRevisionId: batch.verifiedRevisionId,
+          warnings: batch.warnings,
+        };
+      } catch (error) {
+        if (error instanceof ModelImportConsentRequiredError) {
+          return {
+            ok: false,
+            requiresConsent: true,
+            importBudget: error.analysis,
+            warnings: error.analysis.warnings,
+            diagnostics: [agentError('import_consent_required', error.message)],
+          };
+        }
+        return {
+          ok: false,
+          warnings: [],
+          diagnostics: [agentError('model_import_failed', error instanceof Error ? error.message : 'Model import failed.')],
+        };
+      }
     },
 
     analyzeCharacterImport(input) {

@@ -27,6 +27,8 @@ Available now:
 - Declarative timeline replacement, keyframe create/update/delete, staging, preview/apply, and undo
 - Arbitrary-time clay frames via `renderShotFrame({ shotId, timeSeconds })`
 - Controlled shot video rendering with progress and cancellation via `renderShotVideo()`
+- `getShotDocument({ id })` for exact shot staging/keyframe inspection
+- `importModel({ file })` for the same protected geometry import used by the manual dialog
 
 ## Quick start
 
@@ -59,6 +61,20 @@ Agent control mode is an **accidental-write guard**, not a security boundary aga
 - `window.foreScene.disableWrites()` (never grants `read-write`)
 
 CLI launches always clear a stale localStorage write seed unless `--persist-write` is present. `apply` / `run` / `package` refuse to start without an explicit `--write` or `--persist-write`.
+
+## Model import
+
+`importModel({ file, mode })` uses the shared model conversion and local-recovery
+commit path behind **Import 3D scene**. It creates texture-free graybox geometry,
+registers its binary payloads, and adds the resulting objects in the same protected
+project mutation. It requires `read-write` access. Heavy geometry returns a
+structured `requiresConsent` result until its caller sends the explicit
+`allow-heavy-model-imports` token; extreme imports also require the literal
+`IMPORT` confirmation.
+
+`getShotDocument({ id })` returns a structured copy of the requested `Shot`,
+including `objectOverrides` and `cameraKeyframes`. Use it when a workflow must
+copy exact staging rather than infer it from summary inspection fields.
 
 ## Status shape
 
@@ -220,6 +236,29 @@ npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to
 ```
 
 Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. `saved-rig` stages both binary inputs, validates the package and source topology before writing, then applies the shared saved-rig importer. Results include GLB, rig-package, and combined fingerprints; a repeated exact pair reuses the existing character instead of creating a duplicate. Large imports use the device-aware model-import budget and require explicit consent (`--allow-heavy-character-imports` or `--consent-token`). Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
+
+## Ordinary model import and proxy replacement
+
+```bash
+npm run agent:import-model -- --file input/model.glb --write
+npm run agent:replace-proxy -- \
+  --proxy proxy-id --replacement imported-model-id --shots 08,09,10 \
+  --output artifacts/refinement/hand-monster.json --write
+```
+
+`agent:import-model` calls `window.foreScene.importModel()` and the exact shared
+engine service used by **Import 3D scene**. It does not create a separate agent
+asset path. Heavy geometry requires `--allow-heavy-imports`; extreme geometry
+also requires `--consent-token IMPORT`.
+
+`agent:replace-proxy` gets full shot documents (including direct and keyframe
+object overrides), creates one atomic plan, renders before evidence, previews,
+applies, rereads and verifies the project, then renders after evidence. It
+refuses missing objects, empty/partial shot coverage, failed previews, failed
+renders, or any project/shot/panorama/camera/timeline verification mismatch. A
+post-apply failure invokes Agent undo and records that rollback in its JSON
+report. The report sits beside per-shot `.before.png` and `.after.png` clay
+frames.
 
 ## Visual CLI
 

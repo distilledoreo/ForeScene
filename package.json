@@ -19,6 +19,8 @@
     "agent:inspect": "tsx scripts/agent/cli.ts inspect",
     "agent:analyze-character": "tsx scripts/agent/cli.ts analyze-character",
     "agent:import-character": "tsx scripts/agent/cli.ts import-character",
+    "agent:import-model": "tsx scripts/agent/cli.ts import-model",
+    "agent:replace-proxy": "tsx scripts/agent/cli.ts replace-proxy",
     "agent:preview": "tsx scripts/agent/cli.ts preview",
     "agent:apply": "tsx scripts/agent/cli.ts apply",
     "agent:screenshot": "tsx scripts/agent/cli.ts screenshot",

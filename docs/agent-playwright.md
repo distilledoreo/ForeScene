@@ -14,10 +14,21 @@ npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --
 npm run agent:package -- --write --output artifacts/package.zip
 npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig
 npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --write
+npm run agent:import-model -- --file path/to/set.glb --write
+npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
 `apply` / `run` / `package` **require** explicit `--write` or `--persist-write` and refuse to start without it.
+
+`agent:import-model` takes the same ordinary-model path as **Import 3D scene**.
+Use `--allow-heavy-imports` only after reviewing a returned heavy-import estimate.
+An extreme import additionally requires `--consent-token IMPORT`.
+
+`agent:replace-proxy` insists on complete affected-shot coverage. It writes a
+JSON plan/preview/apply/verification report plus `before`/`after` clay renders
+for each requested shot; if the reread or render check fails after apply, it
+immediately asks the Agent API to undo the replacement.
 
 ## Write authorization
 

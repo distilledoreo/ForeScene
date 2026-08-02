@@ -9,6 +9,7 @@ import type {
   ExportSettingsOverride,
   HumanPose,
   LocationProject,
+  Shot,
   SceneObjectType,
   StagingRole,
   Transform,
@@ -29,6 +30,7 @@ import type { SceneContentMode } from '../shotSceneState';
 import type { AgentDiagnostic } from './diagnostics';
 import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
 import type { ImportBudgetEstimate } from '../modelImportBudget';
+import type { ModelImportMode, ModelImportSummary } from '../modelImport';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -759,6 +761,27 @@ export interface AgentSavedRigCharacterImportInput extends AgentSavedRigCharacte
   name: string;
 }
 
+/** Generic geometry import, shared with the manual Import 3D scene dialog. */
+export interface AgentModelImportInput {
+  file: File;
+  mode?: ModelImportMode;
+  /** Required for heavy imports; the CLI supplies this only with explicit consent. */
+  consentToken?: string;
+  /** Must be the literal `IMPORT` for extreme imports. */
+  extremeConfirmation?: string;
+}
+
+export interface AgentModelImportResult {
+  ok: boolean;
+  objectRefs?: AgentEntityReference[];
+  summary?: ModelImportSummary;
+  importBudget?: ImportBudgetEstimate;
+  requiresConsent?: boolean;
+  verifiedRevisionId?: string;
+  warnings: string[];
+  diagnostics?: AgentDiagnostic[];
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -771,6 +794,8 @@ export interface ForeSceneBrowserApi {
    * autonomous previs). Does not expose write handles.
    */
   getProjectDocument(): LocationProject;
+  /** Full structuredClone for a single shot, including staging and keyframes. */
+  getShotDocument(target: AgentEntityTarget): Shot;
   listObjects(query?: AgentObjectQuery): AgentObjectSummary[];
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
@@ -820,6 +845,8 @@ export interface ForeSceneBrowserApi {
   exportPackage(input?: AgentPackageExportRequest): Promise<AgentPackageExportResult>;
   getPackageExportProgress(): AgentPackageExportProgressSnapshot | null;
   cancelPackageExport(): AgentPackageExportResult;
+
+  importModel(input: AgentModelImportInput): Promise<AgentModelImportResult>;
 
   analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis>;
   importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;

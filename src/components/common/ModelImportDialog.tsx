@@ -16,10 +16,8 @@ import {
   ModelImportJob,
   createModelImportPlan,
   formatBytes,
-  importModelJob,
 } from '../../engine/modelImport';
-import { useProjectStore } from '../../state/useProjectStore';
-import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
+import { importModelIntoProject } from '../../engine/modelImportService';
 import { Modal } from './Modal';
 
 interface ImportReportItem {
@@ -39,8 +37,6 @@ export function ModelImportDialog({
   onImported?: (objects: SceneObject[]) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const addImportedModels = useProjectStore((state) => state.addImportedModels);
-  const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
   const [report, setReport] = useState<ImportReportItem[]>([]);
@@ -73,15 +69,11 @@ export function ModelImportDialog({
       setProgress(`Converting ${job.file.name} (${index + 1} of ${plan.jobs.length})…`);
       try {
         // Sequential conversion keeps peak memory predictable on low-power devices.
-        const batch = await importModelJob(job, {
+        const batch = await importModelIntoProject(job, {
           mode,
           allowHeavy: false,
           signal: abortRef.current.signal,
           onProgress: (value) => setProgress(value.message),
-        });
-        if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before importing a model.');
-        await runDestructiveProjectMutation('Before importing a model', () => {
-          addImportedModels(batch.items);
         });
         imported.push(...batch.items.map((i) => i.object));
 
@@ -137,11 +129,7 @@ export function ModelImportDialog({
     abortRef.current = controller;
     setBusy(true);
     try {
-      const batch = await importModelJob(pending.job, { mode, allowHeavy: true, extremeConfirmation: extremeText, signal: controller.signal, onProgress: (value) => setProgress(value.message) });
-      if (!runDestructiveProjectMutation) throw new Error('Local recovery is still starting. Please wait before importing a model.');
-      await runDestructiveProjectMutation('Before importing a model', () => {
-        addImportedModels(batch.items);
-      });
+      const batch = await importModelIntoProject(pending.job, { mode, allowHeavy: true, extremeConfirmation: extremeText, signal: controller.signal, onProgress: (value) => setProgress(value.message) });
       onImported?.(batch.items.map((item) => item.object));
       setReport((items) => [...items, { id: `success-${pending.job.file.name}`, tone: 'success', title: pending.job.file.name, message: `Imported ${batch.summary.totalObjects} object${batch.summary.totalObjects === 1 ? '' : 's'} using binary-backed geometry.` }]);
       setPending(undefined);

@@ -12,6 +12,7 @@ export const AGENT_INSPECT_COMMANDS = [
   'app.capabilities',
   'project.inspect',
   'project.document',
+  'shot.document',
   'object.list',
   'object.find',
   'object.inspect',
@@ -71,6 +72,7 @@ export const AGENT_MUTATE_COMMANDS = [
   'project.reset',
   'character.import',
   'character.importSavedRig',
+  'model.import',
 ] as const;
 
 export const AGENT_DEFERRED_COMMANDS = [

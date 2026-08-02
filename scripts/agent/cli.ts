@@ -11,6 +11,8 @@
  *   npm run agent:package -- --write --output artifacts/package.zip
  *   npm run agent:analyze-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig
  *   npm run agent:import-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig --name "Actor" --write
+ *   npm run agent:import-model -- --file set.glb --write
+ *   npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
  *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
@@ -25,6 +27,10 @@ import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { runContactSheetCli, runPrevisCli, runRenderStillsCli } from './previs';
+import {
+  createProxyReplacementPlan,
+  verifyProxyReplacement,
+} from '../../src/engine/agent/proxyReplacement';
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -53,12 +59,15 @@ function parseArgs(argv: string[]) {
     input: undefined as string | undefined,
     file: undefined as string | undefined,
     rigPackage: undefined as string | undefined,
+    proxy: undefined as string | undefined,
+    replacement: undefined as string | undefined,
     mapping: undefined as string | undefined,
     rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto' | 'saved-rig',
     name: undefined as string | undefined,
     consentToken: undefined as string | undefined,
     profile: undefined as string | undefined,
     shotIds: [] as string[],
+    proxyShotIds: [] as string[],
     timeSeconds: undefined as number | undefined,
     resolution: undefined as string | undefined,
     appearance: undefined as string | undefined,
@@ -66,6 +75,7 @@ function parseArgs(argv: string[]) {
     noAttach: false,
     noDownload: false,
     allowHeavyCharacterImports: false,
+    allowHeavyModelImports: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -89,6 +99,8 @@ function parseArgs(argv: string[]) {
       args.updateManifest = true;
     } else if (token === '--allow-heavy-character-imports') {
       args.allowHeavyCharacterImports = true;
+    } else if (token === '--allow-heavy-imports') {
+      args.allowHeavyModelImports = true;
     } else if (token === '--initialize-only') {
       args.initializeOnly = true;
     } else if (token === '--skip-package') {
@@ -105,6 +117,10 @@ function parseArgs(argv: string[]) {
       args.file = argv[++index];
     } else if (token === '--rig-package') {
       args.rigPackage = argv[++index];
+    } else if (token === '--proxy') {
+      args.proxy = argv[++index];
+    } else if (token === '--replacement') {
+      args.replacement = argv[++index];
     } else if (token === '--mapping') {
       args.mapping = argv[++index];
     } else if (token === '--rig-mode') {
@@ -122,6 +138,9 @@ function parseArgs(argv: string[]) {
     } else if (token === '--shot') {
       const shotId = argv[++index];
       if (shotId) args.shotIds.push(shotId);
+    } else if (token === '--shots') {
+      const shotList = argv[++index];
+      if (shotList) args.proxyShotIds.push(...shotList.split(',').map((item) => item.trim()).filter(Boolean));
     } else if (token === '--time') {
       const value = Number(argv[++index]);
       if (!Number.isFinite(value)) throw new Error('--time must be a finite number');
@@ -265,6 +284,198 @@ async function runCharacterImport(options: {
   });
 }
 
+async function runModelImport(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  file: string;
+  consentToken?: string;
+  allowHeavyModelImports: boolean;
+  output?: string;
+  profile?: string;
+}) {
+  requireExplicitWrite('agent:import-model', options.writeAccess);
+  const target = path.resolve(options.file);
+  await withSession(options, async (session) => {
+    await session.page.locator('[data-agent-model-import-input]').setInputFiles(target);
+    const result = await session.page.evaluate(async (input) => {
+      const fileInput = document.querySelector('[data-agent-model-import-input]') as HTMLInputElement | null;
+      const file = fileInput?.files?.[0];
+      if (!file) throw new Error('Model file was not staged in the browser.');
+      return window.foreScene!.importModel({
+        file,
+        mode: 'separate',
+        consentToken: input.consentToken,
+        extremeConfirmation: input.extremeConfirmation,
+      });
+    }, {
+      consentToken: options.consentToken ?? (options.allowHeavyModelImports ? 'allow-heavy-model-imports' : undefined),
+      extremeConfirmation: options.consentToken === 'IMPORT' ? 'IMPORT' : undefined,
+    });
+    if (options.output) {
+      const output = path.resolve(options.output);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    }
+    printJson({ ...result, ...(options.output ? { output: path.resolve(options.output) } : {}) });
+    if (!result.ok) process.exitCode = 1;
+  });
+}
+
+async function readProxyReplacementSnapshot(session: AgentBrowserSession) {
+  return session.page.evaluate(() => {
+    const api = window.foreScene;
+    if (!api) throw new Error('window.foreScene is not available.');
+    const project = api.getProjectDocument();
+    // Use the dedicated detailed endpoint for every shot. Do not infer staging
+    // from the compact `inspectShot()` response.
+    const shotDocuments = project.shots.map((shot) => api.getShotDocument({ id: shot.id }));
+    return { project: { ...project, shots: shotDocuments }, shotDocuments };
+  });
+}
+
+function safeEvidenceSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'shot';
+}
+
+async function renderProxyEvidence(
+  session: AgentBrowserSession,
+  shots: Array<{ id: string; shotNumber: string }>,
+  phase: 'before' | 'after',
+  reportOutput: string,
+) {
+  const frames = await session.page.evaluate(async (shotIds) => Promise.all(
+    shotIds.map((shotId) => window.foreScene!.renderShotFrame({
+      shotId,
+      pass: 'clay',
+      width: 960,
+      height: 540,
+    })),
+  ), shots.map((shot) => shot.id));
+  const reportPath = path.resolve(reportOutput);
+  const reportDirectory = path.dirname(reportPath);
+  const reportStem = path.basename(reportPath, path.extname(reportPath));
+  const evidence: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index]!;
+    const shot = shots[index]!;
+    if (!frame.ok || !frame.pngDataUrl) {
+      const detail = frame.diagnostics?.map((diagnostic) => diagnostic.message).join('; ') ?? 'No frame data was returned.';
+      throw new Error(`Could not render ${phase} evidence for shot ${shot.shotNumber}: ${detail}`);
+    }
+    const comma = frame.pngDataUrl.indexOf(',');
+    if (comma < 0) throw new Error(`Rendered ${phase} evidence for shot ${shot.shotNumber} was not a data URL.`);
+    const output = path.join(reportDirectory, `${reportStem}.${safeEvidenceSegment(shot.shotNumber)}.${phase}.png`);
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, Buffer.from(frame.pngDataUrl.slice(comma + 1), 'base64'));
+    evidence.push({
+      shotId: shot.id,
+      shotNumber: shot.shotNumber,
+      output,
+      width: frame.width,
+      height: frame.height,
+      sampledTimeSeconds: frame.sampledTimeSeconds,
+      pixelStats: frame.pixelStats,
+      source: frame.source,
+    });
+  }
+  return evidence;
+}
+
+async function runProxyReplacement(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  proxyObjectId: string;
+  replacementObjectId: string;
+  shotIds: string[];
+  output: string;
+  profile?: string;
+}) {
+  requireExplicitWrite('agent:replace-proxy', options.writeAccess);
+  const output = path.resolve(options.output);
+  const report: Record<string, unknown> = {
+    ok: false,
+    command: 'agent:replace-proxy',
+    proxyObjectId: options.proxyObjectId,
+    replacementObjectId: options.replacementObjectId,
+    requestedShotIds: options.shotIds,
+    output,
+  };
+  await withSession(options, async (session) => {
+    let applied = false;
+    try {
+      await waitForAgentIdle(session.page);
+      const before = await readProxyReplacementSnapshot(session);
+      const planned = createProxyReplacementPlan({
+        project: before.project,
+        shotDocuments: before.shotDocuments,
+        proxyObjectId: options.proxyObjectId,
+        replacementObjectId: options.replacementObjectId,
+        requestedShotIds: options.shotIds,
+      });
+      report.before = {
+        projectId: before.project.id,
+        shotIds: before.project.shots.map((shot) => shot.id),
+        panoIds: before.project.panoRefs.map((pano) => pano.id),
+      };
+      if (!planned.ok) {
+        report.errors = planned.errors;
+        return;
+      }
+      report.plan = planned.plan;
+      report.affectedShots = planned.affectedShots;
+      report.beforeEvidence = await renderProxyEvidence(session, planned.affectedShots, 'before', output);
+
+      const preview = await session.page.evaluate((plan) => window.foreScene!.previewPlan(plan), planned.plan);
+      report.preview = preview;
+      if (!preview.ok) {
+        report.errors = preview.diagnostics;
+        return;
+      }
+
+      const apply = await session.page.evaluate(async (plan) => window.foreScene!.applyPlan(plan), planned.plan);
+      report.apply = apply;
+      if (!apply.ok) {
+        report.errors = apply.diagnostics;
+        return;
+      }
+      applied = true;
+
+      const after = await readProxyReplacementSnapshot(session);
+      const verification = verifyProxyReplacement({
+        beforeProject: before.project,
+        afterProject: after.project,
+        proxyObjectId: options.proxyObjectId,
+        replacementObjectId: options.replacementObjectId,
+        affectedShots: planned.affectedShots,
+      });
+      report.verification = verification;
+      if (!verification.ok) throw new Error(verification.errors.join(' '));
+
+      report.afterEvidence = await renderProxyEvidence(session, planned.affectedShots, 'after', output);
+      report.after = {
+        projectId: after.project.id,
+        shotIds: after.project.shots.map((shot) => shot.id),
+        panoIds: after.project.panoRefs.map((pano) => pano.id),
+      };
+      report.ok = true;
+    } catch (error) {
+      report.error = error instanceof Error ? error.message : 'Proxy replacement failed.';
+      if (applied) {
+        report.rollback = await session.page.evaluate(async () => window.foreScene!.undoLastPlan());
+      }
+    } finally {
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+      printJson(report);
+      if (report.ok !== true) process.exitCode = 1;
+    }
+  });
+}
+
 async function runFrame(options: {
   url?: string;
   headless: boolean;
@@ -346,6 +557,7 @@ async function withSession<T>(
     headless: boolean;
     writeAccess: boolean;
     persistWrite: boolean;
+    profile?: string;
   },
   run: (session: AgentBrowserSession) => Promise<T>,
 ): Promise<T> {
@@ -354,6 +566,7 @@ async function withSession<T>(
     headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profileDir: options.profile,
   });
   try {
     return await run(session);
@@ -370,6 +583,7 @@ async function previewOrApply(
     headless: boolean;
     writeAccess: boolean;
     persistWrite: boolean;
+    profile?: string;
   },
 ) {
   const raw = await readFile(path.resolve(planPath), 'utf8');
@@ -379,6 +593,7 @@ async function previewOrApply(
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profile: options.profile,
   }, async (session) => {
     if (command === 'apply') {
       await waitForAgentIdle(session.page);
@@ -402,6 +617,7 @@ async function runScreenshot(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   workspace?: string;
   output: string;
 }) {
@@ -596,12 +812,48 @@ async function main() {
     return;
   }
 
+  if (args.command === 'import-model') {
+    if (!args.file) throw new Error('import-model requires --file <path>.');
+    await runModelImport({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      file: args.file,
+      consentToken: args.consentToken,
+      allowHeavyModelImports: args.allowHeavyModelImports,
+      output: args.output,
+      profile: args.profile,
+    });
+    return;
+  }
+
+  if (args.command === 'replace-proxy') {
+    if (!args.proxy) throw new Error('replace-proxy requires --proxy <object-id>.');
+    if (!args.replacement) throw new Error('replace-proxy requires --replacement <object-id>.');
+    if (args.proxyShotIds.length === 0) throw new Error('replace-proxy requires --shots <shot-id-or-number,...>.');
+    if (!args.output) throw new Error('replace-proxy requires --output <report.json>.');
+    await runProxyReplacement({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      proxyObjectId: args.proxy,
+      replacementObjectId: args.replacement,
+      shotIds: args.proxyShotIds,
+      output: args.output,
+      profile: args.profile,
+    });
+    return;
+  }
+
   if (args.command === 'inspect') {
     await withSession({
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
+      profile: args.profile,
     }, async (session) => {
       printErr(`[agent] connected ${session.url}`);
       printJson(await inspectViaBrowser(session.page));
@@ -619,6 +871,7 @@ async function main() {
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
+      profile: args.profile,
     });
     return;
   }
@@ -630,6 +883,7 @@ async function main() {
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
+      profile: args.profile,
       workspace: args.workspace,
       output: args.output,
     });
