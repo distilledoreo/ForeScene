@@ -97,7 +97,10 @@ describe('ForeScene previs skill contract', () => {
     expect(parsed.errors, parsed.errors.map((error) => error.message).join('\n')).toEqual([]);
     expect(example.shots?.some((shot) => shot.motion?.keyframes && shot.motion.keyframes.length >= 2)).toBe(true);
     expect(example.cast?.every((character) => character.type === 'human_dummy')).toBe(true);
-    expect(readFileSync(path.join(skillRoot, 'examples', 'imported-character-workflow.md'), 'utf8'))
-      .toContain('agent:import-character');
+    const importedWorkflow = readFileSync(path.join(skillRoot, 'examples', 'imported-character-workflow.md'), 'utf8');
+    expect(importedWorkflow).toContain('agent:import-character');
+    expect(importedWorkflow).toContain('shot.stageObject');
+    expect(importedWorkflow).toContain('agent:apply');
+    expect(importedWorkflow).toContain('pose-plan.json');
   });
 });

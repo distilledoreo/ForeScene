@@ -39,7 +39,7 @@
 Supported fields are:
 
 - `durationSeconds`: positive shot duration.
-- `renderControlVideo`: optional boolean that requests `artifacts/previs/shots/<shot-id>.mp4` during orchestration.
+- `renderControlVideo`: optional boolean that requests `artifacts/previs/shots/<shot-number>.mp4` during orchestration. The filename uses the manifest shot number, not the manifest shot ID.
 - `keyframes`: at least two entries with strictly increasing `timeSeconds`.
 - `camera`: optional `position`, `target`, and `fovDegrees`.
 - `staging`: optional subject overrides for `visible`, `transform.position`, `transform.rotation`, `transform.scale`, and `posePreset`.

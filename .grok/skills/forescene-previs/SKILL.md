@@ -49,7 +49,7 @@ Do not generate videos indiscriminately. Use `renderControlVideo: true` only for
 ```bash
 npm run agent:previs -- \
   --manifest path/to/manifest.json \
-  --url https://forescene.app \
+  --url https://ForeScene.distilledlabs.org \
   --write \
   --reset-project \
   --output artifacts/previs
