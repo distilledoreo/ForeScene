@@ -226,12 +226,12 @@ test.describe('Agent API transactions @smoke', () => {
       const api = window.foreScene!;
       return {
         project: api.inspectProject(),
-        actors: api.listObjects({ name: 'Actor', match: 'contains' }),
+        subjects: api.listObjects({ name: 'Subject', match: 'contains' }),
       };
     });
     expect(afterApply.project.name).toBe('Agent E2E Set');
     expect(afterApply.project.objectCount).toBe(baseline.objectCount + 2);
-    expect(afterApply.actors).toHaveLength(2);
+    expect(afterApply.subjects).toHaveLength(2);
 
     await reloadAndAwaitRecovery(page);
     await waitForAgentApi(page);
