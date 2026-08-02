@@ -95,8 +95,9 @@ describe('ForeScene previs skill contract', () => {
     for (const phrase of [
       '3–5 shots',
       'A failed shot blocks the next batch.',
-      'primarySubjectVisible',
-      'requiredPassesPresent',
+      'visual.required-content',
+      'reviewedArtifacts',
+      'criteria exactly once',
       'Empty rooms',
       'When visual evidence conflicts with `validation.json`, trust the visual evidence and mark the shot failed.',
       'open or sample the MP4',
@@ -208,6 +209,32 @@ describe('ForeScene previs skill contract', () => {
     for (const command of new Set(citedCommands)) {
       expect(packageJson.scripts?.[command], `missing package script: ${command}`).toBeTruthy();
     }
+  });
+
+  it('keeps reusable primitives independent from the optional refinement runner', () => {
+    const primitiveCommands = [
+      'agent:import-model',
+      'agent:replace-proxy',
+      'agent:render-passes',
+      'agent:plan-exports',
+      'agent:verify-package',
+    ];
+    for (const command of primitiveCommands) {
+      expect(skill, `primitive command missing from skill: ${command}`).toContain(`npm run ${command}`);
+      expect(packageJson.scripts?.[command], `primitive command missing from package.json: ${command}`).toBeTruthy();
+    }
+    expect(skill).toContain('individual Agent API operations and CLI commands are ForeScene\'s reusable, first-class primitives');
+    expect(skill).toContain('`agent:refine` is an optional advanced runner');
+    expect(skill).toContain('not required for ordinary ForeScene operation, simple asset replacement, normal shot corrections, rendering, or export');
+    expect(skill).toContain('The skill owns production interpretation, visual judgment, repair strategy, and the decision to continue or stop.');
+    expect(skill).toContain('ForeScene and the Agent API provide the operations, validation, preservation mechanisms, and export capabilities');
+
+    const workflowStart = skill.indexOf('## Existing-project refinement workflow');
+    const workflowEnd = skill.indexOf('## Export profiles and package planning');
+    expect(workflowStart).toBeGreaterThanOrEqual(0);
+    expect(workflowEnd).toBeGreaterThan(workflowStart);
+    const ordinaryWorkflow = skill.slice(workflowStart, workflowEnd);
+    expect(ordinaryWorkflow).not.toContain('agent:refine');
   });
 
   it('provides a real motion example and documents imported cast binding', () => {

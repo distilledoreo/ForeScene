@@ -121,6 +121,30 @@ describe('export plan', () => {
     expect(plan.shots[0]!.estimatedFileCount).toBeGreaterThan(10);
   });
 
+  it('plans a transparent character still for a cast-free shot', () => {
+    const project = cloneProject();
+    project.scene.objects = project.scene.objects.filter((object) => object.type !== 'human_dummy');
+    project.shots[0]!.exportSettings = normalizeShotExportSettings({
+      ...defaultShotExportSettings,
+      characterPass: {
+        enabled: true,
+        includeStill: true,
+        includeMotion: true,
+        motionFormat: 'both',
+        backgroundColor: '#00FF00',
+        includeAttachedProps: true,
+      },
+    });
+
+    const plan = createExportPlan(project, project.shots);
+    const characterStill = plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'character-still');
+    expect(characterStill?.disposition).toBe('produce');
+    expect(characterStill?.files.map((file) => file.path)).toEqual([
+      expect.stringContaining('/inputs/characters/viewport_clay_characters.png'),
+    ]);
+    expect(plan.issues.some((issue) => issue.code === 'character-pass-empty')).toBe(true);
+  });
+
   it('treats empty selection as a blocking error', () => {
     const project = cloneProject();
     const plan = createExportPlan(project, []);

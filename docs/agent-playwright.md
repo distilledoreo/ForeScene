@@ -12,10 +12,52 @@ npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
 npm run agent:verify -- --workspace build --output artifacts/verify.png
 npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
 npm run agent:package -- --write --output artifacts/package.zip
+npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig
+npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --write
+npm run agent:import-model -- --file path/to/set.glb --write
+npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
+npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
+npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
+npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
+npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
 `apply` / `run` / `package` **require** explicit `--write` or `--persist-write` and refuse to start without it.
+
+`agent:import-model` takes the same ordinary-model path as **Import 3D scene**.
+Use `--allow-heavy-imports` only after reviewing a returned heavy-import estimate.
+An extreme import additionally requires `--consent-token IMPORT`.
+
+`agent:replace-proxy` insists on complete affected-shot coverage. It writes a
+JSON plan/preview/apply/verification report plus `before`/`after` clay renders
+for each requested shot; if the reread or render check fails after apply, it
+immediately asks the Agent API to undo the replacement.
+
+`agent:render-passes` is read-only and writes six review PNGs per requested
+shot plus `review-manifest.json`: clay with characters, clay clean plate,
+projected with characters, projected clean plate, characters only, and depth.
+Projected rendering fails explicitly when the project has no usable styled pano;
+the manifest keeps that diagnostic rather than disguising a clay fallback.
+
+`agent:plan-exports` persists the exact shared Export workspace plan.
+`agent:verify-package` then checks every planned `produce` file against the
+actual ZIP and exits nonzero with the missing shot, pass kind, and path.
+
+`agent:refine` is the guarded existing-project workflow. It creates
+`refinement-state.json` beside the evidence, captures the first preservation
+snapshot, imports/replaces only the named batch, previews proxy mutations,
+renders the six-pass review matrix, and stops in `awaiting_visual_review`.
+Motion shots also write start, midpoint, endpoint, and MP4 evidence into the
+same `review-manifest.json`; each temporal record includes its output path and
+SHA-256. Use `--approve batch-id --review path/to/batch.semantic.json` after
+semantic review; it must pass every manifest criterion and match every
+rendered still and temporal hash.
+The following batch is rejected until that explicit state transition exists.
+`--finalize --write` runs the final preservation comparison, export plan,
+package download, and ZIP verification. It cannot set production complete while
+a proxy remains visible, an import/replacement did no work, a review is
+incomplete, or preserved IDs, cameras, or timelines changed.
 
 ## Write authorization
 

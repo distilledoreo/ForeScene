@@ -72,7 +72,7 @@ test.describe('Agent API inspection @smoke', () => {
         {
           op: 'object.create',
           ref: 'actorA',
-          object: { type: 'human_dummy', name: 'Actor A', position: [-1.2, 0, 0] },
+          object: { type: 'human_dummy', name: 'Subject A', position: [-1.2, 0, 0] },
         },
         {
           op: 'object.update',
@@ -82,7 +82,7 @@ test.describe('Agent API inspection @smoke', () => {
       ],
     }));
     expect(preview.ok).toBe(true);
-    expect(preview.summary?.createdRefs.actorA?.name).toBe('Actor A');
+    expect(preview.summary?.createdRefs.actorA?.name).toBe('Subject A');
     expect(preview.diff?.objectsCreated).toHaveLength(1);
 
     const objectCountAfterPreview = await page.evaluate(() => window.foreScene!.inspectProject().objectCount);
@@ -139,7 +139,7 @@ test.describe('Agent API transactions @smoke', () => {
       }],
     }), { shotId: shot!.id, camera: detail.camera });
     expect(applied.ok).toBe(true);
-    const frame = await page.evaluate((shotId) => window.foreScene!.renderShotFrame({ shotId, timeSeconds: 1, pass: 'clay' }), shot!.id);
+    const frame = await page.evaluate((shotId) => window.foreScene!.renderShotFrame({ shotId, timeSeconds: 1, appearance: 'clay' }), shot!.id);
     expect(frame.ok).toBe(true);
     expect(frame.sampledTimeSeconds).toBe(1);
     expect(frame.pngDataUrl?.startsWith('data:image/png')).toBe(true);
@@ -178,12 +178,12 @@ test.describe('Agent API transactions @smoke', () => {
           {
             op: 'object.create',
             ref: 'actorA',
-            object: { type: 'human_dummy', name: 'Actor A', position: [-1.2, 0, 0] },
+            object: { type: 'human_dummy', name: 'Subject A', position: [-1.2, 0, 0] },
           },
           {
             op: 'object.create',
             ref: 'actorB',
-            object: { type: 'human_dummy', name: 'Actor B', position: [1.2, 0, 0] },
+            object: { type: 'human_dummy', name: 'Subject B', position: [1.2, 0, 0] },
           },
           {
             op: 'shot.create',
@@ -226,12 +226,12 @@ test.describe('Agent API transactions @smoke', () => {
       const api = window.foreScene!;
       return {
         project: api.inspectProject(),
-        actors: api.listObjects({ name: 'Actor', match: 'contains' }),
+        subjects: api.listObjects({ name: 'Subject', match: 'contains' }),
       };
     });
     expect(afterApply.project.name).toBe('Agent E2E Set');
     expect(afterApply.project.objectCount).toBe(baseline.objectCount + 2);
-    expect(afterApply.actors).toHaveLength(2);
+    expect(afterApply.subjects).toHaveLength(2);
 
     await reloadAndAwaitRecovery(page);
     await waitForAgentApi(page);
@@ -273,6 +273,40 @@ test.describe('Agent API transactions @smoke', () => {
 
     await page.locator('[data-agent-control-stop]').click();
     await expect(page.locator('[data-agent-control-badge="active"]')).toHaveCount(0);
+  });
+
+  test('restores a refinement checkpoint after a failed batch mutation', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'Chromium-only: persistent refinement recovery coverage');
+
+    await enterStudioWorkspace(page);
+    await dismissOverlays(page);
+    await waitForAgentApi(page);
+    const baseline = await page.evaluate(() => window.foreScene!.inspectProject());
+
+    await enableAgentWritesViaUi(page);
+    const checkpoint = await page.evaluate(async () => window.foreScene!.createRefinementCheckpoint({
+      reason: 'Before failed refinement batch',
+    }));
+    expect(checkpoint.ok).toBe(true);
+    expect(checkpoint.revisionId).toBeTruthy();
+
+    const mutation = await page.evaluate(async () => window.foreScene!.applyPlan({
+      version: 1,
+      description: 'Failed refinement batch fixture',
+      commands: [{ op: 'project.updateInfo', name: 'Partial refinement mutation' }],
+    }));
+    expect(mutation.ok).toBe(true);
+    await waitForVerifiedSave(page);
+
+    const restored = await page.evaluate(async ({ projectId, revisionId }) => (
+      window.foreScene!.restoreRefinementCheckpoint({ projectId, revisionId })
+    ), { projectId: baseline.id, revisionId: checkpoint.revisionId! });
+    expect(restored.ok).toBe(true);
+    await waitForAgentApi(page);
+
+    const afterRestore = await page.evaluate(() => window.foreScene!.inspectProject());
+    expect(afterRestore.name).toBe(baseline.name);
+    expect(afterRestore.objectCount).toBe(baseline.objectCount);
   });
 });
 

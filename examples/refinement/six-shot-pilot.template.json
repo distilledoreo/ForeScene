@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "mode": "existing-project-refinement",
+  "preserve": {
+    "project": true,
+    "shots": true,
+    "panoramas": true,
+    "environmentObjects": true,
+    "cameras": true,
+    "timelines": true
+  },
+  "allowMutations": {
+    "shotStaging": [], "pose": [], "camera": [], "timeline": [], "visibility": []
+  },
+  "characterImports": [
+    { "id": "subject-variant-a", "batchId": "pilot", "file": "production/<production-id>/subject-variant-a.glb", "rigPackage": "production/<production-id>/subject-variant-a.fsrig", "rigMode": "saved-rig", "name": "Subject variant A" },
+    { "id": "subject-variant-b", "batchId": "pilot", "file": "production/<production-id>/subject-variant-b.glb", "rigPackage": "production/<production-id>/subject-variant-b.fsrig", "rigMode": "saved-rig", "name": "Subject variant B" },
+    { "id": "subject-variant-c", "batchId": "pilot", "file": "production/<production-id>/subject-variant-c.glb", "rigPackage": "production/<production-id>/subject-variant-c.fsrig", "rigMode": "saved-rig", "name": "Subject variant C" }
+  ],
+  "modelImports": [
+    { "id": "replacement-object-a", "batchId": "pilot", "file": "production/<production-id>/replacement-object-a.glb", "mode": "combined" },
+    { "id": "replacement-object-b", "batchId": "pilot", "file": "production/<production-id>/replacement-object-b.glb", "mode": "combined" }
+  ],
+  "characterAssignments": [
+    { "id": "assign-subject-variant-a", "importId": "subject-variant-a", "replaceObjectId": "replace-with-subject-variant-a-placeholder-id", "shots": ["replace-with-subject-variant-a-shot-id"] },
+    { "id": "assign-subject-variant-b", "importId": "subject-variant-b", "replaceObjectId": "replace-with-subject-variant-b-placeholder-id", "shots": ["replace-with-subject-variant-b-shot-id"] },
+    { "id": "assign-subject-variant-c", "importId": "subject-variant-c", "replaceObjectId": "replace-with-subject-variant-c-placeholder-id", "shots": ["replace-with-subject-variant-c-shot-id"] }
+  ],
+  "proxyReplacements": [
+    { "id": "replace-object-a", "batchId": "pilot", "proxyObjectId": "replace-with-object-a-proxy-id", "replacementImportId": "replacement-object-a", "shots": ["replace-with-object-a-shot-id", "replace-with-motion-shot-id"] },
+    { "id": "replace-object-b", "batchId": "pilot", "proxyObjectId": "replace-with-object-b-proxy-id", "replacementImportId": "replacement-object-b", "shots": ["replace-with-object-b-shot-id", "replace-with-motion-shot-id"] }
+  ],
+  "batches": [
+    {
+      "id": "pilot",
+      "shots": [
+        "replace-with-subject-variant-a-shot-id",
+        "replace-with-subject-variant-b-shot-id",
+        "replace-with-subject-variant-c-shot-id",
+        "replace-with-object-a-shot-id",
+        "replace-with-object-b-shot-id",
+        "replace-with-motion-shot-id"
+      ]
+    }
+  ],
+  "deliverablesProfile": "ai-control-full",
+  "reviewPolicy": { "additionalCriteria": [], "shotRequirements": [] },
+  "finalization": { "scope": "reviewed_shots" },
+  "subjectObjectIds": ["subject-variant-a", "subject-variant-b", "subject-variant-c"]
+}

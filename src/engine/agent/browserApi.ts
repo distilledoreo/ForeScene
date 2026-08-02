@@ -5,7 +5,12 @@
 
 import type { LocationProject, Shot, Workspace } from '../../domain/types';
 import { createExportPlan } from '../exportPlan';
-import { renderShotFrame as renderShotFrameEngine } from '../renderers';
+import {
+  renderShotCharacterFrame,
+  renderShotDepthFrame,
+  renderShotFrame as renderShotFrameEngine,
+  renderShotProjectedFrame,
+} from '../renderers';
 import { sampleShotTimeline } from '../shotTimeline';
 import {
   computePixelStatsFromDataUrl,
@@ -32,6 +37,8 @@ import {
   renderAgentShotVideo,
 } from './videoRenderControl';
 import { resetAgentProject } from './projectReset';
+import { restoreProjectRevision } from '../projectSafety';
+import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -57,6 +64,8 @@ import type {
   AgentEntityTarget,
   AgentExportPlanRequest,
   AgentExportPlanResult,
+  AgentModelImportInput,
+  AgentModelImportResult,
   AgentObjectInspection,
   AgentObjectQuery,
   AgentPackageExportRequest,
@@ -64,6 +73,7 @@ import type {
   AgentPlanApplyResult,
   AgentPlanHistoryEntry,
   AgentPlanPreviewResult,
+  AgentRefinementCheckpointResult,
   AgentProjectInspection,
   AgentRenderShotFrameInput,
   AgentRenderShotFrameResult,
@@ -79,6 +89,7 @@ import type {
   ForeSceneBrowserApi,
 } from './protocol';
 import { FORESCENE_AGENT_API_VERSION } from './protocol';
+import { writeAccessRequiredDiagnostic } from './diagnostics';
 import {
   analyzeCharacterImport,
   analyzeSavedRigCharacter,
@@ -89,6 +100,11 @@ import {
   importSavedRigCharacter,
   isCharacterImportActive,
 } from './characterImport';
+import {
+  ModelImportConsentRequiredError,
+  createModelImportPlan,
+} from '../modelImport';
+import { importModelIntoProject } from '../modelImportService';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -100,6 +116,12 @@ function readInspectionContext(): AgentInspectionContext {
     selectedShotId: projectState.selectedShotId,
     revisionId: safety.activeRevisionId,
   };
+}
+
+/** A clean plate may legitimately be a nearly uniform wall or floor. */
+function rejectFrameStats(stats: RenderPixelStats | undefined, allowFlatFrame: boolean) {
+  const rejection = rejectRenderPixelStats(stats);
+  return allowFlatFrame && rejection?.code === 'frame_zero_variance' ? null : rejection;
 }
 
 function isBusy(status: ForeSceneAgentStatus): boolean {
@@ -117,9 +139,27 @@ function resolveShotsForExport(
   shotIds: string[] | undefined,
 ): { shots: Shot[]; diagnostics: AgentExportPlanResult['diagnostics'] } {
   const diagnostics: AgentExportPlanResult['diagnostics'] = [];
-  if (shotIds && shotIds.length > 0) {
+  if (shotIds !== undefined) {
+    if (shotIds.length === 0) {
+      diagnostics.push(agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'An explicit shotIds selection cannot be empty.',
+        { path: 'shotIds' },
+      ));
+      return { shots: [], diagnostics };
+    }
+    const seen = new Set<string>();
     const shots: Shot[] = [];
     for (const id of shotIds) {
+      if (seen.has(id)) {
+        diagnostics.push(agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          `Shot id "${id}" is listed more than once.`,
+          { path: 'shotIds' },
+        ));
+        continue;
+      }
+      seen.add(id);
       const shot = project.shots.find((candidate) => candidate.id === id);
       if (!shot) {
         diagnostics.push(
@@ -150,6 +190,14 @@ function requireInspectionAccess(): AgentExportPlanResult['diagnostics'] | null 
     ];
   }
   return null;
+}
+
+function refinementWriteDiagnostics(operation: string): AgentRefinementCheckpointResult['diagnostics'] | null {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return [writeAccessRequiredDiagnostic(operation)];
+  }
+  const busy = collectAgentBusyDiagnostics();
+  return busy.length > 0 ? busy : null;
 }
 
 export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
@@ -215,6 +263,20 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       }
       return structuredClone(readInspectionContext().project);
+    },
+
+    getShotDocument(target: AgentEntityTarget): Shot {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
+      if (!shot) throw new AgentApiError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${resolved.id}".`);
+      return structuredClone(shot);
     },
 
     listObjects(query?: AgentObjectQuery) {
@@ -397,6 +459,59 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return listAgentHistory();
     },
 
+    async createRefinementCheckpoint(input) {
+      const blocked = refinementWriteDiagnostics('createRefinementCheckpoint');
+      if (blocked) return { ok: false, diagnostics: blocked };
+      const safety = useProjectSafetyStore.getState();
+      if (!safety.flushProject) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready for a refinement checkpoint.')] };
+      }
+      const revision = await safety.flushProject(`Refinement checkpoint: ${input.reason}`);
+      if (!revision) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Could not create a verified refinement checkpoint.')] };
+      }
+      return { ok: true, revisionId: revision.revision.id, diagnostics: [] };
+    },
+
+    async restoreRefinementCheckpoint(input) {
+      const blocked = refinementWriteDiagnostics('restoreRefinementCheckpoint');
+      if (blocked) return { ok: false, diagnostics: blocked };
+      const live = useProjectStore.getState().project;
+      if (live.id !== input.projectId) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Refinement checkpoint belongs to a different project.')] };
+      }
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      if (!runDestructive) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready for rollback.')] };
+      }
+      try {
+        const restored = await restoreProjectRevision(input.projectId, input.revisionId);
+        const verified = await runDestructive('Restore refinement batch checkpoint', () => {
+          if (useProjectStore.getState().project.id !== input.projectId) {
+            throw new Error('The loaded project changed before rollback could be committed.');
+          }
+          useProjectStore.setState((state) => ({
+            project: structuredClone(restored.project),
+            buildHistoryPast: [],
+            buildHistoryFuture: [],
+            buildHistoryBatchDepth: 0,
+            buildHistoryBatchCaptured: false,
+            buildHistoryCoalesceActive: false,
+            shotCameraFlying: state.workspace === 'shots',
+          }));
+        });
+        return { ok: true, revisionId: verified?.revision.id ?? restored.revision.id, diagnostics: [] };
+      } catch (error) {
+        return {
+          ok: false,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            error instanceof Error ? error.message : 'Refinement checkpoint rollback failed.',
+          )],
+        };
+      }
+    },
+
     async resetProject(input: AgentResetProjectRequest): Promise<AgentPlanApplyResult & { projectId?: string }> {
       return resetAgentProject(input);
     },
@@ -415,6 +530,71 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     cancelPackageExport(): AgentPackageExportResult {
       return cancelAgentPackageExport();
+    },
+
+    async importModel(input: AgentModelImportInput): Promise<AgentModelImportResult> {
+      if (useAgentControlStore.getState().controlMode !== 'read-write') {
+        return {
+          ok: false,
+          warnings: [],
+          diagnostics: [
+            agentError(
+              AGENT_DIAGNOSTIC_CODES.writeAccessRequired,
+              'Write access is required to import a model.',
+            ),
+          ],
+        };
+      }
+      const plan = createModelImportPlan([input.file]);
+      if (plan.jobs.length !== 1 || plan.issues.some((issue) => issue.tone === 'error')) {
+        const diagnostics = plan.issues
+          .filter((issue) => issue.tone === 'error')
+          .map((issue) => agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, issue.message, { path: 'file' }));
+        if (plan.jobs.length !== 1 && diagnostics.length === 0) {
+          diagnostics.push(agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'Select one supported model or portable scene bundle to import.',
+            { path: 'file' },
+          ));
+        }
+        return {
+          ok: false,
+          warnings: plan.issues.filter((issue) => issue.tone === 'warning').map((issue) => issue.message),
+          diagnostics,
+        };
+      }
+      try {
+        const batch = await importModelIntoProject(plan.jobs[0]!, {
+          mode: input.mode ?? 'separate',
+          allowHeavy: input.consentToken === 'allow-heavy-model-imports' || input.consentToken === 'IMPORT',
+          extremeConfirmation: input.extremeConfirmation,
+        });
+        return {
+          ok: true,
+          objectRefs: batch.items.map(({ object }) => ({
+            kind: 'object', id: object.id, name: object.name,
+          })),
+          summary: batch.summary,
+          importBudget: batch.analysis,
+          verifiedRevisionId: batch.verifiedRevisionId,
+          warnings: batch.warnings,
+        };
+      } catch (error) {
+        if (error instanceof ModelImportConsentRequiredError) {
+          return {
+            ok: false,
+            requiresConsent: true,
+            importBudget: error.analysis,
+            warnings: error.analysis.warnings,
+            diagnostics: [agentError('import_consent_required', error.message)],
+          };
+        }
+        return {
+          ok: false,
+          warnings: [],
+          diagnostics: [agentError('model_import_failed', error instanceof Error ? error.message : 'Model import failed.')],
+        };
+      }
     },
 
     analyzeCharacterImport(input) {
@@ -769,11 +949,81 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         },
       };
 
+      const appearance = input.appearance ?? 'clay';
+      const peopleVariant = input.peopleVariant ?? 'with_people';
+      const content = input.content ?? 'full_scene';
+      if (content === 'characters_only' && peopleVariant === 'clean_plate') {
+        return {
+          ok: false,
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'characters_only cannot be combined with the clean_plate people variant.',
+          )],
+        };
+      }
+      if (appearance === 'depth' && content === 'characters_only') {
+        return {
+          ok: false,
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            'Depth stills support full_scene or clean_plate content; characters_only is a separate transparent pass.',
+          )],
+        };
+      }
+
       try {
-        // Same internal path as package export inputs/viewport_clay.png.
-        const frame = await renderShotFrameEngine(project, shotForRender, {
-          peopleVariant: 'with_people',
-        });
+        let pngDataUrl: string;
+        let renderedWidth: number;
+        let renderedHeight: number;
+        let pixelStats: RenderPixelStats | undefined;
+        let source: NonNullable<AgentRenderShotFrameResult['source']>;
+        let depth: AgentRenderShotFrameResult['depth'];
+
+        if (content === 'characters_only') {
+          const frame = await renderShotCharacterFrame(project, shotForRender, {
+            appearance: appearance === 'projected' ? 'projected' : 'clay',
+            includeAttachedProps: true,
+          });
+          pngDataUrl = await blobToDataUrl(frame.blob);
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_character_renderer';
+        } else if (appearance === 'projected') {
+          const frame = await renderShotProjectedFrame(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_projected_renderer';
+        } else if (appearance === 'depth') {
+          const frame = await renderShotDepthFrame(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          source = 'canonical_depth_renderer';
+          depth = {
+            encoding: frame.encoding,
+            nearMeters: frame.nearMeters,
+            farMeters: frame.farMeters,
+            invert: frame.invert,
+            grayscalePixelRatio: 0,
+          };
+        } else {
+          // Same internal path as package export inputs/viewport_clay.png.
+          const frame = await renderShotFrameEngine(project, shotForRender, { peopleVariant });
+          pngDataUrl = frame.dataUrl;
+          renderedWidth = frame.width;
+          renderedHeight = frame.height;
+          pixelStats = frame.pixelStats;
+          source = 'canonical_clay_renderer';
+        }
 
         const revisionNow = useProjectSafetyStore.getState().activeRevisionId ?? '';
         if (revisionAtStart && revisionNow && revisionAtStart !== revisionNow) {
@@ -781,8 +1031,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             ok: false,
             shotId: input.shotId,
             revisionId: revisionNow,
-            width: frame.width,
-            height: frame.height,
+            width: renderedWidth,
+            height: renderedHeight,
             ...(timeSample ? {
               requestedTimeSeconds: timeSample.requestedTimeSeconds,
               sampledTimeSeconds: timeSample.sampledTimeSeconds,
@@ -798,22 +1048,35 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
         // Prefer WebGL readPixels stats; fall back to decoding the PNG data URL
         // when readback is flaky (preserveDrawingBuffer races, partial buffers).
-        let pixelStats: RenderPixelStats | undefined = frame.pixelStats;
-        let rejection = rejectRenderPixelStats(pixelStats);
-        if (rejection && frame.dataUrl) {
+        const allowFlatFrame = content === 'characters_only' || peopleVariant === 'clean_plate';
+        let rejection = rejectFrameStats(pixelStats, allowFlatFrame);
+        if ((!pixelStats || rejection) && pngDataUrl) {
           try {
-            const fromDataUrl = await computePixelStatsFromDataUrl(frame.dataUrl);
-            const second = rejectRenderPixelStats(fromDataUrl);
-            if (!second) {
-              pixelStats = fromDataUrl;
-              rejection = null;
-            } else {
-              // Keep the more informative of the two measurements.
-              pixelStats = fromDataUrl;
-              rejection = second;
-            }
+            const fromDataUrl = await computePixelStatsFromDataUrl(pngDataUrl);
+            const second = rejectFrameStats(fromDataUrl, allowFlatFrame);
+            pixelStats = fromDataUrl;
+            rejection = second;
           } catch {
             // Keep original rejection.
+          }
+        }
+        if (depth) {
+          depth.grayscalePixelRatio = await grayscalePixelRatioFromDataUrl(pngDataUrl);
+          if (depth.grayscalePixelRatio < 0.995) {
+            return {
+              ok: false,
+              shotId: input.shotId,
+              revisionId: revisionNow,
+              width: renderedWidth,
+              height: renderedHeight,
+              pngDataUrl,
+              pixelStats,
+              depth,
+              diagnostics: [agentError(
+                'depth_not_grayscale',
+                `Depth renderer produced non-grayscale pixels (ratio ${depth.grayscalePixelRatio.toFixed(4)}).`,
+              )],
+            };
           }
         }
         if (rejection) {
@@ -821,10 +1084,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             ok: false,
             shotId: input.shotId,
             revisionId: revisionNow,
-            width: frame.width,
-            height: frame.height,
-            pngDataUrl: frame.dataUrl,
+            width: renderedWidth,
+            height: renderedHeight,
+            pngDataUrl,
             pixelStats,
+            depth,
             diagnostics: [
               agentError(rejection.code, rejection.message),
             ],
@@ -835,15 +1099,19 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           ok: true,
           shotId: input.shotId,
           revisionId: revisionNow,
-          width: frame.width,
-          height: frame.height,
+          width: renderedWidth,
+          height: renderedHeight,
           ...(timeSample ? {
             requestedTimeSeconds: timeSample.requestedTimeSeconds,
             sampledTimeSeconds: timeSample.sampledTimeSeconds,
           } : {}),
-          pngDataUrl: frame.dataUrl,
+          pngDataUrl,
           pixelStats,
-          source: 'canonical_clay_renderer',
+          appearance,
+          peopleVariant,
+          content,
+          depth,
+          source,
         };
       } catch (error) {
         return {
@@ -899,6 +1167,48 @@ function waitAnimationFrames(count: number): Promise<void> {
       setTimeout(step, 16);
     }
   });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Could not encode rendered image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function grayscalePixelRatioFromDataUrl(dataUrl: string): Promise<number> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const next = new Image();
+    next.onload = () => resolve(next);
+    next.onerror = () => reject(new Error('Could not decode depth PNG.'));
+    next.src = dataUrl;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext('2d');
+  if (!context || canvas.width <= 0 || canvas.height <= 0) {
+    throw new Error('Could not read depth PNG pixels.');
+  }
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let sampled = 0;
+  let grayscale = 0;
+  const stride = 8;
+  for (let y = 0; y < canvas.height; y += stride) {
+    for (let x = 0; x < canvas.width; x += stride) {
+      const index = (y * canvas.width + x) * 4;
+      if (pixels[index + 3]! <= 8) continue;
+      sampled += 1;
+      const red = pixels[index]!;
+      const green = pixels[index + 1]!;
+      const blue = pixels[index + 2]!;
+      if (Math.max(red, green, blue) - Math.min(red, green, blue) <= 1) grayscale += 1;
+    }
+  }
+  return sampled > 0 ? grayscale / sampled : 0;
 }
 
 export class AgentApiError extends Error {

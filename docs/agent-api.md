@@ -25,8 +25,10 @@ Available now:
 - Project menu → **Agent Console** (same `window.foreScene` path)
 - Timeline inspection and arbitrary-time sampling without changing the live shot
 - Declarative timeline replacement, keyframe create/update/delete, staging, preview/apply, and undo
-- Arbitrary-time clay frames via `renderShotFrame({ shotId, timeSeconds })`
+- Multipass still review via `renderShotFrame({ shotId, appearance, peopleVariant, content })`
 - Controlled shot video rendering with progress and cancellation via `renderShotVideo()`
+- `getShotDocument({ id })` for exact shot staging/keyframe inspection
+- `importModel({ file })` for the same protected geometry import used by the manual dialog
 
 ## Quick start
 
@@ -60,6 +62,20 @@ Agent control mode is an **accidental-write guard**, not a security boundary aga
 
 CLI launches always clear a stale localStorage write seed unless `--persist-write` is present. `apply` / `run` / `package` refuse to start without an explicit `--write` or `--persist-write`.
 
+## Model import
+
+`importModel({ file, mode })` uses the shared model conversion and local-recovery
+commit path behind **Import 3D scene**. It creates texture-free graybox geometry,
+registers its binary payloads, and adds the resulting objects in the same protected
+project mutation. It requires `read-write` access. Heavy geometry returns a
+structured `requiresConsent` result until its caller sends the explicit
+`allow-heavy-model-imports` token; extreme imports also require the literal
+`IMPORT` confirmation.
+
+`getShotDocument({ id })` returns a structured copy of the requested `Shot`,
+including `objectOverrides` and `cameraKeyframes`. Use it when a workflow must
+copy exact staging rather than infer it from summary inspection fields.
+
 ## Status shape
 
 ```json
@@ -91,6 +107,157 @@ CLI launches always clear a stale localStorage write seed unless `--persist-writ
 `createExportPlan({ shotIds?: string[] })` calls the same pure `createExportPlan()` engine used by the Export workspace. It does not render or download anything.
 
 When `shotIds` is omitted, every shot is planned (matching the Export workspace default selection).
+
+Use the CLI when a review workflow needs a persisted preflight plan and a
+post-export archive check:
+
+```bash
+npm run agent:plan-exports -- --shots 01,02,03 --output artifacts/preflight/deliverables-plan.json
+npm run agent:verify-package -- \
+  --plan artifacts/preflight/deliverables-plan.json \
+  --package artifacts/package.zip
+```
+
+`agent:verify-package` reads the ZIP and requires every file from every
+`produce` artifact in the recorded export plan. It reports each missing entry
+with its shot and artifact kind, so a requested projected, clean-plate,
+character-only, or depth pass cannot silently disappear from delivery.
+
+## Multipass still review
+
+`renderShotFrame` uses the same render paths as package export without writing
+assets or changing the live shot. `appearance` is `clay`, `projected`, or
+`depth`; `peopleVariant` is `with_people` or `clean_plate`; and `content` is
+`full_scene` or `characters_only`. Character-only is a transparent pass with
+the environment removed. Depth results include linear camera-depth metadata and
+the sampled grayscale ratio. Projected requests fail with a clear diagnostic
+when no valid styled panorama/projector is available.
+
+```bash
+npm run agent:render-passes -- \
+  --shots 01,02,03,04 \
+  --output artifacts/reviews/batch-01
+```
+
+This writes six deterministic files per shot — clay with characters, clay clean
+plate, projected with characters, projected clean plate, characters only, and
+depth — plus `review-manifest.json`. The manifest records each renderer source,
+pixel/depth inspection data, and a SHA-256 for comparison before packaging.
+`agent:refine` adds a `temporal` record for every renderable camera move to
+that same manifest:
+
+```json
+{
+  "temporal": {
+    "renderable": true,
+    "start": { "output": "temporal/start.png", "sha256": "sha256:..." },
+    "mid": { "output": "temporal/mid.png", "sha256": "sha256:..." },
+    "end": { "output": "temporal/end.png", "sha256": "sha256:..." },
+    "video": {
+      "output": "temporal/motion-preview.mp4",
+      "sha256": "sha256:...",
+      "durationSeconds": 3
+    }
+  }
+}
+```
+
+Semantic approval must include a generic criterion result for every criterion
+listed by the manifest. Renderable shots include `temporal.motion` and must
+pass it; non-renderable shots do not receive that criterion. Every still and
+temporal artifact must also appear in `reviewedArtifacts` with its matching
+SHA-256.
+
+## Existing-project refinement
+
+`agent:refine` is intentionally separate from the greenfield previs manifest.
+It captures a durable preservation baseline before the first mutation, then
+permits one batch at a time. The baseline protects project, shot, panorama,
+existing-object, camera, and timeline identities; import/replacement work may
+add objects and alter only the required staging overrides.
+
+```json
+{
+  "version": 2,
+  "mode": "existing-project-refinement",
+  "preserve": {
+    "project": true, "shots": true, "panoramas": true,
+    "environmentObjects": true, "cameras": true, "timelines": true
+  },
+  "allowMutations": {
+    "shotStaging": [], "pose": [], "camera": [], "timeline": [], "visibility": []
+  },
+  "characterImports": [
+    { "id": "subject-variant-a", "batchId": "batch-01", "file": "production/<production-id>/subject-variant-a.glb", "rigPackage": "production/<production-id>/subject-variant-a.fsrig", "rigMode": "saved-rig" }
+  ],
+  "modelImports": [
+    { "id": "replacement-object-a", "batchId": "batch-01", "file": "production/<production-id>/replacement-object-a.glb", "mode": "combined" }
+  ],
+  "characterAssignments": [
+    { "id": "assign-subject-a", "importId": "subject-variant-a", "replaceObjectId": "existing-subject-placeholder", "shots": ["01"] }
+  ],
+  "proxyReplacements": [
+    { "id": "replace-object-a", "batchId": "batch-01", "proxyObjectId": "proxy-object-a", "replacementImportId": "replacement-object-a", "shots": ["01"] }
+  ],
+  "batches": [{ "id": "batch-01", "shots": ["01"] }],
+  "deliverablesProfile": "ai-control-full",
+  "reviewPolicy": { "additionalCriteria": [], "shotRequirements": [] },
+  "finalization": { "scope": "reviewed_shots" },
+  "subjectObjectIds": []
+}
+```
+
+Run a batch, complete a semantic visual review, approve it explicitly, then
+advance or finalize:
+
+```bash
+npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
+npm run agent:refine -- --plan production/refinement-plan.json --approve batch-01 --review artifacts/refinement/reviews/batch-01.semantic.json --output artifacts/refinement
+npm run agent:refine -- --plan production/refinement-plan.json --finalize --write --output artifacts/refinement
+```
+
+A batch ends in `awaiting_visual_review` only if every required still pass,
+temporal sample (for motion shots), and preservation check succeeds. The next
+batch is blocked until `--approve` receives a semantic review file. It must
+pass every shot, provide a concrete reason for every manifest criterion, and
+include the SHA-256 of every reviewed pass and temporal artifact. Allowed
+camera or timeline changes add the `refinement.authorized-change` criterion.
+Finalization applies `deliverablesProfile`
+(`ai-control-full`) before creating the export plan, then rejects missing
+required clay, projected, clean-plate, cast, depth, or renderable-motion
+artifacts. The planner emits one artifact per viewport pass containing both
+people variants, and finalization validates those filenames inside the shared
+artifact. Character still output is also produced as a transparent image for a
+cast-free shot, keeping the package pass matrix predictable. `--profile`
+selects only the persistent Playwright browser directory, never a deliverables
+profile. Use `--retry batch-id` to restore a failed batch's starting revision
+and run it again, or `--rollback batch-id` to restore without rerunning.
+Finalization refuses
+unapproved batches, failed/missing replacement work, visible proxies, any
+preservation drift, or a package that omits a planned artifact.
+
+Refinement finalization defaults to `scope: "reviewed_shots"` and exports the
+deduplicated shot ids stored on approved batch state. Set
+`finalization.scope` to `"entire_project"` to require an approved review for
+every project shot; missing and extra reviewed ids are reported explicitly.
+The finalization report records `reviewedShotIds`, `plannedShotIds`,
+`exportedShotIds`, `unreviewedExportedShotIds`, `reviewedButUnexportedShotIds`,
+and `productionComplete`. Direct export API calls reject unknown, duplicate,
+or explicitly empty `shotIds` selections.
+
+Approval also stores an `approval-record.json` containing the exact manifest
+hash, semantic-review hash, reviewed shot ids, criterion ids, and artifact
+count. Approval recomputes the manifest and semantic hashes and reads every
+still and temporal output from disk; finalization repeats those checks before
+it can produce a package.
+
+For a production copy, start from
+`examples/refinement/six-shot-pilot.template.json`, replace every placeholder
+object/shot id with IDs from that copied project, and run the pilot before
+adding later production batches. It demonstrates three saved-rig subject
+variants, two replacement objects, and a sixth motion shot. Motion shots
+also emit start/mid/end clay frames plus a downloaded 720p MP4 preview, so
+framing and temporal output can be reviewed together.
 
 ## Preview
 
@@ -215,9 +382,34 @@ Character analysis and import are exposed through the Agent API and appear in ca
 ```bash
 npm run agent:analyze-character -- --file path/to/actor.glb
 npm run agent:import-character -- --file path/to/actor.glb --rig-mode auto --write
+npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --output artifacts/preflight/actor.json
+npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --allow-heavy-character-imports --write
 ```
 
-Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. Large imports use the device-aware model-import budget and require an explicit consent token. Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
+Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. `saved-rig` stages both binary inputs, validates the package and source topology before writing, then applies the shared saved-rig importer. Results include GLB, rig-package, and combined fingerprints; a repeated exact pair reuses the existing character instead of creating a duplicate. Large imports use the device-aware model-import budget and require explicit consent (`--allow-heavy-character-imports` or `--consent-token`). Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
+
+## Ordinary model import and proxy replacement
+
+```bash
+npm run agent:import-model -- --file input/model.glb --write
+npm run agent:replace-proxy -- \
+  --proxy proxy-id --replacement imported-model-id --shots 08,09,10 \
+  --output artifacts/refinement/replacement-object.json --write
+```
+
+`agent:import-model` calls `window.foreScene.importModel()` and the exact shared
+engine service used by **Import 3D scene**. It does not create a separate agent
+asset path. Heavy geometry requires `--allow-heavy-imports`; extreme geometry
+also requires `--consent-token IMPORT`.
+
+`agent:replace-proxy` gets full shot documents (including direct and keyframe
+object overrides), creates one atomic plan, renders before evidence, previews,
+applies, rereads and verifies the project, then renders after evidence. It
+refuses missing objects, empty/partial shot coverage, failed previews, failed
+renders, or any project/shot/panorama/camera/timeline verification mismatch. A
+post-apply failure invokes Agent undo and records that rollback in its JSON
+report. The report sits beside per-shot `.before.png` and `.after.png` clay
+frames.
 
 ## Visual CLI
 

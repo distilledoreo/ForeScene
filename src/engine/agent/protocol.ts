@@ -9,6 +9,7 @@ import type {
   ExportSettingsOverride,
   HumanPose,
   LocationProject,
+  Shot,
   SceneObjectType,
   StagingRole,
   Transform,
@@ -28,6 +29,8 @@ import type { VideoResolutionPresetId } from '../videoPresets';
 import type { SceneContentMode } from '../shotSceneState';
 import type { AgentDiagnostic } from './diagnostics';
 import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
+import type { ImportBudgetEstimate } from '../modelImportBudget';
+import type { ModelImportMode, ModelImportSummary } from '../modelImport';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -553,13 +556,21 @@ export interface AgentResetProjectRequest {
   resetAuthorization?: string;
 }
 
-/** Clean clay first-frame render via the shared package-export renderer. */
+/** One inspectable still pass via the same renderers used by package export. */
 export interface AgentRenderShotFrameInput {
   shotId: string;
   timeSeconds?: number;
-  pass?: 'clay';
+  appearance?: 'clay' | 'projected' | 'depth';
+  peopleVariant?: 'with_people' | 'clean_plate';
+  content?: 'full_scene' | 'characters_only';
   width?: number;
   height?: number;
+}
+
+export interface AgentRefinementCheckpointResult {
+  ok: boolean;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
 }
 
 export interface AgentRenderPixelStats {
@@ -581,9 +592,23 @@ export interface AgentRenderShotFrameResult {
   pixelStats?: AgentRenderPixelStats;
   requestedTimeSeconds?: number;
   sampledTimeSeconds?: number;
+  appearance?: AgentRenderShotFrameInput['appearance'];
+  peopleVariant?: AgentRenderShotFrameInput['peopleVariant'];
+  content?: AgentRenderShotFrameInput['content'];
+  depth?: {
+    encoding: 'linear-camera-depth';
+    nearMeters: number;
+    farMeters: number;
+    invert: boolean;
+    grayscalePixelRatio: number;
+  };
   diagnostics?: AgentDiagnostic[];
-  /** Marks frames produced by the canonical clean clay renderer. */
-  source?: 'canonical_clay_renderer';
+  /** Marks the shared renderer used to produce this exact pass. */
+  source?:
+    | 'canonical_clay_renderer'
+    | 'canonical_projected_renderer'
+    | 'canonical_depth_renderer'
+    | 'canonical_character_renderer';
 }
 
 export interface AgentShotVideoRenderInput {
@@ -666,7 +691,27 @@ export interface AgentCharacterImportAnalysis {
   animationClips: Array<{ name: string; durationSeconds: number }>;
   estimatedMemoryBytes: number;
   requiresConsent: boolean;
+  /** Full device-aware estimate used to decide whether an explicit import consent is needed. */
+  importBudget: ImportBudgetEstimate;
+  consent: AgentCharacterImportConsent;
   warnings: string[];
+}
+
+/** Explicit authorization state for a potentially heavy character import. */
+export interface AgentCharacterImportConsent {
+  required: boolean;
+  provided: boolean;
+  authorized: boolean;
+}
+
+/** Read-only saved-rig preflight enriched with stable source/package fingerprints. */
+export interface AgentSavedRigCharacterAnalysis extends SavedRigCompatibilityAnalysis {
+  glbFingerprint: string;
+  rigPackageFingerprint: string;
+  /** SHA-256 over the exact GLB and rig-package fingerprints. */
+  importFingerprint: string;
+  importBudget?: ImportBudgetEstimate;
+  consent: AgentCharacterImportConsent;
 }
 
 export interface AgentCharacterImportResult {
@@ -679,6 +724,16 @@ export interface AgentCharacterImportResult {
   importedRigPreserved?: boolean;
   appliedSavedRig?: boolean;
   topologyVerified?: boolean;
+  /** SHA-256 of the exact GLB bytes for saved-rig imports. */
+  glbFingerprint?: string;
+  /** SHA-256 of the exact .fsrig/.panorig bytes for saved-rig imports. */
+  rigPackageFingerprint?: string;
+  /** Combined GLB + rig-package fingerprint used for duplicate protection. */
+  importFingerprint?: string;
+  importBudget?: ImportBudgetEstimate;
+  consent?: AgentCharacterImportConsent;
+  /** True when an exact saved-rig pair was already imported into this project. */
+  reused?: boolean;
   verifiedRevisionId?: string;
   warnings: string[];
   diagnostics?: AgentDiagnostic[];
@@ -728,6 +783,27 @@ export interface AgentSavedRigCharacterImportInput extends AgentSavedRigCharacte
   name: string;
 }
 
+/** Generic geometry import, shared with the manual Import 3D scene dialog. */
+export interface AgentModelImportInput {
+  file: File;
+  mode?: ModelImportMode;
+  /** Required for heavy imports; the CLI supplies this only with explicit consent. */
+  consentToken?: string;
+  /** Must be the literal `IMPORT` for extreme imports. */
+  extremeConfirmation?: string;
+}
+
+export interface AgentModelImportResult {
+  ok: boolean;
+  objectRefs?: AgentEntityReference[];
+  summary?: ModelImportSummary;
+  importBudget?: ImportBudgetEstimate;
+  requiresConsent?: boolean;
+  verifiedRevisionId?: string;
+  warnings: string[];
+  diagnostics?: AgentDiagnostic[];
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -740,6 +816,8 @@ export interface ForeSceneBrowserApi {
    * autonomous previs). Does not expose write handles.
    */
   getProjectDocument(): LocationProject;
+  /** Full structuredClone for a single shot, including staging and keyframes. */
+  getShotDocument(target: AgentEntityTarget): Shot;
   listObjects(query?: AgentObjectQuery): AgentObjectSummary[];
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
@@ -759,6 +837,10 @@ export interface ForeSceneBrowserApi {
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
+  /** Create a verified local recovery point before a resumable refinement batch. */
+  createRefinementCheckpoint(input: { reason: string }): Promise<AgentRefinementCheckpointResult>;
+  /** Restore only a verified revision of the currently loaded project. */
+  restoreRefinementCheckpoint(input: { projectId: string; revisionId: string }): Promise<AgentRefinementCheckpointResult>;
   waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus>;
 
   /**
@@ -769,10 +851,7 @@ export interface ForeSceneBrowserApi {
     options?: AgentWaitForViewportReadyInput,
   ): Promise<AgentWaitForViewportReadyResult>;
 
-  /**
-   * Render a clean clay first frame for a shot using the same path as
-   * package `inputs/viewport_clay.png` (not a UI screenshot).
-   */
+  /** Render an inspectable still pass using the same paths as package export (not a UI screenshot). */
   renderShotFrame(input: AgentRenderShotFrameInput): Promise<AgentRenderShotFrameResult>;
   renderShotVideo(input: AgentShotVideoRenderInput): Promise<AgentShotVideoRenderResult>;
   getShotVideoRenderProgress(): AgentShotVideoProgress | null;
@@ -790,9 +869,11 @@ export interface ForeSceneBrowserApi {
   getPackageExportProgress(): AgentPackageExportProgressSnapshot | null;
   cancelPackageExport(): AgentPackageExportResult;
 
+  importModel(input: AgentModelImportInput): Promise<AgentModelImportResult>;
+
   analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis>;
   importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;
-  analyzeSavedRigCharacter(input: AgentSavedRigCharacterInput): Promise<SavedRigCompatibilityAnalysis>;
+  analyzeSavedRigCharacter(input: AgentSavedRigCharacterInput): Promise<AgentSavedRigCharacterAnalysis>;
   importSavedRigCharacter(input: AgentSavedRigCharacterImportInput): Promise<AgentCharacterImportResult>;
   getCharacterImportProgress(): AgentCharacterImportProgress | null;
   cancelCharacterImport(): { ok: boolean; cancelled: boolean };

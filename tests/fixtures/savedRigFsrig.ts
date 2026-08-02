@@ -6,7 +6,7 @@ import type { PoseableRigAsset } from '../../src/domain/types';
  * The optional vertex count also makes a valid-but-incompatible package for
  * preflight regression coverage.
  */
-export async function savedRigFsrig(options: { vertexCount?: number } = {}): Promise<Uint8Array> {
+export async function savedRigFsrig(options: { vertexCount?: number; characterName?: string } = {}): Promise<Uint8Array> {
   const vertexCount = options.vertexCount ?? 6;
   const influenceCount = vertexCount * 4;
   const identity = [
@@ -32,7 +32,7 @@ export async function savedRigFsrig(options: { vertexCount?: number } = {}): Pro
     format: 'forescene-poseable-rig',
     version: 2,
     exportedAt: '2026-01-01T00:00:00.000Z',
-    characterName: 'Joseph',
+    characterName: options.characterName ?? 'Joseph',
     rig,
   }));
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });

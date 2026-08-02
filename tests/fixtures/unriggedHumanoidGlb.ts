@@ -1,5 +1,5 @@
 /** Small, genuinely unrigged humanoid-shaped GLB used for saved-rig autorig coverage. */
-export function unriggedHumanoidGlb(): ArrayBuffer {
+export function unriggedHumanoidGlb(options: { nodeName?: string } = {}): ArrayBuffer {
   const positions = Buffer.from(new Float32Array([
     -0.2, 0, 0, 0.2, 0, 0, 0, 1.5, 0,
     -0.5, 1, 0, -0.2, 1, 0, -0.2, 1.5, 0,
@@ -18,7 +18,7 @@ export function unriggedHumanoidGlb(): ArrayBuffer {
       max: [0.2, 1.5, 0],
     }],
     meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    nodes: [{ name: 'UnriggedHumanoid', mesh: 0 }],
+    nodes: [{ name: options.nodeName ?? 'UnriggedHumanoid', mesh: 0 }],
     scenes: [{ nodes: [0] }],
     scene: 0,
   };

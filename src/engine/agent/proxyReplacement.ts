@@ -1,0 +1,532 @@
+/**
+ * Deterministic proxy-to-model replacement planning.
+ *
+ * The planner consumes full Shot documents (rather than inspection summaries),
+ * so transform, visibility, and keyframe staging are copied without guessing.
+ */
+
+import type {
+  LocationProject,
+  SceneObject,
+  Shot,
+  ShotObjectOverride,
+} from '../../domain/types';
+import { projectFingerprint } from './planDiff';
+import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from './protocol';
+
+export interface ProxyReplacementPlanInput {
+  project: LocationProject;
+  /** Full copies retrieved via `window.foreScene.getShotDocument()`. */
+  shotDocuments: readonly Shot[];
+  proxyObjectId: string;
+  replacementObjectId: string;
+  /** Internal ids or production shot numbers (for example `08`). */
+  requestedShotIds?: readonly string[];
+  /**
+   * Every shot intended to use this replacement across all batches. On the
+   * first batch, these shots are explicitly staged to preserve their current
+   * proxy visibility while both scene objects remain globally hidden.
+   */
+  intendedShotIds?: readonly string[];
+  /** Set false for later batches after the visibility baseline was prepared. */
+  initializeVisibility?: boolean;
+}
+
+export interface ProxyReplacementAffectedShot {
+  id: string;
+  shotNumber: string;
+  keyframeIds: string[];
+}
+
+export type ProxyReplacementPlanResult =
+  | {
+      ok: true;
+      plan: ForeSceneAgentPlan;
+      /** Shots whose visibility baseline was explicitly prepared. */
+      preparedShots: ProxyReplacementAffectedShot[];
+      /** Shots that were swapped from the proxy to the replacement now. */
+      affectedShots: ProxyReplacementAffectedShot[];
+    }
+  | { ok: false; errors: string[] };
+
+export interface ProxyReplacementVerificationInput {
+  beforeProject: LocationProject;
+  afterProject: LocationProject;
+  proxyObjectId: string;
+  replacementObjectId: string;
+  /** Visibility-only preparation made for later, not-yet-swapped batches. */
+  preparedShots?: readonly ProxyReplacementAffectedShot[];
+  affectedShots: readonly ProxyReplacementAffectedShot[];
+}
+
+export interface ProxyReplacementVerificationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+/**
+ * Build one atomic Agent plan that swaps the requested proxy occurrences.
+ *
+ * Both objects are globally hidden. The first swap explicitly stages every
+ * intended occurrence so unswapped batches keep their proxy while unrelated
+ * shots cannot leak either object through global visibility.
+ * It deliberately does not apply the plan; callers must preview it first.
+ */
+export function createProxyReplacementPlan(
+  input: ProxyReplacementPlanInput,
+): ProxyReplacementPlanResult {
+  const proxy = input.project.scene.objects.find((object) => object.id === input.proxyObjectId);
+  const replacement = input.project.scene.objects.find((object) => object.id === input.replacementObjectId);
+  if (!proxy) return { ok: false, errors: [`Proxy object "${input.proxyObjectId}" was not found.`] };
+  if (!replacement) return { ok: false, errors: [`Replacement object "${input.replacementObjectId}" was not found.`] };
+  if (proxy.id === replacement.id) return { ok: false, errors: ['Proxy and replacement must be different objects.'] };
+  if (replacement.type !== 'imported_model' && replacement.type !== 'human_dummy') {
+    return { ok: false, errors: [`Replacement "${replacement.name}" must be an imported model or poseable character.`] };
+  }
+
+  const documents = new Map(input.shotDocuments.map((shot) => [shot.id, shot]));
+  const missingDocuments = input.project.shots
+    .filter((shot) => !documents.has(shot.id))
+    .map((shot) => shot.shotNumber);
+  if (missingDocuments.length > 0) {
+    return { ok: false, errors: [`Full shot documents were not provided for: ${missingDocuments.join(', ')}.`] };
+  }
+
+  const allAffected = input.project.shots
+    .map((summary) => documents.get(summary.id)!)
+    .filter((shot) => shotStagesObject(shot, proxy.id));
+  if (allAffected.length === 0) {
+    return { ok: false, errors: [`Proxy "${proxy.name}" is not staged or animated in any shot.`] };
+  }
+
+  const selected = resolveRequestedShots(input.project, input.requestedShotIds);
+  if (!selected.ok) return selected;
+  const selectedIds = new Set(selected.shots.map((shot) => shot.id));
+  const intended = resolveRequestedShots(
+    input.project,
+    input.intendedShotIds ?? input.requestedShotIds ?? allAffected.map((shot) => shot.id),
+  );
+  if (!intended.ok) return intended;
+  const intendedIds = new Set(intended.shots.map((shot) => shot.id));
+  const requestedWithoutProxy = selected.shots.filter((shot) => !allAffected.some((affected) => affected.id === shot.id));
+  if (input.requestedShotIds && input.requestedShotIds.length > 0 && requestedWithoutProxy.length > 0) {
+    return {
+      ok: false,
+      errors: [`Requested shots do not stage the proxy: ${requestedWithoutProxy.map((shot) => shot.shotNumber).join(', ')}.`],
+    };
+  }
+  const intendedWithoutProxy = intended.shots.filter((shot) => !allAffected.some((affected) => affected.id === shot.id));
+  if (intendedWithoutProxy.length > 0) {
+    return {
+      ok: false,
+      errors: [`Intended shots do not stage the proxy: ${intendedWithoutProxy.map((shot) => shot.shotNumber).join(', ')}.`],
+    };
+  }
+  const omittedActualOccurrences = allAffected.filter((shot) => !intendedIds.has(shot.id));
+  if (omittedActualOccurrences.length > 0) {
+    return {
+      ok: false,
+      errors: [`Intended shots omit existing proxy staging in: ${omittedActualOccurrences.map((shot) => shot.shotNumber).join(', ')}.`],
+    };
+  }
+  const selectedOutsideIntended = selected.shots.filter((shot) => !intendedIds.has(shot.id));
+  if (selectedOutsideIntended.length > 0) {
+    return {
+      ok: false,
+      errors: [`Requested shots are not listed as intended proxy occurrences: ${selectedOutsideIntended.map((shot) => shot.shotNumber).join(', ')}.`],
+    };
+  }
+
+  const affected = allAffected.filter((shot) => selectedIds.has(shot.id));
+  const prepared = allAffected.filter((shot) => intendedIds.has(shot.id));
+  const initializeVisibility = input.initializeVisibility !== false;
+  const commands: ForeSceneAgentCommand[] = initializeVisibility
+    ? [
+      {
+        op: 'object.update',
+        object: { id: replacement.id },
+        updates: { transform: cloneTransform(proxy), visible: false },
+      },
+      {
+        op: 'object.update',
+        object: { id: proxy.id },
+        updates: { visible: false },
+      },
+    ]
+    : [];
+
+  if (initializeVisibility) {
+    for (const shot of prepared) {
+      appendStagingPair(commands, {
+        shotId: shot.id,
+        proxyId: proxy.id,
+        replacementId: replacement.id,
+        source: shot.objectOverrides?.[proxy.id],
+        proxyVisible: shot.objectOverrides?.[proxy.id]?.visible ?? proxy.visible,
+        replacementVisible: false,
+      });
+      for (const keyframe of shot.cameraKeyframes) {
+        const source = keyframe.objectOverrides?.[proxy.id];
+        if (!source) continue;
+        appendKeyframeStagingPair(commands, {
+          shotId: shot.id,
+          keyframeId: keyframe.id,
+          proxyId: proxy.id,
+          replacementId: replacement.id,
+          source,
+          proxyVisible: source.visible ?? proxy.visible,
+          replacementVisible: false,
+        });
+      }
+    }
+  }
+
+  for (const shot of affected) {
+    appendStagingPair(commands, {
+      shotId: shot.id,
+      proxyId: proxy.id,
+      replacementId: replacement.id,
+      source: shot.objectOverrides?.[proxy.id],
+      proxyVisible: false,
+      replacementVisible: true,
+    });
+    for (const keyframe of shot.cameraKeyframes) {
+      const source = keyframe.objectOverrides?.[proxy.id];
+      if (!source) continue;
+      appendKeyframeStagingPair(commands, {
+        shotId: shot.id,
+        keyframeId: keyframe.id,
+        proxyId: proxy.id,
+        replacementId: replacement.id,
+        source,
+        proxyVisible: false,
+        replacementVisible: true,
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    plan: {
+      version: 1,
+      planId: `proxy-replacement-${proxy.id}-${replacement.id}`,
+      description: `Replace proxy ${proxy.name} with ${replacement.name}`,
+      expectedFingerprint: projectFingerprint(input.project),
+      commands,
+    },
+    preparedShots: initializeVisibility ? describeAffectedShots(prepared, proxy.id) : [],
+    affectedShots: describeAffectedShots(affected, proxy.id),
+  };
+}
+
+function resolveRequestedShots(
+  project: LocationProject,
+  requested: readonly string[] | undefined,
+): { ok: true; shots: Shot[] } | { ok: false; errors: string[] } {
+  if (!requested || requested.length === 0) return { ok: true, shots: [...project.shots] };
+  const shots: Shot[] = [];
+  const unresolved: string[] = [];
+  const seen = new Set<string>();
+  for (const identifier of requested) {
+    const shot = project.shots.find((candidate) => candidate.id === identifier || candidate.shotNumber === identifier);
+    if (!shot) {
+      unresolved.push(identifier);
+      continue;
+    }
+    if (!seen.has(shot.id)) {
+      seen.add(shot.id);
+      shots.push(shot);
+    }
+  }
+  if (unresolved.length > 0) return { ok: false, errors: [`Unknown shot identifiers: ${unresolved.join(', ')}.`] };
+  return { ok: true, shots };
+}
+
+function shotStagesObject(shot: Shot, objectId: string): boolean {
+  return Boolean(shot.objectOverrides?.[objectId])
+    || shot.cameraKeyframes.some((keyframe) => Boolean(keyframe.objectOverrides?.[objectId]));
+}
+
+function describeAffectedShots(shots: readonly Shot[], proxyObjectId: string): ProxyReplacementAffectedShot[] {
+  return shots.map((shot) => ({
+    id: shot.id,
+    shotNumber: shot.shotNumber,
+    keyframeIds: shot.cameraKeyframes
+      .filter((keyframe) => Boolean(keyframe.objectOverrides?.[proxyObjectId]))
+      .map((keyframe) => keyframe.id),
+  }));
+}
+
+function cloneTransform(object: Pick<SceneObject, 'transform'>) {
+  return {
+    position: [...object.transform.position] as [number, number, number],
+    rotation: [...object.transform.rotation] as [number, number, number],
+    scale: [...object.transform.scale] as [number, number, number],
+  };
+}
+
+function stageInput(source: ShotObjectOverride, visible: boolean) {
+  return {
+    ...(source.transform ? { transform: structuredClone(source.transform) } : {}),
+    ...(source.humanPose ? { humanPose: structuredClone(source.humanPose) } : {}),
+    visible,
+  };
+}
+
+function appendStagingPair(
+  commands: ForeSceneAgentCommand[],
+  params: {
+    shotId: string;
+    proxyId: string;
+    replacementId: string;
+    source?: ShotObjectOverride;
+    proxyVisible: boolean;
+    replacementVisible: boolean;
+  },
+): void {
+  const source = params.source ?? {};
+  commands.push(
+    {
+      op: 'shot.stageObject',
+      shot: { id: params.shotId },
+      object: { id: params.replacementId },
+      ...stageInput(source, params.replacementVisible),
+    },
+    {
+      op: 'shot.stageObject',
+      shot: { id: params.shotId },
+      object: { id: params.proxyId },
+      ...stageInput(source, params.proxyVisible),
+    },
+  );
+}
+
+function appendKeyframeStagingPair(
+  commands: ForeSceneAgentCommand[],
+  params: {
+    shotId: string;
+    keyframeId: string;
+    proxyId: string;
+    replacementId: string;
+    source: ShotObjectOverride;
+    proxyVisible: boolean;
+    replacementVisible: boolean;
+  },
+): void {
+  commands.push(
+    {
+      op: 'shot.keyframe.stageObject',
+      shot: { id: params.shotId },
+      keyframe: { id: params.keyframeId },
+      object: { id: params.replacementId },
+      ...stageInput(params.source, params.replacementVisible),
+    },
+    {
+      op: 'shot.keyframe.stageObject',
+      shot: { id: params.shotId },
+      keyframe: { id: params.keyframeId },
+      object: { id: params.proxyId },
+      ...stageInput(params.source, params.proxyVisible),
+    },
+  );
+}
+
+/** Verify only the intended replacement changed; preserve cameras and timelines. */
+export function verifyProxyReplacement(
+  input: ProxyReplacementVerificationInput,
+): ProxyReplacementVerificationResult {
+  const errors: string[] = [];
+  const before = input.beforeProject;
+  const after = input.afterProject;
+  if (after.id !== before.id) errors.push('Project id changed during replacement.');
+  if (!sameIds(before.shots, after.shots)) errors.push('Shot ids changed during replacement.');
+  if (!sameIds(before.panoRefs, after.panoRefs)) errors.push('Panorama ids changed during replacement.');
+  if (!sameIds(before.scene.objects, after.scene.objects)) errors.push('Scene object ids changed during replacement.');
+
+  const beforeProxy = before.scene.objects.find((object) => object.id === input.proxyObjectId);
+  const afterProxy = after.scene.objects.find((object) => object.id === input.proxyObjectId);
+  const beforeReplacement = before.scene.objects.find((object) => object.id === input.replacementObjectId);
+  const afterReplacement = after.scene.objects.find((object) => object.id === input.replacementObjectId);
+  if (!beforeProxy || !afterProxy || !beforeReplacement || !afterReplacement) {
+    errors.push('Proxy or replacement object could not be reread after apply.');
+    return { ok: false, errors };
+  }
+  if (!sameJson(afterReplacement.transform, beforeProxy.transform)) {
+    errors.push('Replacement global transform does not match the proxy transform.');
+  }
+  if (afterProxy.visible !== false || afterReplacement.visible !== false) {
+    errors.push('Proxy/replacement global visibility is not fully hidden.');
+  }
+
+  const affectedById = new Map(input.affectedShots.map((shot) => [shot.id, shot]));
+  const preparedById = new Map((input.preparedShots ?? []).map((shot) => [shot.id, shot]));
+  for (const beforeShot of before.shots) {
+    const afterShot = after.shots.find((shot) => shot.id === beforeShot.id);
+    if (!afterShot) continue;
+    if (!sameJson(beforeShot.camera, afterShot.camera)) {
+      errors.push(`Camera changed for shot ${beforeShot.shotNumber}.`);
+    }
+    if (!sameIds(beforeShot.cameraKeyframes, afterShot.cameraKeyframes)) {
+      errors.push(`Timeline keyframes changed for shot ${beforeShot.shotNumber}.`);
+      continue;
+    }
+    for (const beforeKeyframe of beforeShot.cameraKeyframes) {
+      const afterKeyframe = afterShot.cameraKeyframes.find((keyframe) => keyframe.id === beforeKeyframe.id);
+      if (!afterKeyframe) continue;
+      if (!sameJson(stripKeyframeOverrides(beforeKeyframe), stripKeyframeOverrides(afterKeyframe))) {
+        errors.push(`Timeline camera data changed for shot ${beforeShot.shotNumber}, keyframe ${beforeKeyframe.id}.`);
+      }
+    }
+
+    const affected = affectedById.get(beforeShot.id);
+    const prepared = preparedById.get(beforeShot.id);
+    if (!affected && !prepared) {
+      if (!sameJson(beforeShot.objectOverrides, afterShot.objectOverrides)) {
+        errors.push(`Staging changed for unaffected shot ${beforeShot.shotNumber}.`);
+      }
+      for (const beforeKeyframe of beforeShot.cameraKeyframes) {
+        const afterKeyframe = afterShot.cameraKeyframes.find((keyframe) => keyframe.id === beforeKeyframe.id);
+        if (afterKeyframe && !sameJson(beforeKeyframe.objectOverrides, afterKeyframe.objectOverrides)) {
+          errors.push(`Keyframe staging changed for unaffected shot ${beforeShot.shotNumber}, keyframe ${beforeKeyframe.id}.`);
+        }
+      }
+      continue;
+    }
+    if (!sameJson(
+      stripObjectPair(beforeShot.objectOverrides, input.proxyObjectId, input.replacementObjectId),
+      stripObjectPair(afterShot.objectOverrides, input.proxyObjectId, input.replacementObjectId),
+    )) {
+      errors.push(`Unrelated staging changed for shot ${beforeShot.shotNumber}.`);
+    }
+    const directInput = {
+      errors,
+      label: `shot ${beforeShot.shotNumber}`,
+      source: beforeShot.objectOverrides?.[input.proxyObjectId],
+      proxy: afterShot.objectOverrides?.[input.proxyObjectId],
+      replacement: afterShot.objectOverrides?.[input.replacementObjectId],
+      proxyVisible: effectiveVisible(afterProxy, afterShot.objectOverrides?.[input.proxyObjectId]),
+      replacementVisible: effectiveVisible(afterReplacement, afterShot.objectOverrides?.[input.replacementObjectId]),
+    };
+    if (affected) {
+      verifyStagingPair({ ...directInput, allowMissingSource: affected.keyframeIds.length > 0 });
+    } else if (prepared) {
+      verifyPreparedStagingPair({ ...directInput, expectedProxyVisible: directInput.source?.visible ?? beforeProxy.visible });
+    }
+    for (const keyframeId of (affected ?? prepared)!.keyframeIds) {
+      const sourceKeyframe = beforeShot.cameraKeyframes.find((keyframe) => keyframe.id === keyframeId);
+      const afterKeyframe = afterShot.cameraKeyframes.find((keyframe) => keyframe.id === keyframeId);
+      if (!sourceKeyframe || !afterKeyframe) {
+        errors.push(`Keyframe ${keyframeId} could not be reread for shot ${beforeShot.shotNumber}.`);
+        continue;
+      }
+      if (!sameJson(
+        stripObjectPair(sourceKeyframe.objectOverrides, input.proxyObjectId, input.replacementObjectId),
+        stripObjectPair(afterKeyframe.objectOverrides, input.proxyObjectId, input.replacementObjectId),
+      )) {
+        errors.push(`Unrelated keyframe staging changed for shot ${beforeShot.shotNumber}, keyframe ${keyframeId}.`);
+      }
+      const keyframeInput = {
+        errors,
+        label: `shot ${beforeShot.shotNumber}, keyframe ${keyframeId}`,
+        source: sourceKeyframe.objectOverrides?.[input.proxyObjectId],
+        proxy: afterKeyframe.objectOverrides?.[input.proxyObjectId],
+        replacement: afterKeyframe.objectOverrides?.[input.replacementObjectId],
+        proxyVisible: effectiveVisible(afterProxy, afterKeyframe.objectOverrides?.[input.proxyObjectId]),
+        replacementVisible: effectiveVisible(afterReplacement, afterKeyframe.objectOverrides?.[input.replacementObjectId]),
+      };
+      if (affected) verifyStagingPair(keyframeInput);
+      else verifyPreparedStagingPair({ ...keyframeInput, expectedProxyVisible: keyframeInput.source?.visible ?? beforeProxy.visible });
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function verifyStagingPair(params: {
+  errors: string[];
+  label: string;
+  source?: ShotObjectOverride;
+  proxy?: ShotObjectOverride;
+  replacement?: ShotObjectOverride;
+  proxyVisible: boolean;
+  replacementVisible: boolean;
+  allowMissingSource?: boolean;
+}): void {
+  if (!params.source) {
+    if (!params.allowMissingSource) {
+      params.errors.push(`Proxy source staging was missing for ${params.label}.`);
+      return;
+    }
+  } else {
+    if (!sameJson(params.proxy?.transform, params.source.transform)) {
+      params.errors.push(`Proxy transform was not retained for ${params.label}.`);
+    }
+    if (!sameJson(params.replacement?.transform, params.source.transform)) {
+      params.errors.push(`Replacement transform was not copied for ${params.label}.`);
+    }
+    if (!sameJson(params.proxy?.humanPose, params.source.humanPose)) {
+      params.errors.push(`Proxy pose changed for ${params.label}.`);
+    }
+    if (!sameJson(params.replacement?.humanPose, params.source.humanPose)) {
+      params.errors.push(`Replacement pose was not copied for ${params.label}.`);
+    }
+  }
+  if (params.proxyVisible || !params.replacementVisible) {
+    params.errors.push(`Proxy/replacement visibility is wrong for ${params.label}.`);
+  }
+}
+
+function verifyPreparedStagingPair(params: {
+  errors: string[];
+  label: string;
+  source?: ShotObjectOverride;
+  proxy?: ShotObjectOverride;
+  replacement?: ShotObjectOverride;
+  proxyVisible: boolean;
+  replacementVisible: boolean;
+  expectedProxyVisible: boolean;
+}): void {
+  if (params.source) {
+    if (!sameJson(params.proxy?.transform, params.source.transform)) {
+      params.errors.push(`Proxy transform was not retained for prepared ${params.label}.`);
+    }
+    if (!sameJson(params.replacement?.transform, params.source.transform)) {
+      params.errors.push(`Replacement transform was not copied for prepared ${params.label}.`);
+    }
+    if (!sameJson(params.proxy?.humanPose, params.source.humanPose)
+      || !sameJson(params.replacement?.humanPose, params.source.humanPose)) {
+      params.errors.push(`Proxy/replacement pose was not retained for prepared ${params.label}.`);
+    }
+  }
+  if (params.proxyVisible !== params.expectedProxyVisible || params.replacementVisible) {
+    params.errors.push(`Proxy/replacement visibility is wrong for prepared ${params.label}.`);
+  }
+}
+
+function effectiveVisible(object: SceneObject, override: ShotObjectOverride | undefined): boolean {
+  return override?.visible ?? object.visible;
+}
+
+function stripKeyframeOverrides(keyframe: Shot['cameraKeyframes'][number]) {
+  const { objectOverrides: _objectOverrides, ...withoutObjectOverrides } = keyframe;
+  return withoutObjectOverrides;
+}
+
+function stripObjectPair(
+  overrides: Shot['objectOverrides'],
+  proxyObjectId: string,
+  replacementObjectId: string,
+) {
+  if (!overrides) return overrides;
+  const next = { ...overrides };
+  delete next[proxyObjectId];
+  delete next[replacementObjectId];
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function sameIds<T extends { id: string }>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((value, index) => value.id === right[index]?.id);
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}

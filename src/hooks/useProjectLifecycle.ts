@@ -459,7 +459,10 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
           onStateChange: setPersistenceState,
         });
         persistenceControllerRef.current = controller;
-        setFlushProject((reason) => controller.flushAndLoadActiveRevision(reason));
+        setFlushProject((reason) => controller.flushCurrentProject(
+          useProjectStore.getState().project,
+          reason,
+        ));
         setRunDestructiveProjectMutation((reason, mutation) => controller.runDestructiveMutation(
           useProjectStore.getState().project,
           reason,

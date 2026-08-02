@@ -9,33 +9,30 @@ For each batch:
 1. Apply only the selected staging, camera, timeline, or asset changes.
 2. Render the required review frames and motion samples.
 3. Inspect every frame and, for motion, the start, midpoint, endpoint, and opened/sampled MP4.
-4. Write `artifacts/previs/reviews/batch-<nn>.json`.
+4. Write `review-manifest.json` and a semantic review using its exact criteria and artifact hashes.
 5. Repair every failure and rerender its affected output.
-6. Continue only when the batch review has `approved: true` and every required pass is present.
+6. Continue only when the batch review has `approved: true` and every required criterion passes.
 
 A failed shot blocks the next batch. A passing command, file existence, or numeric validation alone does not approve a batch.
 
 ```json
 {
-  "shots": ["01", "02", "03", "04"],
-  "approved": false,
-  "results": [
+  "approved": true,
+  "manifestSha256": "sha256:...",
+  "shots": [
     {
-      "shotNumber": "01",
-      "primarySubjectVisible": true,
-      "framingMatchesDescription": true,
-      "correctCharacterVariant": true,
-      "realCreatureVisible": null,
-      "requiredPassesPresent": true,
-      "decision": "pass"
-    },
-    {
-      "shotNumber": "03",
-      "primarySubjectVisible": false,
-      "framingMatchesDescription": false,
-      "requiredPassesPresent": true,
-      "decision": "fail",
-      "reasons": ["The intended primary subject is outside the camera frame."]
+      "id": "shot-id",
+      "verdict": "pass",
+      "criteria": [
+        {
+          "id": "visual.required-content",
+          "decision": "pass",
+          "reason": "All declared shot content is visible in the linked evidence."
+        }
+      ],
+      "reviewedArtifacts": [
+        { "path": "clay_with_people.png", "sha256": "sha256:..." }
+      ]
     }
   ]
 }
@@ -43,13 +40,12 @@ A failed shot blocks the next batch. A passing command, file existence, or numer
 
 ## Required result fields
 
-Each shot result must identify the reviewed output paths/revision and include:
+Each shot result must identify the reviewed output paths and match the
+manifest’s criteria exactly once. Use `pass`, `fail`, or `not_applicable` only
+when the criterion definition permits it. Every result needs a concrete
+reason. Every still and temporal artifact in the manifest must be listed in
+`reviewedArtifacts` with the matching SHA-256.
 
-- `primarySubjectVisible`
-- `framingMatchesDescription`
-- `correctCharacterVariant` when a variant is required
-- `realCreatureVisible` when a creature is required
-- `requiredPassesPresent`
-- `decision` and concrete `reasons` for every failure
-
-If a result is unknown, mark the batch failed until the frame is inspected. After repair, append or replace the review with a fresh render/revision record; do not approve using a stale review.
+If a result is unknown, mark the shot failed until the evidence is inspected.
+After repair, append or replace the review with a fresh manifest hash and
+artifact records; do not approve using stale evidence.

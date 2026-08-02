@@ -144,6 +144,84 @@ describe('agent browser API (store-backed)', () => {
     expect(result.plan?.packageType).toBe(expected.packageType);
   });
 
+  it('returns an isolated complete shot document for staging workflows', () => {
+    useAgentControlStore.setState({ controlMode: 'read-only' });
+    const project = createDefaultProject();
+    const prop = createSceneObject('box', 1);
+    project.scene.objects.push(prop);
+    const shot = project.shots[0]!;
+    shot.objectOverrides = {
+      [prop.id]: {
+        visible: false,
+        transform: {
+          position: [3, 1, -2],
+          rotation: [0, 20, 0],
+          scale: [1.5, 1.5, 1.5],
+        },
+      },
+    };
+    shot.cameraKeyframes = [{
+      id: 'keyframe_staged',
+      label: 'Reveal',
+      timeSeconds: 1,
+      camera: structuredClone(shot.camera),
+      objectOverrides: structuredClone(shot.objectOverrides),
+    }];
+    useProjectStore.setState({ project, workspace: 'shots' });
+
+    const document = createForeSceneBrowserApi().getShotDocument({ id: shot.id });
+    expect(document.objectOverrides?.[prop.id]?.transform?.position).toEqual([3, 1, -2]);
+    expect(document.cameraKeyframes[0]?.objectOverrides?.[prop.id]?.visible).toBe(false);
+
+    document.objectOverrides![prop.id]!.visible = true;
+    expect(useProjectStore.getState().project.shots[0]?.objectOverrides?.[prop.id]?.visible).toBe(false);
+  });
+
+  it('imports ordinary geometry through the protected shared model-import service', async () => {
+    useAgentControlStore.setState({ controlMode: 'read-write' });
+    const project = createDefaultProject();
+    const originalShotIds = project.shots.map((shot) => shot.id);
+    const originalPanoIds = project.panoRefs.map((pano) => pano.id);
+    const originalObjectCount = project.scene.objects.length;
+    useProjectStore.setState({ project, workspace: 'build' });
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
+      await mutation();
+      const live = useProjectStore.getState().project;
+      return {
+        project: structuredClone(live),
+        revision: {
+          id: 'rev_model_import',
+          projectId: live.id,
+          kind: 'autosave',
+          reason: 'test',
+          createdAt: new Date().toISOString(),
+          manifest: '{}',
+          resources: { projectAssetKeys: [], modelAssetKeys: [] },
+        },
+      };
+    });
+
+    const result = await createForeSceneBrowserApi().importModel({
+      file: new File([
+        'v 0 0 0\n',
+        'v 1 0 0\n',
+        'v 0 1 0\n',
+        'f 1 2 3\n',
+      ], 'replacement.obj', { type: 'text/plain' }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.verifiedRevisionId).toBe('rev_model_import');
+    expect(result.objectRefs).toHaveLength(1);
+    const after = useProjectStore.getState().project;
+    expect(after.id).toBe(project.id);
+    expect(after.shots.map((shot) => shot.id)).toEqual(originalShotIds);
+    expect(after.panoRefs.map((pano) => pano.id)).toEqual(originalPanoIds);
+    expect(after.scene.objects).toHaveLength(originalObjectCount + 1);
+    expect(after.scene.objects.find((object) => object.id === result.objectRefs![0]!.id)?.type).toBe('imported_model');
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(undefined);
+  });
+
   it('disableWrites demotes write access; UI store escalates', async () => {
     useAgentControlStore.setState({ controlMode: 'read-only' });
     useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
