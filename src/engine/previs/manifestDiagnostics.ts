@@ -27,6 +27,10 @@ export const PREVIS_DIAGNOSTIC_CODES = {
   invalidRange: 'invalid_range',
   invalidCombination: 'invalid_combination',
   customBlueprintUnsupported: 'custom_blueprint_unsupported',
+  missingSavedRigPackage: 'missing_saved_rig_package',
+  unsupportedSavedRigExtension: 'unsupported_saved_rig_extension',
+  unexpectedRigPackage: 'unexpected_rig_package',
+  missingImportedCharacterSource: 'missing_imported_character_source',
 } as const;
 
 export function previsError(

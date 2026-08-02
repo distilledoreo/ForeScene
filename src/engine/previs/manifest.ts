@@ -50,6 +50,7 @@ export const PREVIS_IMPORTED_CHARACTER_RIG_MODES = [
   'preserve-existing',
   'auto',
   'autorig',
+  'saved-rig',
 ] as const;
 export type PrevisImportedCharacterRigMode = (typeof PREVIS_IMPORTED_CHARACTER_RIG_MODES)[number];
 
@@ -173,6 +174,8 @@ export interface PrevisImportedCharacterDefinition {
   /** Local GLB, embedded glTF, or FBX path, resolved relative to the manifest. */
   source: string;
   rigMode: PrevisImportedCharacterRigMode;
+  /** Explicit ForeScene .fsrig or legacy .panorig package for saved-rig mode. */
+  rigPackage?: string;
   height?: number;
   defaultPose?: string;
 }

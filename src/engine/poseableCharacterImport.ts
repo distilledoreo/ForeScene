@@ -30,6 +30,17 @@ import { validateHumanoidMapping } from './importedRig/mappingValidation';
 import { calculateCanonicalPoseBases, validateCanonicalPoseBases } from './importedRig/canonicalFrames';
 import { fingerprintImportedRestPose, fingerprintImportedSkeleton } from './importedRig/fingerprints';
 import { buildBonePathMap } from './importedRig/bonePaths';
+import { buildCanonicalAutorigTopology } from './autorig/topology';
+import {
+  canApplyPoseableRigPackage,
+  cleanupImportedPoseableRigPackage,
+  mergeImportedRigOntoTarget,
+  parsePoseableRigPackageFile,
+  resolvePoseableRigPackageVertexCount,
+  type ImportedPoseableRigPackage,
+  type PoseableRigPackageManifest,
+} from './poseableRigPackage';
+import { DEFAULT_POSEABLE_HEIGHT_METERS, defaultPoseableOrientation } from './poseableRigNormalize';
 
 export {
   DEFAULT_POSEABLE_HEIGHT_METERS,
@@ -82,6 +93,46 @@ export interface PoseableCharacterImportResult {
   vertexCount: number;
 }
 
+export interface SavedRigCharacterImportOptions {
+  sourceFile: File;
+  rigPackageFile: File;
+  name: string;
+  approximateHeightMeters?: number;
+  orientation?: PoseableCharacterOrientation;
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
+}
+
+export interface CharacterImportDiagnostic {
+  code: string;
+  message: string;
+  severity: 'warning' | 'error';
+}
+
+export interface SavedRigCompatibilityAnalysis {
+  ok: boolean;
+  sourceFileName: string;
+  rigPackageFileName: string;
+  characterName?: string;
+  sourceVertexCount: number;
+  packageVertexCount?: number;
+  topologyVerified: boolean;
+  skeletonVerified?: boolean;
+  warnings: string[];
+  diagnostics: CharacterImportDiagnostic[];
+}
+
+export interface SavedRigCharacterImportResult extends PoseableCharacterImportResult {
+  appliedSavedRig: true;
+  topologyVerified: boolean;
+  packageManifest: PoseableRigPackageManifest;
+  packageAssets: {
+    sourceAsset?: ProjectAsset;
+    skinAsset?: ProjectAsset;
+    regionAsset?: ProjectAsset;
+  };
+}
+
 export interface RiggedCharacterImportAnalysis {
   sourceFormat: PoseableCharacterImportFormat;
   sourceBytes: ArrayBuffer;
@@ -101,6 +152,15 @@ function extensionOf(fileName: string): string {
 export function isPoseableCharacterImportFile(file: File): boolean {
   const extension = extensionOf(file.name);
   return (POSEABLE_CHARACTER_IMPORT_EXTENSIONS as readonly string[]).includes(extension);
+}
+
+function countMeshVertices(root: THREE.Object3D): number {
+  let count = 0;
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh) count += mesh.geometry?.getAttribute('position')?.count ?? 0;
+  });
+  return count;
 }
 
 function temporarySourceAsset(file: File, format: PoseableCharacterImportFormat): ProjectAsset {
@@ -415,7 +475,7 @@ async function importExistingRigCharacter(
     object,
     rig,
     warnings: analysis.warnings,
-    vertexCount: 0,
+    vertexCount: countMeshVertices(fitted.root),
   };
 }
 
@@ -450,7 +510,7 @@ export async function importPoseableCharacter(
   onProgress?.('Writing original source asset…');
   const sourceAssetId = createId('poseable_source');
   const sourceKey = `poseable-source-${sourceAssetId}`;
-  await putModelAsset(sourceKey, sourceBytes);
+  await putModelAsset(sourceKey, sourceBytes, signal);
   const format = extensionOf(file.name);
   const sourceAsset: ProjectAsset = {
     id: sourceAssetId,
@@ -547,4 +607,239 @@ export async function importPoseableCharacter(
     warnings: [...preview.warnings, ...fitted.warnings],
     vertexCount: fitted.vertexCount,
   };
+}
+
+function compatibilityDiagnostic(
+  code: string,
+  message: string,
+): CharacterImportDiagnostic {
+  return { code, message, severity: 'error' };
+}
+
+/**
+ * Read-only validation for an explicit source + .fsrig/.panorig pair.
+ * Package parsing is deliberately run with persistence disabled so this can be
+ * called before a project reset without leaving IndexedDB payloads behind.
+ */
+export async function analyzeSavedRigCompatibility(params: {
+  sourceFile: File;
+  rigPackageFile: File;
+  approximateHeightMeters?: number;
+  signal?: AbortSignal;
+}): Promise<SavedRigCompatibilityAnalysis> {
+  const diagnostics: CharacterImportDiagnostic[] = [];
+  const warnings: string[] = [];
+  let packageData: ImportedPoseableRigPackage | undefined;
+  let sourceVertexCount = 0;
+  let packageVertexCount: number | undefined;
+  let characterName: string | undefined;
+
+  try {
+    packageData = await parsePoseableRigPackageFile(params.rigPackageFile, {
+      signal: params.signal,
+      persistAssets: false,
+    });
+    characterName = packageData.manifest.characterName;
+  } catch (error) {
+    if (params.signal?.aborted) throw error;
+    diagnostics.push(compatibilityDiagnostic(
+      'corrupt_rig_package',
+      error instanceof Error ? error.message : 'Rig package could not be parsed.',
+    ));
+  }
+
+  let sourceAnalysis: RiggedCharacterImportAnalysis | undefined;
+  try {
+    sourceAnalysis = await analyzeRiggedCharacterImport({ file: params.sourceFile, signal: params.signal });
+    sourceVertexCount = countMeshVertices(sourceAnalysis.source.root);
+    warnings.push(...sourceAnalysis.warnings);
+  } catch (error) {
+    if (params.signal?.aborted) throw error;
+    diagnostics.push(compatibilityDiagnostic(
+      'invalid_character_source',
+      error instanceof Error ? error.message : 'Character source could not be parsed.',
+    ));
+  }
+
+  if (packageData) {
+    packageVertexCount = await resolvePoseableRigPackageVertexCount(packageData);
+    const packageHasSkinAndBind = Boolean(
+      packageData.rig.importedRigBinding
+      || (packageData.rig.bindMatrices && packageData.rig.skin),
+    );
+    if (!packageHasSkinAndBind) {
+      diagnostics.push(compatibilityDiagnostic(
+        'missing_skin_or_bind_information',
+        'Rig package lacks skin weights and bind matrices for the imported source.',
+      ));
+    }
+    if (typeof packageVertexCount !== 'number') {
+      warnings.push('Rig package did not publish a readable vertex count.');
+    }
+  }
+
+  let topologyVerified = false;
+  let skeletonVerified: boolean | undefined;
+  if (sourceAnalysis && packageData) {
+    const sourceTopologyHash = buildCanonicalAutorigTopology(sourceAnalysis.source.root).topologyHash;
+    const packageTopologyHash = packageData.manifest.topologyHash ?? packageData.rig.regionMap?.topologyHash;
+    if (packageTopologyHash) {
+      topologyVerified = sourceTopologyHash === packageTopologyHash;
+      if (!topologyVerified) {
+        diagnostics.push(compatibilityDiagnostic(
+          'topology_mismatch',
+          `Package topology ${packageTopologyHash} does not match source topology ${sourceTopologyHash}.`,
+        ));
+      }
+    } else if (typeof packageVertexCount === 'number') {
+      topologyVerified = sourceVertexCount === packageVertexCount;
+    }
+
+    if (typeof packageVertexCount === 'number' && packageVertexCount !== sourceVertexCount) {
+      diagnostics.push(compatibilityDiagnostic(
+        'vertex_count_mismatch',
+        `Package contains ${packageVertexCount} vertices, but the source contains ${sourceVertexCount}.`,
+      ));
+    }
+
+    if (packageData.rig.importedRigBinding) {
+      skeletonVerified = Boolean(
+        sourceAnalysis.skeletonHash === packageData.rig.importedRigBinding.skeletonHash,
+      );
+      if (!skeletonVerified) {
+        diagnostics.push(compatibilityDiagnostic(
+          'source_skeleton_mismatch',
+          'Package was authored for a different source skeleton.',
+        ));
+      }
+    }
+  }
+
+  return {
+    ok: diagnostics.length === 0,
+    sourceFileName: params.sourceFile.name,
+    rigPackageFileName: params.rigPackageFile.name,
+    ...(characterName ? { characterName } : {}),
+    sourceVertexCount,
+    ...(typeof packageVertexCount === 'number' ? { packageVertexCount } : {}),
+    topologyVerified,
+    ...(skeletonVerified !== undefined ? { skeletonVerified } : {}),
+    warnings: [...new Set(warnings)],
+    diagnostics,
+  };
+}
+
+/**
+ * Shared manual/autonomous saved-rig import path. It owns all temporary
+ * binary writes and cleans them when compatibility, cancellation, or parsing
+ * fails before the caller commits the returned project assets.
+ */
+export async function importPoseableCharacterWithSavedRig(
+  options: SavedRigCharacterImportOptions,
+): Promise<SavedRigCharacterImportResult> {
+  let importedPackage: ImportedPoseableRigPackage | undefined;
+  let result: PoseableCharacterImportResult | undefined;
+  const writtenPackageKeys: string[] = [];
+  const orientation = options.orientation ?? defaultPoseableOrientation();
+  const approximateHeightMeters = options.approximateHeightMeters ?? DEFAULT_POSEABLE_HEIGHT_METERS;
+  try {
+    options.onProgress?.('Reading saved rig package…');
+    importedPackage = await parsePoseableRigPackageFile(options.rigPackageFile, {
+      signal: options.signal,
+      persistAssets: true,
+      onAssetWritten: (storageKey) => writtenPackageKeys.push(storageKey),
+    });
+    const analysis = await analyzeSavedRigCompatibility({
+      sourceFile: options.sourceFile,
+      rigPackageFile: options.rigPackageFile,
+      approximateHeightMeters,
+      signal: options.signal,
+    });
+    if (!analysis.ok) {
+      throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
+    }
+
+    options.onProgress?.('Importing source character…');
+    const mode = importedPackage.rig.importedRigBinding ? 'preserveExistingRig' : 'autorig';
+    result = await importPoseableCharacter({
+      file: options.sourceFile,
+      orientation,
+      approximateHeightMeters,
+      mode,
+      signal: options.signal,
+      onProgress: options.onProgress,
+    });
+    const packageVertexCount = await resolvePoseableRigPackageVertexCount(importedPackage);
+    const importedForCheck: ImportedPoseableRigPackage = {
+      ...importedPackage,
+      rig: {
+        ...importedPackage.rig,
+        regionMap: importedPackage.rig.regionMap ?? (
+          typeof packageVertexCount === 'number'
+            ? {
+              version: 1,
+              regionAssetId: 'package',
+              vertexCount: packageVertexCount,
+              topologyHash: importedPackage.manifest.topologyHash ?? 'unknown',
+              sourceAssetId: 'package',
+            }
+            : undefined
+        ),
+      },
+    };
+    const compatibility = canApplyPoseableRigPackage({
+      targetRig: result.rig,
+      imported: importedForCheck,
+      meshVertexCount: result.vertexCount,
+    });
+    if (!compatibility.ok) throw new Error(compatibility.reason);
+
+    const merged = mergeImportedRigOntoTarget({
+      targetRig: result.rig,
+      imported: importedForCheck,
+    });
+    merged.orientation = orientation;
+    merged.generationSettings = {
+      ...merged.generationSettings,
+      approximateHeightMeters,
+    };
+    const object = options.name.trim() ? { ...result.object, name: options.name.trim() } : result.object;
+    const rigAsset: ProjectAsset = {
+      ...result.rigAsset,
+      metadata: { ...result.rigAsset.metadata, poseableRig: merged },
+    };
+    options.onProgress?.('Saved rig applied.');
+    return {
+      ...result,
+      object,
+      rig: merged,
+      rigAsset,
+      appliedSavedRig: true,
+      topologyVerified: analysis.topologyVerified,
+      packageManifest: importedPackage.manifest,
+      packageAssets: {
+        ...(importedPackage.sourceAsset ? { sourceAsset: importedPackage.sourceAsset } : {}),
+        ...(importedPackage.skinAsset ? { skinAsset: importedPackage.skinAsset } : {}),
+        ...(importedPackage.regionAsset ? { regionAsset: importedPackage.regionAsset } : {}),
+      },
+    };
+  } catch (error) {
+    await cleanupImportedPoseableRigPackage(importedPackage);
+    await Promise.all(writtenPackageKeys.map((key) => deleteModelAsset(key).catch(() => undefined)));
+    if (result?.sourceAsset.storageKey) await deleteModelAsset(result.sourceAsset.storageKey).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Cleanup helper for callers that fail while committing a successful result. */
+export async function cleanupPoseableCharacterImportResult(
+  result: Pick<SavedRigCharacterImportResult, 'sourceAsset' | 'packageAssets'> | undefined,
+): Promise<void> {
+  const keys = [
+    result?.sourceAsset.storageKey,
+    result?.packageAssets.sourceAsset?.storageKey,
+    result?.packageAssets.skinAsset?.storageKey,
+    result?.packageAssets.regionAsset?.storageKey,
+  ].filter((key): key is string => Boolean(key));
+  await Promise.all(keys.map((key) => deleteModelAsset(key).catch(() => undefined)));
 }

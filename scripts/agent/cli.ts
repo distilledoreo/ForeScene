@@ -62,6 +62,7 @@ function parseArgs(argv: string[]) {
     content: undefined as string | undefined,
     noAttach: false,
     noDownload: false,
+    allowHeavyCharacterImports: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -83,6 +84,8 @@ function parseArgs(argv: string[]) {
       args.resetProject = true;
     } else if (token === '--update-manifest') {
       args.updateManifest = true;
+    } else if (token === '--allow-heavy-character-imports') {
+      args.allowHeavyCharacterImports = true;
     } else if (token === '--initialize-only') {
       args.initializeOnly = true;
     } else if (token === '--skip-package') {
@@ -681,6 +684,7 @@ async function main() {
       outputDir: args.output ?? 'artifacts/previs',
       skipPackage: args.skipPackage,
       profileDir: args.profile,
+      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

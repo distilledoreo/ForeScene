@@ -49,10 +49,38 @@ so no second staging command or manual object-ID lookup is required.
 ```
 
 `name` is optional for imported entries and defaults to the cast ID. Supported
-`rigMode` values are `preserve-existing`, `auto`, and `autorig`. `source` must
-be a local GLB, embedded glTF, or FBX file. A missing source or failed rig
-analysis stops the cast phase without advancing shot compilation; successful
-imports are retained in `run-state.json` under `cast.<id>` for retry recovery.
+`rigMode` values are `preserve-existing`, `auto`, `autorig`, and `saved-rig`.
+`source` must be a local GLB, embedded glTF, or FBX file. A missing source or
+failed rig analysis stops the cast phase without advancing shot compilation;
+successful imports are retained in `run-state.json` under `cast.<id>` for retry
+recovery.
+
+Use `saved-rig` when the source model and its matching ForeScene rig package
+must be imported as one cast entry:
+
+```json
+{
+  "id": "joseph",
+  "type": "imported_character",
+  "source": "./characters/joseph.glb",
+  "rigMode": "saved-rig",
+  "rigPackage": "./characters/joseph.fsrig",
+  "height": 1.8
+}
+```
+
+`rigPackage` is required only for `saved-rig` and must be an explicit local
+`.fsrig` or legacy `.panorig` path relative to the manifest. The package and
+source are preflighted read-only before an authorized project reset; topology,
+vertex-count, skin/bind, and preserved-skeleton mismatches stop the run before
+reset or shot compilation. The package is then applied through the same shared
+import path used by the Build tray, with package assets cleaned up on failure.
+Changing either file or the import options changes the cast fingerprint. Resume
+reuses a cast mapping only when that fingerprint still matches; otherwise run
+with `--update-manifest --reset-project` to rebuild the cast-dependent scene.
+Heavy or extreme character imports are refused unless the run explicitly opts
+in with `--allow-heavy-character-imports`; the flag supplies the same non-empty
+consent token used by the direct Agent import API.
 
 Shots may include optional temporal authoring. It is compiled into the same
 Agent timeline commands used by direct automation, so it participates in plan
@@ -136,6 +164,9 @@ npm run agent:previs -- \
   --reset-project \
   --output artifacts/previs
 ```
+
+Add `--allow-heavy-character-imports` when the manifest intentionally includes
+a character above the standard memory tier.
 
 Safety:
 

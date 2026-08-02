@@ -97,6 +97,12 @@ describe('poseable rig package IO', () => {
     expect(imported.rig.skin?.skinAssetId).toBe(imported.skinAsset?.id);
     expect(imported.rig.regionMap?.topologyHash).toBe('topo-abc');
 
+    const readOnly = await parsePoseableRigPackageFile(file, { persistAssets: false });
+    expect(readOnly.skinBytes).toBeInstanceOf(ArrayBuffer);
+    expect(readOnly.regionBytes).toBeInstanceOf(ArrayBuffer);
+    expect(readOnly.skinAsset?.storageKey).toBeUndefined();
+    expect(readOnly.regionAsset?.storageKey).toBeUndefined();
+
     const target = sampleRig({ id: 'rig_target', originalSourceAssetId: 'keep-source' });
     expect(canApplyPoseableRigPackage({ targetRig: target, imported }).ok).toBe(true);
     const merged = mergeImportedRigOntoTarget({ targetRig: target, imported });
@@ -201,6 +207,29 @@ describe('poseable rig package IO', () => {
     const file = new File([blob], 'mixed.fsrig', { type: 'application/zip' });
 
     await expect(parsePoseableRigPackageFile(file)).rejects.toThrow(/ForeScene \.fsrig/);
+  });
+
+  it('cleans package assets when a later package entry is missing', async () => {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file('manifest.json', JSON.stringify({
+      format: POSEABLE_RIG_PACKAGE_FORMAT,
+      version: POSEABLE_RIG_PACKAGE_VERSION,
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      skinFile: 'skin.bin',
+      regionFile: 'missing-region.bin',
+      rig: sampleRig(),
+    }));
+    zip.file('skin.bin', new Uint8Array([1, 2, 3]));
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const written: string[] = [];
+
+    await expect(parsePoseableRigPackageFile(
+      new File([blob], 'broken.fsrig', { type: 'application/zip' }),
+      { onAssetWritten: (key) => written.push(key) },
+    )).rejects.toThrow(/missing-region\.bin/);
+    expect(written).toHaveLength(1);
+    expect(await getModelAsset(written[0]!)).toBeUndefined();
   });
 
   it('rejects incomplete packages missing binds or skin', () => {

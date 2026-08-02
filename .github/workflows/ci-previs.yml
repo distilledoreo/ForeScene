@@ -11,13 +11,19 @@ on:
       - 'scripts/agent/**'
       - 'src/engine/previs/**'
       - 'src/engine/agent/**'
+      - 'src/engine/poseableCharacterImport.ts'
+      - 'src/engine/poseableRigPackage.ts'
+      - 'src/components/common/PoseableCharacterImportDialog.tsx'
       - 'src/components/**/SceneViewport*'
       - 'src/components/**/viewport*'
       - 'src/engine/renderers.ts'
       - 'examples/previs/**'
       - 'tests/previs*.ts'
       - 'e2e/previs-imported-character.spec.ts'
-      - 'tests/fixtures/preservedRigGlb.ts'
+      - 'e2e/previs-saved-rig-character.spec.ts'
+      - 'tests/fixtures/**'
+      - 'docs/previs-production-manifest.md'
+      - '.grok/skills/forescene-previs/references/**'
       - '.github/workflows/ci-previs.yml'
   schedule:
     - cron: '0 7 * * *'
@@ -128,8 +134,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx playwright install --with-deps chromium
-      - name: Run imported-character manifest fixture
-        run: npx playwright test e2e/previs-imported-character.spec.ts --project=desktop-chromium
+      - name: Run imported-character manifest fixtures
+        run: npx playwright test e2e/previs-imported-character.spec.ts e2e/previs-saved-rig-character.spec.ts --project=desktop-chromium
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
       - uses: actions/upload-artifact@v4

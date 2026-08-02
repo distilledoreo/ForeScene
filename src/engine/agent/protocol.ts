@@ -27,6 +27,7 @@ import type { PackageExportPhase } from '../packageExport';
 import type { VideoResolutionPresetId } from '../videoPresets';
 import type { SceneContentMode } from '../shotSceneState';
 import type { AgentDiagnostic } from './diagnostics';
+import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -676,6 +677,8 @@ export interface AgentCharacterImportResult {
   rigAssetId?: string;
   poseable?: boolean;
   importedRigPreserved?: boolean;
+  appliedSavedRig?: boolean;
+  topologyVerified?: boolean;
   verifiedRevisionId?: string;
   warnings: string[];
   diagnostics?: AgentDiagnostic[];
@@ -712,6 +715,17 @@ export interface AgentCharacterImportCommitInput {
   mappingOverrides?: Partial<Record<HumanJointId, string>>;
   consentToken?: string;
   name?: string;
+}
+
+export interface AgentSavedRigCharacterInput {
+  sourceFile: File;
+  rigPackageFile: File;
+  approximateHeightMeters?: number;
+}
+
+export interface AgentSavedRigCharacterImportInput extends AgentSavedRigCharacterInput {
+  consentToken?: string;
+  name: string;
 }
 
 export interface ForeSceneBrowserApi {
@@ -778,6 +792,8 @@ export interface ForeSceneBrowserApi {
 
   analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis>;
   importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;
+  analyzeSavedRigCharacter(input: AgentSavedRigCharacterInput): Promise<SavedRigCompatibilityAnalysis>;
+  importSavedRigCharacter(input: AgentSavedRigCharacterImportInput): Promise<AgentCharacterImportResult>;
   getCharacterImportProgress(): AgentCharacterImportProgress | null;
   cancelCharacterImport(): { ok: boolean; cancelled: boolean };
   discardCharacterImportAnalysis(analysisId: string): { ok: boolean; discarded: boolean };

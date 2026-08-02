@@ -160,7 +160,7 @@ describe('poseable character import shell', () => {
     expect(build).toContain('!meta?.appliedSavedRig');
     expect(dialog).toContain('data-poseable-import-choose-rig');
     expect(dialog).toContain('data-poseable-import-mesh-input');
-    expect(dialog).toContain('parsePoseableRigPackageFile');
+    expect(dialog).toContain('importPoseableCharacterWithSavedRig');
     expect(dialog).toContain('Import with rig');
   });
 });

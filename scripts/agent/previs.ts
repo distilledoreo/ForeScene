@@ -5,6 +5,7 @@
  * render stills/control videos → validation/repairs → contact sheet → package.
  */
 
+import { createHash } from 'node:crypto';
 import { openSync, readSync, closeSync } from 'node:fs';
 import {
   access,
@@ -68,6 +69,8 @@ export interface PrevisCliOptions {
   outputDir: string;
   skipPackage?: boolean;
   profileDir?: string;
+  /** Explicitly authorize heavy/extreme character imports for this run. */
+  allowHeavyCharacterImports?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -356,6 +359,48 @@ function manifestCharacterSourcePath(manifestPath: string, source: string): stri
   return path.resolve(path.dirname(path.resolve(manifestPath)), source);
 }
 
+interface ResolvedManifestCharacterAsset {
+  id: string;
+  sourcePath: string;
+  sourceSha256: string;
+  rigPackagePath?: string;
+  rigPackageSha256?: string;
+  importFingerprint: string;
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return createHash('sha256').update(await readFile(filePath)).digest('hex');
+}
+
+async function resolveManifestCharacterAsset(
+  manifestPath: string,
+  character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>,
+): Promise<ResolvedManifestCharacterAsset> {
+  const sourcePath = manifestCharacterSourcePath(manifestPath, character.source);
+  const sourceSha256 = await sha256File(sourcePath);
+  const rigPackagePath = character.rigPackage
+    ? manifestCharacterSourcePath(manifestPath, character.rigPackage)
+    : undefined;
+  const rigPackageSha256 = rigPackagePath ? await sha256File(rigPackagePath) : undefined;
+  const importFingerprint = createHash('sha256')
+    .update(await readFile(sourcePath))
+    .update(rigPackagePath ? await readFile(rigPackagePath) : Buffer.alloc(0))
+    .update(JSON.stringify({
+      rigMode: character.rigMode,
+      height: character.height,
+      defaultPose: character.defaultPose,
+    }))
+    .digest('hex');
+  return {
+    id: character.id,
+    sourcePath,
+    sourceSha256,
+    ...(rigPackagePath ? { rigPackagePath } : {}),
+    ...(rigPackageSha256 ? { rigPackageSha256 } : {}),
+    importFingerprint: `sha256:${importFingerprint}`,
+  };
+}
+
 async function importManifestCharacter(
   page: Page,
   manifestPath: string,
@@ -363,6 +408,7 @@ async function importManifestCharacter(
     entityKey: string;
     character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>;
   },
+  consentToken?: string,
 ) {
   const sourcePath = manifestCharacterSourcePath(manifestPath, entry.character.source);
   await page.locator('[data-agent-character-import-input]').setInputFiles(sourcePath);
@@ -371,7 +417,9 @@ async function importManifestCharacter(
     const file = fileInput?.files?.[0];
     if (!file) throw new Error('Character file was not staged in the browser.');
 
-    const requestedMode = input.rigMode === 'preserve-existing'
+    const requestedMode = input.rigMode === 'saved-rig'
+      ? 'auto'
+      : input.rigMode === 'preserve-existing'
       ? 'preserveExistingRig'
       : input.rigMode;
     const analysis = await window.foreScene!.analyzeCharacterImport({
@@ -393,14 +441,69 @@ async function importManifestCharacter(
       analysisId: analysis.analysisId,
       mode,
       name: input.name,
+      consentToken: input.consentToken,
     });
     return { analysis, result };
   }, {
     name: entry.character.name,
     height: entry.character.height,
     rigMode: entry.character.rigMode,
+    consentToken,
   });
   return { sourcePath, result };
+}
+
+async function analyzeManifestSavedRigCharacter(
+  page: Page,
+  asset: ResolvedManifestCharacterAsset,
+  character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>,
+) {
+  if (!asset.rigPackagePath) throw new Error(`No rig package was resolved for saved-rig character "${character.id}".`);
+  await page.locator('[data-agent-character-import-input]').setInputFiles(asset.sourcePath);
+  await page.locator('[data-agent-character-rig-package-input]').setInputFiles(asset.rigPackagePath);
+  return page.evaluate(async (input) => {
+    const sourceInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
+    const rigInput = document.querySelector('[data-agent-character-rig-package-input]') as HTMLInputElement | null;
+    const sourceFile = sourceInput?.files?.[0];
+    const rigPackageFile = rigInput?.files?.[0];
+    if (!sourceFile || !rigPackageFile) throw new Error('Saved-rig files were not staged in the browser.');
+    const sourceAnalysis = await window.foreScene!.analyzeCharacterImport({
+      file: sourceFile,
+      mode: 'auto',
+      ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
+    });
+    const compatibility = await window.foreScene!.analyzeSavedRigCharacter({
+      sourceFile,
+      rigPackageFile,
+      ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
+    });
+    return { ...compatibility, sourceImportRequiresConsent: sourceAnalysis.requiresConsent };
+  }, { height: character.height });
+}
+
+async function importManifestSavedRigCharacter(
+  page: Page,
+  asset: ResolvedManifestCharacterAsset,
+  character: Extract<PrevisProductionManifestV1['cast'][number], { type: 'imported_character' }>,
+  consentToken?: string,
+) {
+  if (!asset.rigPackagePath) throw new Error(`No rig package was resolved for saved-rig character "${character.id}".`);
+  await page.locator('[data-agent-character-import-input]').setInputFiles(asset.sourcePath);
+  await page.locator('[data-agent-character-rig-package-input]').setInputFiles(asset.rigPackagePath);
+  return page.evaluate(async (input) => {
+    const sourceInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
+    const rigInput = document.querySelector('[data-agent-character-rig-package-input]') as HTMLInputElement | null;
+    const sourceFile = sourceInput?.files?.[0];
+    const rigPackageFile = rigInput?.files?.[0];
+    if (!sourceFile || !rigPackageFile) throw new Error('Saved-rig files were not staged in the browser.');
+    return window.foreScene!.importSavedRigCharacter({
+      sourceFile,
+      rigPackageFile,
+      name: input.name,
+      consentToken: input.consentToken,
+      ...(input.height !== undefined ? { approximateHeightMeters: input.height } : {}),
+    });
+  }, { name: character.name, height: character.height, consentToken });
 }
 
 async function resetProjectOnPage(
@@ -478,8 +581,12 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   }
 
   const manifest = parsed.manifest;
+  const consentToken = options.allowHeavyCharacterImports
+    ? 'agent:previs:allow-heavy-character-imports'
+    : undefined;
   const manifestHash = hashPrevisManifest(manifest);
   const importedCharacterCount = manifest.cast.filter((character) => character.type === 'imported_character').length;
+  const characterAssets: ResolvedManifestCharacterAsset[] = [];
 
   for (const character of manifest.cast) {
     if (character.type !== 'imported_character') continue;
@@ -495,6 +602,40 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           code: 'missing_imported_character_source',
           path: `cast[id=${character.id}].source`,
           message: `Imported character source was not found: ${sourcePath}`,
+          severity: 'error',
+        }],
+        error: 'Manifest validation failed.',
+      };
+    }
+    if (character.rigPackage) {
+      const rigPackagePath = manifestCharacterSourcePath(options.manifestPath, character.rigPackage);
+      try {
+        const info = await stat(rigPackagePath);
+        if (!info.isFile()) throw new Error('rigPackage is not a file');
+      } catch {
+        return {
+          ok: false,
+          phase: 'validate',
+          diagnostics: [{
+            code: 'missing_saved_rig_package',
+            path: `cast[id=${character.id}].rigPackage`,
+            message: `Saved rig package was not found: ${rigPackagePath}`,
+            severity: 'error',
+          }],
+          error: 'Manifest validation failed.',
+        };
+      }
+    }
+    try {
+      characterAssets.push(await resolveManifestCharacterAsset(options.manifestPath, character));
+    } catch (error) {
+      return {
+        ok: false,
+        phase: 'validate',
+        diagnostics: [{
+          code: 'character_asset_hash_failed',
+          path: `cast[id=${character.id}]`,
+          message: error instanceof Error ? error.message : `Could not hash imported character "${character.id}".`,
           severity: 'error',
         }],
         error: 'Manifest validation failed.',
@@ -534,6 +675,23 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
+  const staleImportedCharacters = characterAssets.filter((asset) => {
+    const mapping = state.entities[`cast.${asset.id}`];
+    return Boolean(mapping?.objectId && mapping.importFingerprint !== asset.importFingerprint);
+  });
+  if (staleImportedCharacters.length > 0 && !(options.updateManifest && options.resetProject)) {
+    const first = staleImportedCharacters[0]!;
+    return {
+      ok: false,
+      phase: 'initialized',
+      manifestHash,
+      runStatePath,
+      error:
+        `Imported character "${first.id}" changed since the previous run. `
+        + 'Run with --update-manifest --reset-project to rebuild cast-dependent shots.',
+    };
+  }
+
   await writeJson(path.join(outputDir, 'manifest.normalized.json'), manifest);
 
   if (loaded.updated) {
@@ -563,6 +721,75 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   try {
     await waitForAgentIdle(session.page);
     const status = await session.page.evaluate(() => window.foreScene!.getStatus());
+
+    const savedRigPreflight = [] as Array<{
+      id: string;
+      source: string;
+      rigPackage: string;
+      sourceSha256: string;
+      rigPackageSha256?: string;
+      ok: boolean;
+      analysis?: unknown;
+      diagnostics?: unknown[];
+    }>;
+    for (const character of manifest.cast) {
+      if (character.type !== 'imported_character' || character.rigMode !== 'saved-rig') continue;
+      const asset = characterAssets.find((candidate) => candidate.id === character.id);
+      if (!asset?.rigPackagePath) continue;
+      try {
+        const analysis = await analyzeManifestSavedRigCharacter(session.page, asset, character);
+        const diagnostics = [...analysis.diagnostics];
+        if (analysis.sourceImportRequiresConsent && !consentToken) {
+          diagnostics.push({
+            code: 'invalid_argument',
+            message: 'This character import requires explicit consent because it exceeds the standard memory tier.',
+            severity: 'error',
+          });
+        }
+        savedRigPreflight.push({
+          id: character.id,
+          source: character.source,
+          rigPackage: character.rigPackage!,
+          sourceSha256: asset.sourceSha256,
+          ...(asset.rigPackageSha256 ? { rigPackageSha256: asset.rigPackageSha256 } : {}),
+          ok: analysis.ok && diagnostics.length === 0,
+          analysis,
+          diagnostics,
+        });
+      } catch (error) {
+        savedRigPreflight.push({
+          id: character.id,
+          source: character.source,
+          rigPackage: character.rigPackage!,
+          sourceSha256: asset.sourceSha256,
+          ...(asset.rigPackageSha256 ? { rigPackageSha256: asset.rigPackageSha256 } : {}),
+          ok: false,
+          diagnostics: [{
+            code: 'saved_rig_preflight_failed',
+            message: error instanceof Error ? error.message : String(error),
+            severity: 'error',
+          }],
+        });
+      }
+    }
+    if (savedRigPreflight.length > 0) {
+      await writeJson(path.join(outputDir, 'logs', 'saved-rig-preflight.json'), {
+        ok: savedRigPreflight.every((entry) => entry.ok),
+        entries: savedRigPreflight,
+      });
+    }
+    const failedSavedRig = savedRigPreflight.filter((entry) => !entry.ok);
+    if (failedSavedRig.length > 0) {
+      return {
+        ok: false,
+        phase: 'saved-rig-preflight',
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        diagnostics: failedSavedRig.flatMap((entry) => entry.diagnostics ?? []),
+        error: 'Saved-rig compatibility preflight failed; project reset was skipped.',
+      };
+    }
 
     if (options.resetProject) {
       const reset = await resetProjectOnPage(session.page, {
@@ -725,33 +952,57 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const importedResults: Array<{
         id: string;
         source: string;
+        rigPackage?: string;
+        rigMode: string;
         ok: boolean;
         analysis?: unknown;
         objectId?: string;
         reused?: boolean;
+        appliedSavedRig?: boolean;
+        topologyVerified?: boolean;
+        sourceSha256?: string;
+        rigPackageSha256?: string;
         warnings?: string[];
         diagnostics?: unknown[];
       }> = [];
       for (const entry of castCompilation.importedCharacters ?? []) {
+        const asset = characterAssets.find((candidate) => candidate.id === entry.character.id);
         const existingObjectId = state.entities[entry.entityKey]?.objectId;
         if (existingObjectId) {
           importedResults.push({
             id: entry.character.id,
             source: entry.character.source,
+            ...(entry.character.rigPackage ? { rigPackage: entry.character.rigPackage } : {}),
+            rigMode: entry.character.rigMode,
             ok: true,
             objectId: existingObjectId,
             reused: true,
+            appliedSavedRig: state.entities[entry.entityKey]?.appliedSavedRig,
+            topologyVerified: state.entities[entry.entityKey]?.topologyVerified,
+            sourceSha256: asset?.sourceSha256,
+            rigPackageSha256: asset?.rigPackageSha256,
           });
           continue;
         }
-        const imported = await importManifestCharacter(session.page, options.manifestPath, entry);
-        const { analysis, result } = imported.result;
+        const savedRig = entry.character.rigMode === 'saved-rig';
+        const result = savedRig && asset?.rigPackagePath
+          ? await importManifestSavedRigCharacter(session.page, asset, entry.character, consentToken)
+          : (await importManifestCharacter(session.page, options.manifestPath, entry, consentToken)).result.result;
+        const analysis = savedRig
+          ? savedRigPreflight.find((item) => item.id === entry.character.id)?.analysis
+          : undefined;
         importedResults.push({
           id: entry.character.id,
           source: entry.character.source,
+          ...(entry.character.rigPackage ? { rigPackage: entry.character.rigPackage } : {}),
+          rigMode: entry.character.rigMode,
           ok: result.ok,
           analysis,
           ...(result.objectId ? { objectId: result.objectId } : {}),
+          ...(result.appliedSavedRig !== undefined ? { appliedSavedRig: result.appliedSavedRig } : {}),
+          ...(result.topologyVerified !== undefined ? { topologyVerified: result.topologyVerified } : {}),
+          sourceSha256: asset?.sourceSha256,
+          rigPackageSha256: asset?.rigPackageSha256,
           warnings: result.warnings,
           diagnostics: result.diagnostics,
         });
@@ -775,6 +1026,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         state = upsertEntity(state, entry.entityKey, {
           objectId: result.objectId,
           refs: { [result.objectId]: result.objectId },
+          importFingerprint: asset?.importFingerprint,
+          sourceSha256: asset?.sourceSha256,
+          rigPackageSha256: asset?.rigPackageSha256,
+          ...(result.appliedSavedRig !== undefined ? { appliedSavedRig: result.appliedSavedRig } : {}),
+          ...(result.topologyVerified !== undefined ? { topologyVerified: result.topologyVerified } : {}),
         });
       }
 

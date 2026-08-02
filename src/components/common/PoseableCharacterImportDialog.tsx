@@ -8,18 +8,14 @@ import {
   MIN_POSEABLE_HEIGHT_METERS,
   POSEABLE_CHARACTER_IMPORT_ACCEPT,
   defaultPoseableOrientation,
+  cleanupPoseableCharacterImportResult,
+  importPoseableCharacterWithSavedRig,
   importPoseableCharacter,
   loadPoseableCharacterPreview,
+  type PoseableCharacterImportResult,
+  type SavedRigCharacterImportResult,
 } from '../../engine/poseableCharacterImport';
-import {
-  canApplyPoseableRigPackage,
-  isPoseableRigPackageFile,
-  mergeImportedRigOntoTarget,
-  parsePoseableRigPackageFile,
-  POSEABLE_RIG_PACKAGE_ACCEPT,
-  resolvePoseableRigPackageVertexCount,
-  type ImportedPoseableRigPackage,
-} from '../../engine/poseableRigPackage';
+import { isPoseableRigPackageFile, POSEABLE_RIG_PACKAGE_ACCEPT } from '../../engine/poseableRigPackage';
 import { hydrateAutoriggedCharactersFromAssets } from '../../engine/autoriggedPoseableCharacter';
 import { hydrateImportedRiggedCharactersFromAssets } from '../../engine/importedRiggedPoseableCharacter';
 import { deleteModelAsset } from '../../engine/modelAssetStore';
@@ -50,7 +46,6 @@ export function PoseableCharacterImportDialog({
   const meshInputRef = useRef<HTMLInputElement>(null);
   const rigInputRef = useRef<HTMLInputElement>(null);
   const addPoseableCharacterImport = useProjectStore((state) => state.addPoseableCharacterImport);
-  const updatePoseableRigAsset = useProjectStore((state) => state.updatePoseableRigAsset);
   const runDestructiveProjectMutation = useProjectSafetyStore((state) => state.runDestructiveProjectMutation);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>();
@@ -166,60 +161,42 @@ export function PoseableCharacterImportDialog({
   const importSelected = async () => {
     if (!file || busy) return;
     let writtenSourceKey: string | undefined;
+    let importedResult: PoseableCharacterImportResult | SavedRigCharacterImportResult | undefined;
     setBusy(true);
     setError(undefined);
     abortRef.current = new AbortController();
     try {
-      const result = await importPoseableCharacter({
-        file,
-        orientation,
-        approximateHeightMeters: heightMeters,
-        poseHint,
-        mode: importMode,
-        mappingOverrides: importMode === 'preserveExistingRig' ? mappingOverrides : undefined,
-        signal: abortRef.current.signal,
-        onProgress: setProgress,
-      });
+      const result: PoseableCharacterImportResult | SavedRigCharacterImportResult = rigFile
+        ? await importPoseableCharacterWithSavedRig({
+          sourceFile: file,
+          rigPackageFile: rigFile,
+          name: file.name.replace(/\.(glb|gltf|fbx)$/i, '') || 'Poseable character',
+          orientation,
+          approximateHeightMeters: heightMeters,
+          signal: abortRef.current.signal,
+          onProgress: setProgress,
+        })
+        : await importPoseableCharacter({
+          file,
+          orientation,
+          approximateHeightMeters: heightMeters,
+          poseHint,
+          mode: importMode,
+          mappingOverrides: importMode === 'preserveExistingRig' ? mappingOverrides : undefined,
+          signal: abortRef.current.signal,
+          onProgress: setProgress,
+        });
+      importedResult = result;
       writtenSourceKey = result.sourceAsset.storageKey
         ?? (result.sourceAsset.uri.startsWith('panoref-model:') ? result.sourceAsset.uri.slice('panoref-model:'.length) : undefined);
       if (!runDestructiveProjectMutation) {
         throw new Error('Local recovery is still starting. Please wait before importing a poseable character.');
       }
 
-      let appliedSavedRig = false;
       let importWarnings = [...result.warnings];
-      let pendingPackage: ImportedPoseableRigPackage | undefined;
-      if (rigFile) {
-        setProgress('Reading saved rig…');
-        pendingPackage = await parsePoseableRigPackageFile(rigFile);
-        const packageVertexCount = await resolvePoseableRigPackageVertexCount(pendingPackage);
-        const importedForCheck: ImportedPoseableRigPackage = {
-          ...pendingPackage,
-          rig: {
-            ...pendingPackage.rig,
-            regionMap: pendingPackage.rig.regionMap ?? (
-              typeof packageVertexCount === 'number'
-                ? {
-                  version: 1,
-                  regionAssetId: 'package',
-                  vertexCount: packageVertexCount,
-                  topologyHash: pendingPackage.manifest.topologyHash ?? 'unknown',
-                  sourceAssetId: 'package',
-                }
-                : undefined
-            ),
-          },
-        };
-        const compatibility = canApplyPoseableRigPackage({
-          targetRig: result.rig,
-          imported: importedForCheck,
-          meshVertexCount: result.vertexCount,
-        });
-        if (!compatibility.ok) {
-          throw new Error(compatibility.reason);
-        }
-        pendingPackage = importedForCheck;
-      }
+      const savedResult = rigFile ? result as SavedRigCharacterImportResult : undefined;
+      const appliedSavedRig = Boolean(savedResult?.appliedSavedRig);
+      if (appliedSavedRig) importWarnings = [...importWarnings, 'Attached saved rig — skipping the rigging wizard.'];
 
       await runDestructiveProjectMutation('Before importing a poseable character', () => {
         const object = addPoseableCharacterImport({
@@ -228,33 +205,21 @@ export function PoseableCharacterImportDialog({
           object: result.object,
         });
 
-        if (pendingPackage) {
-          const merged = mergeImportedRigOntoTarget({
-            targetRig: result.rig,
-            imported: pendingPackage,
-          });
-          // Keep the import orientation/height the user just chose when the package omits them.
-          merged.orientation = orientation;
-          merged.generationSettings = {
-            ...merged.generationSettings,
-            approximateHeightMeters: heightMeters,
-            ...(poseHint ? { poseHint } : {}),
-          };
-          updatePoseableRigAsset(result.rigAsset.id, merged);
+        if (savedResult) {
           useProjectStore.setState((current) => ({
             project: {
               ...current.project,
               assets: {
                 assets: {
                   ...current.project.assets.assets,
-                  ...(pendingPackage.sourceAsset
-                    ? { [pendingPackage.sourceAsset.id]: pendingPackage.sourceAsset }
+                  ...(savedResult.packageAssets.sourceAsset
+                    ? { [savedResult.packageAssets.sourceAsset.id]: savedResult.packageAssets.sourceAsset }
                     : {}),
-                  ...(pendingPackage.skinAsset
-                    ? { [pendingPackage.skinAsset.id]: pendingPackage.skinAsset }
+                  ...(savedResult.packageAssets.skinAsset
+                    ? { [savedResult.packageAssets.skinAsset.id]: savedResult.packageAssets.skinAsset }
                     : {}),
-                  ...(pendingPackage.regionAsset
-                    ? { [pendingPackage.regionAsset.id]: pendingPackage.regionAsset }
+                  ...(savedResult.packageAssets.regionAsset
+                    ? { [savedResult.packageAssets.regionAsset.id]: savedResult.packageAssets.regionAsset }
                     : {}),
                 },
               },
@@ -262,11 +227,6 @@ export function PoseableCharacterImportDialog({
           }));
           hydrateAutoriggedCharactersFromAssets(useProjectStore.getState().project.assets);
           hydrateImportedRiggedCharactersFromAssets(useProjectStore.getState().project.assets);
-          appliedSavedRig = true;
-          importWarnings = [
-            ...importWarnings,
-            'Attached saved rig — skipping the rigging wizard.',
-          ];
         }
 
         onImported?.(object, { appliedSavedRig });
@@ -276,7 +236,7 @@ export function PoseableCharacterImportDialog({
         const { ensureAutoriggedCharactersForProject } = await import('../../engine/autoriggedPoseableCharacter');
         await ensureAutoriggedCharactersForProject(useProjectStore.getState().project);
       }
-      if (importMode === 'preserveExistingRig') {
+      if (result.rig.importedRigBinding || importMode === 'preserveExistingRig') {
         const { ensureImportedRiggedCharactersForProject } = await import('../../engine/importedRiggedPoseableCharacter');
         await ensureImportedRiggedCharactersForProject(useProjectStore.getState().project);
       }
@@ -284,7 +244,11 @@ export function PoseableCharacterImportDialog({
       setWarnings(importWarnings);
       onClose();
     } catch (err) {
-      if (writtenSourceKey) await deleteModelAsset(writtenSourceKey).catch(() => undefined);
+      if (importedResult && 'packageAssets' in importedResult && importedResult.appliedSavedRig) {
+        await cleanupPoseableCharacterImportResult(importedResult);
+      } else if (writtenSourceKey) {
+        await deleteModelAsset(writtenSourceKey).catch(() => undefined);
+      }
       if (err instanceof DOMException && err.name === 'AbortError') {
         setError('Import cancelled.');
       } else {
