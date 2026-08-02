@@ -2,49 +2,57 @@
 
 ## Manifest validation failed
 
-Fix the listed diagnostics (`duplicate_shot_number`, `unknown_reference`, `unsupported_template`, …).
-Re-run; do not reset unless the project itself is wrong.
+Fix the listed diagnostics (`duplicate_shot_number`, `unknown_reference`, `unsupported_template`, invalid motion duration/order, unknown subjects, or invalid pose presets). Re-run validation; do not reset unless the project itself is wrong.
 
-## Hash mismatch on resume
+For motion, correct duration, keyframe order, final keyframe time, unknown subjects, invalid pose presets, excessive movement, or a subject leaving the usable set zone. Reduce keyframes before attempting to approximate nuanced acting.
+
+## Hash mismatch or stale manifest on resume
 
 `run-state.json` belongs to a different manifest.
 
-**Correction loop (preferred):**
+1. Edit only failed/warned shots when creative intent changed.
+2. Re-run with `--update-manifest` and without `--reset-project` for shot-only edits.
+3. Confirm the changed shot is invalidated and its old MP4 is not reused.
 
-1. Edit only failed/warned shots in the manifest.
-2. Re-run with `--update-manifest` (no `--reset-project`).
-3. ForeScene invalidates only changed shots and dependents; completed shots stay complete.
+Location, cast, or prop edits also require `--reset-project` with `--update-manifest` so the scene rebuilds without duplicate creates. A full restart uses `--reset-project` with a fresh or clean output directory.
 
-```bash
-npm run agent:previs -- \
-  --manifest path/to/manifest.json \
-  --write \
-  --update-manifest \
-  --output artifacts/previs
-```
+## Video cancelled
 
-**Location / cast / prop edits:** also pass `--reset-project` with `--update-manifest` so the scene rebuilds without duplicate creates. Shot-only edits do not need `--reset-project`.
+- Re-run the same manifest without resetting.
+- Check the current busy state before retrying.
+- Confirm the previous valid video remains untouched; do not treat a partial replacement as valid.
 
-**Full restart:** `--reset-project` with a fresh/clean `--output` directory.
+## Video stale after a manifest update
 
-## Partial run / browser closed
+- Re-run with `--update-manifest`.
+- Confirm the changed shot’s video is invalidated.
+- Do not reuse the previous MP4; render a new artifact and review its temporal samples.
 
-Re-run the same command **without** `--reset-project`. Completed phases and shots are skipped.
+## Video render failed
+
+1. Inspect progress and diagnostics.
+2. Verify viewport readiness with `waitForViewportReady`, not only `waitForIdle`.
+3. Render start, midpoint, and endpoint still frames separately.
+4. Decide whether the failure is rendering-related or authoring-related.
+5. Retry the video only after the static samples pass.
+
+## Motion validation failed
+
+Correct the reported field rather than hiding the failure:
+
+- `durationSeconds` must be positive and equal the final keyframe time.
+- Keyframe times must be strictly increasing; use at least two.
+- Subjects and pose presets must exist and be supported.
+- Movement must remain conservative and within the usable set zone.
 
 ## Shot compile/render failed
 
-1. Read `validation.json` / `run-state.json` for that shot number.
-2. Adjust blocking, camera template, or subjects.
-3. Re-run with `--update-manifest`.
+Read `validation.json` and `run-state.json` for the shot. Adjust blocking, camera template, subjects, or motion intent, then re-run with `--update-manifest`. Let ForeScene’s numeric repair system handle distance, recentering, headroom, and OTS shoulder corrections.
 
-Automatic repairs (max 2 attempts/shot):
+## Partial run or browser closed
 
-- subject_too_small → move closer
-- subject_too_large → pull back
-- subject_out_of_frame → recenter
-- camera_inside_geometry → alternate angle
-- character_underground → reground
-- subjects_overlapping → separate / pull back
+Re-run the same command without `--reset-project`. Completed phases and shots are skipped when their inputs remain valid.
 
-After each repair, ForeScene reloads the project document and re-validates.
-After repairs are exhausted, the shot is `needs_review` and the run continues.
+## Agent busy
+
+Wait through `window.foreScene.waitForIdle({ timeoutMs: 60_000 })` or retry after package export, graybox render, character import, or video activity finishes. Never start overlapping operations. `waitForIdle` only covers busy state; use viewport readiness before judging a frame.
