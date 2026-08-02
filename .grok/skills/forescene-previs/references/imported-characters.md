@@ -86,17 +86,23 @@ For a new production, declare imported characters directly in the manifest:
 
 If an imported source or saved-rig pair fails, the cast phase stops before shot
 compilation. A retry reuses successful `cast.<id>` mappings only when the
-recorded import fingerprint still matches. Change either file or the rig mode
-with `--update-manifest --reset-project` when the existing scene must be rebuilt.
+recorded import fingerprint still matches. For a disposable Greenfield
+manifest-owned project, change either file or rig mode with
+`--update-manifest --reset-project` only when reconstruction remains explicitly
+authorized. For a retained existing project, import the corrected asset
+incrementally and stage it in the affected shots; do not reset the project.
 
-For older projects that still use a separate import command, project reset can
-delete previously imported characters:
+For older projects that still use a separate import command, treat the project
+as refinement work when it has useful geometry, panoramas, shots, cameras, or
+continuity. Project reset can delete previously imported characters, so:
 
-1. Build/reset the production-manifest project first.
-2. Complete initial dummy-cast previs.
-3. Import custom rigged characters afterward.
-4. Use them for selected manual or Agent-authored refinement shots.
-5. Retain dummy objects as spatial stand-ins until replacement tooling exists.
+1. Capture the preservation preflight before any import.
+2. Import custom rigged characters one at a time.
+3. Use them for selected manual or Agent-authored refinement shots.
+4. Retain dummy objects as spatial stand-ins only until an explicit, logged
+   replacement is complete.
+5. Follow [existing-project-refinement.md](existing-project-refinement.md) for
+   ID preservation and final verification.
 
 Do not mix the legacy separate-import flow with a manifest entry for the same
 cast ID in one run; the manifest cast mapping is the source of truth.

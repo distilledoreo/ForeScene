@@ -48,7 +48,9 @@ For an explicit source/package pair, use:
 `rigPackage` is required for `saved-rig` and accepts only `.fsrig` or legacy
 `.panorig` files. Both paths are resolved relative to the manifest. The pair
 is checked before reset and the package is applied through the shared saved-rig
-import path. Replacing either file requires `--update-manifest --reset-project`.
+import path. In a disposable Greenfield manifest-owned project, replacing either
+file requires `--update-manifest --reset-project`; do not use that reset path to
+refine an existing project with retained shots or panoramas.
 
 ## Supported enum values
 

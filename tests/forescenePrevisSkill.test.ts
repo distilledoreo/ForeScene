@@ -23,10 +23,23 @@ const skillRoot = path.join(repoRoot, '.grok', 'skills', 'forescene-previs');
 const skillPath = path.join(skillRoot, 'SKILL.md');
 const productionManifestPath = path.join(skillRoot, 'references', 'production-manifest.md');
 const shotTemplatesPath = path.join(skillRoot, 'references', 'shot-templates.md');
+const existingProjectRefinementPath = path.join(skillRoot, 'references', 'existing-project-refinement.md');
+const deliverablesPath = path.join(skillRoot, 'references', 'deliverables.md');
+const batchReviewPath = path.join(skillRoot, 'references', 'batch-review.md');
+const visualAcceptancePath = path.join(skillRoot, 'references', 'visual-acceptance.md');
+const nonhumanoidModelsPath = path.join(skillRoot, 'references', 'nonhumanoid-models.md');
+const errorRecoveryPath = path.join(skillRoot, 'references', 'error-recovery.md');
+const aiControlFullPlanPath = path.join(skillRoot, 'examples', 'ai-control-full-export-plan.json');
 
 const skill = readFileSync(skillPath, 'utf8');
 const productionManifest = readFileSync(productionManifestPath, 'utf8');
 const shotTemplates = readFileSync(shotTemplatesPath, 'utf8');
+const existingProjectRefinement = readFileSync(existingProjectRefinementPath, 'utf8');
+const deliverables = readFileSync(deliverablesPath, 'utf8');
+const batchReview = readFileSync(batchReviewPath, 'utf8');
+const visualAcceptance = readFileSync(visualAcceptancePath, 'utf8');
+const nonhumanoidModels = readFileSync(nonhumanoidModelsPath, 'utf8');
+const errorRecovery = readFileSync(errorRecoveryPath, 'utf8');
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>;
 };
@@ -53,6 +66,87 @@ describe('ForeScene previs skill contract', () => {
       't = duration / 2',
     ]) {
       expect(skill, `missing skill contract phrase: ${phrase}`).toContain(phrase);
+    }
+  });
+
+  it('defaults an existing project to non-destructive refinement and captures preservation evidence', () => {
+    for (const phrase of [
+      'Existing-project refinement',
+      'Hard rule:',
+      'contains any shots or panoramas',
+      '`--reset-project` and `resetProject` are prohibited',
+      'project-preservation.json',
+      'project-preservation-final.json',
+      'Record every original shot ID',
+      'panorama ID',
+      'retained environment-object ID',
+      'camera/timeline entry',
+    ]) {
+      expect(`${skill}\n${existingProjectRefinement}`, `missing preservation rule: ${phrase}`).toContain(phrase);
+    }
+    expect(existingProjectRefinement).toContain('"resetAuthorized": false');
+  });
+
+  it('documents gated visual batch review that stops after an empty or failed shot', () => {
+    for (const phrase of [
+      '3–5 shots',
+      'A failed shot blocks the next batch.',
+      'primarySubjectVisible',
+      'requiredPassesPresent',
+      'Empty rooms',
+      'When visual evidence conflicts with `validation.json`, trust the visual evidence and mark the shot failed.',
+      'open or sample the MP4',
+    ]) {
+      expect(`${batchReview}\n${visualAcceptance}`, `missing visual batch gate: ${phrase}`).toContain(phrase);
+    }
+  });
+
+  it('defines the AI-control export plan and blocks required projected omissions', () => {
+    const plan = JSON.parse(readFileSync(aiControlFullPlanPath, 'utf8')) as {
+      version?: number;
+      commands?: Array<{ op?: string; patch?: Record<string, unknown> }>;
+    };
+    expect(plan.version).toBe(1);
+    const patch = plan.commands?.[0];
+    expect(patch?.op).toBe('export.sceneDefaults.patch');
+    expect(patch?.patch).toMatchObject({
+      peopleExportMode: 'both',
+      includeViewport: true,
+      includeProjectedViewport: true,
+      includeProjectedCameraMoveReferenceFrames: true,
+      includeProjectedCameraMoveVideo: true,
+      includeCameraMoveVideo: true,
+      includeCameraMoveReferenceFrames: true,
+      characterPass: {
+        enabled: true,
+        includeStill: true,
+        includeMotion: true,
+        motionFormat: 'both',
+        backgroundColor: '#00FF00',
+        includeAttachedProps: true,
+      },
+      depth: {
+        enabled: true,
+        includeViewportStill: true,
+        includeReferenceFrames: true,
+        includeCameraMoveVideo: true,
+        rangeMode: 'auto',
+        invert: false,
+      },
+    });
+    expect(deliverables).toContain('createExportPlan()');
+    expect(deliverables).toContain('`missing-projector` is a blocking failure');
+  });
+
+  it('requires real proxy replacement work and evidence-based completion summaries', () => {
+    for (const phrase of [
+      'Copy every proxy shot override to the real model.',
+      'Copy timeline/keyframe transforms and visibility where applicable.',
+      'zero `commandsApplied` or zero `affectedShots` is a failure',
+      'associated visual review record passed',
+      'productionComplete": false',
+    ]) {
+      expect(`${nonhumanoidModels}\n${errorRecovery}`, `missing integrity requirement: ${phrase}`).toContain(phrase);
     }
   });
 
