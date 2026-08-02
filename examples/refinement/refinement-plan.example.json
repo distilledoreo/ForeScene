@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "mode": "existing-project-refinement",
   "preserve": {
     "project": true,
@@ -16,5 +16,11 @@
     { "id": "batch-01", "shots": ["01"] },
     { "id": "batch-02", "shots": ["02"] }
   ],
-  "deliverablesProfile": "ai-control-full"
+  "deliverablesProfile": "ai-control-full",
+  "reviewPolicy": {
+    "additionalCriteria": [],
+    "shotRequirements": []
+  },
+  "finalization": { "scope": "reviewed_shots" },
+  "subjectObjectIds": []
 }

@@ -139,9 +139,27 @@ function resolveShotsForExport(
   shotIds: string[] | undefined,
 ): { shots: Shot[]; diagnostics: AgentExportPlanResult['diagnostics'] } {
   const diagnostics: AgentExportPlanResult['diagnostics'] = [];
-  if (shotIds && shotIds.length > 0) {
+  if (shotIds !== undefined) {
+    if (shotIds.length === 0) {
+      diagnostics.push(agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'An explicit shotIds selection cannot be empty.',
+        { path: 'shotIds' },
+      ));
+      return { shots: [], diagnostics };
+    }
+    const seen = new Set<string>();
     const shots: Shot[] = [];
     for (const id of shotIds) {
+      if (seen.has(id)) {
+        diagnostics.push(agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          `Shot id "${id}" is listed more than once.`,
+          { path: 'shotIds' },
+        ));
+        continue;
+      }
+      seen.add(id);
       const shot = project.shots.find((candidate) => candidate.id === id);
       if (!shot) {
         diagnostics.push(

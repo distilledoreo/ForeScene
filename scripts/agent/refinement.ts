@@ -8,6 +8,7 @@ import {
   canApproveBatch,
   canFinalizeRefinement,
   canRunBatch,
+  buildRefinementReviewCriteria,
   checkSemanticReview,
   captureRefinementSnapshot,
   checkReviewMatrix,
@@ -191,7 +192,7 @@ async function applyDeliverablesProfile(session: AgentBrowserSession, profileId:
 }
 
 async function applyConfiguredCastRoles(session: AgentBrowserSession, plan: RefinementPlan, state: RefinementState): Promise<void> {
-  const configured = plan.castObjectIds ?? [];
+  const configured = plan.subjectObjectIds ?? [];
   if (configured.length === 0) return;
   const project = await readProject(session);
   const objectIds = new Set<string>();
@@ -199,7 +200,7 @@ async function applyConfiguredCastRoles(session: AgentBrowserSession, plan: Refi
     if (state.imports[identifier]) state.imports[identifier]!.objectIds.forEach((id) => objectIds.add(id));
     if (project.scene.objects.some((object) => object.id === identifier)) objectIds.add(identifier);
   }
-  await applyObjectUpdates(session, 'Classify configured cast', [...objectIds].map((id) => ({ id, updates: { stagingRole: 'person' } })));
+  await applyObjectUpdates(session, 'Classify configured subjects', [...objectIds].map((id) => ({ id, updates: { stagingRole: 'person' } })));
 }
 
 function assertPreserved(plan: RefinementPlan, state: RefinementState, project: LocationProject): void {
@@ -319,6 +320,7 @@ async function replaceProxy(
 
 async function renderReviewMatrix(
   session: AgentBrowserSession,
+  plan: RefinementPlan,
   shots: ResolvedShot[],
   outputRoot: string,
   authorizedMutations: ReturnType<typeof listAuthorizedRefinementValueChanges>,
@@ -327,7 +329,7 @@ async function renderReviewMatrix(
   const report: {
     ok: boolean;
     generatedAt: string;
-    shots: Array<{ id: string; shotNumber: string; passes: Array<Record<string, unknown>>; temporal: TemporalEvidence }>;
+    shots: Array<{ id: string; shotNumber: string; requiredCriteria: ReturnType<typeof buildRefinementReviewCriteria>; passes: Array<Record<string, unknown>>; temporal: TemporalEvidence }>;
     authorizedMutations: ReturnType<typeof listAuthorizedRefinementValueChanges>;
   } = { ok: true, generatedAt: now(), shots: [], authorizedMutations };
   const temporalByShot = new Map(temporalEvidence.map((evidence) => [evidence.shotId, evidence.temporal]));
@@ -354,11 +356,17 @@ async function renderReviewMatrix(
         depth: result.depth,
       });
     }
-    report.shots.push({ ...shot, passes, temporal: temporalByShot.get(shot.id) ?? { renderable: false } });
+    const temporal = temporalByShot.get(shot.id) ?? { renderable: false };
+    report.shots.push({
+      ...shot,
+      requiredCriteria: buildRefinementReviewCriteria(plan, shot, temporal.renderable, authorizedMutations),
+      passes,
+      temporal,
+    });
   }
   const manifestPath = path.join(outputRoot, 'review-manifest.json');
   await writeJson(manifestPath, report);
-  return { report, manifestPath };
+  return { report, manifestPath, manifestSha256: sha256(await readFile(manifestPath)) };
 }
 
 async function renderTemporalSamples(
@@ -717,6 +725,7 @@ export async function runRefinementCli(options: RefinementCliOptions): Promise<{
       const temporal = await renderTemporalSamples(session, shots, path.join(outputRoot, 'reviews', batchId));
       const reviews = await renderReviewMatrix(
         session,
+        plan,
         shots,
         path.join(outputRoot, 'reviews', batchId),
         authorizedMutations,

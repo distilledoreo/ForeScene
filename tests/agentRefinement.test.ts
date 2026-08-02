@@ -15,6 +15,7 @@ import { resolveProjectForShot } from '../src/engine/shotSceneState';
 import {
   canApproveBatch,
   canRunBatch,
+  buildRefinementReviewCriteria,
   checkRefinementDeliverables,
   checkSemanticReview,
   captureRefinementSnapshot,
@@ -30,7 +31,7 @@ import { createExportPlan } from '../src/engine/exportPlan';
 
 function plan(): RefinementPlan {
   return {
-    version: 1,
+    version: 2,
     mode: 'existing-project-refinement',
     preserve: {
       project: true,
@@ -62,6 +63,9 @@ function plan(): RefinementPlan {
       { id: 'batch-02', shots: ['02'] },
     ],
     deliverablesProfile: 'ai-control-full',
+    reviewPolicy: { additionalCriteria: [], shotRequirements: [] },
+    finalization: { scope: 'reviewed_shots' },
+    subjectObjectIds: [],
   };
 }
 
@@ -78,6 +82,7 @@ function reviewManifest(shotId: string, complete = true, renderable = false) {
     ok: true,
     shots: [{
       id: shotId,
+      requiredCriteria: buildRefinementReviewCriteria(plan(), { id: shotId, shotNumber: shotId }, renderable, []),
       passes: files.slice(0, complete ? undefined : -1).map((fileName) => ({ ok: true, fileName, sha256: undefined as string | undefined })),
       temporal: { renderable },
     }],
@@ -155,22 +160,19 @@ describe('agent refinement guardrails', () => {
     const temporal = manifest.shots[0]!.temporal as unknown as Record<string, Record<string, string | number>>;
     const semantic = {
       approved: true,
+      manifestSha256: 'sha256:manifest',
       shots: [{
         id: 'shot-01',
         verdict: 'pass',
-        reasons: ['Subject, creature, and framing are production-ready.'],
-        primarySubject: true,
-        correctVariant: true,
-        framing: true,
-        creature: true,
-        proxyAbsent: true,
-        props: true,
-        motionDecision: 'approved',
-        authorizedMutationDecision: 'not_applicable',
+        criteria: manifest.shots[0]!.requiredCriteria.map((criterion) => ({
+          id: criterion.id,
+          decision: 'pass',
+          reason: 'The criterion is clearly satisfied by the linked evidence.',
+        })),
         reviewedArtifacts: [
-          ...manifest.shots[0]!.passes.map((pass) => ({ fileName: pass.fileName, sha256: pass.sha256 })),
+          ...manifest.shots[0]!.passes.map((pass) => ({ path: pass.fileName, sha256: pass.sha256 })),
           ...['start', 'mid', 'end', 'video'].map((key) => ({
-            fileName: temporal[key]!.fileName,
+            path: temporal[key]!.fileName,
             sha256: temporal[key]!.sha256,
           })),
         ],
@@ -178,16 +180,11 @@ describe('agent refinement guardrails', () => {
     };
     expect(checkSemanticReview(semantic, manifest, ['shot-01'])).toEqual({ ok: true, errors: [] });
 
-    semantic.shots[0]!.motionDecision = 'not_applicable';
-    expect(checkSemanticReview(semantic, manifest, ['shot-01']).errors).toContain(
-      'Semantic review must approve motion for renderable shot shot-01.',
-    );
-    semantic.shots[0]!.motionDecision = 'approved';
     semantic.shots[0]!.reviewedArtifacts = semantic.shots[0]!.reviewedArtifacts.filter(
-      (artifact) => artifact.fileName !== 'temporal/mid.png',
+      (artifact) => artifact.path !== 'temporal/mid.png',
     );
     expect(checkSemanticReview(semantic, manifest, ['shot-01']).errors).toContain(
-      'Semantic review hash does not match temporal mid evidence for shot shot-01.',
+      'Semantic review hash does not match temporal/mid.png for shot shot-01.',
     );
   });
 
@@ -292,46 +289,43 @@ describe('agent refinement guardrails', () => {
     for (const [index, pass] of manifest.shots[0]!.passes.entries()) pass.sha256 = `sha256:${index}`;
     const semantic = {
       approved: true,
+      manifestSha256: 'sha256:manifest',
       shots: [{
         id: 'shot-01',
         verdict: 'pass',
-        reasons: ['Subject, creature, and framing are production-ready.'],
-        primarySubject: true,
-        correctVariant: true,
-        framing: true,
-        creature: true,
-        proxyAbsent: true,
-        props: true,
-        motionDecision: 'not_applicable',
-        authorizedMutationDecision: 'not_applicable',
-        reviewedArtifacts: manifest.shots[0]!.passes.map((pass) => ({ fileName: pass.fileName, sha256: pass.sha256 })),
+        criteria: manifest.shots[0]!.requiredCriteria.map((criterion) => ({
+          id: criterion.id,
+          decision: 'pass',
+          reason: 'The criterion is clearly satisfied by the linked evidence.',
+        })),
+        reviewedArtifacts: manifest.shots[0]!.passes.map((pass) => ({ path: pass.fileName, sha256: pass.sha256 })),
       }],
     };
     expect(checkSemanticReview(semantic, manifest, ['shot-01'])).toEqual({ ok: true, errors: [] });
-    semantic.shots[0]!.proxyAbsent = false;
-    expect(checkSemanticReview(semantic, manifest, ['shot-01']).errors).toContain('Semantic review must affirm proxyAbsent for shot shot-01.');
+    semantic.shots[0]!.criteria[0]!.decision = 'fail';
+    expect(checkSemanticReview(semantic, manifest, ['shot-01']).errors).toContain('Semantic review failed criterion visual.required-content for shot shot-01.');
   });
 
   it('uses configured cast staging roles for environment-only and cast-only export passes', () => {
     const project = createDefaultProject();
-    const creature = createSceneObject('imported_model');
-    creature.name = 'Hand monster';
-    creature.stagingRole = 'person';
-    project.scene.objects.push(creature);
+    const subject = createSceneObject('imported_model');
+    subject.name = 'Imported subject';
+    subject.stagingRole = 'person';
+    project.scene.objects.push(subject);
     const shot = project.shots[0]!;
     const environment = resolveProjectForShot(project, shot, { contentMode: 'clean_plate' });
     const castOnly = resolveProjectForShot(project, shot, { contentMode: 'characters_only' });
-    expect(environment.scene.objects.find((object) => object.id === creature.id)?.visible).toBe(false);
-    expect(castOnly.scene.objects.find((object) => object.id === creature.id)?.visible).toBe(true);
+    expect(environment.scene.objects.find((object) => object.id === subject.id)?.visible).toBe(false);
+    expect(castOnly.scene.objects.find((object) => object.id === subject.id)?.visible).toBe(true);
   });
 
   it('includes character placeholders in finalization visibility targets', () => {
     expect(listRefinementVisibilityTargets({
-      replacements: [{ proxyObjectId: 'proxy-spider' }],
-      assignments: [{ placeholderObjectId: 'joseph-placeholder' }],
+      replacements: [{ proxyObjectId: 'proxy-object' }],
+      assignments: [{ placeholderObjectId: 'subject-placeholder' }],
     } as never)).toEqual([
-      { proxyObjectId: 'proxy-spider' },
-      { proxyObjectId: 'joseph-placeholder' },
+      { proxyObjectId: 'proxy-object' },
+      { proxyObjectId: 'subject-placeholder' },
     ]);
   });
 });

@@ -51,8 +51,8 @@ renders the six-pass review matrix, and stops in `awaiting_visual_review`.
 Motion shots also write start, midpoint, endpoint, and MP4 evidence into the
 same `review-manifest.json`; each temporal record includes its output path and
 SHA-256. Use `--approve batch-id --review path/to/batch.semantic.json` after
-semantic review; it must affirm each subject, variant, framing, creature, prop,
-proxy, and motion decision and match every rendered still and temporal hash.
+semantic review; it must pass every manifest criterion and match every
+rendered still and temporal hash.
 The following batch is rejected until that explicit state transition exists.
 `--finalize --write` runs the final preservation comparison, export plan,
 package download, and ZIP verification. It cannot set production complete while

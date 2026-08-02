@@ -162,9 +162,11 @@ that same manifest:
 }
 ```
 
-Semantic approval must approve renderable motion and provide matching hashes
-for all four temporal artifacts. A non-renderable shot must explicitly use
-`motionDecision: "not_applicable"`.
+Semantic approval must include a generic criterion result for every criterion
+listed by the manifest. Renderable shots include `temporal.motion` and must
+pass it; non-renderable shots do not receive that criterion. Every still and
+temporal artifact must also appear in `reviewedArtifacts` with its matching
+SHA-256.
 
 ## Existing-project refinement
 
@@ -176,7 +178,7 @@ add objects and alter only the required staging overrides.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "mode": "existing-project-refinement",
   "preserve": {
     "project": true, "shots": true, "panoramas": true,
@@ -186,19 +188,22 @@ add objects and alter only the required staging overrides.
     "shotStaging": [], "pose": [], "camera": [], "timeline": [], "visibility": []
   },
   "characterImports": [
-    { "id": "joseph-intact", "batchId": "batch-01", "file": "assets/joseph.glb", "rigPackage": "assets/joseph.fsrig", "rigMode": "saved-rig" }
+    { "id": "subject-variant-a", "batchId": "batch-01", "file": "production/<production-id>/subject-variant-a.glb", "rigPackage": "production/<production-id>/subject-variant-a.fsrig", "rigMode": "saved-rig" }
   ],
   "modelImports": [
-    { "id": "spider-model", "batchId": "batch-01", "file": "assets/spider.glb", "mode": "combined" }
+    { "id": "replacement-object-a", "batchId": "batch-01", "file": "production/<production-id>/replacement-object-a.glb", "mode": "combined" }
   ],
   "characterAssignments": [
-    { "id": "assign-joseph", "importId": "joseph-intact", "replaceObjectId": "existing-joseph-placeholder", "shots": ["01"] }
+    { "id": "assign-subject-a", "importId": "subject-variant-a", "replaceObjectId": "existing-subject-placeholder", "shots": ["01"] }
   ],
   "proxyReplacements": [
-    { "id": "replace-spider", "batchId": "batch-01", "proxyObjectId": "proxy-spider", "replacementImportId": "spider-model", "shots": ["01"] }
+    { "id": "replace-object-a", "batchId": "batch-01", "proxyObjectId": "proxy-object-a", "replacementImportId": "replacement-object-a", "shots": ["01"] }
   ],
   "batches": [{ "id": "batch-01", "shots": ["01"] }],
-  "deliverablesProfile": "ai-control-full"
+  "deliverablesProfile": "ai-control-full",
+  "reviewPolicy": { "additionalCriteria": [], "shotRequirements": [] },
+  "finalization": { "scope": "reviewed_shots" },
+  "subjectObjectIds": []
 }
 ```
 
@@ -214,11 +219,10 @@ npm run agent:refine -- --plan production/refinement-plan.json --finalize --writ
 A batch ends in `awaiting_visual_review` only if every required still pass,
 temporal sample (for motion shots), and preservation check succeeds. The next
 batch is blocked until `--approve` receives a semantic review file. It must
-pass every shot, give concrete reasons, affirm the subject, variant, framing,
-creature, proxy absence, props, and motion decision, and include the SHA-256
-of every reviewed pass. Allowed camera or timeline changes are recorded in the
-review manifest and require an explicit `authorizedMutationDecision: "approved"`
-for the affected shot. Finalization applies `deliverablesProfile`
+pass every shot, provide a concrete reason for every manifest criterion, and
+include the SHA-256 of every reviewed pass and temporal artifact. Allowed
+camera or timeline changes add the `refinement.authorized-change` criterion.
+Finalization applies `deliverablesProfile`
 (`ai-control-full`) before creating the export plan, then rejects missing
 required clay, projected, clean-plate, cast, depth, or renderable-motion
 artifacts. The planner emits one artifact per viewport pass containing both
@@ -235,8 +239,8 @@ preservation drift, or a package that omits a planned artifact.
 For a production copy, start from
 `examples/refinement/six-shot-pilot.template.json`, replace every placeholder
 object/shot id with IDs from that copied project, and run the pilot before
-adding later production batches. It requires three saved-rig Joseph variants,
-spider and hand-monster replacements, and a sixth motion shot. Motion shots
+adding later production batches. It demonstrates three saved-rig subject
+variants, two replacement objects, and a sixth motion shot. Motion shots
 also emit start/mid/end clay frames plus a downloaded 720p MP4 preview, so
 framing and temporal output can be reviewed together.
 
