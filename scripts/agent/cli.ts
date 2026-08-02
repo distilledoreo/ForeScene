@@ -9,6 +9,8 @@
  *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
  *   npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
  *   npm run agent:package -- --write --output artifacts/package.zip
+ *   npm run agent:analyze-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig
+ *   npm run agent:import-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig --name "Actor" --write
  *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
@@ -50,8 +52,9 @@ function parseArgs(argv: string[]) {
     screenshot: undefined as string | undefined,
     input: undefined as string | undefined,
     file: undefined as string | undefined,
+    rigPackage: undefined as string | undefined,
     mapping: undefined as string | undefined,
-    rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto',
+    rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto' | 'saved-rig',
     name: undefined as string | undefined,
     consentToken: undefined as string | undefined,
     profile: undefined as string | undefined,
@@ -100,12 +103,14 @@ function parseArgs(argv: string[]) {
       args.input = argv[++index];
     } else if (token === '--file') {
       args.file = argv[++index];
+    } else if (token === '--rig-package') {
+      args.rigPackage = argv[++index];
     } else if (token === '--mapping') {
       args.mapping = argv[++index];
     } else if (token === '--rig-mode') {
       const mode = argv[++index];
-      if (mode !== 'preserve' && mode !== 'autorig' && mode !== 'auto') {
-        throw new Error('--rig-mode must be preserve, autorig, or auto');
+      if (mode !== 'preserve' && mode !== 'autorig' && mode !== 'auto' && mode !== 'saved-rig') {
+        throw new Error('--rig-mode must be preserve, autorig, auto, or saved-rig');
       }
       args.rigMode = mode;
     } else if (token === '--name') {
@@ -145,17 +150,32 @@ async function runCharacterAnalysis(options: {
   writeAccess: boolean;
   persistWrite: boolean;
   file: string;
+  rigPackage?: string;
+  rigMode: 'preserve' | 'autorig' | 'auto' | 'saved-rig';
   output?: string;
 }) {
   const target = path.resolve(options.file);
+  const rigPackageTarget = options.rigPackage ? path.resolve(options.rigPackage) : undefined;
+  if (options.rigMode === 'saved-rig' && !rigPackageTarget) {
+    throw new Error('analyze-character with --rig-mode saved-rig requires --rig-package <path>.');
+  }
   await withSession(options, async (session) => {
     await session.page.locator('[data-agent-character-import-input]').setInputFiles(target);
+    if (rigPackageTarget) {
+      await session.page.locator('[data-agent-character-rig-package-input]').setInputFiles(rigPackageTarget);
+    }
     const result = await session.page.evaluate(async (input) => {
       const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
       const file = fileInput?.files?.[0];
       if (!file) throw new Error('Character file was not staged in the browser.');
+      if (input.rigMode === 'saved-rig') {
+        const rigInput = document.querySelector('[data-agent-character-rig-package-input]') as HTMLInputElement | null;
+        const rigPackageFile = rigInput?.files?.[0];
+        if (!rigPackageFile) throw new Error('Saved-rig package was not staged in the browser.');
+        return window.foreScene!.analyzeSavedRigCharacter({ sourceFile: file, rigPackageFile });
+      }
       return window.foreScene!.analyzeCharacterImport({ file, mode: 'auto' });
-    }, undefined);
+    }, { rigMode: options.rigMode });
     if (options.output) {
       const output = path.resolve(options.output);
       await mkdir(path.dirname(output), { recursive: true });
@@ -171,13 +191,19 @@ async function runCharacterImport(options: {
   writeAccess: boolean;
   persistWrite: boolean;
   file: string;
+  rigPackage?: string;
   mapping?: string;
-  rigMode: 'preserve' | 'autorig' | 'auto';
+  rigMode: 'preserve' | 'autorig' | 'auto' | 'saved-rig';
   name?: string;
   consentToken?: string;
+  allowHeavyCharacterImports: boolean;
 }) {
   requireExplicitWrite('agent:import-character', options.writeAccess);
   const target = path.resolve(options.file);
+  const rigPackageTarget = options.rigPackage ? path.resolve(options.rigPackage) : undefined;
+  if (options.rigMode === 'saved-rig' && !rigPackageTarget) {
+    throw new Error('import-character with --rig-mode saved-rig requires --rig-package <path>.');
+  }
   let mappingOverrides: Record<string, string> | undefined;
   if (options.mapping) {
     const mappingPath = options.mapping;
@@ -192,10 +218,24 @@ async function runCharacterImport(options: {
   }
   await withSession(options, async (session) => {
     await session.page.locator('[data-agent-character-import-input]').setInputFiles(target);
+    if (rigPackageTarget) {
+      await session.page.locator('[data-agent-character-rig-package-input]').setInputFiles(rigPackageTarget);
+    }
     const result = await session.page.evaluate(async (input) => {
       const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
       const file = fileInput?.files?.[0];
       if (!file) throw new Error('Character file was not staged in the browser.');
+      if (input.rigMode === 'saved-rig') {
+        const rigInput = document.querySelector('[data-agent-character-rig-package-input]') as HTMLInputElement | null;
+        const rigPackageFile = rigInput?.files?.[0];
+        if (!rigPackageFile) throw new Error('Saved-rig package was not staged in the browser.');
+        return window.foreScene!.importSavedRigCharacter({
+          sourceFile: file,
+          rigPackageFile,
+          name: input.characterName ?? (file.name.replace(/\.(glb|gltf|fbx)$/i, '') || 'Poseable character'),
+          consentToken: input.consentToken,
+        });
+      }
       const analysis = await window.foreScene!.analyzeCharacterImport({ file, mode: input.rigMode === 'auto' ? 'auto' : input.rigMode === 'preserve' ? 'preserveExistingRig' : 'autorig' });
       const mode = input.rigMode === 'autorig'
         ? 'autorig'
@@ -218,7 +258,7 @@ async function runCharacterImport(options: {
       rigMode: options.rigMode,
       mappingOverrides,
       characterName: options.name,
-      consentToken: options.consentToken,
+      consentToken: options.consentToken ?? (options.allowHeavyCharacterImports ? 'allow-heavy-character-imports' : undefined),
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;
@@ -531,6 +571,8 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       file: args.file,
+      rigPackage: args.rigPackage,
+      rigMode: args.rigMode,
       output: args.output,
     });
     return;
@@ -544,9 +586,12 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       file: args.file,
+      rigPackage: args.rigPackage,
       mapping: args.mapping,
       rigMode: args.rigMode,
       name: args.name,
+      consentToken: args.consentToken,
+      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
     });
     return;
   }

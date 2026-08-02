@@ -24,6 +24,7 @@ export const AGENT_INSPECT_COMMANDS = [
   'viewport.waitReady',
   'shot.renderFrame',
   'character.analyze',
+  'character.analyzeSavedRig',
   'character.progress',
 ] as const;
 
@@ -69,6 +70,7 @@ export const AGENT_MUTATE_COMMANDS = [
   'export.package',
   'project.reset',
   'character.import',
+  'character.importSavedRig',
 ] as const;
 
 export const AGENT_DEFERRED_COMMANDS = [

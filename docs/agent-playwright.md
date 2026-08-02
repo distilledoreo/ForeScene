@@ -12,6 +12,8 @@ npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
 npm run agent:verify -- --workspace build --output artifacts/verify.png
 npm run agent:run -- --plan plans/example.json --screenshot artifacts/out.png --write
 npm run agent:package -- --write --output artifacts/package.zip
+npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig
+npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --write
 ```
 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  

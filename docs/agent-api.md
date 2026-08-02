@@ -215,9 +215,11 @@ Character analysis and import are exposed through the Agent API and appear in ca
 ```bash
 npm run agent:analyze-character -- --file path/to/actor.glb
 npm run agent:import-character -- --file path/to/actor.glb --rig-mode auto --write
+npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --output artifacts/preflight/actor.json
+npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --allow-heavy-character-imports --write
 ```
 
-Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. Large imports use the device-aware model-import budget and require an explicit consent token. Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
+Auto mode preserves an existing rig only when the analysis reports skeleton and skinning data, no required mappings are missing, and mapping confidence is at least 0.7; otherwise it selects autorig. `saved-rig` stages both binary inputs, validates the package and source topology before writing, then applies the shared saved-rig importer. Results include GLB, rig-package, and combined fingerprints; a repeated exact pair reuses the existing character instead of creating a duplicate. Large imports use the device-aware model-import budget and require explicit consent (`--allow-heavy-character-imports` or `--consent-token`). Character imports participate in `waitForIdle` and block plan, reset, package, and video operations until they finish or are cancelled.
 
 ## Visual CLI
 

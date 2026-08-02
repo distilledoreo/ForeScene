@@ -28,6 +28,7 @@ import type { VideoResolutionPresetId } from '../videoPresets';
 import type { SceneContentMode } from '../shotSceneState';
 import type { AgentDiagnostic } from './diagnostics';
 import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
+import type { ImportBudgetEstimate } from '../modelImportBudget';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -666,7 +667,27 @@ export interface AgentCharacterImportAnalysis {
   animationClips: Array<{ name: string; durationSeconds: number }>;
   estimatedMemoryBytes: number;
   requiresConsent: boolean;
+  /** Full device-aware estimate used to decide whether an explicit import consent is needed. */
+  importBudget: ImportBudgetEstimate;
+  consent: AgentCharacterImportConsent;
   warnings: string[];
+}
+
+/** Explicit authorization state for a potentially heavy character import. */
+export interface AgentCharacterImportConsent {
+  required: boolean;
+  provided: boolean;
+  authorized: boolean;
+}
+
+/** Read-only saved-rig preflight enriched with stable source/package fingerprints. */
+export interface AgentSavedRigCharacterAnalysis extends SavedRigCompatibilityAnalysis {
+  glbFingerprint: string;
+  rigPackageFingerprint: string;
+  /** SHA-256 over the exact GLB and rig-package fingerprints. */
+  importFingerprint: string;
+  importBudget?: ImportBudgetEstimate;
+  consent: AgentCharacterImportConsent;
 }
 
 export interface AgentCharacterImportResult {
@@ -679,6 +700,16 @@ export interface AgentCharacterImportResult {
   importedRigPreserved?: boolean;
   appliedSavedRig?: boolean;
   topologyVerified?: boolean;
+  /** SHA-256 of the exact GLB bytes for saved-rig imports. */
+  glbFingerprint?: string;
+  /** SHA-256 of the exact .fsrig/.panorig bytes for saved-rig imports. */
+  rigPackageFingerprint?: string;
+  /** Combined GLB + rig-package fingerprint used for duplicate protection. */
+  importFingerprint?: string;
+  importBudget?: ImportBudgetEstimate;
+  consent?: AgentCharacterImportConsent;
+  /** True when an exact saved-rig pair was already imported into this project. */
+  reused?: boolean;
   verifiedRevisionId?: string;
   warnings: string[];
   diagnostics?: AgentDiagnostic[];
@@ -792,7 +823,7 @@ export interface ForeSceneBrowserApi {
 
   analyzeCharacterImport(input: AgentCharacterImportInput): Promise<AgentCharacterImportAnalysis>;
   importCharacter(input: AgentCharacterImportCommitInput): Promise<AgentCharacterImportResult>;
-  analyzeSavedRigCharacter(input: AgentSavedRigCharacterInput): Promise<SavedRigCompatibilityAnalysis>;
+  analyzeSavedRigCharacter(input: AgentSavedRigCharacterInput): Promise<AgentSavedRigCharacterAnalysis>;
   importSavedRigCharacter(input: AgentSavedRigCharacterImportInput): Promise<AgentCharacterImportResult>;
   getCharacterImportProgress(): AgentCharacterImportProgress | null;
   cancelCharacterImport(): { ok: boolean; cancelled: boolean };

@@ -20,18 +20,21 @@ import {
   ensureImportedRiggedCharactersForProject,
   hydrateImportedRiggedCharactersFromAssets,
 } from '../importedRiggedPoseableCharacter';
+import { blobSha256Digest, sha256Digest } from '../binaryIntegrity';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { detectImportDeviceProfile, estimateModelImportBudget, type ImportGeometryStats } from '../modelImportBudget';
 import { collectAgentBusyDiagnostics } from './busy';
 import type {
   AgentCharacterImportAnalysis,
+  AgentCharacterImportConsent,
   AgentCharacterImportCommitInput,
   AgentCharacterImportInput,
   AgentCharacterImportMode,
   AgentCharacterImportPhase,
   AgentCharacterImportProgress,
   AgentCharacterImportResult,
+  AgentSavedRigCharacterAnalysis,
 } from './protocol';
 import { AGENT_DIAGNOSTIC_CODES, agentError } from './diagnostics';
 
@@ -52,6 +55,19 @@ const analyses = new Map<string, StoredAnalysis>();
 const ANALYSIS_TTL_MS = 5 * 60_000;
 const MAX_ANALYSES = 2;
 let activeAnalysisId: string | undefined;
+
+interface SavedRigImportFingerprints {
+  glbFingerprint: string;
+  rigPackageFingerprint: string;
+  importFingerprint: string;
+}
+
+interface SavedRigImportMetadata extends SavedRigImportFingerprints {
+  version: 1;
+  topologyVerified: boolean;
+  sourceAssetId: string;
+  rigAssetId: string;
+}
 
 function evictExpiredAnalyses(now = Date.now()): void {
   for (const [id, entry] of analyses) {
@@ -94,6 +110,64 @@ function importBudget(analysis: RiggedCharacterImportAnalysis) {
     mode: 'separate',
   };
   return estimateModelImportBudget(stats, detectImportDeviceProfile());
+}
+
+function consentStatus(
+  budget: ReturnType<typeof importBudget> | undefined,
+  consentToken?: string,
+): AgentCharacterImportConsent {
+  const required = budget?.tier === 'heavy' || budget?.tier === 'extreme';
+  const provided = Boolean(consentToken);
+  return { required, provided, authorized: !required || provided };
+}
+
+async function fingerprintSavedRigImport(
+  sourceFile: File,
+  rigPackageFile: File,
+): Promise<SavedRigImportFingerprints> {
+  const [sourceDigest, rigPackageDigest] = await Promise.all([
+    blobSha256Digest(sourceFile),
+    blobSha256Digest(rigPackageFile),
+  ]);
+  const glbFingerprint = `sha256:${sourceDigest}`;
+  const rigPackageFingerprint = `sha256:${rigPackageDigest}`;
+  const combinedDigest = await sha256Digest(
+    new TextEncoder().encode(JSON.stringify({
+      version: 1,
+      glbFingerprint,
+      rigPackageFingerprint,
+    })).buffer,
+  );
+  return {
+    glbFingerprint,
+    rigPackageFingerprint,
+    importFingerprint: `sha256:${combinedDigest}`,
+  };
+}
+
+function savedRigImportMetadata(value: unknown): SavedRigImportMetadata | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Partial<SavedRigImportMetadata>;
+  if (
+    candidate.version !== 1
+    || typeof candidate.glbFingerprint !== 'string'
+    || typeof candidate.rigPackageFingerprint !== 'string'
+    || typeof candidate.importFingerprint !== 'string'
+    || typeof candidate.topologyVerified !== 'boolean'
+  ) return undefined;
+  return candidate as SavedRigImportMetadata;
+}
+
+function findSavedRigDuplicate(importFingerprint: string) {
+  return useProjectStore.getState().project.scene.objects.find((object) => (
+    savedRigImportMetadata(object.metadata?.agentSavedRigImport)?.importFingerprint === importFingerprint
+  ));
+}
+
+function poseableAssetIds(object: ReturnType<typeof findSavedRigDuplicate>) {
+  const source = object?.poseableCharacter;
+  if (!source || source.kind === 'builtin') return {};
+  return { sourceAssetId: source.assetId, rigAssetId: source.rigId };
 }
 
 function phaseForMessage(message: string): AgentCharacterImportPhase {
@@ -153,6 +227,8 @@ function publicAnalysis(id: string, analysis: RiggedCharacterImportAnalysis): Ag
     animationClips: analysis.source.animationClips.map((clip) => ({ name: clip.name, durationSeconds: clip.duration })),
     estimatedMemoryBytes: budget.estimatedPeakHeapBytes,
     requiresConsent: budget.tier === 'heavy' || budget.tier === 'extreme',
+    importBudget: budget,
+    consent: consentStatus(budget),
     warnings: [
       ...analysis.warnings,
       ...(budget.tier === 'heavy' || budget.tier === 'extreme' ? ['This import is above the standard memory tier and requires explicit consent.'] : []),
@@ -200,21 +276,38 @@ export async function analyzeSavedRigCharacter(input: {
   sourceFile: File;
   rigPackageFile: File;
   approximateHeightMeters?: number;
-}) {
+}): Promise<AgentSavedRigCharacterAnalysis> {
   const controller = startOperation();
   try {
     setProgress({ active: true, phase: 'reading', message: `Reading ${input.rigPackageFile.name}…` });
-    const result = await analyzeSavedRigCompatibility({
-      sourceFile: input.sourceFile,
-      rigPackageFile: input.rigPackageFile,
-      approximateHeightMeters: input.approximateHeightMeters,
-      signal: controller.signal,
-    });
+    const [result, fingerprints] = await Promise.all([
+      analyzeSavedRigCompatibility({
+        sourceFile: input.sourceFile,
+        rigPackageFile: input.rigPackageFile,
+        approximateHeightMeters: input.approximateHeightMeters,
+        signal: controller.signal,
+      }),
+      fingerprintSavedRigImport(input.sourceFile, input.rigPackageFile),
+    ]);
+    let budget: ReturnType<typeof importBudget> | undefined;
+    try {
+      budget = importBudget(await analyzeRiggedCharacterImport({
+        file: input.sourceFile,
+        signal: controller.signal,
+      }));
+    } catch {
+      // The compatibility analyzer already reports source parsing failures as diagnostics.
+    }
     if (result.diagnostics.length > 0) {
       setProgress({ active: true, phase: 'validating', message: 'Saved rig compatibility failed.' });
     }
     finishOperation();
-    return result;
+    return {
+      ...result,
+      ...fingerprints,
+      ...(budget ? { importBudget: budget } : {}),
+      consent: consentStatus(budget),
+    };
   } catch (error) {
     finishOperation();
     throw error;
@@ -246,21 +339,55 @@ export async function importSavedRigCharacter(input: {
   }
 
   let result: SavedRigCharacterImportResult | undefined;
+  let fingerprints: SavedRigImportFingerprints | undefined;
+  let budget: ReturnType<typeof importBudget> | undefined;
+  let consent: AgentCharacterImportConsent | undefined;
   try {
     setProgress({ active: true, phase: 'reading', message: `Reading ${input.sourceFile.name}…` });
-    const sourceAnalysis = await analyzeRiggedCharacterImport({
-      file: input.sourceFile,
-      signal: controller.signal,
-      onProgress: (message) => setProgress({ active: true, phase: phaseForMessage(message), message }),
-    });
-    const budget = importBudget(sourceAnalysis);
+    const [sourceAnalysis, calculatedFingerprints] = await Promise.all([
+      analyzeRiggedCharacterImport({
+        file: input.sourceFile,
+        signal: controller.signal,
+        onProgress: (message) => setProgress({ active: true, phase: phaseForMessage(message), message }),
+      }),
+      fingerprintSavedRigImport(input.sourceFile, input.rigPackageFile),
+    ]);
+    fingerprints = calculatedFingerprints;
+    budget = importBudget(sourceAnalysis);
+    consent = consentStatus(budget, input.consentToken);
     if (budget.tier === 'reject') {
       throw new Error(`Character import exceeds the device-aware safety budget: ${budget.exceeded.join(', ')}.`);
+    }
+    const duplicate = findSavedRigDuplicate(fingerprints.importFingerprint);
+    if (duplicate) {
+      const metadata = savedRigImportMetadata(duplicate.metadata?.agentSavedRigImport);
+      const existingAssetIds = poseableAssetIds(duplicate);
+      finishOperation();
+      return {
+        ok: true,
+        objectId: duplicate.id,
+        objectRef: { kind: 'object', id: duplicate.id, name: duplicate.name },
+        ...(metadata?.sourceAssetId || existingAssetIds.sourceAssetId
+          ? { sourceAssetId: metadata?.sourceAssetId ?? existingAssetIds.sourceAssetId }
+          : {}),
+        ...(metadata?.rigAssetId || existingAssetIds.rigAssetId
+          ? { rigAssetId: metadata?.rigAssetId ?? existingAssetIds.rigAssetId }
+          : {}),
+        poseable: Boolean(duplicate.poseableCharacter),
+        importedRigPreserved: duplicate.poseableCharacter?.kind === 'importedRig',
+        appliedSavedRig: true,
+        topologyVerified: metadata?.topologyVerified ?? false,
+        ...fingerprints,
+        importBudget: budget,
+        consent,
+        reused: true,
+        warnings: ['An identical GLB + rig package pair is already imported; reusing the existing character.'],
+      };
     }
     if (input.consentToken !== undefined && input.consentToken.length === 0) {
       throw new Error('consentToken must not be empty.');
     }
-    if ((budget.tier === 'heavy' || budget.tier === 'extreme') && !input.consentToken) {
+    if (!consent.authorized) {
       throw new Error('This character import requires explicit consent because it exceeds the standard memory tier.');
     }
     setProgress({ active: true, phase: 'validating', message: 'Validating saved rig compatibility…' });
@@ -281,6 +408,19 @@ export async function importSavedRigCharacter(input: {
       signal: controller.signal,
       onProgress: (message) => setProgress({ active: true, phase: phaseForMessage(message), message }),
     });
+    result.object = {
+      ...result.object,
+      metadata: {
+        ...result.object.metadata,
+        agentSavedRigImport: {
+          version: 1,
+          ...fingerprints,
+          topologyVerified: result.topologyVerified,
+          sourceAssetId: result.sourceAsset.id,
+          rigAssetId: result.rigAsset.id,
+        } satisfies SavedRigImportMetadata,
+      },
+    };
     const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
     if (!runDestructive) throw new Error('Local project recovery is still starting.');
     setProgress({ active: true, phase: 'saving', message: 'Saving a verified project revision…' });
@@ -325,6 +465,9 @@ export async function importSavedRigCharacter(input: {
       importedRigPreserved: Boolean(result.rig.importedRigBinding),
       appliedSavedRig: true,
       topologyVerified: result.topologyVerified,
+      ...fingerprints,
+      importBudget: budget,
+      consent,
       ...(verified?.revision.id ? { verifiedRevisionId: verified.revision.id } : {}),
       warnings: [...result.warnings, 'Attached saved rig — skipping the rigging wizard.'],
     };
@@ -334,6 +477,9 @@ export async function importSavedRigCharacter(input: {
     return {
       ok: false,
       warnings: result?.warnings ?? [],
+      ...(fingerprints ?? {}),
+      ...(budget ? { importBudget: budget } : {}),
+      ...(consent ? { consent } : {}),
       diagnostics: [agentError(
         AGENT_DIAGNOSTIC_CODES.invalidArgument,
         error instanceof Error ? error.message : 'Saved-rig character import failed.',
