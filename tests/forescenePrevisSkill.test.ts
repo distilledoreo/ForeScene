@@ -95,8 +95,9 @@ describe('ForeScene previs skill contract', () => {
     for (const phrase of [
       '3–5 shots',
       'A failed shot blocks the next batch.',
-      'primarySubjectVisible',
-      'requiredPassesPresent',
+      'visual.required-content',
+      'reviewedArtifacts',
+      'criteria exactly once',
       'Empty rooms',
       'When visual evidence conflicts with `validation.json`, trust the visual evidence and mark the shot failed.',
       'open or sample the MP4',
