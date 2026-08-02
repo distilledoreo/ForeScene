@@ -236,6 +236,15 @@ Finalization refuses
 unapproved batches, failed/missing replacement work, visible proxies, any
 preservation drift, or a package that omits a planned artifact.
 
+Refinement finalization defaults to `scope: "reviewed_shots"` and exports the
+deduplicated shot ids stored on approved batch state. Set
+`finalization.scope` to `"entire_project"` to require an approved review for
+every project shot; missing and extra reviewed ids are reported explicitly.
+The finalization report records `reviewedShotIds`, `plannedShotIds`,
+`exportedShotIds`, `unreviewedExportedShotIds`, `reviewedButUnexportedShotIds`,
+and `productionComplete`. Direct export API calls reject unknown, duplicate,
+or explicitly empty `shotIds` selections.
+
 For a production copy, start from
 `examples/refinement/six-shot-pilot.template.json`, replace every placeholder
 object/shot id with IDs from that copied project, and run the pilot before

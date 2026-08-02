@@ -24,6 +24,8 @@ import {
   createRefinementState,
   listRefinementVisibilityTargets,
   parseRefinementPlan,
+  resolveRefinementFinalizationScope,
+  resolveReviewedShotIds,
   resolveRefinementDeliverablesProfile,
   type RefinementPlan,
 } from '../src/engine/agent/refinement';
@@ -144,6 +146,18 @@ describe('agent refinement guardrails', () => {
     expect(canApproveBatch(plan(), state, 'batch-01')).toEqual([]);
     state.batches['batch-01']!.status = 'approved';
     expect(canRunBatch(plan(), state, 'batch-02')).toEqual([]);
+  });
+
+  it('resolves finalization to the deduplicated approved shot ids', () => {
+    const state = createRefinementState(plan(), createDefaultProject());
+    state.batches['batch-01']!.status = 'approved';
+    state.batches['batch-01']!.resolvedShotIds = ['shot-a', 'shot-shared'];
+    state.batches['batch-02']!.status = 'approved';
+    state.batches['batch-02']!.resolvedShotIds = ['shot-shared', 'shot-b'];
+
+    expect(resolveReviewedShotIds(plan(), state)).toEqual(['shot-a', 'shot-shared', 'shot-b']);
+    expect(resolveRefinementFinalizationScope(plan())).toBe('reviewed_shots');
+    expect(resolveRefinementFinalizationScope({ finalization: { scope: 'entire_project' } })).toBe('entire_project');
   });
 
   it('does not accept an incomplete review matrix as a completed batch review', () => {

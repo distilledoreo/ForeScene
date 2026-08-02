@@ -186,6 +186,12 @@ export interface RefinementState {
   replacements: RefinementReplacementState[];
   assignments: RefinementAssignmentState[];
   finalization?: {
+    scope: RefinementFinalizationScope;
+    reviewedShotIds: string[];
+    plannedShotIds: string[];
+    exportedShotIds: string[];
+    unreviewedExportedShotIds: string[];
+    reviewedButUnexportedShotIds: string[];
     completedAt: string;
     productionComplete: boolean;
     packagePath?: string;
@@ -619,6 +625,23 @@ export function createRefinementState(plan: RefinementPlan, project: LocationPro
   };
 }
 
+export function resolveRefinementFinalizationScope(plan: Pick<RefinementPlan, 'finalization'>): RefinementFinalizationScope {
+  return plan.finalization?.scope ?? 'reviewed_shots';
+}
+
+/** Resolve durable shot ids from approved batches; never infer from shot numbers. */
+export function resolveReviewedShotIds(plan: RefinementPlan, state: RefinementState): string[] {
+  const reviewed: string[] = [];
+  for (const batch of plan.batches) {
+    const batchState = state.batches[batch.id];
+    if (batchState?.status !== 'approved') continue;
+    for (const shotId of batchState.resolvedShotIds ?? []) {
+      if (!reviewed.includes(shotId)) reviewed.push(shotId);
+    }
+  }
+  return reviewed;
+}
+
 export function validateRefinementState(plan: RefinementPlan, state: RefinementState): string[] {
   const errors: string[] = [];
   const stateVersion = (state as unknown as { version?: number }).version;
@@ -657,6 +680,10 @@ export function canFinalizeRefinement(plan: RefinementPlan, state: RefinementSta
   const errors = validateRefinementState(plan, state);
   const unapproved = plan.batches.filter((batch) => state.batches[batch.id]?.status !== 'approved').map((batch) => batch.id);
   if (unapproved.length > 0) errors.push(`All batches require approval before finalization: ${unapproved.join(', ')}.`);
+  const missingResolvedIds = plan.batches
+    .filter((batch) => state.batches[batch.id]?.status === 'approved' && (state.batches[batch.id]?.resolvedShotIds?.length ?? 0) === 0)
+    .map((batch) => batch.id);
+  if (missingResolvedIds.length > 0) errors.push(`Approved batches are missing resolved shot ids: ${missingResolvedIds.join(', ')}.`);
   for (const entry of plan.proxyReplacements) {
     const replacement = state.replacements.find((candidate) => candidate.id === entry.id);
     if (!replacement || !replacement.verified || replacement.workUnits <= 0) {

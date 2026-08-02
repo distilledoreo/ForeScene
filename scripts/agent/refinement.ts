@@ -19,6 +19,8 @@ import {
   listAuthorizedRefinementValueChanges,
   parseRefinementPlan,
   resolveRefinementDeliverablesProfile,
+  resolveRefinementFinalizationScope,
+  resolveReviewedShotIds,
   type RefinementPlan,
   type RefinementState,
 } from '../../src/engine/agent/refinement';
@@ -482,6 +484,17 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   const gate = canFinalizeRefinement(plan, state);
   if (gate.length > 0) throw new Error(gate.join(' '));
   assertPreserved(plan, state, await readProject(session));
+  const scope = resolveRefinementFinalizationScope(plan);
+  const reviewedShotIds = resolveReviewedShotIds(plan, state);
+  const project = await readProject(session);
+  const projectShotIds = project.shots.map((shot) => shot.id);
+  const missingReviewedShotIds = projectShotIds.filter((shotId) => !reviewedShotIds.includes(shotId));
+  const extraReviewedShotIds = reviewedShotIds.filter((shotId) => !projectShotIds.includes(shotId));
+  if (scope === 'entire_project' && (missingReviewedShotIds.length > 0 || extraReviewedShotIds.length > 0)) {
+    throw new Error(`Entire-project finalization requires approved review for every project shot. Missing: ${missingReviewedShotIds.join(', ') || 'none'}; extra: ${extraReviewedShotIds.join(', ') || 'none'}.`);
+  }
+  if (reviewedShotIds.length === 0) throw new Error('Finalization requires at least one approved reviewed shot.');
+  const selectedShotIds = scope === 'entire_project' ? projectShotIds : reviewedShotIds;
   const visibleProxies = await session.page.evaluate((visibilityTargets) => {
     const api = window.foreScene!;
     const project = api.getProjectDocument();
@@ -504,8 +517,16 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   if (visibleProxies.length > 0) throw new Error(`Visible proxies prevent finalization: ${visibleProxies.join(', ')}`);
 
   await applyDeliverablesProfile(session, plan.deliverablesProfile);
-  const planResult = await session.page.evaluate(() => window.foreScene!.createExportPlan());
+  const packageType: 'current-shot' | 'selected-shots' = selectedShotIds.length === 1 ? 'current-shot' : 'selected-shots';
+  const planResult = await session.page.evaluate((input) => window.foreScene!.createExportPlan(input), {
+    shotIds: selectedShotIds,
+    packageType,
+  });
   if (!planResult.ok || !planResult.plan) throw new Error(`Final export plan failed: ${planResult.diagnostics.map((item) => item.message).join('; ')}`);
+  const plannedShotIds = planResult.plan.shots.map((shot) => shot.shotId);
+  if (plannedShotIds.length !== selectedShotIds.length || plannedShotIds.some((shotId, index) => shotId !== selectedShotIds[index])) {
+    throw new Error(`Final export plan shot scope mismatch. Requested ${selectedShotIds.join(', ')}; planned ${plannedShotIds.join(', ')}.`);
+  }
   const profile = resolveRefinementDeliverablesProfile(plan.deliverablesProfile)!;
   const deliverableErrors = checkRefinementDeliverables(profile, planResult.plan);
   if (deliverableErrors.length > 0) throw new Error(deliverableErrors.join(' '));
@@ -513,8 +534,18 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   await writeJson(exportPlanPath, planResult);
   const packagePath = path.join(outputRoot, 'final-package.zip');
   const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 }).catch(() => null);
-  const exported = await session.page.evaluate(() => window.foreScene!.exportPackage());
+  const exported = await session.page.evaluate((input) => window.foreScene!.exportPackage(input), {
+    shotIds: selectedShotIds,
+    packageType,
+    download: true,
+  });
   if (!exported.ok) throw new Error(`Final package export failed: ${exported.diagnostics.map((item) => item.message).join('; ')}`);
+  const exportedShotIds = exported.shotIds ?? [];
+  const unreviewedExportedShotIds = exportedShotIds.filter((shotId) => !reviewedShotIds.includes(shotId));
+  const reviewedButUnexportedShotIds = reviewedShotIds.filter((shotId) => !exportedShotIds.includes(shotId));
+  if (unreviewedExportedShotIds.length > 0 || reviewedButUnexportedShotIds.length > 0) {
+    throw new Error(`Final export shot scope mismatch. Unreviewed exports: ${unreviewedExportedShotIds.join(', ') || 'none'}; reviewed but unexported: ${reviewedButUnexportedShotIds.join(', ') || 'none'}.`);
+  }
   const download = await downloadPromise;
   if (!download) throw new Error('Final package export reported success but no browser download was received.');
   await download.saveAs(packagePath);
@@ -522,20 +553,35 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   const finalProject = await readProject(session);
   assertPreserved(plan, state, finalProject);
   state.finalization = {
+    scope,
+    reviewedShotIds,
+    plannedShotIds,
+    exportedShotIds,
+    unreviewedExportedShotIds,
+    reviewedButUnexportedShotIds,
     completedAt: now(),
-    productionComplete: verification.ok,
+    productionComplete: verification.ok
+      && unreviewedExportedShotIds.length === 0
+      && reviewedButUnexportedShotIds.length === 0,
     packagePath,
     verification: { ok: verification.ok, missingCount: verification.missing.length },
   };
   await writeJson(path.join(outputRoot, 'finalization-report.json'), {
     ok: verification.ok,
+    scope,
+    reviewedShotIds,
+    plannedShotIds,
+    exportedShotIds,
+    unreviewedExportedShotIds,
+    reviewedButUnexportedShotIds,
+    productionComplete: state.finalization.productionComplete,
     preservation: compareRefinementSnapshot(state.preservation, finalProject, plan.preserve, plan.allowMutations),
     exportPlanPath,
     packagePath,
     deliverablesProfile: profile.id,
     verification,
   });
-  if (!verification.ok) throw new Error(`Final package omitted ${verification.missing.length} planned artifacts.`);
+  if (!state.finalization.productionComplete) throw new Error(`Final package or shot scope is incomplete: ${verification.missing.length} planned artifacts missing.`);
 }
 
 async function rollbackBatch(
@@ -624,6 +670,7 @@ export async function runRefinementCli(options: RefinementCliOptions): Promise<{
     if (gate.length > 0) throw new Error(gate.join(' '));
     const batch = plan.batches.find((candidate) => candidate.id === batchId)!;
     const shots = await resolveShots(session, batch.shots);
+    state.batches[batchId]!.resolvedShotIds = [...new Set(shots.map((shot) => shot.id))];
     await assertRefinementShotCoverage(session, plan);
     assertPreserved(plan, state, await readProject(session));
     const checkpoint = await session.page.evaluate((reason) => window.foreScene!.createRefinementCheckpoint({ reason }), `before refinement batch ${batchId}`);
