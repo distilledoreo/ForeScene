@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
+import { resolveProjectForShot } from '../src/engine/shotSceneState';
 import {
   canApproveBatch,
   canRunBatch,
+  checkRefinementDeliverables,
+  checkSemanticReview,
   captureRefinementSnapshot,
   checkReviewMatrix,
   compareRefinementSnapshot,
   createRefinementState,
   parseRefinementPlan,
+  resolveRefinementDeliverablesProfile,
   type RefinementPlan,
 } from '../src/engine/agent/refinement';
 
@@ -23,7 +27,15 @@ function plan(): RefinementPlan {
       cameras: true,
       timelines: true,
     },
+    allowMutations: {
+      shotStaging: [],
+      pose: [],
+      camera: [],
+      timeline: [],
+      visibility: [],
+    },
     characterImports: [],
+    characterAssignments: [],
     modelImports: [{ id: 'spider-model', batchId: 'batch-01', file: 'spider.glb' }],
     proxyReplacements: [{
       id: 'replace-spider',
@@ -53,7 +65,7 @@ function reviewManifest(shotId: string, complete = true) {
     ok: true,
     shots: [{
       id: shotId,
-      passes: files.slice(0, complete ? undefined : -1).map((fileName) => ({ ok: true, fileName })),
+      passes: files.slice(0, complete ? undefined : -1).map((fileName) => ({ ok: true, fileName, sha256: undefined as string | undefined })),
     }],
   };
 }
@@ -82,6 +94,11 @@ describe('agent refinement guardrails', () => {
       `Camera changed for shot ${next.shots[0]!.shotNumber}.`,
     );
 
+    expect(compareRefinementSnapshot(baseline, next, plan().preserve, {
+      ...plan().allowMutations,
+      camera: [next.shots[0]!.id],
+    })).toMatchObject({ ok: true });
+
     next.shots[0]!.camera.fovDegrees -= 5;
     next.scene.objects.shift();
     expect(compareRefinementSnapshot(baseline, next, plan().preserve).errors.join(' ')).toContain('environment object ids disappeared');
@@ -103,5 +120,64 @@ describe('agent refinement guardrails', () => {
     expect(checkReviewMatrix(reviewManifest('shot-01', false), ['shot-01']).errors).toContain(
       'Review matrix is missing depth.png for shot shot-01.',
     );
+  });
+
+  it('resolves the declared deliverables profile and rejects omitted production passes', () => {
+    const profile = resolveRefinementDeliverablesProfile('ai-control-full');
+    expect(profile).toBeDefined();
+    if (!profile) return;
+    const exportPlan = {
+      shots: [{
+        shotId: 'shot-01',
+        artifacts: profile.requiredArtifacts.map((expected, index) => ({
+          id: `artifact-${index}`,
+          kind: expected.kind,
+          variant: expected.variant,
+          disposition: 'produce',
+          files: [{ path: `shot-01/${index}.png` }],
+        })),
+      }],
+    };
+    expect(checkRefinementDeliverables(profile, exportPlan as never)).toEqual([]);
+    exportPlan.shots[0]!.artifacts[0]!.disposition = 'omit';
+    expect(checkRefinementDeliverables(profile, exportPlan as never)[0]).toContain('clay-viewport');
+  });
+
+  it('requires semantic approval to cover each pass hash and production judgment', () => {
+    const manifest = reviewManifest('shot-01');
+    for (const [index, pass] of manifest.shots[0]!.passes.entries()) pass.sha256 = `sha256:${index}`;
+    const semantic = {
+      approved: true,
+      shots: [{
+        id: 'shot-01',
+        verdict: 'pass',
+        reasons: ['Subject, creature, and framing are production-ready.'],
+        primarySubject: true,
+        correctVariant: true,
+        framing: true,
+        creature: true,
+        proxyAbsent: true,
+        props: true,
+        motionDecision: 'not_applicable',
+        authorizedMutationDecision: 'not_applicable',
+        reviewedArtifacts: manifest.shots[0]!.passes.map((pass) => ({ fileName: pass.fileName, sha256: pass.sha256 })),
+      }],
+    };
+    expect(checkSemanticReview(semantic, manifest, ['shot-01'])).toEqual({ ok: true, errors: [] });
+    semantic.shots[0]!.proxyAbsent = false;
+    expect(checkSemanticReview(semantic, manifest, ['shot-01']).errors).toContain('Semantic review must affirm proxyAbsent for shot shot-01.');
+  });
+
+  it('uses configured cast staging roles for environment-only and cast-only export passes', () => {
+    const project = createDefaultProject();
+    const creature = createSceneObject('imported_model');
+    creature.name = 'Hand monster';
+    creature.stagingRole = 'person';
+    project.scene.objects.push(creature);
+    const shot = project.shots[0]!;
+    const environment = resolveProjectForShot(project, shot, { contentMode: 'clean_plate' });
+    const castOnly = resolveProjectForShot(project, shot, { contentMode: 'characters_only' });
+    expect(environment.scene.objects.find((object) => object.id === creature.id)?.visible).toBe(false);
+    expect(castOnly.scene.objects.find((object) => object.id === creature.id)?.visible).toBe(true);
   });
 });

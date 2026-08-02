@@ -136,7 +136,6 @@ when no valid styled panorama/projector is available.
 ```bash
 npm run agent:render-passes -- \
   --shots 01,02,03,04 \
-  --profile ai-control-full \
   --output artifacts/reviews/batch-01
 ```
 
@@ -161,11 +160,17 @@ add objects and alter only the required staging overrides.
     "project": true, "shots": true, "panoramas": true,
     "environmentObjects": true, "cameras": true, "timelines": true
   },
+  "allowMutations": {
+    "shotStaging": [], "pose": [], "camera": [], "timeline": [], "visibility": []
+  },
   "characterImports": [
     { "id": "joseph-intact", "batchId": "batch-01", "file": "assets/joseph.glb", "rigPackage": "assets/joseph.fsrig", "rigMode": "saved-rig" }
   ],
   "modelImports": [
-    { "id": "spider-model", "batchId": "batch-01", "file": "assets/spider.glb" }
+    { "id": "spider-model", "batchId": "batch-01", "file": "assets/spider.glb", "mode": "combined" }
+  ],
+  "characterAssignments": [
+    { "id": "assign-joseph", "importId": "joseph-intact", "replaceObjectId": "existing-joseph-placeholder", "shots": ["01"] }
   ],
   "proxyReplacements": [
     { "id": "replace-spider", "batchId": "batch-01", "proxyObjectId": "proxy-spider", "replacementImportId": "spider-model", "shots": ["01"] }
@@ -180,13 +185,24 @@ advance or finalize:
 
 ```bash
 npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
-npm run agent:refine -- --plan production/refinement-plan.json --approve batch-01 --output artifacts/refinement
+npm run agent:refine -- --plan production/refinement-plan.json --approve batch-01 --review artifacts/refinement/reviews/batch-01.semantic.json --output artifacts/refinement
 npm run agent:refine -- --plan production/refinement-plan.json --finalize --write --output artifacts/refinement
 ```
 
 A batch ends in `awaiting_visual_review` only if every required still pass,
 temporal sample (for motion shots), and preservation check succeeds. The next
-batch is blocked until `--approve` records that review. Finalization refuses
+batch is blocked until `--approve` receives a semantic review file. It must
+pass every shot, give concrete reasons, affirm the subject, variant, framing,
+creature, proxy absence, props, and motion decision, and include the SHA-256
+of every reviewed pass. Allowed camera or timeline changes are recorded in the
+review manifest and require an explicit `authorizedMutationDecision: "approved"`
+for the affected shot. Finalization applies `deliverablesProfile`
+(`ai-control-full`) before creating the export plan, then rejects missing
+required clay, projected, clean-plate, cast, or depth artifacts. `--profile`
+selects only the persistent Playwright browser directory, never a deliverables
+profile. Use `--retry batch-id` to restore a failed batch's starting revision
+and run it again, or `--rollback batch-id` to restore without rerunning.
+Finalization refuses
 unapproved batches, failed/missing replacement work, visible proxies, any
 preservation drift, or a package that omits a planned artifact.
 

@@ -7,6 +7,8 @@
  */
 
 import type { LocationProject, Shot } from '../../domain/types';
+import type { ExportSettingsOverride } from '../../domain/types';
+import type { PlannedArtifactKind, ExportPlan } from '../exportPlan';
 
 export const REFINEMENT_PLAN_VERSION = 1;
 export const REFINEMENT_STATE_VERSION = 1;
@@ -33,17 +35,37 @@ export interface RefinementModelImport {
   id: string;
   batchId: string;
   file: string;
+  /** Multi-object assets are combined by default when used for replacement. */
+  mode?: 'combined' | 'separate';
 }
 
 export interface RefinementProxyReplacement {
   id: string;
-  batchId: string;
+  /** Optional legacy import batch. Replacement shots can span later batches. */
+  batchId?: string;
   proxyObjectId: string;
   /** Model import id; requires that import to produce exactly one object. */
   replacementImportId?: string;
   /** Existing imported-model object id, when no import is required. */
   replacementObjectId?: string;
   shots: string[];
+}
+
+/** Assign a saved-rig character to its existing staging placeholder. */
+export interface RefinementCharacterAssignment {
+  id: string;
+  importId: string;
+  replaceObjectId: string;
+  shots: string[];
+}
+
+/** Narrow, explicit value changes that remain subject to visual approval. */
+export interface RefinementMutationAllowlist {
+  shotStaging: string[];
+  pose: string[];
+  camera: string[];
+  timeline: string[];
+  visibility: string[];
 }
 
 export interface RefinementBatch {
@@ -55,11 +77,15 @@ export interface RefinementPlan {
   version: typeof REFINEMENT_PLAN_VERSION;
   mode: 'existing-project-refinement';
   preserve: RefinementPreserveSettings;
+  allowMutations: RefinementMutationAllowlist;
   characterImports: RefinementCharacterImport[];
+  characterAssignments: RefinementCharacterAssignment[];
   modelImports: RefinementModelImport[];
   proxyReplacements: RefinementProxyReplacement[];
   batches: RefinementBatch[];
   deliverablesProfile: string;
+  /** Import ids or existing scene object ids that comprise the production cast. */
+  castObjectIds?: string[];
 }
 
 export interface RefinementSnapshot {
@@ -76,9 +102,14 @@ export type RefinementBatchStatus = 'pending' | 'awaiting_visual_review' | 'appr
 export interface RefinementBatchState {
   status: RefinementBatchStatus;
   reviewManifestPath?: string;
+  semanticReviewPath?: string;
   mutationCompletedAt?: string;
   approvedAt?: string;
   failure?: string;
+  startingProject?: LocationProject;
+  startingRevisionId?: string;
+  attemptCount?: number;
+  rolledBackAt?: string;
 }
 
 export interface RefinementImportState {
@@ -89,10 +120,23 @@ export interface RefinementImportState {
 
 export interface RefinementReplacementState {
   id: string;
-  batchId: string;
   proxyObjectId: string;
   replacementObjectId: string;
-  affectedShotIds: string[];
+  intendedShotIds: string[];
+  completedShotIds: string[];
+  initialized: boolean;
+  workUnits: number;
+  verified: boolean;
+}
+
+export interface RefinementAssignmentState {
+  id: string;
+  importId: string;
+  placeholderObjectId: string;
+  characterObjectId: string;
+  intendedShotIds: string[];
+  completedShotIds: string[];
+  initialized: boolean;
   workUnits: number;
   verified: boolean;
 }
@@ -104,6 +148,7 @@ export interface RefinementState {
   batches: Record<string, RefinementBatchState>;
   imports: Record<string, RefinementImportState>;
   replacements: RefinementReplacementState[];
+  assignments: RefinementAssignmentState[];
   finalization?: {
     completedAt: string;
     productionComplete: boolean;
@@ -122,6 +167,78 @@ export interface RefinementComparison {
   };
 }
 
+export interface RefinementAuthorizedValueChange {
+  shotId: string;
+  shotNumber: string;
+  kind: 'camera' | 'timeline';
+}
+
+export interface RefinementDeliverablesProfile {
+  id: string;
+  patch: ExportSettingsOverride;
+  requiredArtifacts: Array<{ kind: PlannedArtifactKind; variant?: 'with_people' | 'clean_plate' }>;
+}
+
+const AI_CONTROL_FULL_PROFILE: RefinementDeliverablesProfile = {
+  id: 'ai-control-full',
+  patch: {
+    peopleExportMode: 'both',
+    characterPass: {
+      enabled: true,
+      includeStill: true,
+      includeMotion: true,
+      motionFormat: 'both',
+      backgroundColor: '#00FF00',
+      includeAttachedProps: true,
+    },
+    includeViewport: true,
+    includeProjectedViewport: true,
+    includeProjectedCameraMoveReferenceFrames: true,
+    includeProjectedCameraMoveVideo: true,
+    includeCameraMoveVideo: true,
+    includeCameraMoveReferenceFrames: true,
+    depth: {
+      enabled: true,
+      includeViewportStill: true,
+      includeReferenceFrames: true,
+      includeCameraMoveVideo: true,
+      rangeMode: 'auto',
+      invert: false,
+    },
+  },
+  requiredArtifacts: [
+    { kind: 'clay-viewport', variant: 'with_people' },
+    { kind: 'clay-viewport', variant: 'clean_plate' },
+    { kind: 'projected-viewport', variant: 'with_people' },
+    { kind: 'projected-viewport', variant: 'clean_plate' },
+    { kind: 'depth-viewport' },
+    { kind: 'character-still' },
+  ],
+};
+
+/** Resolve the declared deliverables profile rather than treating it as a label. */
+export function resolveRefinementDeliverablesProfile(id: string): RefinementDeliverablesProfile | undefined {
+  return id === AI_CONTROL_FULL_PROFILE.id ? AI_CONTROL_FULL_PROFILE : undefined;
+}
+
+/** Refuse a profile whose export plan omits any required pass for a selected shot. */
+export function checkRefinementDeliverables(
+  profile: RefinementDeliverablesProfile,
+  exportPlan: Pick<ExportPlan, 'shots'>,
+): string[] {
+  const errors: string[] = [];
+  for (const shot of exportPlan.shots) {
+    for (const expected of profile.requiredArtifacts) {
+      const artifact = shot.artifacts.find((candidate) => candidate.kind === expected.kind && candidate.variant === expected.variant);
+      if (!artifact || artifact.disposition !== 'produce' || artifact.files.length === 0) {
+        const variant = expected.variant ? ` (${expected.variant})` : '';
+        errors.push(`Deliverables profile ${profile.id} omits ${expected.kind}${variant} for shot ${shot.shotId}.`);
+      }
+    }
+  }
+  return errors;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -132,6 +249,10 @@ function stringList(value: unknown): string[] | null {
 
 function hasKnownKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return keys.every((key) => typeof value[key] === 'boolean');
+}
+
+function hasStringListKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => stringList(value[key]) !== null);
 }
 
 function stable(value: unknown): string {
@@ -157,6 +278,9 @@ export function parseRefinementPlan(raw: unknown): { ok: true; plan: RefinementP
   if (!isRecord(raw.preserve) || !hasKnownKeys(raw.preserve, ['project', 'shots', 'panoramas', 'environmentObjects', 'cameras', 'timelines'])) {
     errors.push('preserve must explicitly enable or disable project, shots, panoramas, environmentObjects, cameras, and timelines.');
   }
+  if (!isRecord(raw.allowMutations) || !hasStringListKeys(raw.allowMutations, ['shotStaging', 'pose', 'camera', 'timeline', 'visibility'])) {
+    errors.push('allowMutations must explicitly list shotStaging, pose, camera, timeline, and visibility identifiers.');
+  }
   if (typeof raw.deliverablesProfile !== 'string' || raw.deliverablesProfile.length === 0) {
     errors.push('deliverablesProfile is required.');
   }
@@ -178,37 +302,67 @@ export function parseRefinementPlan(raw: unknown): { ok: true; plan: RefinementP
 
   const batchIds = new Set((batches ?? []).flatMap((batch) => isRecord(batch) && typeof batch.id === 'string' ? [batch.id] : []));
   const importIds = new Set<string>();
+  const characterImportIds = new Set<string>();
+  const modelImportIds = new Set<string>();
   const characterImports = Array.isArray(raw.characterImports) ? raw.characterImports : null;
+  const characterAssignments = Array.isArray(raw.characterAssignments) ? raw.characterAssignments : null;
   const modelImports = Array.isArray(raw.modelImports) ? raw.modelImports : null;
   const proxyReplacements = Array.isArray(raw.proxyReplacements) ? raw.proxyReplacements : null;
-  if (!characterImports || !modelImports || !proxyReplacements) {
-    errors.push('characterImports, modelImports, and proxyReplacements must be arrays.');
+  if (!characterImports || !characterAssignments || !modelImports || !proxyReplacements) {
+    errors.push('characterImports, characterAssignments, modelImports, and proxyReplacements must be arrays.');
   }
-  for (const entry of [...(characterImports ?? []), ...(modelImports ?? [])]) {
+  for (const entry of characterImports ?? []) {
     if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.batchId !== 'string' || typeof entry.file !== 'string') {
       errors.push('Each import needs id, batchId, and file.');
       continue;
     }
     if (importIds.has(entry.id)) errors.push(`Duplicate import id: ${entry.id}.`);
     importIds.add(entry.id);
+    characterImportIds.add(entry.id);
     if (!batchIds.has(entry.batchId)) errors.push(`Import ${entry.id} references unknown batch ${entry.batchId}.`);
+  }
+  for (const entry of modelImports ?? []) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.batchId !== 'string' || typeof entry.file !== 'string') {
+      errors.push('Each import needs id, batchId, and file.');
+      continue;
+    }
+    if (entry.mode !== undefined && entry.mode !== 'combined' && entry.mode !== 'separate') {
+      errors.push(`Model import ${entry.id} mode must be "combined" or "separate".`);
+    }
+    if (importIds.has(entry.id)) errors.push(`Duplicate import id: ${entry.id}.`);
+    importIds.add(entry.id);
+    modelImportIds.add(entry.id);
+    if (!batchIds.has(entry.batchId)) errors.push(`Import ${entry.id} references unknown batch ${entry.batchId}.`);
+  }
+  const seenAssignments = new Set<string>();
+  for (const entry of characterAssignments ?? []) {
+    const shots = isRecord(entry) ? stringList(entry.shots) : null;
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.importId !== 'string'
+      || typeof entry.replaceObjectId !== 'string' || !shots || shots.length === 0) {
+      errors.push('Each character assignment needs id, importId, replaceObjectId, and at least one shot.');
+      continue;
+    }
+    if (seenAssignments.has(entry.id)) errors.push(`Duplicate character assignment id: ${entry.id}.`);
+    seenAssignments.add(entry.id);
+    if (!characterImportIds.has(entry.importId)) errors.push(`Character assignment ${entry.id} references unknown character import ${entry.importId}.`);
   }
   for (const entry of proxyReplacements ?? []) {
     const shots = isRecord(entry) ? stringList(entry.shots) : null;
-    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.batchId !== 'string'
+    if (!isRecord(entry) || typeof entry.id !== 'string' || (entry.batchId !== undefined && typeof entry.batchId !== 'string')
       || typeof entry.proxyObjectId !== 'string' || !shots || shots.length === 0) {
-      errors.push('Each proxy replacement needs id, batchId, proxyObjectId, and at least one shot.');
+      errors.push('Each proxy replacement needs id, optional batchId, proxyObjectId, and at least one shot.');
       continue;
     }
-    if (!batchIds.has(entry.batchId)) errors.push(`Replacement ${entry.id} references unknown batch ${entry.batchId}.`);
+    if (typeof entry.batchId === 'string' && !batchIds.has(entry.batchId)) errors.push(`Replacement ${entry.id} references unknown batch ${entry.batchId}.`);
     const importId = entry.replacementImportId;
     const objectId = entry.replacementObjectId;
     if ((typeof importId === 'string') === (typeof objectId === 'string')) {
       errors.push(`Replacement ${entry.id} needs exactly one of replacementImportId or replacementObjectId.`);
-    } else if (typeof importId === 'string' && !importIds.has(importId)) {
+    } else if (typeof importId === 'string' && !modelImportIds.has(importId)) {
       errors.push(`Replacement ${entry.id} references unknown model import ${importId}.`);
     }
   }
+  if (raw.castObjectIds !== undefined && stringList(raw.castObjectIds) === null) errors.push('castObjectIds must be an array of import or object identifiers.');
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, plan: raw as unknown as RefinementPlan };
 }
@@ -239,6 +393,7 @@ export function compareRefinementSnapshot(
   baseline: RefinementSnapshot,
   project: LocationProject,
   preserve: RefinementPreserveSettings,
+  allowMutations?: RefinementMutationAllowlist,
 ): RefinementComparison {
   const errors: string[] = [];
   const result = {
@@ -251,14 +406,40 @@ export function compareRefinementSnapshot(
   if (result.panoramas.length > 0) errors.push(`Preserved panorama ids disappeared: ${result.panoramas.join(', ')}.`);
   if (result.environmentObjects.length > 0) errors.push(`Preserved environment object ids disappeared: ${result.environmentObjects.join(', ')}.`);
   for (const shot of project.shots) {
-    if (preserve.cameras && baseline.cameras[shot.id] && stable(baseline.cameras[shot.id]) !== stable(shot.camera)) {
+    if (preserve.cameras && baseline.cameras[shot.id] && stable(baseline.cameras[shot.id]) !== stable(shot.camera)
+      && !mutationAllowed(allowMutations?.camera, shot)) {
       errors.push(`Camera changed for shot ${shot.shotNumber}.`);
     }
-    if (preserve.timelines && baseline.timelines[shot.id] && stable(baseline.timelines[shot.id]) !== stable(timelineIdentity(shot))) {
+    if (preserve.timelines && baseline.timelines[shot.id] && stable(baseline.timelines[shot.id]) !== stable(timelineIdentity(shot))
+      && !mutationAllowed(allowMutations?.timeline, shot)) {
       errors.push(`Timeline changed for shot ${shot.shotNumber}.`);
     }
   }
   return { ok: errors.length === 0, errors, missing: result };
+}
+
+function mutationAllowed(identifiers: readonly string[] | undefined, shot: Shot): boolean {
+  return Boolean(identifiers?.includes(shot.id) || identifiers?.includes(shot.shotNumber));
+}
+
+/** Surface allowed camera/timeline changes so they can be reviewed explicitly. */
+export function listAuthorizedRefinementValueChanges(
+  baseline: RefinementSnapshot,
+  project: LocationProject,
+  allowMutations: RefinementMutationAllowlist,
+): RefinementAuthorizedValueChange[] {
+  const changes: RefinementAuthorizedValueChange[] = [];
+  for (const shot of project.shots) {
+    if (baseline.cameras[shot.id] && stable(baseline.cameras[shot.id]) !== stable(shot.camera)
+      && mutationAllowed(allowMutations.camera, shot)) {
+      changes.push({ shotId: shot.id, shotNumber: shot.shotNumber, kind: 'camera' });
+    }
+    if (baseline.timelines[shot.id] && stable(baseline.timelines[shot.id]) !== stable(timelineIdentity(shot))
+      && mutationAllowed(allowMutations.timeline, shot)) {
+      changes.push({ shotId: shot.id, shotNumber: shot.shotNumber, kind: 'timeline' });
+    }
+  }
+  return changes;
 }
 
 export function createRefinementState(plan: RefinementPlan, project: LocationProject): RefinementState {
@@ -269,6 +450,7 @@ export function createRefinementState(plan: RefinementPlan, project: LocationPro
     batches: Object.fromEntries(plan.batches.map((batch) => [batch.id, { status: 'pending' } satisfies RefinementBatchState])),
     imports: {},
     replacements: [],
+    assignments: [],
   };
 }
 
@@ -305,8 +487,23 @@ export function canFinalizeRefinement(plan: RefinementPlan, state: RefinementSta
   const errors = validateRefinementState(plan, state);
   const unapproved = plan.batches.filter((batch) => state.batches[batch.id]?.status !== 'approved').map((batch) => batch.id);
   if (unapproved.length > 0) errors.push(`All batches require approval before finalization: ${unapproved.join(', ')}.`);
-  if (state.replacements.some((replacement) => !replacement.verified || replacement.workUnits <= 0)) {
-    errors.push('Every replacement log must be verified and contain nonzero work.');
+  for (const entry of plan.proxyReplacements) {
+    const replacement = state.replacements.find((candidate) => candidate.id === entry.id);
+    if (!replacement || !replacement.verified || replacement.workUnits <= 0) {
+      errors.push(`Replacement ${entry.id} was not verified with nonzero work.`);
+      continue;
+    }
+    const incomplete = replacement.intendedShotIds.filter((shotId) => !replacement.completedShotIds.includes(shotId));
+    if (incomplete.length > 0) errors.push(`Replacement ${entry.id} remains incomplete for: ${incomplete.join(', ')}.`);
+  }
+  for (const entry of plan.characterAssignments) {
+    const assignment = (state.assignments ?? []).find((candidate) => candidate.id === entry.id);
+    if (!assignment || !assignment.verified || assignment.workUnits <= 0) {
+      errors.push(`Character assignment ${entry.id} was not verified with nonzero work.`);
+      continue;
+    }
+    const incomplete = assignment.intendedShotIds.filter((shotId) => !assignment.completedShotIds.includes(shotId));
+    if (incomplete.length > 0) errors.push(`Character assignment ${entry.id} remains incomplete for: ${incomplete.join(', ')}.`);
   }
   return errors;
 }
@@ -314,6 +511,64 @@ export function canFinalizeRefinement(plan: RefinementPlan, state: RefinementSta
 export interface ReviewMatrixCheck {
   ok: boolean;
   errors: string[];
+}
+
+/** Validate an evidence-linked semantic review before a batch can advance. */
+export function checkSemanticReview(
+  review: unknown,
+  manifest: unknown,
+  expectedShotIds: readonly string[],
+): ReviewMatrixCheck {
+  if (!isRecord(review) || review.approved !== true || !Array.isArray(review.shots)) {
+    return { ok: false, errors: ['Semantic review must set approved: true and include per-shot verdicts.'] };
+  }
+  if (!isRecord(manifest) || !Array.isArray(manifest.shots)) {
+    return { ok: false, errors: ['Review manifest is unavailable for semantic evidence checks.'] };
+  }
+  const errors: string[] = [];
+  const manifestByShot = new Map(manifest.shots.filter(isRecord).map((shot) => [shot.id, shot]));
+  const reviewByShot = new Map(review.shots.filter(isRecord).map((shot) => [shot.id, shot]));
+  for (const shotId of expectedShotIds) {
+    const verdict = reviewByShot.get(shotId);
+    if (!verdict) {
+      errors.push(`Semantic review is missing shot ${shotId}.`);
+      continue;
+    }
+    if (verdict.verdict !== 'pass') errors.push(`Semantic review did not pass shot ${shotId}.`);
+    const reasons = stringList(verdict.reasons);
+    if (!reasons || reasons.length === 0 || reasons.some((reason) => reason.trim().length < 8)) {
+      errors.push(`Semantic review needs concrete reasons for shot ${shotId}.`);
+    }
+    for (const key of ['primarySubject', 'correctVariant', 'framing', 'creature', 'proxyAbsent', 'props']) {
+      if (verdict[key] !== true) errors.push(`Semantic review must affirm ${key} for shot ${shotId}.`);
+    }
+    if (verdict.motionDecision !== 'approved' && verdict.motionDecision !== 'not_applicable') {
+      errors.push(`Semantic review must record a motion decision for shot ${shotId}.`);
+    }
+    const hasAuthorizedChanges = Array.isArray(manifest.authorizedMutations)
+      && manifest.authorizedMutations.some((change) => isRecord(change) && change.shotId === shotId);
+    if (hasAuthorizedChanges && verdict.authorizedMutationDecision !== 'approved') {
+      errors.push(`Semantic review must approve authorized value changes for shot ${shotId}.`);
+    }
+    if (!hasAuthorizedChanges && verdict.authorizedMutationDecision !== 'not_applicable') {
+      errors.push(`Semantic review must record no authorized value changes for shot ${shotId}.`);
+    }
+    const reviewedArtifacts = Array.isArray(verdict.reviewedArtifacts) ? verdict.reviewedArtifacts.filter(isRecord) : [];
+    const reviewedHashes = new Map(
+      reviewedArtifacts
+        .filter((artifact) => typeof artifact.fileName === 'string' && typeof artifact.sha256 === 'string')
+        .map((artifact) => [artifact.fileName as string, artifact.sha256 as string]),
+    );
+    const manifestShot = manifestByShot.get(shotId);
+    const passRecords = manifestShot && Array.isArray(manifestShot.passes) ? manifestShot.passes.filter(isRecord) : [];
+    for (const pass of passRecords) {
+      if (pass.ok !== true || typeof pass.fileName !== 'string' || typeof pass.sha256 !== 'string') continue;
+      if (reviewedHashes.get(pass.fileName) !== pass.sha256) {
+        errors.push(`Semantic review hash does not match ${pass.fileName} for shot ${shotId}.`);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
 }
 
 const REQUIRED_REVIEW_FILES = new Set([

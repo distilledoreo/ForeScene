@@ -274,6 +274,40 @@ test.describe('Agent API transactions @smoke', () => {
     await page.locator('[data-agent-control-stop]').click();
     await expect(page.locator('[data-agent-control-badge="active"]')).toHaveCount(0);
   });
+
+  test('restores a refinement checkpoint after a failed batch mutation', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'Chromium-only: persistent refinement recovery coverage');
+
+    await enterStudioWorkspace(page);
+    await dismissOverlays(page);
+    await waitForAgentApi(page);
+    const baseline = await page.evaluate(() => window.foreScene!.inspectProject());
+
+    await enableAgentWritesViaUi(page);
+    const checkpoint = await page.evaluate(async () => window.foreScene!.createRefinementCheckpoint({
+      reason: 'Before failed refinement batch',
+    }));
+    expect(checkpoint.ok).toBe(true);
+    expect(checkpoint.revisionId).toBeTruthy();
+
+    const mutation = await page.evaluate(async () => window.foreScene!.applyPlan({
+      version: 1,
+      description: 'Failed refinement batch fixture',
+      commands: [{ op: 'project.updateInfo', name: 'Partial refinement mutation' }],
+    }));
+    expect(mutation.ok).toBe(true);
+    await waitForVerifiedSave(page);
+
+    const restored = await page.evaluate(async ({ projectId, revisionId }) => (
+      window.foreScene!.restoreRefinementCheckpoint({ projectId, revisionId })
+    ), { projectId: baseline.id, revisionId: checkpoint.revisionId! });
+    expect(restored.ok).toBe(true);
+    await waitForAgentApi(page);
+
+    const afterRestore = await page.evaluate(() => window.foreScene!.inspectProject());
+    expect(afterRestore.name).toBe(baseline.name);
+    expect(afterRestore.objectCount).toBe(baseline.objectCount);
+  });
 });
 
 test.describe('Agent Console @smoke', () => {

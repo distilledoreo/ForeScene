@@ -48,7 +48,9 @@ actual ZIP and exits nonzero with the missing shot, pass kind, and path.
 `refinement-state.json` beside the evidence, captures the first preservation
 snapshot, imports/replaces only the named batch, previews proxy mutations,
 renders the six-pass review matrix, and stops in `awaiting_visual_review`.
-Use `--approve batch-id` after semantic review; the following batch is rejected
+Use `--approve batch-id --review path/to/batch.semantic.json` after semantic
+review; it must affirm each subject, variant, framing, creature, prop, proxy,
+and motion decision and match every rendered-pass SHA-256. The following batch is rejected
 until that explicit state transition exists. `--finalize --write` runs the
 final preservation comparison, export plan, package download, and ZIP
 verification. It cannot set production complete while a proxy remains visible,

@@ -85,6 +85,9 @@ function parseArgs(argv: string[]) {
     allowHeavyModelImports: false,
     batch: undefined as string | undefined,
     approveBatch: undefined as string | undefined,
+    review: undefined as string | undefined,
+    retryBatch: undefined as string | undefined,
+    rollbackBatch: undefined as string | undefined,
     finalize: false,
   };
 
@@ -151,6 +154,12 @@ function parseArgs(argv: string[]) {
       args.batch = argv[++index];
     } else if (token === '--approve') {
       args.approveBatch = argv[++index];
+    } else if (token === '--review') {
+      args.review = argv[++index];
+    } else if (token === '--retry') {
+      args.retryBatch = argv[++index];
+    } else if (token === '--rollback') {
+      args.rollbackBatch = argv[++index];
     } else if (token === '--finalize') {
       args.finalize = true;
     } else if (token === '--shot') {
@@ -1097,6 +1106,9 @@ async function main() {
       planPath: args.plan,
       batchId: args.batch,
       approveBatchId: args.approveBatch,
+      semanticReviewPath: args.review,
+      retryBatchId: args.retryBatch,
+      rollbackBatchId: args.rollbackBatch,
       finalize: args.finalize,
       output: args.output,
       url: args.url,

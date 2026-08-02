@@ -47,6 +47,42 @@ function replacementProject() {
 }
 
 describe('proxy replacement planning', () => {
+  it('assigns a poseable character only to its designated shot while other variants stay hidden', () => {
+    const project = createDefaultProject();
+    const placeholder = createSceneObject('human_dummy', 1, [1, 0, -3]);
+    const intact = createSceneObject('human_dummy', 2, [-4, 0, 1]);
+    const amputated = createSceneObject('human_dummy', 3, [-5, 0, 1]);
+    intact.name = 'Joseph — intact';
+    amputated.name = 'Joseph — amputated';
+    amputated.visible = false;
+    project.scene.objects.push(placeholder, intact, amputated);
+    const shot = project.shots[0]!;
+    shot.objectOverrides = {
+      [placeholder.id]: {
+        visible: true,
+        transform: { position: [3, 0, -4], rotation: [0, 20, 0], scale: [1, 1, 1] },
+      },
+    };
+
+    const result = createProxyReplacementPlan({
+      project,
+      shotDocuments: project.shots.map((item) => structuredClone(item)),
+      proxyObjectId: placeholder.id,
+      replacementObjectId: intact.id,
+      requestedShotIds: [shot.id],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const prepared = prepareAgentPlan(result.plan, {
+      project, workspace: 'shots', selectedObjectIds: [], selectedShotId: shot.id,
+    });
+    if (!prepared.ok) throw new Error(prepared.diagnostics.map((item) => item.message).join('\n'));
+    const resolved = resolveProjectForShot(prepared.prepared.nextProject, prepared.prepared.nextProject.shots[0]!);
+    expect(resolved.scene.objects.find((object) => object.id === intact.id)?.visible).toBe(true);
+    expect(resolved.scene.objects.find((object) => object.id === placeholder.id)?.visible).toBe(false);
+    expect(resolved.scene.objects.find((object) => object.id === amputated.id)?.visible).toBe(false);
+  });
+
   it('copies global, per-shot, and keyframe transforms while hiding the proxy', () => {
     const { project, proxy, replacement, shot } = replacementProject();
     const originalCamera = structuredClone(shot.camera);
@@ -83,6 +119,7 @@ describe('proxy replacement planning', () => {
     const nextProxy = next.scene.objects.find((object) => object.id === proxy.id)!;
     const nextReplacement = next.scene.objects.find((object) => object.id === replacement.id)!;
     expect(nextProxy.visible).toBe(false);
+    expect(nextReplacement.visible).toBe(false);
     expect(nextReplacement.transform).toEqual(proxy.transform);
 
     const direct = next.shots[0]!.objectOverrides!;
@@ -108,11 +145,57 @@ describe('proxy replacement planning', () => {
       afterProject: next,
       proxyObjectId: proxy.id,
       replacementObjectId: replacement.id,
+      preparedShots: result.preparedShots,
       affectedShots: result.affectedShots,
     })).toEqual({ ok: true, errors: [] });
   });
 
-  it('refuses partial or empty replacement coverage before it creates a plan', () => {
+  it('allows a batch to swap one intended proxy occurrence while preserving later occurrences', () => {
+    const { project, proxy, replacement, shot } = replacementProject();
+    const later = structuredClone(shot);
+    later.id = 'shot_later';
+    later.shotNumber = '09';
+    later.cameraKeyframes = [];
+    project.shots.push(later);
+
+    const first = createProxyReplacementPlan({
+      project,
+      shotDocuments: project.shots.map((item) => structuredClone(item)),
+      proxyObjectId: proxy.id,
+      replacementObjectId: replacement.id,
+      intendedShotIds: [shot.id, later.id],
+      requestedShotIds: [shot.id],
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const preparedFirst = prepareAgentPlan(first.plan, {
+      project, workspace: 'shots', selectedObjectIds: [], selectedShotId: shot.id,
+    });
+    if (!preparedFirst.ok) throw new Error(preparedFirst.diagnostics.map((item) => item.message).join('\n'));
+    const afterFirst = preparedFirst.prepared.nextProject;
+    expect(resolveProjectForShot(afterFirst, afterFirst.shots[0]!).scene.objects.find((object) => object.id === replacement.id)?.visible).toBe(true);
+    expect(resolveProjectForShot(afterFirst, afterFirst.shots[1]!).scene.objects.find((object) => object.id === proxy.id)?.visible).toBe(true);
+    expect(resolveProjectForShot(afterFirst, afterFirst.shots[1]!).scene.objects.find((object) => object.id === replacement.id)?.visible).toBe(false);
+
+    const second = createProxyReplacementPlan({
+      project: afterFirst,
+      shotDocuments: afterFirst.shots.map((item) => structuredClone(item)),
+      proxyObjectId: proxy.id,
+      replacementObjectId: replacement.id,
+      intendedShotIds: [shot.id, later.id],
+      requestedShotIds: [later.id],
+      initializeVisibility: false,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const preparedSecond = prepareAgentPlan(second.plan, {
+      project: afterFirst, workspace: 'shots', selectedObjectIds: [], selectedShotId: later.id,
+    });
+    if (!preparedSecond.ok) throw new Error(preparedSecond.diagnostics.map((item) => item.message).join('\n'));
+    expect(resolveProjectForShot(preparedSecond.prepared.nextProject, preparedSecond.prepared.nextProject.shots[1]!).scene.objects.find((object) => object.id === replacement.id)?.visible).toBe(true);
+  });
+
+  it('rejects unknown and unstaged proxy occurrences before it creates a plan', () => {
     const { project, proxy, replacement, shot } = replacementProject();
     const missing = createProxyReplacementPlan({
       project,
@@ -159,6 +242,7 @@ describe('proxy replacement planning', () => {
       afterProject: prepared.prepared.nextProject,
       proxyObjectId: proxy.id,
       replacementObjectId: replacement.id,
+      preparedShots: result.preparedShots,
       affectedShots: result.affectedShots,
     })).toEqual({ ok: true, errors: [] });
   });

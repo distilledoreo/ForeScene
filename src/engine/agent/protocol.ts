@@ -567,6 +567,12 @@ export interface AgentRenderShotFrameInput {
   height?: number;
 }
 
+export interface AgentRefinementCheckpointResult {
+  ok: boolean;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
 export interface AgentRenderPixelStats {
   width: number;
   height: number;
@@ -831,6 +837,10 @@ export interface ForeSceneBrowserApi {
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
+  /** Create a verified local recovery point before a resumable refinement batch. */
+  createRefinementCheckpoint(input: { reason: string }): Promise<AgentRefinementCheckpointResult>;
+  /** Restore only a verified revision of the currently loaded project. */
+  restoreRefinementCheckpoint(input: { projectId: string; revisionId: string }): Promise<AgentRefinementCheckpointResult>;
   waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus>;
 
   /**

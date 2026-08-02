@@ -37,6 +37,8 @@ import {
   renderAgentShotVideo,
 } from './videoRenderControl';
 import { resetAgentProject } from './projectReset';
+import { restoreProjectRevision } from '../projectSafety';
+import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -71,6 +73,7 @@ import type {
   AgentPlanApplyResult,
   AgentPlanHistoryEntry,
   AgentPlanPreviewResult,
+  AgentRefinementCheckpointResult,
   AgentProjectInspection,
   AgentRenderShotFrameInput,
   AgentRenderShotFrameResult,
@@ -86,6 +89,7 @@ import type {
   ForeSceneBrowserApi,
 } from './protocol';
 import { FORESCENE_AGENT_API_VERSION } from './protocol';
+import { writeAccessRequiredDiagnostic } from './diagnostics';
 import {
   analyzeCharacterImport,
   analyzeSavedRigCharacter,
@@ -168,6 +172,14 @@ function requireInspectionAccess(): AgentExportPlanResult['diagnostics'] | null 
     ];
   }
   return null;
+}
+
+function refinementWriteDiagnostics(operation: string): AgentRefinementCheckpointResult['diagnostics'] | null {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return [writeAccessRequiredDiagnostic(operation)];
+  }
+  const busy = collectAgentBusyDiagnostics();
+  return busy.length > 0 ? busy : null;
 }
 
 export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
@@ -427,6 +439,59 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     listPlanHistory(): AgentPlanHistoryEntry[] {
       return listAgentHistory();
+    },
+
+    async createRefinementCheckpoint(input) {
+      const blocked = refinementWriteDiagnostics('createRefinementCheckpoint');
+      if (blocked) return { ok: false, diagnostics: blocked };
+      const safety = useProjectSafetyStore.getState();
+      if (!safety.flushProject) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready for a refinement checkpoint.')] };
+      }
+      const revision = await safety.flushProject(`Refinement checkpoint: ${input.reason}`);
+      if (!revision) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Could not create a verified refinement checkpoint.')] };
+      }
+      return { ok: true, revisionId: revision.revision.id, diagnostics: [] };
+    },
+
+    async restoreRefinementCheckpoint(input) {
+      const blocked = refinementWriteDiagnostics('restoreRefinementCheckpoint');
+      if (blocked) return { ok: false, diagnostics: blocked };
+      const live = useProjectStore.getState().project;
+      if (live.id !== input.projectId) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Refinement checkpoint belongs to a different project.')] };
+      }
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      if (!runDestructive) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready for rollback.')] };
+      }
+      try {
+        const restored = await restoreProjectRevision(input.projectId, input.revisionId);
+        const verified = await runDestructive('Restore refinement batch checkpoint', () => {
+          if (useProjectStore.getState().project.id !== input.projectId) {
+            throw new Error('The loaded project changed before rollback could be committed.');
+          }
+          useProjectStore.setState((state) => ({
+            project: structuredClone(restored.project),
+            buildHistoryPast: [],
+            buildHistoryFuture: [],
+            buildHistoryBatchDepth: 0,
+            buildHistoryBatchCaptured: false,
+            buildHistoryCoalesceActive: false,
+            shotCameraFlying: state.workspace === 'shots',
+          }));
+        });
+        return { ok: true, revisionId: verified?.revision.id ?? restored.revision.id, diagnostics: [] };
+      } catch (error) {
+        return {
+          ok: false,
+          diagnostics: [agentError(
+            AGENT_DIAGNOSTIC_CODES.invalidArgument,
+            error instanceof Error ? error.message : 'Refinement checkpoint rollback failed.',
+          )],
+        };
+      }
     },
 
     async resetProject(input: AgentResetProjectRequest): Promise<AgentPlanApplyResult & { projectId?: string }> {

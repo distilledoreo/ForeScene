@@ -9,14 +9,22 @@
     "cameras": true,
     "timelines": true
   },
+  "allowMutations": {
+    "shotStaging": [], "pose": [], "camera": [], "timeline": [], "visibility": []
+  },
   "characterImports": [
     { "id": "joseph-intact", "batchId": "pilot", "file": "assets/production/joseph-intact.glb", "rigPackage": "assets/production/joseph-intact.fsrig", "rigMode": "saved-rig", "name": "Joseph — intact" },
     { "id": "joseph-amputated", "batchId": "pilot", "file": "assets/production/joseph-amputated.glb", "rigPackage": "assets/production/joseph-amputated.fsrig", "rigMode": "saved-rig", "name": "Joseph — amputated" },
     { "id": "joseph-prosthetic", "batchId": "pilot", "file": "assets/production/joseph-prosthetic.glb", "rigPackage": "assets/production/joseph-prosthetic.fsrig", "rigMode": "saved-rig", "name": "Joseph — prosthetic" }
   ],
   "modelImports": [
-    { "id": "spider", "batchId": "pilot", "file": "assets/production/spider.glb" },
-    { "id": "hand-monster", "batchId": "pilot", "file": "assets/production/hand-monster.glb" }
+    { "id": "spider", "batchId": "pilot", "file": "assets/production/spider.glb", "mode": "combined" },
+    { "id": "hand-monster", "batchId": "pilot", "file": "assets/production/hand-monster.glb", "mode": "combined" }
+  ],
+  "characterAssignments": [
+    { "id": "assign-joseph-intact", "importId": "joseph-intact", "replaceObjectId": "replace-with-joseph-intact-placeholder-id", "shots": ["replace-with-joseph-intact-shot-id"] },
+    { "id": "assign-joseph-amputated", "importId": "joseph-amputated", "replaceObjectId": "replace-with-joseph-amputated-placeholder-id", "shots": ["replace-with-joseph-amputated-shot-id"] },
+    { "id": "assign-joseph-prosthetic", "importId": "joseph-prosthetic", "replaceObjectId": "replace-with-joseph-prosthetic-placeholder-id", "shots": ["replace-with-joseph-prosthetic-shot-id"] }
   ],
   "proxyReplacements": [
     { "id": "replace-spider", "batchId": "pilot", "proxyObjectId": "replace-with-spider-proxy-id", "replacementImportId": "spider", "shots": ["replace-with-spider-shot-id", "replace-with-motion-shot-id"] },
@@ -35,5 +43,6 @@
       ]
     }
   ],
-  "deliverablesProfile": "ai-control-full"
+  "deliverablesProfile": "ai-control-full",
+  "castObjectIds": ["joseph-intact", "joseph-amputated", "joseph-prosthetic", "spider", "hand-monster"]
 }
