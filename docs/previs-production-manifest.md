@@ -33,6 +33,27 @@ interface PrevisProductionManifestV1 {
 }
 ```
 
+Cast entries may be built-in semantic mannequins or imported characters. An
+imported character source is resolved relative to the manifest file, analyzed,
+and imported through the existing Agent character-import path during the same
+`agent:previs` cast phase. The normalized cast ID is then used by every shot,
+so no second staging command or manual object-ID lookup is required.
+
+```json
+{
+  "id": "joseph",
+  "type": "imported_character",
+  "source": "./characters/joseph.glb",
+  "rigMode": "preserve-existing"
+}
+```
+
+`name` is optional for imported entries and defaults to the cast ID. Supported
+`rigMode` values are `preserve-existing`, `auto`, and `autorig`. `source` must
+be a local GLB, embedded glTF, or FBX file. A missing source or failed rig
+analysis stops the cast phase without advancing shot compilation; successful
+imports are retained in `run-state.json` under `cast.<id>` for retry recovery.
+
 Shots may include optional temporal authoring. It is compiled into the same
 Agent timeline commands used by direct automation, so it participates in plan
 preview, atomic apply, undo, and controlled invalidation of stale video assets:

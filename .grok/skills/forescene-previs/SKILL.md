@@ -21,7 +21,7 @@ The output is an editable ForeScene graybox project and a validated still-and-mo
 
 **Operating ForeScene** (this skill): manipulate a live project through the Agent CLI and hosted app. Do **not** edit application source code.
 
-**Developing ForeScene**: edit application source only when the user explicitly asks to change the app itself. Native imported-character manifest binding is a separate product milestone and is not part of this skill update.
+**Developing ForeScene**: edit application source only when the user explicitly asks to change the app itself. Imported-character manifest binding is supported by the production manifest workflow described below.
 
 ## Shot-intent classification
 
@@ -161,8 +161,7 @@ Wait for idle before starting another package, graybox, character-import, or vid
 
 ## Rules
 
-- `PrevisProductionManifestV1.cast` currently accepts only `type: "human_dummy"`; imported rigs use the separate Agent workflow and are not direct manifest cast entries.
-- Use semantic `human_dummy` cast and primitive props in the manifest; see [imported-characters.md](references/imported-characters.md) for the separate imported-rig workflow.
+- Cast entries may use `type: "human_dummy"` or `type: "imported_character"`. Imported entries declare a local `source` and `rigMode` (for example `preserve-existing`); `agent:previs` resolves the source, analyzes it, imports it, and records the live object under `cast.<id>` before compiling shots. See [imported-characters.md](references/imported-characters.md) for the schema and recovery rules.
 - Use the closest supported location, camera, and pose templates.
 - Do not invent coordinates before compilation. Let ForeScene compile the initial shot, inspect the compiled project or sample timeline, derive world-space motion from existing camera and subject transforms, and then apply conservative relative changes.
 - Do not silently skip shots. Unsupported performance should still receive coarse timing/blocking guidance and a clear limitation label.

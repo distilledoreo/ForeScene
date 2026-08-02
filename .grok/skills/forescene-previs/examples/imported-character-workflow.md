@@ -1,75 +1,58 @@
 # Imported-character workflow
 
-Imported rigs are Agent-accessible, but they are not direct `PrevisProductionManifestV1.cast` entries. Keep the initial manifest dummy-only and use this workflow for a selected refinement character.
+Declare imported rigs in the production manifest so the cast and shots resolve
+in one operation:
 
-1. Run the dummy-cast previs and save its package:
+```json
+{
+  "version": 1,
+  "project": { "name": "Imported dialogue", "aspectRatio": "16:9" },
+  "locations": [
+    { "id": "room", "name": "Room", "template": "interior_room" }
+  ],
+  "cast": [
+    {
+      "id": "joseph",
+      "type": "imported_character",
+      "source": "./characters/joseph.glb",
+      "rigMode": "preserve-existing"
+    }
+  ],
+  "shots": [
+    {
+      "id": "joseph-medium",
+      "shotNumber": "010",
+      "name": "Joseph medium",
+      "description": "Joseph holds a guarded stance.",
+      "locationId": "room",
+      "subjects": ["joseph"],
+      "camera": { "template": "medium", "subjects": ["joseph"] }
+    }
+  ]
+}
+```
 
-   ```bash
-   npm run agent:previs -- \
-     --manifest .grok/skills/forescene-previs/examples/dialogue-motion.json \
-     --url https://ForeScene.distilledlabs.org \
-     --write \
-     --reset-project \
-     --output artifacts/imported-character-previs
-   npm run agent:package -- --url https://ForeScene.distilledlabs.org --write --output artifacts/imported-character-previs/package.zip
-   ```
+Run the normal production operation:
 
-2. Analyze a small Mixamo GLB:
+```bash
+npm run agent:previs -- \
+  --manifest path/to/imported-dialogue.json \
+  --url https://ForeScene.distilledlabs.org \
+  --write \
+  --reset-project \
+  --output artifacts/imported-character-previs
+```
 
-   ```bash
-   npm run agent:analyze-character -- \
-     --url https://ForeScene.distilledlabs.org \
-     --file path/to/mixamo-actor.glb
-   ```
+`agent:previs` stages each declared file through the browser, analyzes it,
+imports it using the requested rig mode, and records the resolved object under
+`cast.<id>` in `run-state.json` before compiling shots. Imported `name` defaults
+to the cast ID. Inspect `logs/scene-cast.json` for per-character analysis and
+import results.
 
-3. Import it with automatic rig selection:
+If one source fails, the cast phase stops before shot compilation. Re-running
+the same output reuses successful `cast.<id>` mappings; use
+`--update-manifest --reset-project` after changing a source or cast definition.
 
-   ```bash
-   npm run agent:import-character -- \
-     --url https://ForeScene.distilledlabs.org \
-     --file path/to/mixamo-actor.glb \
-     --rig-mode auto \
-     --name "Mixamo Actor" \
-     --write
-   ```
-
-   Add `--consent-token <explicit-token>` when the asset exceeds the device-aware import budget.
-
-4. Run `agent:inspect` and identify the created object and its capabilities. Do not rewrite the manifest cast or claim automatic cast binding.
-5. Identify the generated shot and imported object IDs from `agent:inspect`, then save this plan as `artifacts/imported-character-previs/pose-plan.json` after replacing the two placeholders:
-
-   ```json
-   {
-     "version": 1,
-     "planId": "pose-imported-character",
-     "commands": [
-       {
-         "op": "shot.stageObject",
-         "shot": { "id": "<shot-id>" },
-         "object": { "id": "<imported-object-id>" },
-         "posePreset": "standing-alert"
-       }
-     ]
-   }
-   ```
-
-   Apply it with explicit write access:
-
-   ```bash
-   npm run agent:apply -- \
-     --plan artifacts/imported-character-previs/pose-plan.json \
-     --url https://ForeScene.distilledlabs.org \
-     --write
-   ```
-
-6. Render a test clay frame:
-
-   ```bash
-   npm run agent:frame -- \
-     --url https://ForeScene.distilledlabs.org \
-     --shot <shot-id> \
-     --output artifacts/imported-character-previs/import-test.png
-   ```
-
-7. Reload or re-open the project, inspect again, and verify that the imported character remains poseable.
-8. Export the selected refinement package. Retain the dummy objects as spatial stand-ins for shots that still come from the production manifest.
+The standalone `agent:analyze-character` and `agent:import-character` commands
+remain available for importing a character into an already-authored project
+that is not driven by a production manifest.

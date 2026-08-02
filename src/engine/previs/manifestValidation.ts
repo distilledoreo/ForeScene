@@ -11,6 +11,7 @@ import {
   PREVIS_LOCATION_FEATURE_TYPES,
   PREVIS_LOCATION_SLOTS,
   PREVIS_LOCATION_TEMPLATES,
+  PREVIS_IMPORTED_CHARACTER_RIG_MODES,
   PREVIS_MANIFEST_LIMITS,
   PREVIS_MANIFEST_VERSION,
   PREVIS_PROP_PRIMITIVES,
@@ -21,6 +22,7 @@ import {
   type PrevisCameraAngle,
   type PrevisCameraTemplate,
   type PrevisCharacterDefinition,
+  type PrevisImportedCharacterRigMode,
   type PrevisLensClass,
   type PrevisLocationDefinition,
   type PrevisLocationFeatureType,
@@ -332,14 +334,17 @@ function parseCast(
     }
     const record = entry as Record<string, unknown>;
     const id = readId(record.id, `${path}.id`, castIds, errors);
-    const name = readNonemptyString(record.name, `${path}.name`, errors);
-    if (record.type !== 'human_dummy') {
+    const type = record.type;
+    if (type !== 'human_dummy' && type !== 'imported_character') {
       errors.push(previsError(
         PREVIS_DIAGNOSTIC_CODES.unsupportedValue,
-        'character.type must be "human_dummy" in the MVP.',
+        'character.type must be "human_dummy" or "imported_character".',
         { path: `${path}.type`, entityId: id },
       ));
     }
+    const name = record.name === undefined && type === 'imported_character'
+      ? id
+      : readNonemptyString(record.name, `${path}.name`, errors);
     let height: number | undefined;
     if (record.height !== undefined) {
       height = readOptionalPositiveNumber(record.height, `${path}.height`, errors);
@@ -366,7 +371,33 @@ function parseCast(
       ));
     }
 
-    if (id && name && record.type === 'human_dummy') {
+    if (type === 'imported_character') {
+      const source = readNonemptyString(record.source, `${path}.source`, errors);
+      const rigMode = readEnum(
+        record.rigMode,
+        PREVIS_IMPORTED_CHARACTER_RIG_MODES,
+        `${path}.rigMode`,
+        errors,
+      ) as PrevisImportedCharacterRigMode | undefined;
+      if (source && !/\.(?:glb|gltf|fbx)$/i.test(source)) {
+        errors.push(previsError(
+          PREVIS_DIAGNOSTIC_CODES.unsupportedValue,
+          'source must point to a GLB, embedded glTF, or FBX file.',
+          { path: `${path}.source`, entityId: id },
+        ));
+      }
+      if (id && name && source && rigMode) {
+        result.push({
+          id,
+          name,
+          type: 'imported_character',
+          source,
+          rigMode,
+          ...(height !== undefined ? { height } : {}),
+          ...(defaultPose !== undefined ? { defaultPose } : {}),
+        });
+      }
+    } else if (id && name && type === 'human_dummy') {
       result.push({
         id,
         name,

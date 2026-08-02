@@ -7,14 +7,31 @@ Required top-level fields:
 - `version: 1`
 - `project.name`, `project.aspectRatio`
 - `locations[]` with `id`, `name`, `template`
-- `cast[]` with `id`, `name`, and `type: "human_dummy"`
+- `cast[]` with either `type: "human_dummy"` or `type: "imported_character"`
 - `shots[]` with exact `shotNumber`, `name`, `description`, `locationId`, `subjects`, and `camera`
 
 Optional top-level fields are `project.description`, `project.frameRate`, and `props[]`. Optional shot fields are `blocking`, `requirements`, and `motion`.
 
-## Current cast boundary
+## Cast entries
 
-`PrevisProductionManifestV1.cast` currently accepts only `type: "human_dummy"`. Imported-rig characters are accessible through the Agent API, but they are not direct manifest cast entries. Follow [imported-characters.md](imported-characters.md) for the accurate two-stage workflow.
+Built-in cast entries use `id`, `name`, and `type: "human_dummy"`. Imported
+entries use a local source path and rig mode:
+
+```json
+{
+  "id": "joseph",
+  "type": "imported_character",
+  "source": "./characters/joseph.glb",
+  "rigMode": "preserve-existing"
+}
+```
+
+Imported `name` is optional and defaults to `id`. `source` is resolved relative
+to the manifest and must be a GLB, embedded glTF, or FBX. Supported
+`rigMode` values are `preserve-existing`, `auto`, and `autorig`. The
+`agent:previs` cast phase analyzes and imports each declared source in order,
+persists `cast.<id>` mappings, and only then compiles shots. See
+[imported-characters.md](imported-characters.md) for recovery guidance.
 
 ## Supported enum values
 

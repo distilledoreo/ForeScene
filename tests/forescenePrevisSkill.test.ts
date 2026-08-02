@@ -41,7 +41,10 @@ describe('ForeScene previs skill contract', () => {
       'renderControlVideo',
       'durationSeconds',
       'keyframes',
-      'currently accepts only `type: "human_dummy"`',
+      'type: "imported_character"',
+      'preserve-existing',
+      'source',
+      'cast.<id>',
       'imported-characters.md',
       'motion-authoring.md',
       'MP4 exists',
@@ -87,7 +90,7 @@ describe('ForeScene previs skill contract', () => {
     }
   });
 
-  it('provides a real motion example without unsupported imported cast fields', () => {
+  it('provides a real motion example and documents imported cast binding', () => {
     const examplePath = path.join(skillRoot, 'examples', 'dialogue-motion.json');
     const example = JSON.parse(readFileSync(examplePath, 'utf8')) as {
       cast?: Array<{ type?: string }>;
@@ -98,9 +101,8 @@ describe('ForeScene previs skill contract', () => {
     expect(example.shots?.some((shot) => shot.motion?.keyframes && shot.motion.keyframes.length >= 2)).toBe(true);
     expect(example.cast?.every((character) => character.type === 'human_dummy')).toBe(true);
     const importedWorkflow = readFileSync(path.join(skillRoot, 'examples', 'imported-character-workflow.md'), 'utf8');
-    expect(importedWorkflow).toContain('agent:import-character');
-    expect(importedWorkflow).toContain('shot.stageObject');
-    expect(importedWorkflow).toContain('agent:apply');
-    expect(importedWorkflow).toContain('pose-plan.json');
+    expect(importedWorkflow).toContain('agent:previs');
+    expect(importedWorkflow).toContain('imported_character');
+    expect(importedWorkflow).toContain('preserve-existing');
   });
 });

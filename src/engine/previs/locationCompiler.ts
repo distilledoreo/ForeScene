@@ -61,6 +61,11 @@ export interface CompilePhaseResult {
   diagnostics: PrevisDiagnostic[];
   /** Expected entity keys written after apply (for run-state). */
   entityKeys: string[];
+  /** Imported cast entries are resolved by the CLI through the browser file-input API. */
+  importedCharacters?: Array<{
+    entityKey: string;
+    character: Extract<PrevisCharacterDefinition, { type: 'imported_character' }>;
+  }>;
 }
 
 export function createEmptyCompiledContext(): CompiledProductionContext {
@@ -210,6 +215,7 @@ export function compileCastPhase(
   const diagnostics: PrevisDiagnostic[] = [];
   const commands: ForeSceneAgentCommand[] = [];
   const entityKeys: string[] = [];
+  const importedCharacters: NonNullable<CompilePhaseResult['importedCharacters']> = [];
   const next = cloneContext(context);
 
   // Park cast near first location origin, off to the side; shots stage them.
@@ -217,6 +223,10 @@ export function compileCastPhase(
 
   manifest.cast.forEach((character, index) => {
     const entityKey = `cast.${character.id}`;
+    if (character.type === 'imported_character') {
+      importedCharacters.push({ entityKey, character });
+      return;
+    }
     if (next.entities[entityKey]?.objectId) return;
 
     const ref = previsRef('cast', character.id);
@@ -262,6 +272,7 @@ export function compileCastPhase(
     context: next,
     diagnostics,
     entityKeys,
+    importedCharacters,
   };
 }
 
