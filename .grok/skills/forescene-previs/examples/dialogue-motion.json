@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Dialogue Motion Previs",
+    "description": "Static coverage plus a reaction push and character entrance.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "room",
+      "name": "Interior Room",
+      "template": "interior_room",
+      "description": "A simple room for dialogue coverage."
+    }
+  ],
+  "cast": [
+    {
+      "id": "alex",
+      "name": "Alex",
+      "type": "human_dummy",
+      "height": 1.75,
+      "color": "#60a5fa",
+      "defaultPose": "standing-neutral"
+    },
+    {
+      "id": "blair",
+      "name": "Blair",
+      "type": "human_dummy",
+      "height": 1.68,
+      "color": "#f472b6",
+      "defaultPose": "standing-neutral"
+    }
+  ],
+  "shots": [
+    {
+      "id": "s010",
+      "shotNumber": "010",
+      "name": "Static establishing two-shot",
+      "description": "A clean establishing view of Alex and Blair before the exchange.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        { "subject": "alex", "placement": { "type": "location_slot", "slot": "left" }, "face": "blair" },
+        { "subject": "blair", "placement": { "type": "location_slot", "slot": "right" }, "face": "alex" }
+      ],
+      "camera": { "template": "two_shot", "subjects": ["alex", "blair"], "angle": "front", "lensClass": "wide" },
+      "requirements": { "visibleSubjects": ["alex", "blair"] }
+    },
+    {
+      "id": "s020",
+      "shotNumber": "020",
+      "name": "Static Blair OTS",
+      "description": "A static over-the-shoulder view onto Blair.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        { "subject": "blair", "placement": { "type": "location_slot", "slot": "center" }, "face": "alex" },
+        { "subject": "alex", "placement": { "type": "relative", "anchor": "blair", "relation": "in_front_of" }, "face": "blair" }
+      ],
+      "camera": { "template": "over_the_shoulder", "subjects": ["blair"], "foregroundSubject": "alex", "angle": "three_quarter", "lensClass": "normal" },
+      "requirements": { "visibleSubjects": ["alex", "blair"] }
+    },
+    {
+      "id": "s030",
+      "shotNumber": "030",
+      "name": "Alex reaction push",
+      "description": "A slow push toward Alex as the meaning of the line lands.",
+      "locationId": "room",
+      "subjects": ["alex"],
+      "blocking": [
+        { "subject": "alex", "placement": { "type": "location_slot", "slot": "center" }, "face": "blair", "pose": "standing-alert" }
+      ],
+      "camera": { "template": "medium_close_up", "subjects": ["alex"], "angle": "three_quarter", "lensClass": "normal" },
+      "requirements": { "visibleSubjects": ["alex"] },
+      "motion": {
+        "durationSeconds": 3,
+        "renderControlVideo": true,
+        "keyframes": [
+          { "timeSeconds": 0, "camera": { "position": [0, 1.65, 5.2], "target": [0, 1.35, 0] } },
+          { "timeSeconds": 3, "camera": { "position": [0.35, 1.65, 4.55], "target": [0, 1.35, 0] } }
+        ]
+      }
+    },
+    {
+      "id": "s040",
+      "shotNumber": "040",
+      "name": "Alex walks into the conversation",
+      "description": "Alex walks continuously from the room entrance into the conversation frame.",
+      "locationId": "room",
+      "subjects": ["alex", "blair"],
+      "blocking": [
+        { "subject": "blair", "placement": { "type": "location_slot", "slot": "right" }, "face": "alex" },
+        { "subject": "alex", "placement": { "type": "relative", "anchor": "entrance", "relation": "just_inside" }, "face": "blair", "pose": "walking" }
+      ],
+      "camera": { "template": "wide", "subjects": ["alex", "blair"], "angle": "three_quarter", "lensClass": "wide" },
+      "requirements": { "visibleSubjects": ["alex", "blair"] },
+      "motion": {
+        "durationSeconds": 4,
+        "renderControlVideo": true,
+        "keyframes": [
+          {
+            "timeSeconds": 0,
+            "camera": { "position": [2.2, 1.65, 6], "target": [0, 1.1, 0] },
+            "staging": [
+              { "subject": "alex", "visible": true, "transform": { "position": [1.8, 0, 0] }, "posePreset": "walking" }
+            ]
+          },
+          {
+            "timeSeconds": 2,
+            "camera": { "position": [2.2, 1.65, 6], "target": [0, 1.1, 0] },
+            "staging": [
+              { "subject": "alex", "visible": true, "transform": { "position": [1.2, 0, 0] }, "posePreset": "walking" }
+            ]
+          },
+          {
+            "timeSeconds": 4,
+            "camera": { "position": [2.2, 1.65, 6], "target": [0, 1.1, 0] },
+            "staging": [
+              { "subject": "alex", "visible": true, "transform": { "position": [0.6, 0, 0] }, "posePreset": "standing-neutral" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
