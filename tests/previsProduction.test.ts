@@ -8,6 +8,7 @@ import {
   createBlankGrayboxProject,
   createInitialRunState,
   compileCastPhaseWithPersistedEntities,
+  diffPrevisManifests,
   firstIncompletePhase,
   hashPrevisManifest,
   parsePrevisProductionManifest,
@@ -73,6 +74,54 @@ describe('previs production manifest', () => {
       source: './characters/joseph.glb',
       rigMode: 'preserve-existing',
     });
+  });
+
+  it('requires an explicit matching package for saved-rig cast entries', () => {
+    const base = {
+      version: 1 as const,
+      project: { name: 'Saved rig', aspectRatio: '16:9' as const },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' as const }],
+      cast: [{
+        id: 'joseph',
+        type: 'imported_character' as const,
+        source: './characters/joseph.glb',
+        rigMode: 'saved-rig' as const,
+        rigPackage: './characters/joseph.fsrig',
+      }],
+      shots: [{
+        id: 's1',
+        shotNumber: '010',
+        name: 'Joseph medium',
+        description: 'A medium shot.',
+        locationId: 'room',
+        subjects: ['joseph'],
+        camera: { template: 'medium' as const, subjects: ['joseph'] },
+      }],
+    };
+    const valid = parsePrevisProductionManifest(base);
+    expect(valid.errors).toEqual([]);
+    expect(valid.manifest?.cast[0]).toMatchObject({
+      rigMode: 'saved-rig',
+      rigPackage: './characters/joseph.fsrig',
+    });
+
+    const missing = parsePrevisProductionManifest({
+      ...base,
+      cast: [{ ...base.cast[0], rigPackage: undefined }],
+    });
+    expect(missing.errors.some((item) => item.code === 'missing_saved_rig_package')).toBe(true);
+
+    const wrongExtension = parsePrevisProductionManifest({
+      ...base,
+      cast: [{ ...base.cast[0], rigPackage: './characters/joseph.zip' }],
+    });
+    expect(wrongExtension.errors.some((item) => item.code === 'unsupported_saved_rig_extension')).toBe(true);
+
+    const unexpected = parsePrevisProductionManifest({
+      ...base,
+      cast: [{ ...base.cast[0], rigMode: 'auto', rigPackage: './characters/joseph.fsrig' }],
+    });
+    expect(unexpected.errors.some((item) => item.code === 'unexpected_rig_package')).toBe(true);
   });
 
   it('parses motion keyframes and rejects a duration mismatch', () => {
@@ -654,6 +703,25 @@ describe('blocking and camera solvers', () => {
 });
 
 describe('run-state resume', () => {
+  it('treats a saved-rig package change as a cast change', () => {
+    const previous = structuredClone(parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!);
+    previous.cast = [{
+      id: 'joseph',
+      name: 'joseph',
+      type: 'imported_character',
+      source: './joseph.glb',
+      rigMode: 'saved-rig',
+      rigPackage: './joseph.fsrig',
+    }];
+    const next = structuredClone(previous);
+    next.cast = next.cast.map((entry) => entry.type === 'imported_character'
+      ? { ...entry, rigPackage: './joseph-v2.fsrig' }
+      : entry);
+    const diff = diffPrevisManifests(previous, next);
+    expect(diff.castChanged).toEqual(['joseph']);
+    expect(diff.invalidateCast).toBe(true);
+  });
+
   it('tracks phases and refuses hash mismatch', () => {
     const manifest = parsePrevisProductionManifest(loadExample('minimal-dialogue.json')).manifest!;
     const hash = hashPrevisManifest(manifest);

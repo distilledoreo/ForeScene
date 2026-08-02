@@ -81,10 +81,12 @@ import type {
 import { FORESCENE_AGENT_API_VERSION } from './protocol';
 import {
   analyzeCharacterImport,
+  analyzeSavedRigCharacter,
   cancelCharacterImport,
   discardCharacterImportAnalysis,
   getCharacterImportProgress,
   importCharacter,
+  importSavedRigCharacter,
   isCharacterImportActive,
 } from './characterImport';
 
@@ -436,6 +438,29 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         });
       }
       return importCharacter(input);
+    },
+
+    analyzeSavedRigCharacter(input) {
+      const blocked = requireInspectionAccess();
+      if (blocked) return Promise.reject(new AgentApiError(blocked[0]!.code, blocked[0]!.message));
+      return analyzeSavedRigCharacter(input);
+    },
+
+    importSavedRigCharacter(input) {
+      const controlMode = useAgentControlStore.getState().controlMode;
+      if (controlMode !== 'read-write') {
+        return Promise.resolve({
+          ok: false,
+          warnings: [],
+          diagnostics: [
+            agentError(
+              AGENT_DIAGNOSTIC_CODES.writeAccessRequired,
+              'Write access is required to import a saved-rig character.',
+            ),
+          ],
+        });
+      }
+      return importSavedRigCharacter(input);
     },
 
     getCharacterImportProgress() {

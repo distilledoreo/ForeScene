@@ -9,7 +9,7 @@ import { BRAND } from '../config/brand';
 import { createId } from '../utils/ids';
 import { sanitizeAutorigMarkers } from './autorigMarkers';
 import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
-import { getModelAsset, putModelAsset } from './modelAssetStore';
+import { deleteModelAsset, getModelAsset, putModelAsset } from './modelAssetStore';
 import { normalizePoseableRigAsset } from './poseableRigNormalize';
 import { downloadBlob } from './fileTransfers';
 
@@ -61,6 +61,10 @@ export interface ImportedPoseableRigPackage {
   skinAsset?: ProjectAsset;
   regionAsset?: ProjectAsset;
   sourceAsset?: ProjectAsset;
+  /** Present for read-only analysis so package payloads never need storage writes. */
+  skinBytes?: ArrayBuffer;
+  regionBytes?: ArrayBuffer;
+  sourceBytes?: ArrayBuffer;
 }
 
 function isPoseableRigPackageManifest(value: unknown): value is PoseableRigPackageManifest {
@@ -185,8 +189,21 @@ export async function exportPoseableRigPackage(params: {
   return built;
 }
 
-export async function parsePoseableRigPackageFile(file: File): Promise<ImportedPoseableRigPackage> {
+export async function parsePoseableRigPackageFile(
+  file: File,
+  options: {
+    persistAssets?: boolean;
+    signal?: AbortSignal;
+    onAssetWritten?: (storageKey: string) => void;
+  } = {},
+): Promise<ImportedPoseableRigPackage> {
+  const persistAssets = options.persistAssets !== false;
+  const checkCancelled = () => {
+    if (options.signal?.aborted) throw new DOMException('Import cancelled.', 'AbortError');
+  };
+  checkCancelled();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  checkCancelled();
   const manifestEntry = zip.file('manifest.json');
   if (!manifestEntry) {
     throw new Error('Rig package is missing manifest.json.');
@@ -208,96 +225,134 @@ export async function parsePoseableRigPackageFile(file: File): Promise<ImportedP
   let skinAsset: ProjectAsset | undefined;
   let regionAsset: ProjectAsset | undefined;
   let sourceAsset: ProjectAsset | undefined;
+  let skinBytes: ArrayBuffer | undefined;
+  let regionBytes: ArrayBuffer | undefined;
+  let sourceBytes: ArrayBuffer | undefined;
+  const writtenStorageKeys: string[] = [];
   const rig: PoseableRigAsset = {
     ...baseRig,
     id: nextRigId,
   };
 
-  if (manifestJson.skinFile) {
+  try {
+    if (manifestJson.skinFile) {
     const skinEntry = zip.file(manifestJson.skinFile);
     if (!skinEntry) throw new Error(`Rig package is missing ${manifestJson.skinFile}.`);
-    const skinBytes = await skinEntry.async('arraybuffer');
+    skinBytes = await skinEntry.async('arraybuffer');
+    checkCancelled();
     const skinAssetId = createId('poseable_skin');
     const key = `poseable-skin-${skinAssetId}`;
-    await putModelAsset(key, skinBytes);
-    skinAsset = {
-      id: skinAssetId,
-      name: `${manifestJson.characterName ?? 'Character'} skin`,
-      type: 'other',
-      uri: `${MODEL_ASSET_URI_PREFIX}${key}`,
-      createdAt: new Date().toISOString(),
-      metadata: { poseableSkin: true },
-    };
-    rig.skin = {
-      influencesPerVertex: rig.skin?.influencesPerVertex || 4,
-      skinAssetId,
-    };
-  }
+      if (persistAssets) {
+        await putModelAsset(key, skinBytes, options.signal);
+        writtenStorageKeys.push(key);
+        options.onAssetWritten?.(key);
+      }
+      skinAsset = {
+        id: skinAssetId,
+        name: `${manifestJson.characterName ?? 'Character'} skin`,
+        type: 'other',
+        uri: persistAssets ? `${MODEL_ASSET_URI_PREFIX}${key}` : 'panoref-model:preflight-skin',
+        createdAt: new Date().toISOString(),
+        metadata: { poseableSkin: true },
+        ...(persistAssets ? { storageKey: key } : {}),
+      };
+      rig.skin = {
+        influencesPerVertex: rig.skin?.influencesPerVertex || 4,
+        skinAssetId,
+      };
+    }
 
-  if (manifestJson.regionFile) {
+    if (manifestJson.regionFile) {
     const regionEntry = zip.file(manifestJson.regionFile);
     if (!regionEntry) throw new Error(`Rig package is missing ${manifestJson.regionFile}.`);
-    const regionBytes = await regionEntry.async('arraybuffer');
+    regionBytes = await regionEntry.async('arraybuffer');
+    checkCancelled();
     const regionAssetId = createId('poseable_region');
     const key = `poseable-region-${regionAssetId}`;
-    await putModelAsset(key, regionBytes);
-    regionAsset = {
-      id: regionAssetId,
-      name: `${manifestJson.characterName ?? 'Character'} regions`,
-      type: 'other',
-      uri: `${MODEL_ASSET_URI_PREFIX}${key}`,
-      createdAt: new Date().toISOString(),
-      metadata: { poseableRegionMap: true },
-    };
-    const topologyHash = manifestJson.topologyHash
-      ?? baseRig.regionMap?.topologyHash
-      ?? 'unknown';
-    rig.regionMap = {
-      version: 1,
-      regionAssetId,
-      vertexCount: baseRig.regionMap?.vertexCount ?? 0,
-      topologyHash,
-      sourceAssetId: 'package-import',
-    };
-  } else {
-    delete rig.regionMap;
-  }
+      if (persistAssets) {
+        await putModelAsset(key, regionBytes, options.signal);
+        writtenStorageKeys.push(key);
+        options.onAssetWritten?.(key);
+      }
+      regionAsset = {
+        id: regionAssetId,
+        name: `${manifestJson.characterName ?? 'Character'} regions`,
+        type: 'other',
+        uri: persistAssets ? `${MODEL_ASSET_URI_PREFIX}${key}` : 'panoref-model:preflight-region',
+        createdAt: new Date().toISOString(),
+        metadata: { poseableRegionMap: true },
+        ...(persistAssets ? { storageKey: key } : {}),
+      };
+      const topologyHash = manifestJson.topologyHash
+        ?? baseRig.regionMap?.topologyHash
+        ?? 'unknown';
+      rig.regionMap = {
+        version: 1,
+        regionAssetId,
+        vertexCount: baseRig.regionMap?.vertexCount ?? 0,
+        topologyHash,
+        sourceAssetId: 'package-import',
+      };
+    } else {
+      delete rig.regionMap;
+    }
 
-  if (manifestJson.sourceFile) {
+    if (manifestJson.sourceFile) {
     const sourceEntry = zip.file(manifestJson.sourceFile);
     if (!sourceEntry) throw new Error(`Rig package is missing ${manifestJson.sourceFile}.`);
-    const sourceBytes = await sourceEntry.async('arraybuffer');
+    sourceBytes = await sourceEntry.async('arraybuffer');
+    checkCancelled();
     const sourceAssetId = createId('poseable_source');
     const extension = manifestJson.sourceFile.split('.').pop()?.toLowerCase() as 'glb' | 'gltf' | 'fbx' | undefined;
     const key = `poseable-source-${sourceAssetId}`;
-    await putModelAsset(key, sourceBytes);
-    sourceAsset = {
-      id: sourceAssetId,
-      name: `${manifestJson.characterName ?? 'Character'} source.${extension ?? 'glb'}`,
-      type: 'model',
-      uri: `${MODEL_ASSET_URI_PREFIX}${key}`,
-      storageKey: key,
-      mimeType: extension === 'fbx' ? 'application/octet-stream' : extension === 'gltf' ? 'model/gltf+json' : 'model/gltf-binary',
-      createdAt: new Date().toISOString(),
-      metadata: { poseableSource: true, preservesRig: true, format: extension ?? 'glb' },
-    };
-    if (rig.importedRigBinding) {
-      rig.importedRigBinding = {
-        ...rig.importedRigBinding,
-        sourceAssetId,
+      if (persistAssets) {
+        await putModelAsset(key, sourceBytes, options.signal);
+        writtenStorageKeys.push(key);
+        options.onAssetWritten?.(key);
+      }
+      sourceAsset = {
+        id: sourceAssetId,
+        name: `${manifestJson.characterName ?? 'Character'} source.${extension ?? 'glb'}`,
+        type: 'model',
+        uri: persistAssets ? `${MODEL_ASSET_URI_PREFIX}${key}` : 'panoref-model:preflight-source',
+        mimeType: extension === 'fbx' ? 'application/octet-stream' : extension === 'gltf' ? 'model/gltf+json' : 'model/gltf-binary',
+        createdAt: new Date().toISOString(),
+        metadata: { poseableSource: true, preservesRig: true, format: extension ?? 'glb' },
+        ...(persistAssets ? { storageKey: key } : {}),
       };
+      if (rig.importedRigBinding) {
+        rig.importedRigBinding = {
+          ...rig.importedRigBinding,
+          sourceAssetId,
+        };
+      }
+      rig.originalSourceAssetId = sourceAssetId;
+      rig.sourceMeshAssetId = sourceAssetId;
     }
-    rig.originalSourceAssetId = sourceAssetId;
-    rig.sourceMeshAssetId = sourceAssetId;
-  }
 
-  return {
-    manifest: manifestJson,
-    rig,
-    skinAsset,
-    regionAsset,
-    sourceAsset,
-  };
+    return {
+      manifest: manifestJson,
+      rig,
+      skinAsset,
+      regionAsset,
+      sourceAsset,
+      skinBytes,
+      regionBytes,
+      sourceBytes,
+    };
+  } catch (error) {
+    await Promise.all(writtenStorageKeys.map((key) => deleteModelAsset(key).catch(() => undefined)));
+    throw error;
+  }
+}
+
+/** Remove package payloads when a saved-rig import fails after ZIP hydration. */
+export async function cleanupImportedPoseableRigPackage(
+  imported: Pick<ImportedPoseableRigPackage, 'skinAsset' | 'regionAsset' | 'sourceAsset'> | undefined,
+): Promise<void> {
+  const keys = [imported?.skinAsset?.storageKey, imported?.regionAsset?.storageKey, imported?.sourceAsset?.storageKey]
+    .filter((key): key is string => Boolean(key));
+  await Promise.all(keys.map((key) => deleteModelAsset(key).catch(() => undefined)));
 }
 
 /**
@@ -371,6 +426,15 @@ export async function resolvePoseableRigPackageVertexCount(
   const quick = poseableRigPackageVertexCount(imported);
   if (typeof quick === 'number') return quick;
   const skinAssetId = imported.rig.skin?.skinAssetId ?? imported.skinAsset?.id;
+  if (imported.skinBytes && imported.skinBytes.byteLength >= 24) {
+    const view = new DataView(imported.skinBytes);
+    const version = view.getUint32(0, true);
+    const influencesPerVertex = view.getUint32(4, true) || 4;
+    const indexCount = view.getUint32(8, true);
+    if (version === 1 && influencesPerVertex > 0 && indexCount > 0) {
+      return Math.floor(indexCount / influencesPerVertex);
+    }
+  }
   if (!skinAssetId || !imported.skinAsset?.uri) return undefined;
   if (!imported.skinAsset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) return undefined;
   const key = imported.skinAsset.uri.slice(MODEL_ASSET_URI_PREFIX.length);

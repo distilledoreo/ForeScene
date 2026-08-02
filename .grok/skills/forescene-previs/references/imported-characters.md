@@ -15,9 +15,33 @@ cast phase:
 
 `source` is resolved relative to the manifest file and must be a local GLB,
 embedded glTF, or FBX. `name` is optional and defaults to the cast ID.
-Supported modes are `preserve-existing`, `auto`, and `autorig`. After import,
-the live object ID is persisted as `cast.joseph` in `run-state.json`, and shot
-compilation uses that mapping directly.
+Supported modes are `preserve-existing`, `auto`, `autorig`, and `saved-rig`.
+After import, the live object ID is persisted as `cast.joseph` in
+`run-state.json`, and shot compilation uses that mapping directly.
+
+### Matching saved rigs
+
+Use `saved-rig` to import a model and its matching `.fsrig` or legacy `.panorig`
+package as one cast entry:
+
+```json
+{
+  "id": "joseph",
+  "type": "imported_character",
+  "source": "./characters/joseph.glb",
+  "rigMode": "saved-rig",
+  "rigPackage": "./characters/joseph.fsrig"
+}
+```
+
+Both paths are explicit and relative to the manifest. The source and package
+are hashed together with the import options. `agent:previs` runs a read-only
+compatibility preflight before reset, checking package integrity, skin/bind
+data, topology, vertex count, and preserved source skeleton where available.
+Any mismatch fails the cast phase before reset and writes the diagnostics to
+`logs/saved-rig-preflight.json`. A successful import records the source/package
+hashes, `appliedSavedRig`, and `topologyVerified` in `logs/scene-cast.json` and
+`run-state.json`.
 
 ## Analyze and import
 
@@ -58,10 +82,10 @@ For a new production, declare imported characters directly in the manifest:
 2. Run `agent:previs` with the manifest and write/reset authorization.
 3. Inspect the cast log and shot outputs.
 
-If an imported source fails, the cast phase stops before shot compilation. A
-retry reuses successful `cast.<id>` mappings from `run-state.json`; change the
-source or rig mode with `--update-manifest --reset-project` when the existing
-scene must be rebuilt.
+If an imported source or saved-rig pair fails, the cast phase stops before shot
+compilation. A retry reuses successful `cast.<id>` mappings only when the
+recorded import fingerprint still matches. Change either file or the rig mode
+with `--update-manifest --reset-project` when the existing scene must be rebuilt.
 
 For older projects that still use a separate import command, project reset can
 delete previously imported characters:

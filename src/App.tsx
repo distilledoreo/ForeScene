@@ -259,6 +259,14 @@ export default function App() {
         aria-hidden="true"
         className="hidden"
       />
+      <input
+        type="file"
+        accept=".fsrig,.panorig,application/zip"
+        data-agent-character-rig-package-input
+        tabIndex={-1}
+        aria-hidden="true"
+        className="hidden"
+      />
       <main className="absolute inset-0">
         <Suspense
           fallback={(

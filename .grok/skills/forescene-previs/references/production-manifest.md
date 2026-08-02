@@ -28,10 +28,27 @@ entries use a local source path and rig mode:
 
 Imported `name` is optional and defaults to `id`. `source` is resolved relative
 to the manifest and must be a GLB, embedded glTF, or FBX. Supported
-`rigMode` values are `preserve-existing`, `auto`, and `autorig`. The
+`rigMode` values are `preserve-existing`, `auto`, `autorig`, and `saved-rig`. The
 `agent:previs` cast phase analyzes and imports each declared source in order,
 persists `cast.<id>` mappings, and only then compiles shots. See
 [imported-characters.md](imported-characters.md) for recovery guidance.
+
+For an explicit source/package pair, use:
+
+```json
+{
+  "id": "joseph",
+  "type": "imported_character",
+  "source": "./characters/joseph.glb",
+  "rigMode": "saved-rig",
+  "rigPackage": "./characters/joseph.fsrig"
+}
+```
+
+`rigPackage` is required for `saved-rig` and accepts only `.fsrig` or legacy
+`.panorig` files. Both paths are resolved relative to the manifest. The pair
+is checked before reset and the package is applied through the shared saved-rig
+import path. Replacing either file requires `--update-manifest --reset-project`.
 
 ## Supported enum values
 

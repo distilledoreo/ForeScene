@@ -386,6 +386,40 @@ function parseCast(
           { path: `${path}.source`, entityId: id },
         ));
       }
+      if (!source) {
+        errors.push(previsError(
+          PREVIS_DIAGNOSTIC_CODES.missingImportedCharacterSource,
+          'Imported characters require an explicit model source path.',
+          { path: `${path}.source`, entityId: id },
+        ));
+      }
+      const rigPackage = readOptionalString(
+        record.rigPackage,
+        `${path}.rigPackage`,
+        errors,
+        warnings,
+      );
+      if (rigMode === 'saved-rig') {
+        if (!rigPackage) {
+          errors.push(previsError(
+            PREVIS_DIAGNOSTIC_CODES.missingSavedRigPackage,
+            'rigPackage is required when rigMode is "saved-rig".',
+            { path: `${path}.rigPackage`, entityId: id },
+          ));
+        } else if (!/\.(?:fsrig|panorig)$/i.test(rigPackage) || /[\\/]\s*$/.test(rigPackage)) {
+          errors.push(previsError(
+            PREVIS_DIAGNOSTIC_CODES.unsupportedSavedRigExtension,
+            'rigPackage must point to a .fsrig or legacy .panorig file.',
+            { path: `${path}.rigPackage`, entityId: id },
+          ));
+        }
+      } else if (rigPackage !== undefined) {
+        errors.push(previsError(
+          PREVIS_DIAGNOSTIC_CODES.unexpectedRigPackage,
+          'rigPackage is only allowed when rigMode is "saved-rig".',
+          { path: `${path}.rigPackage`, entityId: id },
+        ));
+      }
       if (id && name && source && rigMode) {
         result.push({
           id,
@@ -393,6 +427,7 @@ function parseCast(
           type: 'imported_character',
           source,
           rigMode,
+          ...(rigPackage !== undefined ? { rigPackage } : {}),
           ...(height !== undefined ? { height } : {}),
           ...(defaultPose !== undefined ? { defaultPose } : {}),
         });

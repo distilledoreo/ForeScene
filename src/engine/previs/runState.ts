@@ -31,6 +31,12 @@ export interface PrevisEntityMapping {
   anchors?: Record<string, string>;
   zoneOrigin?: [number, number, number];
   refs?: Record<string, string>;
+  /** Binary/import-option provenance for cast entries that came from files. */
+  importFingerprint?: string;
+  sourceSha256?: string;
+  rigPackageSha256?: string;
+  appliedSavedRig?: boolean;
+  topologyVerified?: boolean;
 }
 
 export interface PrevisShotPixelStats {

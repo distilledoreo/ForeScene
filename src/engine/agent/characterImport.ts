@@ -7,12 +7,19 @@ import {
 } from '../poseableRigNormalize';
 import {
   analyzeRiggedCharacterImport,
+  analyzeSavedRigCompatibility,
+  cleanupPoseableCharacterImportResult,
   importPoseableCharacter,
+  importPoseableCharacterWithSavedRig,
   type PoseableCharacterImportFormat,
+  type SavedRigCharacterImportResult,
   type RiggedCharacterImportAnalysis,
 } from '../poseableCharacterImport';
 import { deleteModelAsset } from '../modelAssetStore';
-import { ensureImportedRiggedCharactersForProject } from '../importedRiggedPoseableCharacter';
+import {
+  ensureImportedRiggedCharactersForProject,
+  hydrateImportedRiggedCharactersFromAssets,
+} from '../importedRiggedPoseableCharacter';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { detectImportDeviceProfile, estimateModelImportBudget, type ImportGeometryStats } from '../modelImportBudget';
@@ -186,6 +193,143 @@ export async function analyzeCharacterImport(input: AgentCharacterImportInput): 
   } catch (error) {
     finishOperation();
     throw error;
+  }
+}
+
+export async function analyzeSavedRigCharacter(input: {
+  sourceFile: File;
+  rigPackageFile: File;
+  approximateHeightMeters?: number;
+}) {
+  const controller = startOperation();
+  try {
+    setProgress({ active: true, phase: 'reading', message: `Reading ${input.rigPackageFile.name}…` });
+    const result = await analyzeSavedRigCompatibility({
+      sourceFile: input.sourceFile,
+      rigPackageFile: input.rigPackageFile,
+      approximateHeightMeters: input.approximateHeightMeters,
+    });
+    if (result.diagnostics.length > 0) {
+      setProgress({ active: true, phase: 'validating', message: 'Saved rig compatibility failed.' });
+    }
+    finishOperation();
+    return result;
+  } catch (error) {
+    finishOperation();
+    throw error;
+  }
+}
+
+export async function importSavedRigCharacter(input: {
+  sourceFile: File;
+  rigPackageFile: File;
+  name: string;
+  approximateHeightMeters?: number;
+}): Promise<AgentCharacterImportResult> {
+  const projectState = useProjectStore.getState();
+  if (!projectState.project?.id) {
+    return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.projectNotLoaded, 'No project is loaded.')] };
+  }
+  if (useProjectSafetyStore.getState().criticalWrite) {
+    return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is busy.')] };
+  }
+  const busy = collectAgentBusyDiagnostics();
+  if (busy.length > 0) return { ok: false, warnings: [], diagnostics: busy };
+
+  let controller: AbortController;
+  try {
+    controller = startOperation();
+  } catch (error) {
+    return { ok: false, warnings: [], diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, error instanceof Error ? error.message : 'Another character import is already in progress.')] };
+  }
+
+  let result: SavedRigCharacterImportResult | undefined;
+  try {
+    setProgress({ active: true, phase: 'reading', message: `Reading ${input.sourceFile.name}…` });
+    const sourceAnalysis = await analyzeRiggedCharacterImport({
+      file: input.sourceFile,
+      signal: controller.signal,
+      onProgress: (message) => setProgress({ active: true, phase: phaseForMessage(message), message }),
+    });
+    const budget = importBudget(sourceAnalysis);
+    if (budget.tier === 'reject') {
+      throw new Error(`Character import exceeds the device-aware safety budget: ${budget.exceeded.join(', ')}.`);
+    }
+    setProgress({ active: true, phase: 'validating', message: 'Validating saved rig compatibility…' });
+    const analysis = await analyzeSavedRigCompatibility({
+      sourceFile: input.sourceFile,
+      rigPackageFile: input.rigPackageFile,
+      approximateHeightMeters: input.approximateHeightMeters,
+    });
+    if (!analysis.ok) {
+      throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
+    }
+    result = await importPoseableCharacterWithSavedRig({
+      sourceFile: input.sourceFile,
+      rigPackageFile: input.rigPackageFile,
+      name: input.name,
+      approximateHeightMeters: input.approximateHeightMeters,
+      signal: controller.signal,
+      onProgress: (message) => setProgress({ active: true, phase: phaseForMessage(message), message }),
+    });
+    const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+    if (!runDestructive) throw new Error('Local project recovery is still starting.');
+    setProgress({ active: true, phase: 'saving', message: 'Saving a verified project revision…' });
+    const verified = await runDestructive('Before importing a saved-rig character through the Agent API', () => {
+      useProjectStore.getState().addPoseableCharacterImport({
+        sourceAsset: result!.sourceAsset,
+        rigAsset: result!.rigAsset,
+        object: result!.object,
+      });
+      useProjectStore.setState((current) => ({
+        project: {
+          ...current.project,
+          assets: {
+            assets: {
+              ...current.project.assets.assets,
+              ...(result!.packageAssets.sourceAsset
+                ? { [result!.packageAssets.sourceAsset.id]: result!.packageAssets.sourceAsset }
+                : {}),
+              ...(result!.packageAssets.skinAsset
+                ? { [result!.packageAssets.skinAsset.id]: result!.packageAssets.skinAsset }
+                : {}),
+              ...(result!.packageAssets.regionAsset
+                ? { [result!.packageAssets.regionAsset.id]: result!.packageAssets.regionAsset }
+                : {}),
+            },
+          },
+        },
+      }));
+    });
+    hydrateImportedRiggedCharactersFromAssets(useProjectStore.getState().project.assets);
+    const { ensureAutoriggedCharactersForProject } = await import('../autoriggedPoseableCharacter');
+    await ensureAutoriggedCharactersForProject(useProjectStore.getState().project);
+    await ensureImportedRiggedCharactersForProject(useProjectStore.getState().project);
+    finishOperation();
+    return {
+      ok: true,
+      objectId: result.object.id,
+      objectRef: { kind: 'object', id: result.object.id, name: result.object.name },
+      sourceAssetId: result.sourceAsset.id,
+      rigAssetId: result.rigAsset.id,
+      poseable: true,
+      importedRigPreserved: Boolean(result.rig.importedRigBinding),
+      appliedSavedRig: true,
+      topologyVerified: result.topologyVerified,
+      ...(verified?.revision.id ? { verifiedRevisionId: verified.revision.id } : {}),
+      warnings: [...result.warnings, 'Attached saved rig — skipping the rigging wizard.'],
+    };
+  } catch (error) {
+    if (result) await cleanupPoseableCharacterImportResult(result);
+    finishOperation();
+    return {
+      ok: false,
+      warnings: result?.warnings ?? [],
+      diagnostics: [agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        error instanceof Error ? error.message : 'Saved-rig character import failed.',
+      )],
+    };
   }
 }
 
