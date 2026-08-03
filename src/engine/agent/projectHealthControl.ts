@@ -2,6 +2,7 @@
  * Agent API project health, recovery, and storage inspection.
  */
 
+import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import {
@@ -16,10 +17,9 @@ import {
   repairProjectHealth,
 } from '../projectHealth';
 import { pruneUnreferencedProjectAssets } from '../projectAssets';
-import { agentError } from './diagnostics';
-import type { AgentProjectHealthResult, AgentProjectRevisionSummary } from './protocol';
+import { agentError, writeAccessRequiredDiagnostic } from './diagnostics';
 
-export async function listAgentProjectRevisions(): Promise<AgentProjectRevisionSummary[]> {
+export async function listAgentProjectRevisions(): Promise<import('./protocol').AgentProjectRevisionSummary[]> {
   const projectId = useProjectStore.getState().project.id;
   const summaries = await listProjectRevisionSummaries(projectId);
   return summaries.map((summary) => ({
@@ -33,7 +33,7 @@ export async function listAgentProjectRevisions(): Promise<AgentProjectRevisionS
   }));
 }
 
-export async function inspectAgentProjectHealth(): Promise<AgentProjectHealthResult> {
+export async function inspectAgentProjectHealth(): Promise<import('./protocol').AgentProjectHealthResult> {
   const project = useProjectStore.getState().project;
   const report = await runProjectHealthCheck(project);
   return {
@@ -71,13 +71,41 @@ export async function inspectAgentBrowserStorage(): Promise<Record<string, unkno
 }
 
 export async function restoreAgentProjectRevision(input: { revisionId: string }) {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return {
+      ok: false,
+      diagnostics: [writeAccessRequiredDiagnostic('restoreProjectRevision')],
+    };
+  }
+
   const projectId = useProjectStore.getState().project.id;
+  const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+  if (!runDestructive) {
+    return {
+      ok: false,
+      diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')],
+    };
+  }
+
   try {
     const restored = await restoreProjectRevision(projectId, input.revisionId);
-    useProjectStore.getState().setProject(restored.project);
+    const verified = await runDestructive('Restore project revision', () => {
+      if (useProjectStore.getState().project.id !== projectId) {
+        throw new Error('The loaded project changed before revision restore could be committed.');
+      }
+      useProjectStore.setState((state) => ({
+        project: structuredClone(restored.project),
+        buildHistoryPast: [],
+        buildHistoryFuture: [],
+        buildHistoryBatchDepth: 0,
+        buildHistoryBatchCaptured: false,
+        buildHistoryCoalesceActive: false,
+        shotCameraFlying: state.workspace === 'shots',
+      }));
+    });
     return {
       ok: true,
-      revisionId: restored.revision.id,
+      revisionId: verified?.revision.id ?? restored.revision.id,
       diagnostics: [],
     };
   } catch (error) {
@@ -113,6 +141,10 @@ export async function compareAgentProjectRevisions(input: {
 }
 
 export async function cleanupAgentUnreferencedAssets() {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return { ok: false, diagnostics: [writeAccessRequiredDiagnostic('cleanupUnreferencedAssets')] };
+  }
+
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructive) {
     return { ok: false, diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')] };
@@ -137,6 +169,10 @@ export async function cleanupAgentUnreferencedAssets() {
 }
 
 export async function repairAgentProjectIntegrity() {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return { ok: false, diagnostics: [writeAccessRequiredDiagnostic('repairProjectIntegrity')] };
+  }
+
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructive) {
     return { ok: false, diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')] };
@@ -152,7 +188,7 @@ export async function repairAgentProjectIntegrity() {
   });
 
   return {
-    ok: repairedCount > 0 || true,
+    ok: true,
     repairedCount,
     revisionId: verified?.revision.id,
     diagnostics: [],

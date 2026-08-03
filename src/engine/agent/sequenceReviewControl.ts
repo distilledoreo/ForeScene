@@ -111,6 +111,23 @@ export async function reorderAgentShots(
     };
   }
 
+  const uniqueIds = new Set(input.shotIds);
+  if (uniqueIds.size !== input.shotIds.length) {
+    return {
+      ok: false,
+      diagnostics: [agentError('invalid_reorder', 'reorderShots shot id list contains duplicates.')],
+    };
+  }
+
+  const knownShotIds = new Set(project.shots.map((shot) => shot.id));
+  const unknownIds = input.shotIds.filter((id) => !knownShotIds.has(id));
+  if (unknownIds.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [agentError('invalid_reorder', 'Unknown shot ids: ' + unknownIds.join(', ') + '.')],
+    };
+  }
+
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructive) {
     return { ok: false, diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')] };
@@ -140,8 +157,11 @@ export function listAgentShotMedia(input: { shotId: string }): AgentShotMediaIte
   }));
 }
 
-export function compareAgentAdjacentShots(input: { shotId: string }): AgentSequenceContinuityDelta {
-  const project = useProjectStore.getState().project;
+export function compareAgentAdjacentShots(
+  input: { shotId: string },
+  projectOverride?: LocationProject,
+): AgentSequenceContinuityDelta {
+  const project = projectOverride ?? useProjectStore.getState().project;
   const index = project.shots.findIndex((candidate) => candidate.id === input.shotId);
   const shot = project.shots[index];
   const nextShot = index >= 0 ? project.shots[index + 1] : undefined;
@@ -163,6 +183,7 @@ export function compareAgentAdjacentShots(input: { shotId: string }): AgentSeque
 
   const lensA = shot.camera.fovDegrees ?? project.settings.defaultShotFovDegrees ?? 35;
   const lensB = nextShot.camera.fovDegrees ?? project.settings.defaultShotFovDegrees ?? 35;
+  const lensFovDeltaDegrees = lensB - lensA;
 
   const subjectSideReversal = Math.abs(delta) > 90;
 
@@ -170,7 +191,7 @@ export function compareAgentAdjacentShots(input: { shotId: string }): AgentSeque
     shotId: shot.id,
     nextShotId: nextShot.id,
     cameraDirectionDeltaDegrees: delta,
-    lensDeltaMm: lensB - lensA,
+    lensFovDeltaDegrees,
     subjectSideReversal,
     panoramaChanged: shot.linkedPanoId !== nextShot.linkedPanoId,
     stagingDelta: Object.keys(nextShot.objectOverrides ?? {}).length
@@ -186,5 +207,5 @@ export function inspectAgentSequenceContinuity(input: { shotIds: string[] }): Ag
 }
 
 export function buildContinuityReport(project: LocationProject, shotIds: string[]): AgentSequenceContinuityDelta[] {
-  return shotIds.map((shotId) => compareAgentAdjacentShots({ shotId }));
+  return shotIds.map((shotId) => compareAgentAdjacentShots({ shotId }, project));
 }

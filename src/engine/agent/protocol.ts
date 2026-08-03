@@ -900,6 +900,8 @@ export interface AgentSequenceContinuityDelta {
   nextShotId?: string;
   cameraDirectionDeltaDegrees?: number;
   lensDeltaMm?: number;
+  /** Focal-length field of view change between adjacent shots (degrees). */
+  lensFovDeltaDegrees?: number;
   subjectSideReversal?: boolean;
   panoramaChanged?: boolean;
   stagingDelta?: number;

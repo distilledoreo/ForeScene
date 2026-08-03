@@ -45,6 +45,7 @@ import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
+  notImplementedDiagnostic,
 } from './diagnostics';
 import {
   inspectObjectSnapshot,
@@ -162,7 +163,10 @@ import {
   resumeAgentJob,
   submitAgentJob,
   subscribeToAgentJobProgress,
+  waitForAgentJob,
 } from './jobQueue';
+import { frameAgentSubjectsBatch, renderAgentShotBatch } from './batchControl';
+import { setAgentRenderShotFrameImpl } from './renderCallbackRegistry';
 import {
   compareAgentAdjacentShots,
   duplicateAgentShot,
@@ -202,6 +206,7 @@ import {
 } from './setBlueprintControl';
 import {
   deleteAgentArtifact,
+  getAgentArtifactBlob,
   getAgentArtifactStatus,
   listAgentArtifacts,
   persistAgentArtifact,
@@ -1002,12 +1007,58 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return reorderAgentShots(input);
     },
 
-    captureShotThumbnail(input) {
-      return api.renderShotFrame({
+    async captureShotThumbnail(input) {
+      const blocked = refinementWriteDiagnostics('captureShotThumbnail');
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: blocked,
+        };
+      }
+
+      const rendered = await api.renderShotFrame({
         shotId: input.shotId,
         timeSeconds: input.timeSeconds,
         appearance: 'clay',
       });
+      if (!rendered.ok || !rendered.pngDataUrl) return rendered;
+
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      if (!runDestructive) {
+        return {
+          ...rendered,
+          ok: false,
+          status: 'failed',
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')],
+        };
+      }
+
+      try {
+        await runDestructive('Attach shot thumbnail', () => {
+          useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+            name: `shot_${input.shotId}_thumbnail.png`,
+            dataUrl: rendered.pngDataUrl!,
+            width: rendered.width,
+            height: rendered.height,
+          });
+        });
+        return rendered;
+      } catch (error) {
+        return {
+          ...rendered,
+          ok: false,
+          status: 'failed',
+          diagnostics: [agentError(
+            'thumbnail_attach_failed',
+            error instanceof Error ? error.message : 'Could not attach shot thumbnail.',
+          )],
+        };
+      }
     },
 
     listShotMedia(input) {
@@ -1023,25 +1074,107 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
 
     async renderStoryboard(input) {
-      const results = await api.renderShotBatch({ jobs: input.shotIds.map((shotId) => ({ shotId })) });
-      const first = results[0];
-      return first ?? {
-        ok: false,
-        status: 'failed',
-        diagnostics: [agentError('render_failed', 'No shots rendered.')],
+      const submitted = submitAgentJob({
+        type: 'render-shot-batch',
+        jobs: input.shotIds.map((shotId) => ({ shotId })),
+        concurrency: 1,
+        continueOnError: false,
+      });
+      if (!submitted.ok || !submitted.jobId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: submitted.diagnostics,
+        };
+      }
+
+      const progress = await waitForAgentJob(submitted.jobId);
+      const artifactIds = progress.artifactIds ?? [];
+      if (progress.status === 'failed' || progress.status === 'cancelled') {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: progress.errors ?? [agentError('render_failed', 'Storyboard render job failed.')],
+        };
+      }
+      if (artifactIds.length !== input.shotIds.length) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: [agentError(
+            'storyboard_incomplete',
+            `Expected ${input.shotIds.length} shot renders but received ${artifactIds.length}.`,
+          )],
+        };
+      }
+
+      const sheetSubmitted = submitAgentJob({
+        type: 'create-contact-sheets',
+        jobs: [artifactIds],
+      });
+      if (!sheetSubmitted.ok || !sheetSubmitted.jobId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: sheetSubmitted.diagnostics,
+        };
+      }
+
+      const sheetProgress = await waitForAgentJob(sheetSubmitted.jobId);
+      const storyboardArtifactId = sheetProgress.artifactIds?.[0];
+      const blob = storyboardArtifactId ? getAgentArtifactBlob(storyboardArtifactId) : undefined;
+      if (!blob || !storyboardArtifactId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: sheetProgress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: [agentError('storyboard_compose_failed', 'Storyboard contact sheet was not produced.')],
+        };
+      }
+
+      const dataUrl = await blobToDataUrlFromBlob(blob);
+      const artifact = buildInlineArtifact({ mimeType: 'image/png', dataUrl });
+      return {
+        ok: true,
+        status: sheetProgress.status === 'completed_with_warnings' ? 'completed_with_warnings' : 'completed',
+        shotId: input.shotIds[0] ?? '',
+        revisionId: sheetProgress.revisionId ?? progress.revisionId ?? '',
+        width: 0,
+        height: 0,
+        artifact,
+        pngDataUrl: dataUrl,
+        diagnostics: sheetProgress.errors ?? [],
       };
     },
 
     renderAnimaticPreview(input) {
-      const firstShotId = input.shotIds[0];
-      if (!firstShotId) {
-        return Promise.resolve({
-          ok: false,
-          status: 'failed' as const,
-          diagnostics: [agentError('shot_not_found', 'renderAnimaticPreview requires at least one shot id.')],
-        });
-      }
-      return renderAgentShotVideo({ shotId: firstShotId });
+      void input;
+      return Promise.resolve({
+        ok: false,
+        status: 'failed' as const,
+        shotId: input.shotIds[0] ?? '',
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        diagnostics: [notImplementedDiagnostic('renderAnimaticPreview')],
+      });
     },
 
     inspectCharacterPose(input) {
@@ -1162,19 +1295,19 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
 
     async frameSubjectsBatch(input) {
-      return Promise.all(input.shots.map((shotInput) => frameAgentSubjects(shotInput)));
+      return frameAgentSubjectsBatch(input.shots);
     },
 
     async renderShotBatch(input) {
-      return Promise.all(input.jobs.map((job) => api.renderShotFrame(job)));
+      return renderAgentShotBatch(input.jobs, 1);
     },
 
     renderPassMatrix(input) {
       return Promise.resolve(submitAgentJob({
         type: 'render-pass-matrix',
         shotIds: input.shotIds,
-        jobs: input.passes,
-        concurrency: input.concurrency,
+        passes: input.passes,
+        concurrency: input.concurrency ?? 1,
         continueOnError: true,
       }));
     },
@@ -1182,7 +1315,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     createContactSheets(input) {
       return Promise.resolve(submitAgentJob({
         type: 'create-contact-sheets',
-        jobs: input.artifactIds,
+        jobs: [input.artifactIds],
       }));
     },
 
@@ -1529,7 +1662,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             appearance: appearance === 'projected' ? 'projected' : 'clay',
             includeAttachedProps: true,
           });
-          pngDataUrl = await blobToDataUrl(frame.blob);
+          pngDataUrl = await blobToDataUrlFromBlob(frame.blob);
           renderedWidth = frame.width;
           renderedHeight = frame.height;
           source = 'canonical_character_renderer';
@@ -1671,6 +1804,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
   };
 
+  setAgentRenderShotFrameImpl((input) => api.renderShotFrame(input));
+
   return api;
 }
 
@@ -1697,7 +1832,7 @@ function waitAnimationFrames(count: number): Promise<void> {
   });
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
+function blobToDataUrlFromBlob(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));

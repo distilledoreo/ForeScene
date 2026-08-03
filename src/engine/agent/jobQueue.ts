@@ -1,16 +1,14 @@
 /**
  * Unified asynchronous job queue for Agent API batch operations.
- * Jobs checkpoint progress in memory and can resume after page restart when
- * backed by persisted revision snapshots.
+ * Items execute through registered handlers and report progress from settled work.
  */
 
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
-import { useProjectStore } from '../../state/useProjectStore';
 import { agentError } from './diagnostics';
+import { AGENT_JOB_HANDLERS, expandJobItems } from './jobHandlers';
 import type {
   AgentJobProgress,
   AgentJobStatus,
-  AgentJobType,
   AgentSubmitJobInput,
   AgentSubmitJobResult,
 } from './protocol';
@@ -52,16 +50,44 @@ function notify(job: StoredJob) {
   for (const listener of job.listeners) listener(snap);
 }
 
+function isTerminalStatus(status: AgentJobStatus): boolean {
+  return status === 'completed'
+    || status === 'completed_with_warnings'
+    || status === 'failed'
+    || status === 'cancelled';
+}
+
 async function runJob(job: StoredJob): Promise<void> {
   job.status = 'running';
   job.message = 'Job started.';
   notify(job);
 
-  const items = job.input.jobs ?? job.input.shotIds ?? [];
+  const items = expandJobItems({
+    type: job.type,
+    jobs: job.input.jobs,
+    shotIds: job.input.shotIds,
+    passes: job.input.passes,
+  });
   job.totalItems = items.length;
   const concurrency = Math.max(1, job.input.concurrency ?? 1);
   const continueOnError = job.input.continueOnError ?? true;
   const startIndex = job.resumeIndex;
+  const handler = AGENT_JOB_HANDLERS[job.type];
+
+  if (!handler) {
+    job.status = 'failed';
+    job.message = 'No handler registered for job type ' + job.type + '.';
+    job.errors = [agentError('job_handler_missing', job.message)];
+    notify(job);
+    return;
+  }
+
+  let settledCount = job.completedItems;
+  const artifactIds = [...(job.artifactIds ?? [])];
+  const registerArtifact = (artifactId: string) => {
+    if (!artifactIds.includes(artifactId)) artifactIds.push(artifactId);
+    job.artifactIds = [...artifactIds];
+  };
 
   const runItem = async (index: number, item: unknown) => {
     if (job.abortController?.signal.aborted) {
@@ -75,27 +101,29 @@ async function runJob(job: StoredJob): Promise<void> {
     job.message = 'Processing item ' + String(index + 1) + ' of ' + String(job.totalItems) + '.';
     notify(job);
 
+    const runHandler = () => handler(item, index, {
+      jobId: job.jobId,
+      revisionIdAtStart: job.revisionIdAtStart,
+      registerArtifact,
+    });
+
     try {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = job.input.timeoutMsPerItem;
-        const timer = timeout ? setTimeout(() => reject(new Error('Job item timed out.')), timeout) : undefined;
-        Promise.resolve()
-          .then(() => {
-            void item;
-          })
-          .then(() => {
-            if (timer) clearTimeout(timer);
-            resolve();
-          })
-          .catch((error) => {
-            if (timer) clearTimeout(timer);
-            reject(error);
-          });
-      });
-      job.completedItems = index + 1;
-      job.progress = job.totalItems > 0 ? job.completedItems / job.totalItems : 1;
-      job.resumeIndex = index + 1;
-      notify(job);
+      if (job.input.timeoutMsPerItem) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Job item timed out.')), job.input.timeoutMsPerItem);
+          runHandler()
+            .then(() => {
+              clearTimeout(timer);
+              resolve();
+            })
+            .catch((error) => {
+              clearTimeout(timer);
+              reject(error);
+            });
+        });
+      } else {
+        await runHandler();
+      }
     } catch (error) {
       const diagnostic = agentError(
         'job_item_failed',
@@ -105,20 +133,25 @@ async function runJob(job: StoredJob): Promise<void> {
       if (!continueOnError) {
         job.status = 'failed';
         job.message = diagnostic.message;
+        settledCount += 1;
+        job.completedItems = settledCount;
+        job.progress = job.totalItems > 0 ? settledCount / job.totalItems : 1;
+        job.resumeIndex = index + 1;
         notify(job);
         throw error;
       }
-      job.completedItems = index + 1;
-      job.progress = job.totalItems > 0 ? job.completedItems / job.totalItems : 1;
-      job.resumeIndex = index + 1;
-      notify(job);
     }
+
+    settledCount += 1;
+    job.completedItems = settledCount;
+    job.progress = job.totalItems > 0 ? settledCount / job.totalItems : 1;
+    job.resumeIndex = index + 1;
+    notify(job);
   };
 
   try {
-    const pending = items.slice(startIndex);
     let cursor = startIndex;
-    const workers = Array.from({ length: Math.min(concurrency, pending.length) }, async () => {
+    const workers = Array.from({ length: Math.min(concurrency, Math.max(1, items.length - startIndex)) }, async () => {
       while (cursor < items.length) {
         if (job.abortController?.signal.aborted) break;
         const index = cursor;
@@ -139,7 +172,7 @@ async function runJob(job: StoredJob): Promise<void> {
     notify(job);
   } catch {
     const status = job.status as AgentJobStatus;
-    if (status !== 'cancelled' && status !== 'failed') {
+    if (!isTerminalStatus(status)) {
       job.status = 'failed';
       notify(job);
     }
@@ -156,8 +189,13 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     };
   }
 
+  const items = expandJobItems({
+    type: input.type,
+    jobs: input.jobs,
+    shotIds: input.shotIds,
+    passes: input.passes,
+  });
   const jobId = nextJobId();
-  const items = input.jobs ?? input.shotIds ?? [];
   const job: StoredJob = {
     jobId,
     type: input.type,
@@ -171,6 +209,7 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     listeners: new Set(),
     resumeIndex: 0,
     abortController: new AbortController(),
+    artifactIds: [],
   };
   jobs.set(jobId, job);
 
@@ -226,6 +265,34 @@ export function subscribeToAgentJobProgress(
   job.listeners.add(listener);
   listener(snapshot(job));
   return () => job.listeners.delete(listener);
+}
+
+export function waitForAgentJob(
+  jobId: string,
+  options: { timeoutMs?: number } = {},
+): Promise<AgentJobProgress> {
+  const existing = getAgentJob(jobId);
+  if (existing && isTerminalStatus(existing.status)) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise((resolve, reject) => {
+    let unsub: (() => void) | undefined;
+    const timer = options.timeoutMs
+      ? setTimeout(() => {
+          unsub?.();
+          reject(new Error(`Job ${jobId} did not finish within ${options.timeoutMs}ms.`));
+        }, options.timeoutMs)
+      : undefined;
+
+    unsub = subscribeToAgentJobProgress(jobId, (progress) => {
+      if (isTerminalStatus(progress.status)) {
+        if (timer) clearTimeout(timer);
+        unsub?.();
+        resolve(progress);
+      }
+    });
+  });
 }
 
 export function resetAgentJobsForTests(): void {

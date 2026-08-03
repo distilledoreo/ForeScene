@@ -2,20 +2,77 @@
  * Agent API production manifest compiler endpoints.
  */
 
+import type { Workspace } from '../../domain/types';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
 import { compileProduction, plansForSceneSetup } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
-import { agentError } from './diagnostics';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
+import { agentError, agentWarning, writeAccessRequiredDiagnostic } from './diagnostics';
 import type {
   AgentProductionCompilePreviewResult,
   AgentProductionManifestValidateResult,
 } from './protocol';
-import { previewAgentPlan } from './planCompiler';
-import { applyAgentPlan } from './transaction';
+import { prepareAgentPlan, type PreparedAgentPlan } from './planCompiler';
+import { projectFingerprint } from './planDiff';
+import { commitPreparedPlanToStore } from './transaction';
+
+const manifestBindingsByProjectId = new Map<string, Record<string, string>>();
+
+function readLiveSource() {
+  const projectState = useProjectStore.getState();
+  return {
+    project: projectState.project,
+    workspace: projectState.workspace as Workspace,
+    selectedObjectIds: projectState.selectedObjectIds,
+    selectedShotId: projectState.selectedShotId,
+    activePanoId: projectState.activePanoId,
+    gridSnap: projectState.gridSnap,
+  };
+}
 
 function mapPrevisDiagnostics(items: Array<{ code: string; message: string; severity: string }>) {
-  return items.map((item) => agentError(item.code, item.message));
+  return items.map((item) => (
+    item.severity === 'warning' || item.severity === 'info'
+      ? agentWarning(item.code, item.message)
+      : agentError(item.code, item.message)
+  ));
+}
+
+function chainPreparePlans(
+  plans: unknown[],
+  source: ReturnType<typeof readLiveSource>,
+): { ok: true; lastPrepared: PreparedAgentPlan; commandCount: number } | { ok: false; diagnostics: import('./diagnostics').AgentDiagnostic[] } {
+  let chainSource = source;
+  let lastPrepared: PreparedAgentPlan | undefined;
+  let commandCount = 0;
+
+  for (const plan of plans) {
+    const prepared = prepareAgentPlan(plan, chainSource);
+    if (!prepared.ok) {
+      return { ok: false, diagnostics: prepared.diagnostics };
+    }
+    lastPrepared = prepared.prepared;
+    commandCount += prepared.prepared.summary.commandCount;
+    chainSource = {
+      ...chainSource,
+      project: prepared.prepared.nextProject,
+      workspace: prepared.prepared.nextSelection.workspace,
+      selectedObjectIds: prepared.prepared.nextSelection.selectedObjectIds,
+      selectedShotId: prepared.prepared.nextSelection.selectedShotId,
+      activePanoId: prepared.prepared.nextActivePanoId ?? chainSource.activePanoId,
+    };
+  }
+
+  if (!lastPrepared) {
+    return { ok: false, diagnostics: [agentError('compile_empty', 'Production compile produced no plans.')] };
+  }
+
+  return { ok: true, lastPrepared, commandCount };
+}
+
+export function resetAgentProductionManifestBindingsForTests(): void {
+  manifestBindingsByProjectId.clear();
 }
 
 export function validateAgentProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult {
@@ -58,11 +115,18 @@ export function bindAgentManifestAssets(input: {
     };
   }
 
+  const projectId = useProjectStore.getState().project.id;
+  manifestBindingsByProjectId.set(projectId, { ...input.bindings });
+
   return {
     ok: true,
     shotCount: parsed.manifest.shots.length,
-    diagnostics: [],
+    diagnostics: mapPrevisDiagnostics(parsed.warnings.filter((item) => item.severity === 'warning')),
   };
+}
+
+export function getAgentManifestBindings(projectId: string): Record<string, string> | undefined {
+  return manifestBindingsByProjectId.get(projectId);
 }
 
 export function previewAgentProductionCompile(input: { manifest: unknown }): AgentProductionCompilePreviewResult {
@@ -76,25 +140,15 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
 
   const result = compileProduction(parsed.manifest);
   const plans = plansForSceneSetup(result);
-  const projectState = useProjectStore.getState();
-  const source = {
-    project: projectState.project,
-    workspace: projectState.workspace,
-    selectedObjectIds: projectState.selectedObjectIds,
-    selectedShotId: projectState.selectedShotId,
-    activePanoId: projectState.activePanoId,
-    gridSnap: projectState.gridSnap,
-  };
-  let commandCount = 0;
-  for (const plan of plans) {
-    const preview = previewAgentPlan(plan, source);
-    commandCount += preview.summary?.commandCount ?? 0;
+  const chained = chainPreparePlans(plans, readLiveSource());
+  if (!chained.ok) {
+    return { ok: false, diagnostics: chained.diagnostics };
   }
 
   return {
     ok: result.ok,
     planCount: plans.length,
-    commandCount,
+    commandCount: chained.commandCount,
     diagnostics: mapPrevisDiagnostics(result.diagnostics.filter((item) => item.severity === 'error')),
   };
 }
@@ -106,7 +160,7 @@ export async function applyAgentProductionCompile(input: {
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
     return {
       ok: false,
-      diagnostics: [agentError('write_access_required', 'Write access is required for applyProductionCompile.')],
+      diagnostics: [writeAccessRequiredDiagnostic('applyProductionCompile')],
     };
   }
 
@@ -122,22 +176,56 @@ export async function applyAgentProductionCompile(input: {
 
   const result = compileProduction(parsed.manifest);
   const plans = plansForSceneSetup(result);
-  for (const plan of plans) {
-    const apply = await applyAgentPlan(plan);
-    if (!apply.ok) return apply;
+  const chained = chainPreparePlans(plans, readLiveSource());
+  if (!chained.ok) {
+    return { ok: false, diagnostics: chained.diagnostics };
   }
 
-  return {
-    ok: true,
-    diagnostics: mapPrevisDiagnostics(result.diagnostics.filter((item) => item.severity === 'warning')),
-  };
+  const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+  if (!runDestructive) {
+    return { ok: false, diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')] };
+  }
+
+  const baseFingerprint = projectFingerprint(readLiveSource().project);
+
+  try {
+    if (input.preserveCurrentAsRecovery) {
+      await runDestructive('Recovery snapshot before production compile', async () => {
+        // Snapshot only — compile commit follows.
+      });
+    }
+
+    const verified = await runDestructive('Apply production compile', () => {
+      const live = useProjectStore.getState().project;
+      if (projectFingerprint(live) !== baseFingerprint) {
+        throw new Error('Project changed before production compile could be committed.');
+      }
+      commitPreparedPlanToStore(chained.lastPrepared);
+    });
+
+    return {
+      ok: true,
+      revisionId: verified?.revision.id,
+      diagnostics: mapPrevisDiagnostics(result.diagnostics.filter((item) => item.severity === 'warning')),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostics: [agentError(
+        'compile_apply_failed',
+        error instanceof Error ? error.message : 'Production compile apply failed.',
+      )],
+    };
+  }
 }
 
 export function inspectAgentProductionStatus() {
   const project = useProjectStore.getState().project;
+  const bindings = manifestBindingsByProjectId.get(project.id);
   return {
-    manifestBound: false,
+    manifestBound: Boolean(bindings && Object.keys(bindings).length > 0),
     shotCount: project.shots.length,
+    bindingCount: bindings ? Object.keys(bindings).length : 0,
     diagnostics: [],
   };
 }

@@ -9,9 +9,11 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { touchProject } from '../../state/slices/touchProject';
 import { selectionBounds } from '../buildSelection';
-import { applyShotStagingPatch } from './spatialShotState';
+import { computeRigidGroupMemberTransforms, groupPivotFromObjects } from './groupTransform';
+import { applyShotStagingPatch, getEffectiveObject, getShotEffectiveState } from './spatialShotState';
 import {
   agentError,
+  agentInfo,
   agentWarning,
   writeAccessRequiredDiagnostic,
 } from './diagnostics';
@@ -23,7 +25,6 @@ import type {
   AgentShotDiagnostics,
 } from './protocol';
 import { deriveOperationOk, deriveOperationStatus } from './renderResult';
-import { getShotEffectiveState } from './spatialShotState';
 
 function objectGroups(project: LocationProject): Record<string, ObjectGroup> {
   return project.scene.objectGroups ?? {};
@@ -182,14 +183,39 @@ export async function stageAgentObjectGroup(input: {
     };
   }
 
+  const shotState = getShotEffectiveState(project, input.shotId);
+  if (!shotState) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: [agentError('shot_not_found', `No shot with id "${input.shotId}".`)],
+    };
+  }
+
+  const effectiveMembers = group.objectIds
+    .map((objectId) => getEffectiveObject(shotState, objectId))
+    .filter((member): member is SceneObject => Boolean(member));
+
   const verified = await runDestructive('Stage object group', () => {
     useProjectStore.setState((state) => {
       let nextProject = state.project;
-      for (const objectId of group.objectIds) {
-        const patch: { transform?: Transform; visible?: boolean } = {};
-        if (input.transform) patch.transform = input.transform;
-        if (input.visible !== undefined) patch.visible = input.visible;
-        nextProject = applyShotStagingPatch(nextProject, input.shotId, objectId, patch);
+      if (input.transform && effectiveMembers.length > 0) {
+        const pivot = groupPivotFromObjects(effectiveMembers);
+        const memberTransforms = computeRigidGroupMemberTransforms(
+          effectiveMembers,
+          pivot,
+          input.transform,
+        );
+        for (const objectId of group.objectIds) {
+          const transform = memberTransforms.get(objectId);
+          if (!transform) continue;
+          nextProject = applyShotStagingPatch(nextProject, input.shotId, objectId, { transform });
+        }
+      }
+      if (input.visible !== undefined) {
+        for (const objectId of group.objectIds) {
+          nextProject = applyShotStagingPatch(nextProject, input.shotId, objectId, { visible: input.visible });
+        }
       }
       return { project: touchProject(nextProject) };
     });
@@ -227,13 +253,27 @@ export function diagnoseAgentObjectGroup(input: {
   }
 
   const assemblyIds = group.objectIds;
+  const state = getShotEffectiveState(project, input.shotId);
+  const effectiveMembers = assemblyIds
+    .map((objectId) => getEffectiveObject(state!, objectId))
+    .filter((member): member is SceneObject => Boolean(member));
+
   const diagnostics = inspectAgentShotDiagnostics({
     project,
     shot,
     subjectIds: assemblyIds,
   });
 
-  const state = getShotEffectiveState(project, input.shotId);
+  if (effectiveMembers.length > 0) {
+    const box = selectionBounds(effectiveMembers);
+    diagnostics.diagnostics.push(agentInfo(
+      'assembly_bounds',
+      'Shot-effective assembly bounds min '
+        + box.min.x.toFixed(2) + ',' + box.min.y.toFixed(2) + ',' + box.min.z.toFixed(2)
+        + ' max '
+        + box.max.x.toFixed(2) + ',' + box.max.y.toFixed(2) + ',' + box.max.z.toFixed(2),
+    ));
+  }
   const presentIds = new Set(state?.objects.map((object) => object.id) ?? []);
   const missingMembers = assemblyIds.filter((id) => !presentIds.has(id));
   if (missingMembers.length > 0) {

@@ -13,7 +13,8 @@ import {
   validateProjectPackage as validateProjectPackageBlob,
   validateProjectFile,
 } from '../projectIO';
-import { loadProjectRevision } from '../projectSafety';
+import { loadProjectRevision, saveProjectRevision } from '../projectSafety';
+import { createId } from '../../utils/ids';
 import { awaitAgentNotBusy } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
@@ -202,11 +203,19 @@ export async function cloneAgentProjectRevision(
   try {
     const loaded = await loadProjectRevision(input.revisionId);
     const cloned = structuredClone(loaded.project);
+
     if (!input.loadAsCurrent) {
+      cloned.id = createId('project');
+      cloned.name = `${cloned.name} (clone)`;
+      const saved = await saveProjectRevision(cloned, {
+        kind: 'snapshot',
+        reason: `Cloned from revision ${input.revisionId}`,
+      });
       return {
         ok: true,
         status: 'completed',
         projectId: cloned.id,
+        revisionId: saved.revision.id,
         clonedFromRevisionId: input.revisionId,
         diagnostics: [],
       };

@@ -7,11 +7,12 @@ import {
   cloneHumanPose,
   createEmptyHumanPose,
   eulerDegreesToQuaternion,
+  isPoseableSceneObject,
   mirrorHumanPose,
   resetHumanJoint,
   HUMAN_POSE_EDITABLE_JOINT_IDS,
 } from '../humanPose';
-import { applyHumanPosePreset } from '../humanPosePresets';
+import { applyHumanPosePreset, getHumanPosePreset } from '../humanPosePresets';
 import { clampHumanJointEulerDegrees } from '../humanoidSkeleton';
 import { applyShotStagingPatch } from './spatialShotState';
 import { sampleShotTimeline } from '../shotTimeline';
@@ -28,6 +29,7 @@ import type {
   AgentPoseMutationResult,
 } from './protocol';
 import { deriveOperationOk, deriveOperationStatus } from './renderResult';
+import { upsertAgentObjectKeyframe } from './timelineHelpers';
 
 function resolvePoseContext(
   objectId: string,
@@ -60,6 +62,47 @@ function resolvePoseContext(
   }
 
   return { objectId, pose: object.humanPose };
+}
+
+function requirePoseableObject(objectId: string): { ok: true; object: import('../../domain/types').SceneObject } | { ok: false; result: AgentPoseMutationResult } {
+  const project = useProjectStore.getState().project;
+  const object = project.scene.objects.find((candidate) => candidate.id === objectId);
+  if (!object) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError('object_not_found', `No object with id "${objectId}".`)],
+      },
+    };
+  }
+  if (!isPoseableSceneObject(object)) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError('not_poseable', `Object "${objectId}" is not poseable.`)],
+      },
+    };
+  }
+  return { ok: true, object };
+}
+
+function requireShot(shotId: string): { ok: true } | { ok: false; result: AgentPoseMutationResult } {
+  const project = useProjectStore.getState().project;
+  if (!project.shots.some((candidate) => candidate.id === shotId)) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError('shot_not_found', `No shot with id "${shotId}".`)],
+      },
+    };
+  }
+  return { ok: true };
 }
 
 async function commitPoseMutation(
@@ -95,7 +138,6 @@ function applyPoseToContext(
   objectId: string,
   pose: HumanPose,
   shotId?: string,
-  timeSeconds?: number,
 ): void {
   useProjectStore.setState((state) => {
     if (shotId) {
@@ -107,6 +149,27 @@ function applyPoseToContext(
     ));
     return { project: touchProject({ ...state.project, scene: { ...state.project.scene, objects } }) };
   });
+}
+
+async function applyTimedPose(
+  objectId: string,
+  shotId: string,
+  timeSeconds: number,
+  pose: HumanPose,
+): Promise<AgentPoseMutationResult> {
+  const keyframeResult = await upsertAgentObjectKeyframe({
+    shotId,
+    objectId,
+    timeSeconds,
+    humanPose: pose,
+    preserveExplicitState: true,
+  });
+  return {
+    ok: keyframeResult.ok,
+    status: keyframeResult.status,
+    revisionId: keyframeResult.revisionId,
+    diagnostics: keyframeResult.diagnostics,
+  };
 }
 
 export function inspectAgentCharacterPose(input: {
@@ -134,6 +197,13 @@ export function inspectAgentCharacterPose(input: {
 export async function setAgentJointRotation(
   input: AgentJointRotationInput,
 ): Promise<AgentPoseMutationResult> {
+  const poseable = requirePoseableObject(input.objectId);
+  if (!poseable.ok) return poseable.result;
+  if (input.shotId) {
+    const shotCheck = requireShot(input.shotId);
+    if (!shotCheck.ok) return shotCheck.result;
+  }
+
   const ctx = resolvePoseContext(input.objectId, input.shotId, input.timeSeconds);
   if (!ctx) {
     return {
@@ -149,8 +219,12 @@ export async function setAgentJointRotation(
     rotation: eulerDegreesToQuaternion(clamped[0], clamped[1], clamped[2]),
   };
 
+  if (input.shotId !== undefined && input.timeSeconds !== undefined) {
+    return applyTimedPose(input.objectId, input.shotId, input.timeSeconds, base);
+  }
+
   return commitPoseMutation('Set joint rotation', () => {
-    applyPoseToContext(input.objectId, base, input.shotId, input.timeSeconds);
+    applyPoseToContext(input.objectId, base, input.shotId);
   });
 }
 
@@ -160,9 +234,27 @@ export async function applyAgentPosePreset(input: {
   shotId?: string;
   timeSeconds?: number;
 }): Promise<AgentPoseMutationResult> {
+  const poseable = requirePoseableObject(input.objectId);
+  if (!poseable.ok) return poseable.result;
+  if (input.shotId) {
+    const shotCheck = requireShot(input.shotId);
+    if (!shotCheck.ok) return shotCheck.result;
+  }
+  if (!getHumanPosePreset(input.presetId)) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: [agentError('preset_not_found', `No pose preset with id "${input.presetId}".`)],
+    };
+  }
+
   const pose = applyHumanPosePreset(input.presetId);
+  if (input.shotId !== undefined && input.timeSeconds !== undefined) {
+    return applyTimedPose(input.objectId, input.shotId, input.timeSeconds, pose);
+  }
+
   return commitPoseMutation('Apply pose preset', () => {
-    applyPoseToContext(input.objectId, pose, input.shotId, input.timeSeconds);
+    applyPoseToContext(input.objectId, pose, input.shotId);
   });
 }
 
@@ -171,6 +263,13 @@ export async function mirrorAgentPose(input: {
   shotId?: string;
   timeSeconds?: number;
 }): Promise<AgentPoseMutationResult> {
+  const poseable = requirePoseableObject(input.objectId);
+  if (!poseable.ok) return poseable.result;
+  if (input.shotId) {
+    const shotCheck = requireShot(input.shotId);
+    if (!shotCheck.ok) return shotCheck.result;
+  }
+
   const ctx = resolvePoseContext(input.objectId, input.shotId, input.timeSeconds);
   if (!ctx) {
     return {
@@ -180,8 +279,14 @@ export async function mirrorAgentPose(input: {
     };
   }
   const base = cloneHumanPose(ctx.pose) ?? createEmptyHumanPose();
+  const mirrored = mirrorHumanPose(base);
+
+  if (input.shotId !== undefined && input.timeSeconds !== undefined) {
+    return applyTimedPose(input.objectId, input.shotId, input.timeSeconds, mirrored);
+  }
+
   return commitPoseMutation('Mirror pose', () => {
-    applyPoseToContext(input.objectId, mirrorHumanPose(base), input.shotId, input.timeSeconds);
+    applyPoseToContext(input.objectId, mirrored, input.shotId);
   });
 }
 
@@ -191,6 +296,13 @@ export async function resetAgentJointPose(input: {
   shotId?: string;
   timeSeconds?: number;
 }): Promise<AgentPoseMutationResult> {
+  const poseable = requirePoseableObject(input.objectId);
+  if (!poseable.ok) return poseable.result;
+  if (input.shotId) {
+    const shotCheck = requireShot(input.shotId);
+    if (!shotCheck.ok) return shotCheck.result;
+  }
+
   const ctx = resolvePoseContext(input.objectId, input.shotId, input.timeSeconds);
   if (!ctx) {
     return {
@@ -201,8 +313,13 @@ export async function resetAgentJointPose(input: {
   }
   const base = cloneHumanPose(ctx.pose) ?? createEmptyHumanPose();
   const next = input.jointId ? resetHumanJoint(base, input.jointId) : createEmptyHumanPose();
+
+  if (input.shotId !== undefined && input.timeSeconds !== undefined) {
+    return applyTimedPose(input.objectId, input.shotId, input.timeSeconds, next);
+  }
+
   return commitPoseMutation('Reset joint pose', () => {
-    applyPoseToContext(input.objectId, next, input.shotId, input.timeSeconds);
+    applyPoseToContext(input.objectId, next, input.shotId);
   });
 }
 
@@ -212,6 +329,13 @@ export async function copyAgentPoseBetweenShots(input: {
   toShotId: string;
   timeSeconds?: number;
 }): Promise<AgentPoseMutationResult> {
+  const poseable = requirePoseableObject(input.objectId);
+  if (!poseable.ok) return poseable.result;
+  const toShotCheck = requireShot(input.toShotId);
+  if (!toShotCheck.ok) return toShotCheck.result;
+  const fromShotCheck = requireShot(input.fromShotId);
+  if (!fromShotCheck.ok) return fromShotCheck.result;
+
   const fromCtx = resolvePoseContext(input.objectId, input.fromShotId, input.timeSeconds);
   if (!fromCtx?.pose) {
     return {
@@ -221,8 +345,13 @@ export async function copyAgentPoseBetweenShots(input: {
     };
   }
   const pose = cloneHumanPose(fromCtx.pose)!;
+
+  if (input.timeSeconds !== undefined) {
+    return applyTimedPose(input.objectId, input.toShotId, input.timeSeconds, pose);
+  }
+
   return commitPoseMutation('Copy pose between shots', () => {
-    applyPoseToContext(input.objectId, pose, input.toShotId, input.timeSeconds);
+    applyPoseToContext(input.objectId, pose, input.toShotId);
   });
 }
 

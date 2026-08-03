@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultProject, createSceneObject, createShot } from '../src/domain/defaults';
-import type { LocationProject, ObjectGroup } from '../src/domain/types';
+import type { LocationProject, ObjectGroup, Transform } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
 import { inspectAgentShotDiagnostics } from '../src/engine/agent/shotDiagnostics';
 import { identifyFloorY } from '../src/engine/agent/spatialShotState';
@@ -8,6 +8,7 @@ import {
   createAgentObjectGroup,
   inspectAgentObjectGroup,
   listAgentObjectGroups,
+  stageAgentObjectGroup,
 } from '../src/engine/agent/objectGroupControl';
 import {
   getAgentLoadedProjectSource,
@@ -23,7 +24,21 @@ import {
   getAgentJob,
   cancelAgentJob,
   resetAgentJobsForTests,
+  waitForAgentJob,
 } from '../src/engine/agent/jobQueue';
+import {
+  bindAgentManifestAssets,
+  inspectAgentProductionStatus,
+  resetAgentProductionManifestBindingsForTests,
+} from '../src/engine/agent/productionManifestControl';
+import { restoreAgentProjectRevision } from '../src/engine/agent/projectHealthControl';
+import { setAgentJointRotation } from '../src/engine/agent/poseControl';
+import {
+  setAgentRenderShotFrameImpl,
+  resetAgentRenderShotFrameImplForTests,
+} from '../src/engine/agent/renderCallbackRegistry';
+import { buildInlineArtifact } from '../src/engine/agent/renderResult';
+import { projectFingerprint } from '../src/engine/agent/planDiff';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
 import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useProjectStore } from '../src/state/useProjectStore';
@@ -54,12 +69,16 @@ describe('agent API robustness', () => {
     installMockDestructiveMutation();
     resetAgentArtifactRegistryForTests();
     resetAgentJobsForTests();
+    resetAgentProductionManifestBindingsForTests();
+    resetAgentRenderShotFrameImplForTests();
   });
 
   afterEach(() => {
     useAgentControlStore.getState().setControlMode('off');
     resetAgentArtifactRegistryForTests();
     resetAgentJobsForTests();
+    resetAgentProductionManifestBindingsForTests();
+    resetAgentRenderShotFrameImplForTests();
   });
 
   it('reports missing diagnostic subjects instead of silently skipping them', () => {
@@ -132,11 +151,78 @@ describe('agent API robustness', () => {
     expect(listAgentObjectGroups().length).toBe(1);
   });
 
+  it('preserves pairwise member offsets when staging object groups', async () => {
+    const project = useProjectStore.getState().project;
+    const shotId = project.shots[0]!.id;
+    const a = createSceneObject('box', 1, [0, 0, 0]);
+    const b = createSceneObject('box', 1, [2, 0, 0]);
+    useProjectStore.setState({
+      project: {
+        ...project,
+        scene: { ...project.scene, objects: [...project.scene.objects, a, b] },
+      },
+    });
+
+    const created = await createAgentObjectGroup({ name: 'Pair', objectIds: [a.id, b.id] });
+    expect(created.ok).toBe(true);
+
+    const groupTransform: Transform = {
+      position: [5, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+    };
+    const staged = await stageAgentObjectGroup({
+      shotId,
+      groupId: created.groupId!,
+      transform: groupTransform,
+    });
+    expect(staged.ok).toBe(true);
+
+    const updated = useProjectStore.getState().project;
+    const shot = updated.shots.find((candidate) => candidate.id === shotId)!;
+    const overrideA = shot.objectOverrides?.[a.id]?.transform?.position;
+    const overrideB = shot.objectOverrides?.[b.id]?.transform?.position;
+    expect(overrideA).toBeTruthy();
+    expect(overrideB).toBeTruthy();
+    const offsetX = overrideB![0] - overrideA![0];
+    expect(offsetX).toBeCloseTo(2, 3);
+  });
+
   it('tracks loaded project source metadata', () => {
     markAgentProjectSource('import', 'demo.fsp');
     const source = getAgentLoadedProjectSource();
     expect(source.source).toBe('import');
     expect(source.sourceLabel).toBe('demo.fsp');
+  });
+
+  it('executes render-shot-batch jobs and registers artifacts', async () => {
+    setAgentRenderShotFrameImpl(async (input) => ({
+      ok: true,
+      status: 'completed',
+      shotId: input.shotId,
+      revisionId: 'rev_test',
+      width: 64,
+      height: 64,
+      artifact: buildInlineArtifact({
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      }),
+      pngDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      diagnostics: [],
+    }));
+
+    const submitted = submitAgentJob({
+      type: 'render-shot-batch',
+      jobs: [{ shotId: 'shot_a' }, { shotId: 'shot_b' }],
+      concurrency: 1,
+    });
+    expect(submitted.ok).toBe(true);
+
+    const progress = await waitForAgentJob(submitted.jobId!);
+    expect(progress.status).toBe('completed');
+    expect(progress.completedItems).toBe(2);
+    expect(progress.artifactIds?.length).toBe(2);
+    expect(listAgentArtifacts({ jobId: submitted.jobId }).length).toBe(2);
   });
 
   it('submits and cancels async jobs', () => {
@@ -155,6 +241,33 @@ describe('agent API robustness', () => {
     expect(cancelled.ok).toBe(true);
   });
 
+  it('produces pass-matrix artifacts for each shot and pass combination', async () => {
+    setAgentRenderShotFrameImpl(async (input) => ({
+      ok: true,
+      status: 'completed',
+      shotId: input.shotId,
+      revisionId: 'rev_test',
+      width: 32,
+      height: 32,
+      artifact: buildInlineArtifact({
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      }),
+      pngDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      diagnostics: [],
+    }));
+
+    const submitted = submitAgentJob({
+      type: 'render-pass-matrix',
+      shotIds: ['shot_1', 'shot_2'],
+      passes: ['clay', 'depth'],
+      concurrency: 2,
+    });
+    const progress = await waitForAgentJob(submitted.jobId!);
+    expect(progress.completedItems).toBe(4);
+    expect(progress.artifactIds?.length).toBe(4);
+  });
+
   it('lists registered artifacts with filters', () => {
     registerAgentArtifact({
       blob: new Blob(['test'], { type: 'image/png' }),
@@ -166,5 +279,62 @@ describe('agent API robustness', () => {
     const listed = listAgentArtifacts({ shotId: 'shot_1' });
     expect(listed.length).toBe(1);
     expect(listed[0]?.fileName).toBe('shot.png');
+  });
+
+  it('binds manifest assets and reports manifestBound status', () => {
+    const manifest = {
+      version: 1,
+      project: { name: 'Demo', aspectRatio: '16:9' },
+      cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
+      shots: [{
+        id: 'shot_1',
+        shotNumber: '001',
+        name: 'Hero shot',
+        description: 'Hero in room.',
+        locationId: 'loc',
+        subjects: ['hero'],
+        camera: { template: 'medium', subjects: ['hero'] },
+      }],
+    };
+    const bound = bindAgentManifestAssets({
+      manifest,
+      bindings: { hero: 'object_hero' },
+    });
+    expect(bound.ok).toBe(true);
+    const status = inspectAgentProductionStatus();
+    expect(status.manifestBound).toBe(true);
+    expect(status.bindingCount).toBe(1);
+  });
+
+  it('blocks restoreProjectRevision in read-only mode', async () => {
+    const before = projectFingerprint(useProjectStore.getState().project);
+    useAgentControlStore.getState().setControlMode('read-only');
+    const result = await restoreAgentProjectRevision({ revisionId: 'rev_fake' });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.some((item) => item.code === 'write_access_required')).toBe(true);
+    expect(projectFingerprint(useProjectStore.getState().project)).toBe(before);
+  });
+
+  it('creates pose keyframes when timeSeconds is supplied', async () => {
+    const project = useProjectStore.getState().project;
+    const shotId = project.shots[0]!.id;
+    const object = project.scene.objects.find((candidate) => candidate.type === 'human_dummy');
+    expect(object).toBeTruthy();
+
+    const result = await setAgentJointRotation({
+      objectId: object!.id,
+      shotId,
+      timeSeconds: 1.5,
+      jointId: 'rightLowerArm',
+      rotation: [10, 0, 0],
+    });
+    expect(result.ok).toBe(true);
+
+    const shot = useProjectStore.getState().project.shots.find((candidate) => candidate.id === shotId)!;
+    const keyframe = shot.cameraKeyframes?.find((candidate) => candidate.timeSeconds === 1.5);
+    expect(keyframe).toBeTruthy();
+    expect(keyframe?.objectOverrides?.[object!.id]?.humanPose?.joints.rightLowerArm).toBeTruthy();
+    expect(shot.objectOverrides?.[object!.id]?.humanPose).toBeUndefined();
   });
 });

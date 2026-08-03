@@ -167,13 +167,12 @@ export async function renderAgentGrayboxPanorama(
   const busy = await awaitAgentNotBusy();
   if (busy) return { ok: false, status: 'busy', diagnostics: busy };
 
-  if (input.origin) {
-    useProjectStore.getState().setPanoOrigin([...input.origin] as Vec3);
-  }
-
   try {
     let panoId: string | undefined;
     const commit = await commitMutation('Render graybox panorama', async () => {
+      if (input.origin) {
+        useProjectStore.getState().setPanoOrigin([...input.origin] as Vec3);
+      }
       const pano = await useProjectStore.getState().renderGrayboxPano();
       panoId = pano.id;
     });
@@ -200,6 +199,15 @@ export async function renderAgentGrayboxPanorama(
 export async function approveAgentPanoramaReference(input: { panoId: string }): Promise<AgentPanoramaReferenceResult> {
   const blocked = requireWrite('approvePanoramaReference');
   if (blocked) return blocked;
+
+  const project = useProjectStore.getState().project;
+  if (!project.panoRefs.some((candidate) => candidate.id === input.panoId)) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: [agentError('pano_not_found', `No panorama with id "${input.panoId}".`)],
+    };
+  }
 
   const commit = await commitMutation('Approve panorama reference', () => {
     useProjectStore.setState((state) => ({
@@ -228,6 +236,15 @@ export async function approveAgentPanoramaReference(input: { panoId: string }): 
 export async function acceptAgentReferenceAlignment(input: { panoId: string }): Promise<AgentPanoramaReferenceResult> {
   const blocked = requireWrite('acceptReferenceAlignment');
   if (blocked) return blocked;
+
+  const project = useProjectStore.getState().project;
+  if (!project.panoRefs.some((candidate) => candidate.id === input.panoId)) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: [agentError('pano_not_found', `No panorama with id "${input.panoId}".`)],
+    };
+  }
 
   const commit = await commitMutation('Accept reference alignment', () => {
     useProjectStore.setState((state) => ({
