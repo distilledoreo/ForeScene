@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Rapid Review Motion",
+    "description": "Single motion shot with control video requested — rapid-review must skip video and still succeed.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "room",
+      "name": "Interior Room",
+      "template": "interior_room",
+      "description": "Simple room for motion smoke"
+    }
+  ],
+  "cast": [
+    {
+      "id": "alex",
+      "name": "Alex",
+      "type": "human_dummy",
+      "height": 1.75,
+      "color": "#60a5fa",
+      "defaultPose": "standing-neutral"
+    }
+  ],
+  "shots": [
+    {
+      "id": "s010",
+      "shotNumber": "010",
+      "name": "Static wide",
+      "description": "Establishing still for rapid-review baseline.",
+      "locationId": "room",
+      "subjects": ["alex"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "standing-neutral"
+        }
+      ],
+      "camera": {
+        "template": "wide",
+        "subjects": ["alex"],
+        "angle": "front",
+        "lensClass": "wide"
+      },
+      "requirements": {
+        "visibleSubjects": ["alex"]
+      }
+    },
+    {
+      "id": "s020",
+      "shotNumber": "020",
+      "name": "Motion medium",
+      "description": "Camera move with control video requested — skipped in rapid-review.",
+      "locationId": "room",
+      "subjects": ["alex"],
+      "blocking": [
+        {
+          "subject": "alex",
+          "placement": { "type": "location_slot", "slot": "center" },
+          "pose": "standing-neutral"
+        }
+      ],
+      "camera": {
+        "template": "medium",
+        "subjects": ["alex"],
+        "angle": "front",
+        "lensClass": "normal"
+      },
+      "motion": {
+        "durationSeconds": 2,
+        "renderControlVideo": true,
+        "keyframes": [
+          { "timeSeconds": 0, "camera": { "position": [0, 1.6, 4], "target": [0, 1.4, 0] } },
+          { "timeSeconds": 2, "camera": { "position": [1.2, 1.6, 3.2], "target": [0, 1.4, 0] } }
+        ]
+      },
+      "requirements": {
+        "visibleSubjects": ["alex"]
+      }
+    }
+  ]
+}

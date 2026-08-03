@@ -31,3 +31,6 @@ export * from './framingProfiles';
 export * from './screenProjection';
 export * from './compositionTelemetry';
 export * from './repairSceneState';
+export * from './renderProfiles';
+export * from './productionRun';
+export * from './renderSession';

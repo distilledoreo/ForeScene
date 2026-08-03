@@ -35,6 +35,7 @@ import {
   isCanonicalFrame,
   isRepairableIssue,
   migrateRenderPipelineVersion,
+  migrateRenderProfileChange,
   parsePrevisProductionManifest,
   parseRunState,
   preflightContactSheet,
@@ -51,9 +52,20 @@ import {
   type PrevisRunState,
   type RemovedShotEntry,
   type ShotCompositionTelemetry,
+  type RenderProfile,
+  DELIVERY_PROFILE,
+  resolveRenderProfileForMode,
+  renderProfileFingerprint,
+  emptyProductionTiming,
+  ProductionTimeBudget,
+  ProductionTimeBudgetExceededError,
+  hasMissingControlVideos,
+  type ProductionRunTiming,
 } from '../../src/engine/previs/index';
+import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
+import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -71,6 +83,16 @@ export interface PrevisCliOptions {
   profileDir?: string;
   /** Explicitly authorize heavy/extreme character imports for this run. */
   allowHeavyCharacterImports?: boolean;
+  /** Production mode — rapid-review uses low-res frames and skips control videos. */
+  mode?: 'rapid-review' | 'delivery' | 'previs';
+  renderProfile?: RenderProfile;
+  renderProfileId?: string;
+  renderProfileFingerprint?: string;
+  runId?: string;
+  autoRepair?: boolean;
+  maxRepairPasses?: number;
+  timeBudgetSeconds?: number;
+  skipControlVideos?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -88,9 +110,15 @@ export interface PrevisCliResult {
   passed?: number;
   warnings?: number;
   failed?: number;
+  reviewRequiredShotIds?: string[];
   contactSheet?: string;
   package?: string;
+  artifactPaths?: string[];
   diagnostics?: unknown[];
+  timing?: ProductionRunTiming;
+  sourceRevisionId?: string;
+  resultRevisionId?: string;
+  budgetExceeded?: boolean;
   error?: string;
 }
 
@@ -145,7 +173,12 @@ async function renderCleanShotFrame(
   page: Page,
   shotId: string,
   framePath: string,
-  options?: { debugUiPath?: string },
+  options?: {
+    debugUiPath?: string;
+    profile?: RenderProfile;
+    renderSession?: PersistentRenderSession;
+    shotNumber?: string;
+  },
 ): Promise<{
   ok: boolean;
   width: number;
@@ -162,6 +195,25 @@ async function renderCleanShotFrame(
   error?: string;
   fromCanonicalRenderer: boolean;
 }> {
+  if (options?.renderSession) {
+    const result = await options.renderSession.renderShot({
+      shotId,
+      shotNumber: options.shotNumber ?? shotId,
+      framePath,
+      debugUiPath: options.debugUiPath,
+    });
+    return {
+      ok: result.ok,
+      width: result.width,
+      height: result.height,
+      pixelStats: result.pixelStats,
+      revisionId: result.revisionId,
+      error: result.error,
+      fromCanonicalRenderer: result.fromCanonicalRenderer,
+    };
+  }
+
+  const profile = options?.profile ?? DELIVERY_PROFILE;
   await page.evaluate(async (id) => {
     await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
     await window.foreScene!.applyPlan({
@@ -194,12 +246,24 @@ async function renderCleanShotFrame(
     await captureSceneScreenshot(page, options.debugUiPath).catch(() => undefined);
   }
 
-  const result = await page.evaluate(async (id) => {
+  const result = await page.evaluate(async (payload) => {
     return window.foreScene!.renderShotFrame({
-      shotId: id,
-      appearance: 'clay',
+      shotId: payload.shotId,
+      appearance: payload.appearance,
+      peopleVariant: payload.peopleVariant,
+      content: payload.content,
+      width: payload.width,
+      height: payload.height,
     });
-  }, shotId);
+  }, {
+    shotId,
+    appearance: profile.appearance,
+    peopleVariant: profile.peopleVariant,
+    content: profile.content,
+    ...(profile.overrideDimensions
+      ? { width: profile.width, height: profile.height }
+      : {}),
+  });
 
   if (!result.ok || !result.pngDataUrl) {
     if (options?.debugUiPath) {
@@ -563,14 +627,34 @@ function resolveMappingIds(
 }
 
 export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCliResult> {
+  const runStartedAt = Date.now();
   const outputDir = path.resolve(options.outputDir);
+  const mode = options.mode ?? 'previs';
+  const renderProfile = options.renderProfile ?? resolveRenderProfileForMode(mode);
+  const renderProfileFingerprintValue = options.renderProfileFingerprint
+    ?? renderProfileFingerprint(renderProfile);
+  const runId = options.runId ?? `previs_${Date.now().toString(36)}`;
+  const autoRepair = options.autoRepair ?? true;
+  const maxRepairPasses = options.maxRepairPasses ?? 3;
+  const skipControlVideos = options.skipControlVideos ?? !renderProfile.renderVideo;
+  const skipPackage = options.skipPackage ?? renderProfile.skipPackage;
+  const timeBudget = options.timeBudgetSeconds
+    ? new ProductionTimeBudget(options.timeBudgetSeconds, runStartedAt)
+    : undefined;
+  const timing = emptyProductionTiming();
+  let sourceRevisionId: string | undefined;
+  let resultRevisionId: string | undefined;
+  let repairMs = 0;
+
   await mkdir(outputDir, { recursive: true });
   await mkdir(path.join(outputDir, 'logs'), { recursive: true });
   await mkdir(path.join(outputDir, 'shots'), { recursive: true });
   await mkdir(path.join(outputDir, 'debug'), { recursive: true });
 
   const rawManifest = await readFile(path.resolve(options.manifestPath), 'utf8');
+  const validationStartedAt = Date.now();
   const parsed = parsePrevisProductionManifest(JSON.parse(rawManifest) as unknown);
+  timing.validationMs = Date.now() - validationStartedAt;
   if (!parsed.manifest || parsed.errors.length > 0) {
     return {
       ok: false,
@@ -650,6 +734,15 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     updateManifest: options.updateManifest,
   });
   let state = loaded.state;
+  const profileMigration = migrateRenderProfileChange(state, renderProfileFingerprintValue);
+  state = profileMigration.state;
+  state = {
+    ...state,
+    runId,
+    mode,
+    renderProfileId: renderProfile.id,
+    renderProfileFingerprint: renderProfileFingerprintValue,
+  };
   const runStatePath = path.join(outputDir, 'run-state.json');
 
   if (loaded.error && loaded.resumed && !loaded.updated) {
@@ -718,10 +811,17 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     profileDir: options.profileDir,
   });
 
+  let framesRendered = 0;
+  let controlVideosRendered = 0;
+  let controlVideosFailed = 0;
+
   try {
+    timeBudget?.assertWithinBudget('open_package');
     await waitForAgentIdle(session.page);
     const status = await session.page.evaluate(() => window.foreScene!.getStatus());
+    sourceRevisionId = status.revisionId;
 
+    const compilationStartedAt = Date.now();
     const savedRigPreflight = [] as Array<{
       id: string;
       source: string;
@@ -1204,116 +1304,147 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
     state = setPhase(state, 'shots', 'complete');
     await writeJson(runStatePath, state);
+    timing.compilationMs = Date.now() - compilationStartedAt;
 
+    timeBudget?.assertWithinBudget('render_review_frames');
+    const renderingStartedAt = Date.now();
     state = setPhase(state, 'render', 'in_progress');
     await openWorkspace(session.page, 'shots');
-    let framesRendered = 0;
+    const renderSession = await createPersistentRenderSession(
+      session.page,
+      renderProfile,
+      `${runId}_render`,
+    );
 
-    for (const definition of manifest.shots) {
-      const shotState = state.shots[definition.shotNumber];
-      if (!shotState || shotState.compile !== 'complete') continue;
-      // Never reuse frames unless provenance is explicitly canonical clay.
-      if (isCanonicalFrame(shotState) && shotState.framePath && await pathExists(shotState.framePath)) {
-        framesRendered += 1;
-        continue;
+    try {
+      const locationOrder = [...new Set(manifest.shots.map((shot) => shot.locationId))];
+      const pendingJobs: RenderSessionShotJob[] = [];
+
+      for (const definition of manifest.shots) {
+        const shotState = state.shots[definition.shotNumber];
+        if (!shotState || shotState.compile !== 'complete') continue;
+        if (isCanonicalFrame(shotState) && shotState.framePath && await pathExists(shotState.framePath)) {
+          framesRendered += 1;
+          continue;
+        }
+
+        const shotId = shotState.shotId
+          ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
+        if (!shotId) continue;
+
+        pendingJobs.push({
+          shotId,
+          shotNumber: definition.shotNumber,
+          locationId: definition.locationId,
+          framePath: path.join(outputDir, 'shots', `${definition.shotNumber}.png`),
+        });
       }
 
-      const framePath = path.join(outputDir, 'shots', `${definition.shotNumber}.png`);
-      const debugUiPath = path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`);
-      let renderAttempts = shotState.renderAttempts ?? shotState.attempts ?? 0;
-      let rendered = false;
-      let lastError: string | undefined;
-
-      while (renderAttempts < 2 && !rendered) {
-        renderAttempts += 1;
-        try {
-          const shotId = shotState.shotId
-            ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
-          if (!shotId) throw new Error(`No shot id for ${definition.shotNumber}`);
-
-          const frame = await renderCleanShotFrame(session.page, shotId, framePath, {
-            debugUiPath,
-          });
+      if (pendingJobs.length > 0) {
+        timeBudget?.assertWithinBudget('render_review_frames');
+        const batch = await renderSession.renderBatch(pendingJobs, { locationOrder });
+        for (const frame of batch.results) {
+          const shotState = state.shots[frame.shotNumber];
+          let renderAttempts = (shotState?.renderAttempts ?? shotState?.attempts ?? 0) + 1;
           if (!frame.ok) {
-            throw new Error(frame.error ?? 'Clean frame render failed');
+            state = upsertShotState(state, frame.shotNumber, {
+              render: 'failed',
+              renderSource: undefined,
+              pixelStats: undefined,
+              renderAttempts,
+              attempts: renderAttempts,
+              lastError: frame.error,
+            });
+            continue;
           }
           if (!frame.fromCanonicalRenderer) {
-            throw new Error('Frame was not produced by the canonical clay renderer.');
+            state = upsertShotState(state, frame.shotNumber, {
+              render: 'failed',
+              renderSource: undefined,
+              pixelStats: undefined,
+              renderAttempts,
+              attempts: renderAttempts,
+              lastError: 'Frame was not produced by the canonical renderer.',
+            });
+            continue;
           }
-          const info = await stat(framePath);
-          if (info.size < 32) throw new Error('Clean frame file too small');
-          rendered = true;
+          const info = await stat(frame.framePath).catch(() => undefined);
+          if (!info || info.size < 32) {
+            state = upsertShotState(state, frame.shotNumber, {
+              render: 'failed',
+              renderSource: undefined,
+              pixelStats: undefined,
+              renderAttempts,
+              attempts: renderAttempts,
+              lastError: 'Clean frame file too small',
+            });
+            continue;
+          }
           framesRendered += 1;
-          state = upsertShotState(state, definition.shotNumber, {
+          state = upsertShotState(state, frame.shotNumber, {
             render: 'complete',
-            framePath,
+            framePath: frame.framePath,
             renderSource: 'canonical_clay_renderer',
             pixelStats: frame.pixelStats,
             renderAttempts,
             attempts: renderAttempts,
           });
-        } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-          state = upsertShotState(state, definition.shotNumber, {
-            render: 'failed',
-            renderSource: undefined,
-            pixelStats: undefined,
-            renderAttempts,
-            attempts: renderAttempts,
-            lastError,
-          });
+        }
+        await writeJson(runStatePath, state);
+      }
+
+      controlVideosRendered = 0;
+      controlVideosFailed = 0;
+      if (!skipControlVideos) {
+        for (const definition of manifest.shots) {
+          if (!definition.motion?.renderControlVideo) continue;
+          const shotState = state.shots[definition.shotNumber];
+          if (!shotState || shotState.compile !== 'complete') continue;
+          const videoPath = path.join(outputDir, 'shots', `${definition.shotNumber}.mp4`);
+          if (shotState.video === 'complete' && shotState.videoPath && await pathExists(shotState.videoPath)) {
+            controlVideosRendered += 1;
+            continue;
+          }
+          const shotId = shotState.shotId
+            ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
+          if (!shotId) {
+            controlVideosFailed += 1;
+            state = upsertShotState(state, definition.shotNumber, {
+              video: 'failed',
+              videoPath: undefined,
+              lastError: `No shot id for ${definition.shotNumber}`,
+            });
+            await writeJson(runStatePath, state);
+            continue;
+          }
+          try {
+            const video = await renderControlVideo(session.page, shotId, videoPath);
+            await writeJson(path.join(outputDir, 'logs', `video-${definition.shotNumber}.json`), video);
+            if (!video.ok) throw new Error(video.error ?? 'Control video render failed.');
+            controlVideosRendered += 1;
+            state = upsertShotState(state, definition.shotNumber, {
+              video: 'complete',
+              videoPath,
+              videoAssetId: video.assetId,
+            });
+          } catch (error) {
+            controlVideosFailed += 1;
+            state = upsertShotState(state, definition.shotNumber, {
+              video: 'failed',
+              videoPath: undefined,
+              lastError: error instanceof Error ? error.message : String(error),
+            });
+          }
+          await writeJson(runStatePath, state);
         }
       }
+      timing.renderingMs = Date.now() - renderingStartedAt;
+      state = setPhase(state, 'render', 'complete');
       await writeJson(runStatePath, state);
-    }
 
-    let controlVideosRendered = 0;
-    let controlVideosFailed = 0;
-    for (const definition of manifest.shots) {
-      if (!definition.motion?.renderControlVideo) continue;
-      const shotState = state.shots[definition.shotNumber];
-      if (!shotState || shotState.compile !== 'complete') continue;
-      const videoPath = path.join(outputDir, 'shots', `${definition.shotNumber}.mp4`);
-      if (shotState.video === 'complete' && shotState.videoPath && await pathExists(shotState.videoPath)) {
-        controlVideosRendered += 1;
-        continue;
-      }
-      const shotId = shotState.shotId
-        ?? liveShots.find((shot) => shot.shotNumber === definition.shotNumber)?.id;
-      if (!shotId) {
-        controlVideosFailed += 1;
-        state = upsertShotState(state, definition.shotNumber, {
-          video: 'failed',
-          videoPath: undefined,
-          lastError: `No shot id for ${definition.shotNumber}`,
-        });
-        await writeJson(runStatePath, state);
-        continue;
-      }
-      try {
-        const video = await renderControlVideo(session.page, shotId, videoPath);
-        await writeJson(path.join(outputDir, 'logs', `video-${definition.shotNumber}.json`), video);
-        if (!video.ok) throw new Error(video.error ?? 'Control video render failed.');
-        controlVideosRendered += 1;
-        state = upsertShotState(state, definition.shotNumber, {
-          video: 'complete',
-          videoPath,
-          videoAssetId: video.assetId,
-        });
-      } catch (error) {
-        controlVideosFailed += 1;
-        state = upsertShotState(state, definition.shotNumber, {
-          video: 'failed',
-          videoPath: undefined,
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-      }
-      await writeJson(runStatePath, state);
-    }
-    state = setPhase(state, 'render', 'complete');
-    await writeJson(runStatePath, state);
-
-    state = setPhase(state, 'validation', 'in_progress');
+      timeBudget?.assertWithinBudget('structural_diagnostics');
+      const validationStartedAt = Date.now();
+      state = setPhase(state, 'validation', 'in_progress');
     let project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
     const names = subjectNameMap(manifest);
     const validationResults: FrameValidationResult[] = [];
@@ -1380,9 +1511,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
       let repairAttempts = shotState?.repairAttempts ?? 0;
       while (
-        finalResult.status !== 'passed'
+        autoRepair
+        && finalResult.status !== 'passed'
         && finalResult.issues.some((issue) => isRepairableIssue(issue.code))
-        && repairAttempts < 3
+        && repairAttempts < maxRepairPasses
         && shotState?.shotId
       ) {
         // Always re-read live project so objectOverrides match current staging.
@@ -1423,6 +1555,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
 
         repairAttempts += 1;
+        const repairStartedAt = Date.now();
         await applyPlanOnPage(session.page, {
           version: 1,
           planId: `repair-${definition.shotNumber}-${repairAttempts}`,
@@ -1435,9 +1568,14 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           session.page,
           shotState.shotId,
           framePath,
-          { debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`) },
+          {
+            debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
+            renderSession,
+            shotNumber: definition.shotNumber,
+          },
         );
         if (!reframe.ok || !reframe.fromCanonicalRenderer) {
+          repairMs += Date.now() - repairStartedAt;
           finalResult = {
             ...finalResult,
             status: 'failed',
@@ -1448,6 +1586,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           };
           break;
         }
+        repairMs += Date.now() - repairStartedAt;
 
         state = upsertShotState(state, definition.shotNumber, {
           render: 'complete',
@@ -1489,7 +1628,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           fromCanonicalRenderer: true,
           pixelStats: reframe.pixelStats,
         });
-        if (finalResult.status !== 'passed' && repairAttempts >= 3) {
+        if (finalResult.status !== 'passed' && repairAttempts >= maxRepairPasses) {
           finalResult = {
             ...finalResult,
             status: finalResult.status === 'failed' ? 'needs_review' : finalResult.status,
@@ -1525,6 +1664,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     state = setPhase(state, 'validation', 'complete');
     await writeJson(runStatePath, state);
 
+    timeBudget?.assertWithinBudget('create_review_sheets');
     state = setPhase(state, 'contactSheet', 'in_progress');
     const sheetEntries = manifest.shots.map((shot) => {
       const shotState = state.shots[shot.shotNumber];
@@ -1589,7 +1729,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
     let packagePath: string | undefined;
     let packageFailed = false;
-    if (!options.skipPackage) {
+    if (!skipPackage && !timeBudget?.isExpired()) {
+      timeBudget?.assertWithinBudget('finalize');
       state = setPhase(state, 'package', 'in_progress');
       const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 });
       const pack = await session.page.evaluate(async () => {
@@ -1607,9 +1748,34 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         state = setPhase(state, 'package', 'failed');
       }
       await writeJson(runStatePath, state);
+    } else if (!skipPackage && timeBudget?.isExpired()) {
+      state = setPhase(state, 'package', 'skipped');
+      await writeJson(runStatePath, state);
     } else {
       state = setPhase(state, 'package', 'skipped');
     }
+
+    timing.repairMs = repairMs;
+    timing.reviewMs = Date.now() - validationStartedAt;
+    timing.totalMs = Date.now() - runStartedAt;
+
+    const reviewRequiredShotIds = validationResults
+      .filter((item) => (
+        item.status === 'warning'
+        || item.status === 'failed'
+        || item.status === 'needs_review'
+      ))
+      .map((item) => item.shotNumber);
+
+    const artifactPaths = [
+      contactSheetPath,
+      htmlPath,
+      packagePath,
+      path.join(outputDir, 'validation.json'),
+    ].filter((value): value is string => Boolean(value));
+
+    const endStatus = await session.page.evaluate(() => window.foreScene!.getStatus());
+    resultRevisionId = renderSession.toDescriptor().revisionId ?? endStatus.revisionId;
 
     const passed = validationResults.filter((item) => item.status === 'passed').length;
     const warnings = validationResults.filter((item) => (
@@ -1620,10 +1786,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const shotState = state.shots[shot.shotNumber];
       return shotState?.compile === 'complete' && shotState.render !== 'complete';
     });
-    const missingControlVideos = manifest.shots.some((shot) => {
-      if (!shot.motion?.renderControlVideo) return false;
-      const shotState = state.shots[shot.shotNumber];
-      return shotState?.compile === 'complete' && shotState.video !== 'complete';
+    const missingControlVideos = hasMissingControlVideos({
+      shots: manifest.shots,
+      shotStates: state.shots,
+      skipControlVideos,
     });
 
     const summary: PrevisCliResult = {
@@ -1638,16 +1804,52 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       passed,
       warnings,
       failed,
+      reviewRequiredShotIds,
       contactSheet: contactSheetPath,
       package: packagePath,
+      artifactPaths,
       manifestHash,
       runStatePath,
+      phase: 'complete',
+      timing,
+      sourceRevisionId,
+      resultRevisionId,
       ...(packageFailed ? { error: 'Package export failed.' } : {}),
     };
-    await writeJson(path.join(outputDir, 'summary.json'), summary);
+    await writeJson(path.join(outputDir, 'summary.json'), {
+      ...summary,
+      runId,
+      mode,
+      renderProfileId: renderProfile.id,
+      renderProfileFingerprint: renderProfileFingerprintValue,
+    });
     state = touchRunState(state);
     await writeJson(runStatePath, state);
     return summary;
+    } finally {
+      const descriptor = await renderSession.close();
+      await writeJson(path.join(outputDir, 'render-session.json'), descriptor);
+    }
+  } catch (error) {
+    timing.totalMs = Date.now() - runStartedAt;
+    if (error instanceof ProductionTimeBudgetExceededError) {
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        budgetExceeded: true,
+        phase: error.phase,
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        framesRendered,
+        controlVideosRendered,
+        controlVideosFailed,
+        timing,
+        sourceRevisionId,
+        error: error.message,
+      };
+    }
+    throw error;
   } finally {
     await session.close();
   }

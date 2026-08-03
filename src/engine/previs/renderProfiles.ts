@@ -1,0 +1,154 @@
+/**
+ * Render profiles for production runs — resolution, appearance, and pass policy.
+ */
+
+export const RENDER_PROFILE_VERSION = 1;
+
+export type RenderProfileId = 'rapid-review' | 'delivery' | 'control-video';
+
+export type RenderAppearance = 'clay' | 'projected' | 'depth';
+export type RenderPeopleVariant = 'with_people' | 'clean_plate';
+export type RenderContentMode = 'full_scene' | 'characters_only';
+export type RenderSampling = 'single' | 'adaptive';
+export type RenderQuality = 'draft' | 'standard' | 'final';
+
+export interface RenderProfile {
+  id: RenderProfileId;
+  version: number;
+  width: number;
+  height: number;
+  appearance: RenderAppearance;
+  /** When primary appearance cannot be produced, fall back to this pass. */
+  fallbackAppearance?: RenderAppearance;
+  peopleVariant?: RenderPeopleVariant;
+  content?: RenderContentMode;
+  /** Single frame per static shot today; adaptive sampling reserved for a later milestone. */
+  staticSampling: RenderSampling;
+  /** Event-aware motion sampling reserved — currently behaves like staticSampling. */
+  motionSampling: RenderSampling;
+  /** Draft/standard/final tiers reserved — not passed to the renderer yet. */
+  antialiasing: RenderQuality;
+  /** See antialiasing — not passed to the renderer yet. */
+  shadows: RenderQuality;
+  /** Reserved — depth pass planning deferred. */
+  renderDepth: boolean;
+  /** Reserved — clean-plate pass planning deferred. */
+  renderCleanPlate: boolean;
+  /** Reserved — characters-only pass planning deferred. */
+  renderCharactersOnly: boolean;
+  renderVideo: boolean;
+  /** Skip final package export during rapid review. */
+  skipPackage: boolean;
+  /** When false, render at each shot's export resolution instead of width/height. */
+  overrideDimensions: boolean;
+}
+
+/** Review-quality first pass — low resolution, single clay frame, no video export. */
+export const RAPID_REVIEW_PROFILE: RenderProfile = {
+  id: 'rapid-review',
+  version: RENDER_PROFILE_VERSION,
+  width: 640,
+  height: 360,
+  appearance: 'clay',
+  fallbackAppearance: 'clay',
+  peopleVariant: 'with_people',
+  content: 'full_scene',
+  staticSampling: 'single',
+  motionSampling: 'adaptive',
+  antialiasing: 'draft',
+  shadows: 'draft',
+  renderDepth: false,
+  renderCleanPlate: false,
+  renderCharactersOnly: false,
+  renderVideo: false,
+  skipPackage: true,
+  overrideDimensions: true,
+};
+
+/** Full delivery profile — shot export resolution, control videos when requested. */
+export const DELIVERY_PROFILE: RenderProfile = {
+  id: 'delivery',
+  version: RENDER_PROFILE_VERSION,
+  width: 1920,
+  height: 1080,
+  appearance: 'clay',
+  peopleVariant: 'with_people',
+  content: 'full_scene',
+  staticSampling: 'single',
+  motionSampling: 'single',
+  antialiasing: 'standard',
+  shadows: 'standard',
+  renderDepth: false,
+  renderCleanPlate: false,
+  renderCharactersOnly: false,
+  renderVideo: true,
+  skipPackage: false,
+  overrideDimensions: false,
+};
+
+/** Control-video only pass at 1080p clay. */
+export const CONTROL_VIDEO_PROFILE: RenderProfile = {
+  id: 'control-video',
+  version: RENDER_PROFILE_VERSION,
+  width: 1920,
+  height: 1080,
+  appearance: 'clay',
+  peopleVariant: 'with_people',
+  content: 'full_scene',
+  staticSampling: 'single',
+  motionSampling: 'single',
+  antialiasing: 'standard',
+  shadows: 'standard',
+  renderDepth: false,
+  renderCleanPlate: false,
+  renderCharactersOnly: false,
+  renderVideo: true,
+  skipPackage: false,
+  overrideDimensions: false,
+};
+
+const PROFILE_REGISTRY: Record<RenderProfileId, RenderProfile> = {
+  'rapid-review': RAPID_REVIEW_PROFILE,
+  delivery: DELIVERY_PROFILE,
+  'control-video': CONTROL_VIDEO_PROFILE,
+};
+
+export function getRenderProfile(id: RenderProfileId): RenderProfile {
+  return PROFILE_REGISTRY[id];
+}
+
+export function resolveRenderProfileForMode(mode: ProductionMode): RenderProfile {
+  switch (mode) {
+    case 'rapid-review':
+      return RAPID_REVIEW_PROFILE;
+    case 'delivery':
+    case 'previs':
+      return DELIVERY_PROFILE;
+    default:
+      return RAPID_REVIEW_PROFILE;
+  }
+}
+
+export type ProductionMode = 'rapid-review' | 'delivery' | 'previs';
+
+export function renderProfileFingerprint(profile: RenderProfile): string {
+  return [
+    profile.id,
+    profile.version,
+    profile.width,
+    profile.height,
+    profile.appearance,
+    profile.fallbackAppearance ?? '',
+    profile.peopleVariant ?? '',
+    profile.content ?? '',
+    profile.staticSampling,
+    profile.motionSampling,
+    profile.antialiasing,
+    profile.shadows,
+    profile.renderDepth ? '1' : '0',
+    profile.renderCleanPlate ? '1' : '0',
+    profile.renderCharactersOnly ? '1' : '0',
+    profile.renderVideo ? '1' : '0',
+    profile.overrideDimensions ? '1' : '0',
+  ].join('|');
+}

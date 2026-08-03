@@ -18,6 +18,7 @@
  *   npm run agent:verify-package -- --plan artifacts/preflight/deliverables-plan.json --package artifacts/package.zip
  *   npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 --write --output artifacts/refinement
  *   npm run agent:previs -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --output artifacts/previs
+ *   npm run agent:production -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --mode rapid-review
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
  *
@@ -32,6 +33,7 @@ import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { runContactSheetCli, runPrevisCli, runRenderStillsCli } from './previs';
+import { runProduction } from './production';
 import {
   createProxyReplacementPlan,
   verifyProxyReplacement,
@@ -90,6 +92,11 @@ function parseArgs(argv: string[]) {
     rollbackBatch: undefined as string | undefined,
     finalize: false,
     json: false,
+    mode: undefined as string | undefined,
+    autoRepair: true,
+    noAutoRepair: false,
+    maxRepairPasses: undefined as number | undefined,
+    timeBudgetSeconds: undefined as number | undefined,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -185,6 +192,23 @@ function parseArgs(argv: string[]) {
       args.noAttach = true;
     } else if (token === '--no-download') {
       args.noDownload = true;
+    } else if (token === '--mode') {
+      args.mode = argv[++index];
+    } else if (token === '--no-auto-repair') {
+      args.noAutoRepair = true;
+      args.autoRepair = false;
+    } else if (token === '--max-repair-passes') {
+      const value = Number(argv[++index]);
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error('--max-repair-passes must be a non-negative number');
+      }
+      args.maxRepairPasses = value;
+    } else if (token === '--time-budget') {
+      const value = Number(argv[++index]);
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error('--time-budget must be a positive number');
+      }
+      args.timeBudgetSeconds = value;
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }
@@ -1058,7 +1082,7 @@ async function main() {
       printJson({
         commands: [
           'inspect', 'preview', 'apply', 'screenshot', 'frame', 'video', 'package',
-          'verify', 'run', 'previs', 'render-stills', 'contact-sheet', 'help',
+          'verify', 'run', 'previs', 'production', 'render-stills', 'contact-sheet', 'help',
         ],
         discovery: {
           describeCapabilities: 'window.foreScene.describeCapabilities()',
@@ -1256,6 +1280,37 @@ async function main() {
       output: args.output,
       shotIds: args.shotIds,
     });
+    return;
+  }
+
+  if (args.command === 'production') {
+    if (!args.manifest) throw new Error('--manifest is required for production');
+    if (args.resetProject) {
+      requireExplicitWrite('production --reset-project', args.writeAccess);
+    }
+    const mode = args.mode === 'delivery' || args.mode === 'previs'
+      ? args.mode
+      : 'rapid-review';
+    const result = await runProduction({
+      manifestPath: args.manifest,
+      url: args.url,
+      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      resetProject: args.resetProject,
+      updateManifest: args.updateManifest,
+      initializeOnly: args.initializeOnly,
+      outputDir: args.output ?? 'artifacts/production',
+      skipPackage: args.skipPackage,
+      profileDir: args.profile,
+      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      mode,
+      autoRepair: args.autoRepair,
+      maxRepairPasses: args.maxRepairPasses,
+      timeBudgetSeconds: args.timeBudgetSeconds,
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 

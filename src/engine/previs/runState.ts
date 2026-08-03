@@ -4,6 +4,8 @@
  */
 
 import type { PrevisProductionManifestV1 } from './manifest';
+import type { ProductionMode } from './renderProfiles';
+import type { RenderProfileId } from './renderProfiles';
 export { hashPrevisManifest } from './manifestHash';
 
 export type PrevisPhaseStatus = 'pending' | 'in_progress' | 'complete' | 'failed' | 'skipped';
@@ -75,6 +77,14 @@ export interface PrevisRunState {
    * compile is complete (prevents UI screenshots masquerading as clay frames).
    */
   renderPipelineVersion?: number;
+  /** Production-run identifier for reporting and artifact linkage. */
+  runId?: string;
+  /** Production mode used for this run (rapid-review, delivery, previs). */
+  mode?: ProductionMode;
+  /** Active render profile for frame artifacts. */
+  renderProfileId?: RenderProfileId;
+  /** Fingerprint of the active render profile — invalidates frames on change. */
+  renderProfileFingerprint?: string;
   manifestHash: string;
   projectId?: string;
   revisionId?: string;
@@ -182,6 +192,48 @@ export function migrateRenderPipelineVersion(state: PrevisRunState): {
   next = touchRunState(next);
 
   return { state: next, invalidated: true, previousVersion };
+}
+
+/**
+ * When the render profile changes, invalidate rendered frames while preserving compile.
+ */
+export function migrateRenderProfileChange(
+  state: PrevisRunState,
+  nextFingerprint: string,
+): { state: PrevisRunState; invalidated: boolean; previousFingerprint?: string } {
+  const previousFingerprint = state.renderProfileFingerprint;
+  if (previousFingerprint === nextFingerprint) {
+    return { state, invalidated: false, previousFingerprint };
+  }
+
+  let next: PrevisRunState = {
+    ...state,
+    renderProfileFingerprint: nextFingerprint,
+  };
+
+  for (const shotNumber of Object.keys(next.shots)) {
+    const shot = next.shots[shotNumber]!;
+    if (shot.render === 'complete' || shot.framePath || shot.renderSource) {
+      next = upsertShotState(next, shotNumber, {
+        render: 'pending',
+        validation: 'pending',
+        framePath: undefined,
+        renderSource: undefined,
+        pixelStats: undefined,
+        renderAttempts: 0,
+        attempts: 0,
+        issues: undefined,
+        lastError: undefined,
+      });
+    }
+  }
+
+  next = setPhase(next, 'render', 'pending');
+  next = setPhase(next, 'validation', 'pending');
+  next = setPhase(next, 'contactSheet', 'pending');
+  next = setPhase(next, 'package', 'pending');
+
+  return { state: next, invalidated: true, previousFingerprint };
 }
 
 /** True only when provenance is explicitly the canonical clay renderer. */

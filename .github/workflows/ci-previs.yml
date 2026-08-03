@@ -21,6 +21,8 @@ on:
       - 'tests/previs*.ts'
       - 'e2e/previs-imported-character.spec.ts'
       - 'e2e/previs-saved-rig-character.spec.ts'
+      - 'e2e/production-rapid-review.spec.ts'
+      - 'tests/productionRun.test.ts'
       - 'tests/fixtures/**'
       - 'docs/previs-production-manifest.md'
       - '.grok/skills/forescene-previs/references/**'
@@ -44,7 +46,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx vitest run tests/previsProduction.test.ts tests/previsComposition.test.ts tests/previsReset.test.ts
+      - run: npx vitest run tests/previsProduction.test.ts tests/previsComposition.test.ts tests/previsReset.test.ts tests/productionRun.test.ts
 
   previs-smoke:
     name: Four-shot previs smoke
@@ -120,6 +122,32 @@ jobs:
         if: always()
         run: |
           if [ -f preview.pid ]; then kill "$(cat preview.pid)" || true; fi
+
+  production-rapid-review:
+    name: Production rapid-review E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Run production rapid-review E2E
+        run: npx playwright test e2e/production-rapid-review.spec.ts --project=desktop-chromium
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: production-rapid-review-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
 
   previs-imported-character:
     name: Imported-character Chromium E2E
