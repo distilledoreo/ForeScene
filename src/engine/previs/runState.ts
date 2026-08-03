@@ -3,8 +3,8 @@
  * Pure helpers; filesystem I/O lives in the CLI.
  */
 
-import { createHash } from 'node:crypto';
 import type { PrevisProductionManifestV1 } from './manifest';
+export { hashPrevisManifest } from './manifestHash';
 
 export type PrevisPhaseStatus = 'pending' | 'in_progress' | 'complete' | 'failed' | 'skipped';
 
@@ -94,13 +94,6 @@ export interface PrevisRunState {
   entities: Record<string, PrevisEntityMapping>;
   shots: Record<string, PrevisShotRunState>;
   outputDir?: string;
-}
-
-export function hashPrevisManifest(manifest: PrevisProductionManifestV1 | unknown): string {
-  const canonical = typeof manifest === 'string'
-    ? manifest
-    : JSON.stringify(manifest);
-  return createHash('sha256').update(canonical).digest('hex').slice(0, 24);
 }
 
 export function createInitialRunState(params: {

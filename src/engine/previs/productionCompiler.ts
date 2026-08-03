@@ -26,30 +26,35 @@ export interface ProductionCompileResult {
   diagnostics: PrevisDiagnostic[];
 }
 
+export interface ProductionCompileOptions {
+  existingContext?: CompiledProductionContext;
+  skipShotNumbers?: Set<string>;
+  existingShotIds?: Record<string, string>;
+  batchSize?: number;
+  /** Manifest entity id → existing scene object id — skips create commands for bound entities. */
+  assetBindings?: Record<string, string>;
+}
+
 export function compileProduction(
   manifest: PrevisProductionManifestV1,
-  options: {
-    existingContext?: CompiledProductionContext;
-    skipShotNumbers?: Set<string>;
-    existingShotIds?: Record<string, string>;
-    batchSize?: number;
-  } = {},
+  options: ProductionCompileOptions = {},
 ): ProductionCompileResult {
   const diagnostics: PrevisDiagnostic[] = [
     ...validateManifestShotNumbers(manifest),
   ];
 
   let context = options.existingContext ?? createEmptyCompiledContext();
+  const phaseOptions = { assetBindings: options.assetBindings };
 
-  const locations = compileLocationsPhase(manifest, context);
+  const locations = compileLocationsPhase(manifest, context, phaseOptions);
   diagnostics.push(...locations.diagnostics);
   context = locations.context;
 
-  const cast = compileCastPhase(manifest, context);
+  const cast = compileCastPhase(manifest, context, phaseOptions);
   diagnostics.push(...cast.diagnostics);
   context = cast.context;
 
-  const props = compilePropsPhase(manifest, context);
+  const props = compilePropsPhase(manifest, context, phaseOptions);
   diagnostics.push(...props.diagnostics);
   context = props.context;
 
@@ -80,4 +85,12 @@ export function plansForSceneSetup(result: ProductionCompileResult): ForeSceneAg
   if (result.cast.plan.commands.length > 0) plans.push(result.cast.plan);
   if (result.props.plan.commands.length > 0) plans.push(result.props.plan);
   return plans;
+}
+
+/** Scene setup plus every compiled shot batch — use for full manifest apply/preview. */
+export function plansForProductionCompile(result: ProductionCompileResult): ForeSceneAgentPlan[] {
+  return [
+    ...plansForSceneSetup(result),
+    ...result.shotBatches.map((batch) => batch.plan),
+  ].filter((plan) => plan.commands.length > 0);
 }

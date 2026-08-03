@@ -10,7 +10,7 @@ import type {
   PrevisPropDefinition,
 } from './manifest';
 import { compileLocationTemplate, normalizeAnchorKey } from './locationTemplates';
-import { locationPrimitiveBlockers } from './manifestDiff';
+import { locationPrimitiveBlockers } from './locationBlockers';
 import { locationZoneOrigin, sceneExtentWithinLimits } from './spatialLayout';
 import type { PrevisEntityMapping } from './runState';
 import type { Vec3 } from '../../domain/types';
@@ -78,9 +78,14 @@ export function createEmptyCompiledContext(): CompiledProductionContext {
   };
 }
 
+export interface CompilePhaseOptions {
+  assetBindings?: Record<string, string>;
+}
+
 export function compileLocationsPhase(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext = createEmptyCompiledContext(),
+  options: CompilePhaseOptions = {},
 ): CompilePhaseResult {
   const diagnostics: PrevisDiagnostic[] = [];
   const commands: ForeSceneAgentCommand[] = [];
@@ -92,6 +97,20 @@ export function compileLocationsPhase(
     const entityKey = `locations.${location.id}`;
     if (next.entities[entityKey]?.objectIds?.length) {
       // Idempotent: already compiled.
+      return;
+    }
+
+    const boundObjectId = options.assetBindings?.[location.id];
+    if (boundObjectId) {
+      // Limited binding: maps one existing object id only — no template anchors/blockers.
+      const origin = locationZoneOrigin(index);
+      origins.push(origin);
+      next.locationOrigins[location.id] = origin;
+      next.entities[entityKey] = {
+        objectIds: [boundObjectId],
+        refs: { [boundObjectId]: boundObjectId },
+      };
+      entityKeys.push(entityKey);
       return;
     }
 
@@ -211,6 +230,7 @@ export function compileLocationsPhase(
 export function compileCastPhase(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,
+  options: CompilePhaseOptions = {},
 ): CompilePhaseResult {
   const diagnostics: PrevisDiagnostic[] = [];
   const commands: ForeSceneAgentCommand[] = [];
@@ -228,6 +248,14 @@ export function compileCastPhase(
       return;
     }
     if (next.entities[entityKey]?.objectId) return;
+
+    const boundObjectId = options.assetBindings?.[character.id];
+    if (boundObjectId) {
+      next.entities[entityKey] = { objectId: boundObjectId, refs: { [boundObjectId]: boundObjectId } };
+      next.refs[character.id] = boundObjectId;
+      entityKeys.push(entityKey);
+      return;
+    }
 
     const ref = previsRef('cast', character.id);
     const height = character.height ?? 1.75;
@@ -285,16 +313,18 @@ export function compileCastPhaseWithPersistedEntities(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,
   persistedEntities: Record<string, PrevisEntityMapping>,
+  options: CompilePhaseOptions = {},
 ): CompilePhaseResult {
   return compileCastPhase(manifest, {
     ...context,
     entities: { ...persistedEntities },
-  });
+  }, options);
 }
 
 export function compilePropsPhase(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,
+  options: CompilePhaseOptions = {},
 ): CompilePhaseResult {
   const diagnostics: PrevisDiagnostic[] = [];
   const commands: ForeSceneAgentCommand[] = [];
@@ -306,6 +336,14 @@ export function compilePropsPhase(
   props.forEach((prop, index) => {
     const entityKey = `props.${prop.id}`;
     if (next.entities[entityKey]?.objectId) return;
+
+    const boundObjectId = options.assetBindings?.[prop.id];
+    if (boundObjectId) {
+      next.entities[entityKey] = { objectId: boundObjectId, refs: { [boundObjectId]: boundObjectId } };
+      next.refs[prop.id] = boundObjectId;
+      entityKeys.push(entityKey);
+      return;
+    }
 
     const ref = previsRef('prop', prop.id);
     const mapped = mapPropPrimitive(prop);

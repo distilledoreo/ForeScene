@@ -338,11 +338,22 @@ export interface SceneObject {
   metadata?: Record<string, unknown>;
 }
 
+/** Logical assembly of scene objects for spatial operations and diagnostics. */
+export interface ObjectGroup {
+  id: string;
+  name: string;
+  objectIds: string[];
+  /** Optional link to a model import batch (`ImportedModelInfo.sourceImportId`). */
+  sourceImportId?: string;
+}
+
 export interface SceneData {
   worldUp: 'Y';
   objects: SceneObject[];
   panoOrigin: Vec3;
   panoRotation: Euler;
+  /** Agent-managed logical assemblies; persisted with the project. */
+  objectGroups?: Record<string, ObjectGroup>;
 }
 
 export interface PanoReference {
@@ -681,6 +692,8 @@ export interface ProjectWorkflow {
   shotFramingAcceptedAtByShotId: Record<string, string>;
   aiBriefSentAtByShotId: Record<string, string>;
   finalPackageExportedAtByShotId: Record<string, string>;
+  /** Manifest entity id → existing scene object id for production compile binding. */
+  productionManifestAssetBindings?: Record<string, string>;
 }
 
 export interface ProjectSettings {

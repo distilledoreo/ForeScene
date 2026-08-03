@@ -689,13 +689,313 @@ export interface AgentShotDiagnostics {
   /** True when a linked panorama resolves for the shot (not a render confirmation). */
   linkedPanoramaResolved: boolean;
   linkedPanoId?: string;
+  /** True when projected panorama pixels are expected to be visible in a projected render. */
+  projectedPanoramaVisible?: boolean;
   /** True when the camera position intersects solid geometry. */
   cameraIntersectsSolidGeometry: boolean;
   /** True when the camera is inside the navigable environment envelope, if one can be inferred. */
   cameraInsideEnvironmentBounds?: boolean;
   cameraDisplacementMeters: number;
   subjectDisplacements: AgentSubjectDisplacement[];
+  /** Expected subject ids that were missing, hidden, or incomplete. */
+  expectedSubjectIds?: string[];
   diagnostics: AgentDiagnostic[];
+}
+
+export type AgentProjectPackageSource =
+  | 'blank'
+  | 'import'
+  | 'recovery'
+  | 'reset'
+  | 'blueprint'
+  | 'clone'
+  | 'unknown';
+
+export interface AgentLoadedProjectSource {
+  projectId: string;
+  revisionId?: string;
+  source: AgentProjectPackageSource;
+  sourceLabel?: string;
+  loadedAt: string;
+}
+
+export interface AgentProjectPackageOpenInput {
+  file: File;
+  /** When true, snapshot the current project before replacing it. */
+  preserveCurrentAsRecovery?: boolean;
+}
+
+export interface AgentProjectPackageOpenResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  projectId?: string;
+  revisionId?: string;
+  projectName?: string;
+  missingAssetCount?: number;
+  missingAssets?: AgentMissingAssetSummary[];
+  panoCount?: number;
+  canonicalPanoId?: string;
+  persistenceConfirmed?: boolean;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProjectPackageValidateResult {
+  ok: boolean;
+  projectName?: string;
+  objectCount?: number;
+  shotCount?: number;
+  panoCount?: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentCloneProjectRevisionInput {
+  revisionId: string;
+  /** When true, replace the live project with the cloned revision. */
+  loadAsCurrent?: boolean;
+}
+
+export interface AgentCloneProjectRevisionResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  projectId?: string;
+  revisionId?: string;
+  clonedFromRevisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export type AgentPanoramaImportMode = 'canonical' | 'secondary' | 'replace';
+
+export interface AgentPanoramaReferenceImportInput {
+  file: File;
+  mode?: AgentPanoramaImportMode;
+  name?: string;
+}
+
+export interface AgentPanoramaReferenceResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  panoId?: string;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentPanoramaReferenceUpdateInput {
+  panoId: string;
+  origin?: [number, number, number];
+  rotation?: [number, number, number];
+}
+
+export interface AgentGrayboxPanoramaRenderInput {
+  origin?: [number, number, number];
+  width?: number;
+  height?: number;
+}
+
+export interface AgentObjectGroupSummary {
+  groupId: string;
+  name: string;
+  objectIds: string[];
+  sourceImportId?: string;
+  worldBounds?: { min: [number, number, number]; max: [number, number, number] };
+}
+
+export interface AgentObjectGroupInput {
+  name: string;
+  objectIds: string[];
+  sourceImportId?: string;
+}
+
+export interface AgentObjectGroupResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  groupId?: string;
+  group?: AgentObjectGroupSummary;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentSubjectRef {
+  objectId?: string;
+  groupId?: string;
+}
+
+export type AgentJobType =
+  | 'render-shot-batch'
+  | 'render-pass-matrix'
+  | 'frame-subjects-batch'
+  | 'inspect-shots-diagnostics'
+  | 'create-contact-sheets'
+  | 'custom';
+
+export type AgentJobStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'completed_with_warnings'
+  | 'failed'
+  | 'cancelled'
+  | 'paused';
+
+export interface AgentJobProgress {
+  jobId: string;
+  type: AgentJobType;
+  status: AgentJobStatus;
+  progress: number;
+  completedItems: number;
+  totalItems: number;
+  currentItem?: string;
+  message?: string;
+  revisionId?: string;
+  errors?: AgentDiagnostic[];
+  artifactIds?: string[];
+}
+
+export interface AgentSubmitJobInput {
+  type: AgentJobType;
+  revisionId?: string;
+  jobs?: unknown[];
+  shotIds?: string[];
+  passes?: string[];
+  concurrency?: number;
+  continueOnError?: boolean;
+  timeoutMsPerItem?: number;
+  retries?: number;
+}
+
+export interface AgentSubmitJobResult {
+  ok: boolean;
+  jobId?: string;
+  status?: AgentJobStatus;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentDuplicateShotInput {
+  shotId: string;
+  insertAfter?: boolean;
+}
+
+export interface AgentDuplicateShotResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId?: string;
+  sourceShotId?: string;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentReorderShotsInput {
+  shotIds: string[];
+}
+
+export interface AgentShotMediaItem {
+  id: string;
+  assetId: string;
+  kind: 'image' | 'video';
+  label: string;
+  source: string;
+}
+
+export interface AgentSequenceContinuityDelta {
+  shotId: string;
+  nextShotId?: string;
+  cameraDirectionDeltaDegrees?: number;
+  lensDeltaMm?: number;
+  /** Focal-length field of view change between adjacent shots (degrees). */
+  lensFovDeltaDegrees?: number;
+  subjectSideReversal?: boolean;
+  panoramaChanged?: boolean;
+  stagingDelta?: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentCharacterPoseInspection {
+  objectId: string;
+  shotId?: string;
+  timeSeconds?: number;
+  pose?: HumanPose;
+  presetId?: string;
+  editableJointIds: HumanJointId[];
+}
+
+export interface AgentJointRotationInput {
+  objectId: string;
+  jointId: HumanJointId;
+  rotation: [number, number, number];
+  shotId?: string;
+  timeSeconds?: number;
+}
+
+export interface AgentPoseMutationResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  objectId?: string;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProjectRevisionSummary {
+  id: string;
+  projectId: string;
+  kind: string;
+  reason: string;
+  createdAt: string;
+  isActive: boolean;
+  isPreviousKnownGood: boolean;
+}
+
+export interface AgentProjectHealthResult {
+  ok: boolean;
+  projectId: string;
+  checkedAt: string;
+  issues: Array<{ code: string; severity: string; message: string; repairable?: boolean }>;
+  storage?: Record<string, unknown>;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentArtifactListItem {
+  artifactId: string;
+  mimeType: string;
+  fileName: string;
+  byteLength: number;
+  revisionId?: string;
+  createdAt: number;
+  persisted?: boolean;
+}
+
+export interface AgentArtifactStatusResult {
+  ok: boolean;
+  artifact?: AgentArtifactHandle;
+  persisted?: boolean;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionManifestValidateResult {
+  ok: boolean;
+  shotCount?: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionCompilePreviewResult {
+  ok: boolean;
+  planCount?: number;
+  commandCount?: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentSetBlueprintApplyInput {
+  blueprint: unknown;
+  preserveCurrentAsRecovery?: boolean;
+}
+
+export interface AgentProjectSettingsPatch {
+  defaultShotWidth?: number;
+  defaultShotHeight?: number;
+  defaultShotFovDegrees?: number;
+  defaultCameraLensMm?: number;
+  defaultCameraHeightMeters?: number;
+  panoGoodMatchMeters?: number;
+  panoModerateMatchMeters?: number;
+  panoLetterboxExports169?: boolean;
 }
 
 export interface AgentSnapObjectToFloorInput {
@@ -1170,4 +1470,87 @@ export interface ForeSceneBrowserApi {
   getCharacterImportProgress(): AgentCharacterImportProgress | null;
   cancelCharacterImport(): { ok: boolean; cancelled: boolean };
   discardCharacterImportAnalysis(analysisId: string): { ok: boolean; discarded: boolean };
+
+  // Project package open/import
+  openProjectPackage(input: AgentProjectPackageOpenInput): Promise<AgentProjectPackageOpenResult>;
+  validateProjectPackage(input: { file: File }): Promise<AgentProjectPackageValidateResult>;
+  cloneProjectRevision(input: AgentCloneProjectRevisionInput): Promise<AgentCloneProjectRevisionResult>;
+  getLoadedProjectSource(): AgentLoadedProjectSource;
+
+  // Panorama / reference lifecycle
+  importPanoramaReference(input: AgentPanoramaReferenceImportInput): Promise<AgentPanoramaReferenceResult>;
+  updatePanoramaReference(input: AgentPanoramaReferenceUpdateInput): Promise<AgentPanoramaReferenceResult>;
+  renderGrayboxPanorama(input?: AgentGrayboxPanoramaRenderInput): Promise<AgentPanoramaReferenceResult>;
+  approvePanoramaReference(input: { panoId: string }): Promise<AgentPanoramaReferenceResult>;
+  acceptReferenceAlignment(input: { panoId: string }): Promise<AgentPanoramaReferenceResult>;
+  removePanoramaReference(input: { panoId: string }): Promise<AgentPanoramaReferenceResult>;
+  setPanoramaCaptureOrigin(input: { position: [number, number, number] }): Promise<AgentPanoramaReferenceResult>;
+  inspectPanoramaProjection(input: { panoId: string; camera?: CameraData }): Promise<AgentPanoramaReferenceResult & { projection?: Record<string, unknown> }>;
+
+  // Set blueprint and project settings
+  validateSetBlueprint(input: { blueprint: unknown }): Promise<{ ok: boolean; objectCount?: number; diagnostics: AgentDiagnostic[] }>;
+  applySetBlueprint(input: AgentSetBlueprintApplyInput): Promise<AgentProjectPackageOpenResult>;
+  patchProjectSettings(input: AgentProjectSettingsPatch): Promise<{ ok: boolean; revisionId?: string; diagnostics: AgentDiagnostic[] }>;
+
+  // Logical object groups
+  createObjectGroup(input: AgentObjectGroupInput): Promise<AgentObjectGroupResult>;
+  inspectObjectGroup(input: { groupId: string }): AgentObjectGroupSummary | undefined;
+  listObjectGroups(): AgentObjectGroupSummary[];
+  stageObjectGroup(input: { shotId: string; groupId: string; transform?: Transform; visible?: boolean }): Promise<AgentObjectGroupResult>;
+  diagnoseObjectGroup(input: { shotId: string; groupId: string }): AgentShotDiagnostics;
+
+  // Async job API
+  submitJob(input: AgentSubmitJobInput): Promise<AgentSubmitJobResult>;
+  getJob(jobId: string): AgentJobProgress | undefined;
+  cancelJob(jobId: string): AgentSubmitJobResult;
+  resumeJob(jobId: string): Promise<AgentSubmitJobResult>;
+  subscribeToJobProgress(jobId: string, listener: (progress: AgentJobProgress) => void): () => void;
+
+  // Shot library and sequence review
+  duplicateShot(input: AgentDuplicateShotInput): Promise<AgentDuplicateShotResult>;
+  reorderShots(input: AgentReorderShotsInput): Promise<{ ok: boolean; revisionId?: string; diagnostics: AgentDiagnostic[] }>;
+  captureShotThumbnail(input: { shotId: string; timeSeconds?: number }): Promise<AgentRenderShotFrameResult>;
+  listShotMedia(input: { shotId: string }): AgentShotMediaItem[];
+  compareAdjacentShots(input: { shotId: string }): AgentSequenceContinuityDelta;
+  inspectSequenceContinuity(input: { shotIds: string[] }): AgentSequenceContinuityDelta[];
+  renderStoryboard(input: { shotIds: string[] }): Promise<AgentRenderShotFrameResult>;
+  renderAnimaticPreview(input: { shotIds: string[] }): Promise<AgentShotVideoRenderResult>;
+
+  // Semantic character posing
+  inspectCharacterPose(input: { objectId: string; shotId?: string; timeSeconds?: number }): AgentCharacterPoseInspection;
+  setJointRotation(input: AgentJointRotationInput): Promise<AgentPoseMutationResult>;
+  applyPosePreset(input: { objectId: string; presetId: string; shotId?: string; timeSeconds?: number }): Promise<AgentPoseMutationResult>;
+  mirrorPose(input: { objectId: string; shotId?: string; timeSeconds?: number }): Promise<AgentPoseMutationResult>;
+  resetJointPose(input: { objectId: string; jointId?: HumanJointId; shotId?: string; timeSeconds?: number }): Promise<AgentPoseMutationResult>;
+  copyPoseBetweenShots(input: { objectId: string; fromShotId: string; toShotId: string; timeSeconds?: number }): Promise<AgentPoseMutationResult>;
+  exportRigPackage(input: { objectId: string }): Promise<AgentArtifactDownloadResult>;
+
+  // Project safety and recovery
+  listProjectRevisions(): Promise<AgentProjectRevisionSummary[]>;
+  inspectProjectHealth(): Promise<AgentProjectHealthResult>;
+  inspectBrowserStorage(): Promise<Record<string, unknown>>;
+  restoreProjectRevision(input: { revisionId: string }): Promise<AgentRefinementCheckpointResult>;
+  compareProjectRevisions(input: { revisionIdA: string; revisionIdB: string }): Promise<{ ok: boolean; changedFields?: string[]; diagnostics: AgentDiagnostic[] }>;
+  cleanupUnreferencedAssets(): Promise<{ ok: boolean; removedCount?: number; diagnostics: AgentDiagnostic[] }>;
+  repairProjectIntegrity(): Promise<{ ok: boolean; repairedCount?: number; revisionId?: string; diagnostics: AgentDiagnostic[] }>;
+
+  // Artifact registry extensions
+  listArtifacts(input?: { jobId?: string; revisionId?: string; shotId?: string }): AgentArtifactListItem[];
+  persistArtifact(input: { artifactId: string }): Promise<AgentArtifactStatusResult>;
+  deleteArtifact(input: { artifactId: string }): Promise<{ ok: boolean }>;
+  getArtifactStatus(input: { artifactId: string }): AgentArtifactStatusResult;
+
+  // Production manifest compiler
+  validateProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult;
+  bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): Promise<AgentProductionManifestValidateResult>;
+  previewProductionCompile(input: { manifest: unknown }): AgentProductionCompilePreviewResult;
+  applyProductionCompile(input: { manifest: unknown; preserveCurrentAsRecovery?: boolean }): Promise<AgentPlanApplyResult>;
+  inspectProductionStatus(): { manifestBound: boolean; shotCount: number; diagnostics: AgentDiagnostic[] };
+
+  // Project-wide batch APIs
+  inspectShotsDiagnostics(input: { shots: Array<{ shotId: string; timeSeconds?: number; subjectIds?: string[] }> }): AgentShotDiagnostics[];
+  frameSubjectsBatch(input: { shots: Array<AgentFrameSubjectsInput> }): Promise<AgentFrameSubjectsResult[]>;
+  renderShotBatch(input: { jobs: Array<AgentRenderShotFrameInput> }): Promise<AgentRenderShotFrameResult[]>;
+  renderPassMatrix(input: { shotIds: string[]; passes: string[]; concurrency?: number }): Promise<AgentSubmitJobResult>;
+  createContactSheets(input: { artifactIds: string[]; grouping?: string }): Promise<AgentSubmitJobResult>;
 }

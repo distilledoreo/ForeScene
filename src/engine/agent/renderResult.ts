@@ -20,13 +20,15 @@ export function deriveOperationStatus(params: {
   stale?: boolean;
   cancelled?: boolean;
   busy?: boolean;
+  /** Mutation-style operations that succeed without producing an artifact. */
+  allowNoArtifact?: boolean;
 }): AgentOperationStatus {
   if (params.busy) return 'busy';
   if (params.cancelled) return 'cancelled';
   if (params.stale) return 'stale_revision';
-  if (!params.hasArtifact) return 'failed';
+  if (!params.hasArtifact && !params.allowNoArtifact) return 'failed';
   const hasErrors = params.diagnostics.some((item) => item.severity === 'error');
-  if (hasErrors) return 'completed_with_warnings';
+  if (hasErrors) return params.hasArtifact ? 'completed_with_warnings' : 'failed';
   const hasWarnings = params.diagnostics.some((item) => item.severity === 'warning');
   if (hasWarnings) return 'completed_with_warnings';
   return 'completed';

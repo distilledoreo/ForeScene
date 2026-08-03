@@ -71,8 +71,10 @@ export function getEffectiveObject(
 export function identifyFloorY(
   project: LocationProject,
   position: Vec3,
+  objects?: SceneObject[],
 ): number {
-  const floors = project.scene.objects.filter((object) => (
+  const sourceObjects = objects ?? project.scene.objects;
+  const floors = sourceObjects.filter((object) => (
     (object.type === 'floor' || object.type === 'terrain_mass')
     && object.visible !== false
   ));

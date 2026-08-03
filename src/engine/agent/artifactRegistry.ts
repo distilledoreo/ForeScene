@@ -3,7 +3,15 @@
  * Artifacts are stable handles agents can retrieve without browser download events.
  */
 
+import type { ProjectAsset } from '../../domain/types';
+import { touchProject } from '../../state/slices/touchProject';
+import { useAgentControlStore } from '../../state/useAgentControlStore';
+import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
+import { useProjectStore } from '../../state/useProjectStore';
 import { downloadBlob } from '../fileTransfers';
+import { storeProjectAssetBlob, createProjectAssetStorageKey } from '../projectAssetStore';
+import { createId } from '../../utils/ids';
+import { writeAccessRequiredDiagnostic } from './diagnostics';
 import type { AgentArtifactHandle, AgentArtifactDownloadResult } from './protocol';
 
 interface StoredArtifact {
@@ -13,6 +21,11 @@ interface StoredArtifact {
   fileName: string;
   revisionId?: string;
   createdAt: number;
+  jobId?: string;
+  shotId?: string;
+  persisted?: boolean;
+  persistedKey?: string;
+  projectAssetId?: string;
 }
 
 const registry = new Map<string, StoredArtifact>();
@@ -23,11 +36,21 @@ function nextArtifactId(): string {
   return `artifact_${Date.now().toString(36)}_${artifactCounter.toString(36)}`;
 }
 
+function assetTypeFromMime(mimeType: string): ProjectAsset['type'] {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType === 'application/json' || mimeType.endsWith('/json')) return 'json';
+  if (mimeType.startsWith('text/')) return 'text';
+  return 'other';
+}
+
 export function registerAgentArtifact(params: {
   blob: Blob;
   mimeType: string;
   fileName: string;
   revisionId?: string;
+  jobId?: string;
+  shotId?: string;
 }): AgentArtifactHandle {
   const id = nextArtifactId();
   registry.set(id, {
@@ -36,6 +59,8 @@ export function registerAgentArtifact(params: {
     mimeType: params.mimeType,
     fileName: params.fileName,
     revisionId: params.revisionId,
+    jobId: params.jobId,
+    shotId: params.shotId,
     createdAt: Date.now(),
   });
   return {
@@ -115,4 +140,182 @@ export async function downloadAgentArtifact(input: {
 export function resetAgentArtifactRegistryForTests(): void {
   registry.clear();
   artifactCounter = 0;
+}
+
+export function listAgentArtifacts(filter: {
+  jobId?: string;
+  revisionId?: string;
+  shotId?: string;
+} = {}): import('./protocol').AgentArtifactListItem[] {
+  return [...registry.values()]
+    .filter((stored) => (
+      (!filter.jobId || stored.jobId === filter.jobId)
+      && (!filter.revisionId || stored.revisionId === filter.revisionId)
+      && (!filter.shotId || stored.shotId === filter.shotId)
+    ))
+    .map((stored) => ({
+      artifactId: stored.id,
+      mimeType: stored.mimeType,
+      fileName: stored.fileName,
+      byteLength: stored.blob.size,
+      revisionId: stored.revisionId,
+      createdAt: stored.createdAt,
+      persisted: stored.persisted,
+    }));
+}
+
+export async function persistAgentArtifact(artifactId: string): Promise<import('./protocol').AgentArtifactStatusResult> {
+  const stored = registry.get(artifactId);
+  if (!stored) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'artifact_not_found',
+        message: `No artifact with id "${artifactId}".`,
+        severity: 'error',
+      }],
+    };
+  }
+
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return {
+      ok: false,
+      diagnostics: [writeAccessRequiredDiagnostic('persistArtifact')],
+    };
+  }
+
+  const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+  if (!runDestructive) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'persistence_not_ready',
+        message: 'Project persistence is not ready.',
+        severity: 'error',
+      }],
+    };
+  }
+
+  const projectId = useProjectStore.getState().project.id;
+  const assetId = createId('asset');
+  const assetType = assetTypeFromMime(stored.mimeType);
+
+  try {
+    await runDestructive('Persist agent artifact', () => {
+      const baseAsset: ProjectAsset = {
+        id: assetId,
+        type: assetType,
+        name: stored.fileName,
+        uri: '',
+        mimeType: stored.mimeType,
+        createdAt: new Date().toISOString(),
+        metadata: {
+          source: 'agent_artifact',
+          artifactId: stored.id,
+        },
+      };
+      const persistedAsset = storeProjectAssetBlob(projectId, baseAsset, stored.blob);
+
+      useProjectStore.setState((state) => ({
+        project: touchProject({
+          ...state.project,
+          assets: {
+            assets: {
+              ...state.project.assets.assets,
+              [persistedAsset.id]: persistedAsset,
+            },
+          },
+        }),
+      }));
+
+      stored.persisted = true;
+      stored.persistedKey = persistedAsset.storageKey ?? createProjectAssetStorageKey(projectId, persistedAsset.id);
+      stored.projectAssetId = persistedAsset.id;
+    });
+
+    return {
+      ok: true,
+      artifact: {
+        artifactId: stored.id,
+        mimeType: stored.mimeType,
+        fileName: stored.fileName,
+        byteLength: stored.blob.size,
+        revisionId: stored.revisionId,
+      },
+      persisted: true,
+      diagnostics: [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'persist_failed',
+        message: error instanceof Error ? error.message : 'Artifact persistence failed.',
+        severity: 'error',
+      }],
+    };
+  }
+}
+
+export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boolean }> {
+  const stored = registry.get(artifactId);
+  if (!stored) return { ok: false };
+
+  if (stored.persisted || stored.persistedKey || stored.projectAssetId) {
+    if (useAgentControlStore.getState().controlMode !== 'read-write') {
+      return { ok: false };
+    }
+  }
+
+  if (stored.persistedKey) {
+    const { deleteProjectAssetBlob } = await import('../projectAssetStore');
+    await deleteProjectAssetBlob(stored.persistedKey);
+  }
+
+  if (stored.projectAssetId) {
+    const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+    if (!runDestructive) {
+      return { ok: false };
+    }
+    await runDestructive('Remove persisted agent artifact', () => {
+      useProjectStore.setState((state) => {
+        const assets = { ...state.project.assets.assets };
+        delete assets[stored.projectAssetId!];
+        return {
+          project: touchProject({
+            ...state.project,
+            assets: { assets },
+          }),
+        };
+      });
+    });
+  }
+
+  return { ok: registry.delete(artifactId) };
+}
+
+export function getAgentArtifactStatus(artifactId: string): import('./protocol').AgentArtifactStatusResult {
+  const stored = registry.get(artifactId);
+  if (!stored) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'artifact_not_found',
+        message: `No artifact with id "${artifactId}".`,
+        severity: 'error',
+      }],
+    };
+  }
+  return {
+    ok: true,
+    artifact: {
+      artifactId: stored.id,
+      mimeType: stored.mimeType,
+      fileName: stored.fileName,
+      byteLength: stored.blob.size,
+      revisionId: stored.revisionId,
+    },
+    persisted: stored.persisted,
+    diagnostics: [],
+  };
 }

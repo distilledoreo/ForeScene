@@ -17,6 +17,7 @@ import {
   rejectRenderPixelStats,
   type RenderPixelStats,
 } from '../previs/renderPixelStats';
+import { buildContactSheetSpec } from '../previs/contactSheet';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -45,6 +46,7 @@ import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
+  notImplementedDiagnostic,
 } from './diagnostics';
 import {
   inspectObjectSnapshot,
@@ -132,6 +134,84 @@ import {
   sampleAgentShotState,
   upsertAgentObjectKeyframe,
 } from './timelineHelpers';
+import {
+  openAgentProjectPackage,
+  validateAgentProjectPackage,
+  cloneAgentProjectRevision,
+  getAgentLoadedProjectSource,
+} from './projectImportControl';
+import {
+  importAgentPanoramaReference,
+  updateAgentPanoramaReference,
+  renderAgentGrayboxPanorama,
+  approveAgentPanoramaReference,
+  acceptAgentReferenceAlignment,
+  removeAgentPanoramaReference,
+  setAgentPanoramaCaptureOrigin,
+  inspectAgentPanoramaProjection,
+} from './panoramaReferenceControl';
+import {
+  createAgentObjectGroup,
+  diagnoseAgentObjectGroup,
+  inspectAgentObjectGroup,
+  listAgentObjectGroups,
+  stageAgentObjectGroup,
+  inferImportAssemblyGroups,
+} from './objectGroupControl';
+import {
+  cancelAgentJob,
+  getAgentJob,
+  resumeAgentJob,
+  submitAgentJob,
+  subscribeToAgentJobProgress,
+  waitForAgentJob,
+} from './jobQueue';
+import { frameAgentSubjectsBatch, renderAgentShotBatch } from './batchControl';
+import { setAgentRenderShotFrameImpl } from './renderCallbackRegistry';
+import {
+  compareAgentAdjacentShots,
+  duplicateAgentShot,
+  inspectAgentSequenceContinuity,
+  listAgentShotMedia,
+  reorderAgentShots,
+} from './sequenceReviewControl';
+import {
+  applyAgentPosePreset,
+  copyAgentPoseBetweenShots,
+  exportAgentRigPackage,
+  inspectAgentCharacterPose,
+  mirrorAgentPose,
+  resetAgentJointPose,
+  setAgentJointRotation,
+} from './poseControl';
+import {
+  cleanupAgentUnreferencedAssets,
+  compareAgentProjectRevisions,
+  inspectAgentBrowserStorage,
+  inspectAgentProjectHealth,
+  listAgentProjectRevisions,
+  repairAgentProjectIntegrity,
+  restoreAgentProjectRevision,
+} from './projectHealthControl';
+import {
+  applyAgentProductionCompile,
+  bindAgentManifestAssets,
+  inspectAgentProductionStatus,
+  previewAgentProductionCompile,
+  validateAgentProductionManifest,
+} from './productionManifestControl';
+import {
+  applyAgentSetBlueprint,
+  patchAgentProjectSettings,
+  validateAgentSetBlueprint,
+} from './setBlueprintControl';
+import {
+  deleteAgentArtifact,
+  getAgentArtifactBlob,
+  getAgentArtifactStatus,
+  listAgentArtifacts,
+  persistAgentArtifact,
+} from './artifactRegistry';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -818,6 +898,442 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return discardCharacterImportAnalysis(analysisId);
     },
 
+    openProjectPackage(input) {
+      return openAgentProjectPackage(input);
+    },
+
+    validateProjectPackage(input) {
+      return validateAgentProjectPackage(input);
+    },
+
+    cloneProjectRevision(input) {
+      return cloneAgentProjectRevision(input);
+    },
+
+    getLoadedProjectSource() {
+      return getAgentLoadedProjectSource();
+    },
+
+    importPanoramaReference(input) {
+      return importAgentPanoramaReference(input);
+    },
+
+    updatePanoramaReference(input) {
+      return updateAgentPanoramaReference(input);
+    },
+
+    renderGrayboxPanorama(input) {
+      return renderAgentGrayboxPanorama(input);
+    },
+
+    approvePanoramaReference(input) {
+      return approveAgentPanoramaReference(input);
+    },
+
+    acceptReferenceAlignment(input) {
+      return acceptAgentReferenceAlignment(input);
+    },
+
+    removePanoramaReference(input) {
+      return removeAgentPanoramaReference(input);
+    },
+
+    setPanoramaCaptureOrigin(input) {
+      return setAgentPanoramaCaptureOrigin(input);
+    },
+
+    inspectPanoramaProjection(input) {
+      return inspectAgentPanoramaProjection(input);
+    },
+
+    validateSetBlueprint(input) {
+      return Promise.resolve(validateAgentSetBlueprint(input));
+    },
+
+    applySetBlueprint(input) {
+      return applyAgentSetBlueprint(input);
+    },
+
+    patchProjectSettings(input) {
+      return patchAgentProjectSettings(input);
+    },
+
+    createObjectGroup(input) {
+      return createAgentObjectGroup(input);
+    },
+
+    inspectObjectGroup(input) {
+      return inspectAgentObjectGroup(input.groupId);
+    },
+
+    listObjectGroups() {
+      const explicit = listAgentObjectGroups();
+      if (explicit.length > 0) return explicit;
+      return inferImportAssemblyGroups(readInspectionContext().project);
+    },
+
+    stageObjectGroup(input) {
+      return stageAgentObjectGroup(input);
+    },
+
+    diagnoseObjectGroup(input) {
+      return diagnoseAgentObjectGroup(input);
+    },
+
+    submitJob(input) {
+      return Promise.resolve(submitAgentJob(input));
+    },
+
+    getJob(jobId) {
+      return getAgentJob(jobId);
+    },
+
+    cancelJob(jobId) {
+      return cancelAgentJob(jobId);
+    },
+
+    resumeJob(jobId) {
+      return resumeAgentJob(jobId);
+    },
+
+    subscribeToJobProgress(jobId, listener) {
+      return subscribeToAgentJobProgress(jobId, listener);
+    },
+
+    duplicateShot(input) {
+      return duplicateAgentShot(input);
+    },
+
+    reorderShots(input) {
+      return reorderAgentShots(input);
+    },
+
+    async captureShotThumbnail(input) {
+      const blocked = refinementWriteDiagnostics('captureShotThumbnail');
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: blocked,
+        };
+      }
+
+      const rendered = await api.renderShotFrame({
+        shotId: input.shotId,
+        timeSeconds: input.timeSeconds,
+        appearance: 'clay',
+      });
+      if (!rendered.ok || !rendered.pngDataUrl) return rendered;
+
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      if (!runDestructive) {
+        return {
+          ...rendered,
+          ok: false,
+          status: 'failed',
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')],
+        };
+      }
+
+      try {
+        await runDestructive('Attach shot thumbnail', () => {
+          useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+            name: `shot_${input.shotId}_thumbnail.png`,
+            dataUrl: rendered.pngDataUrl!,
+            width: rendered.width,
+            height: rendered.height,
+          });
+        });
+        return rendered;
+      } catch (error) {
+        return {
+          ...rendered,
+          ok: false,
+          status: 'failed',
+          diagnostics: [agentError(
+            'thumbnail_attach_failed',
+            error instanceof Error ? error.message : 'Could not attach shot thumbnail.',
+          )],
+        };
+      }
+    },
+
+    listShotMedia(input) {
+      return listAgentShotMedia(input);
+    },
+
+    compareAdjacentShots(input) {
+      return compareAgentAdjacentShots(input);
+    },
+
+    inspectSequenceContinuity(input) {
+      return inspectAgentSequenceContinuity(input);
+    },
+
+    async renderStoryboard(input) {
+      const submitted = submitAgentJob({
+        type: 'render-shot-batch',
+        jobs: input.shotIds.map((shotId) => ({ shotId })),
+        concurrency: 1,
+        continueOnError: false,
+      });
+      if (!submitted.ok || !submitted.jobId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: submitted.diagnostics,
+        };
+      }
+
+      const progress = await waitForAgentJob(submitted.jobId);
+      const artifactIds = progress.artifactIds ?? [];
+      if (progress.status === 'failed' || progress.status === 'cancelled') {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: progress.errors ?? [agentError('render_failed', 'Storyboard render job failed.')],
+        };
+      }
+      if (artifactIds.length !== input.shotIds.length) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: [agentError(
+            'storyboard_incomplete',
+            `Expected ${input.shotIds.length} shot renders but received ${artifactIds.length}.`,
+          )],
+        };
+      }
+
+      const sheetSubmitted = submitAgentJob({
+        type: 'create-contact-sheets',
+        jobs: [artifactIds],
+      });
+      if (!sheetSubmitted.ok || !sheetSubmitted.jobId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: progress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: sheetSubmitted.diagnostics,
+        };
+      }
+
+      const sheetProgress = await waitForAgentJob(sheetSubmitted.jobId);
+      const storyboardArtifactId = sheetProgress.artifactIds?.[0];
+      const blob = storyboardArtifactId ? getAgentArtifactBlob(storyboardArtifactId) : undefined;
+      if (!blob || !storyboardArtifactId) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotIds[0] ?? '',
+          revisionId: sheetProgress.revisionId ?? '',
+          width: 0,
+          height: 0,
+          diagnostics: [agentError('storyboard_compose_failed', 'Storyboard contact sheet was not produced.')],
+        };
+      }
+
+      const dataUrl = await blobToDataUrlFromBlob(blob);
+      const artifact = buildInlineArtifact({ mimeType: 'image/png', dataUrl });
+      const sheetSpec = buildContactSheetSpec({
+        title: 'Storyboard',
+        shots: artifactIds.map((id, idx) => ({
+          shotNumber: String(idx + 1).padStart(3, '0'),
+          name: id,
+          framePath: id,
+          status: 'rendered',
+          warningCount: 0,
+          fromCanonicalRenderer: true,
+        })),
+      });
+      const rows = Math.ceil(artifactIds.length / sheetSpec.columns);
+      const storyboardWidth = sheetSpec.columns * sheetSpec.cellWidth;
+      const storyboardHeight = rows * sheetSpec.cellHeight;
+      return {
+        ok: true,
+        status: sheetProgress.status === 'completed_with_warnings' ? 'completed_with_warnings' : 'completed',
+        shotId: input.shotIds[0] ?? '',
+        revisionId: sheetProgress.revisionId ?? progress.revisionId ?? '',
+        width: storyboardWidth,
+        height: storyboardHeight,
+        artifact,
+        pngDataUrl: dataUrl,
+        diagnostics: sheetProgress.errors ?? [],
+      };
+    },
+
+    renderAnimaticPreview(input) {
+      void input;
+      return Promise.resolve({
+        ok: false,
+        status: 'failed' as const,
+        shotId: input.shotIds[0] ?? '',
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        diagnostics: [notImplementedDiagnostic('renderAnimaticPreview')],
+      });
+    },
+
+    inspectCharacterPose(input) {
+      return inspectAgentCharacterPose(input);
+    },
+
+    setJointRotation(input) {
+      return setAgentJointRotation(input);
+    },
+
+    applyPosePreset(input) {
+      return applyAgentPosePreset(input);
+    },
+
+    mirrorPose(input) {
+      return mirrorAgentPose(input);
+    },
+
+    resetJointPose(input) {
+      return resetAgentJointPose(input);
+    },
+
+    copyPoseBetweenShots(input) {
+      return copyAgentPoseBetweenShots(input);
+    },
+
+    exportRigPackage(input) {
+      return exportAgentRigPackage(input);
+    },
+
+    listProjectRevisions() {
+      return listAgentProjectRevisions();
+    },
+
+    inspectProjectHealth() {
+      return inspectAgentProjectHealth();
+    },
+
+    inspectBrowserStorage() {
+      return inspectAgentBrowserStorage();
+    },
+
+    restoreProjectRevision(input) {
+      return restoreAgentProjectRevision(input);
+    },
+
+    compareProjectRevisions(input) {
+      return compareAgentProjectRevisions(input);
+    },
+
+    cleanupUnreferencedAssets() {
+      return cleanupAgentUnreferencedAssets();
+    },
+
+    repairProjectIntegrity() {
+      return repairAgentProjectIntegrity();
+    },
+
+    listArtifacts(input) {
+      return listAgentArtifacts(input ?? {});
+    },
+
+    persistArtifact(input) {
+      return persistAgentArtifact(input.artifactId);
+    },
+
+    deleteArtifact(input) {
+      return deleteAgentArtifact(input.artifactId);
+    },
+
+    getArtifactStatus(input) {
+      return getAgentArtifactStatus(input.artifactId);
+    },
+
+    validateProductionManifest(input) {
+      return validateAgentProductionManifest(input);
+    },
+
+    bindManifestAssets(input) {
+      return bindAgentManifestAssets(input);
+    },
+
+    previewProductionCompile(input) {
+      return previewAgentProductionCompile(input);
+    },
+
+    applyProductionCompile(input) {
+      return applyAgentProductionCompile(input);
+    },
+
+    inspectProductionStatus() {
+      return inspectAgentProductionStatus();
+    },
+
+    inspectShotsDiagnostics(input) {
+      const ctx = readInspectionContext();
+      return input.shots.map((entry) => {
+        const shot = ctx.project.shots.find((candidate) => candidate.id === entry.shotId);
+        if (!shot) {
+          return {
+            shotId: entry.shotId,
+            subjects: [],
+            foregroundOcclusionFraction: 0,
+            linkedPanoramaResolved: false,
+            cameraIntersectsSolidGeometry: false,
+            cameraDisplacementMeters: 0,
+            subjectDisplacements: [],
+            diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${entry.shotId}".`)],
+          };
+        }
+        return inspectAgentShotDiagnostics({
+          project: ctx.project,
+          shot,
+          timeSeconds: entry.timeSeconds,
+          subjectIds: entry.subjectIds,
+        });
+      });
+    },
+
+    async frameSubjectsBatch(input) {
+      return frameAgentSubjectsBatch(input.shots);
+    },
+
+    async renderShotBatch(input) {
+      return renderAgentShotBatch(input.jobs, 1);
+    },
+
+    renderPassMatrix(input) {
+      return Promise.resolve(submitAgentJob({
+        type: 'render-pass-matrix',
+        shotIds: input.shotIds,
+        passes: input.passes,
+        concurrency: input.concurrency ?? 1,
+        continueOnError: true,
+      }));
+    },
+
+    createContactSheets(input) {
+      return Promise.resolve(submitAgentJob({
+        type: 'create-contact-sheets',
+        jobs: [input.artifactIds],
+      }));
+    },
+
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {
       const timeoutMs = options?.timeoutMs ?? 30_000;
       const started = Date.now();
@@ -1161,7 +1677,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             appearance: appearance === 'projected' ? 'projected' : 'clay',
             includeAttachedProps: true,
           });
-          pngDataUrl = await blobToDataUrl(frame.blob);
+          pngDataUrl = await blobToDataUrlFromBlob(frame.blob);
           renderedWidth = frame.width;
           renderedHeight = frame.height;
           source = 'canonical_character_renderer';
@@ -1303,6 +1819,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
   };
 
+  setAgentRenderShotFrameImpl((input) => api.renderShotFrame(input));
+
   return api;
 }
 
@@ -1329,7 +1847,7 @@ function waitAnimationFrames(count: number): Promise<void> {
   });
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
+function blobToDataUrlFromBlob(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
