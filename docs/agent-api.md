@@ -164,7 +164,7 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 `inspectShotDiagnostics({ shotId, timeSeconds? })` returns:
 
 - `screenCoverage` — projected frame occupancy
-- `visibleFraction` — unobstructed subject fraction (`1 - occlusionRatio`)
+- `visibleFraction` — in-frame visible subject fraction (`visibleArea / unclippedArea * (1 - occlusionRatio)`)
 - `groundClearanceMeters` — signed distance to identified floor (negative = below floor)
 - `cameraIntersectsSolidGeometry` — camera inside a wall/box/column
 - `cameraInsideEnvironmentBounds` — camera inside inferred navigable envelope

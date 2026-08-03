@@ -16,6 +16,7 @@ import { useProjectStore } from '../src/state/useProjectStore';
 import { getCanonicalPano, withShotPanoLink } from '../src/engine/sync';
 import { setAgentShotPanorama } from '../src/engine/agent/shotPanorama';
 import { inspectAgentShotDiagnostics } from '../src/engine/agent/shotDiagnostics';
+import { buildShotCompositionTelemetry } from '../src/engine/previs/compositionTelemetry';
 import {
   frameAgentSubjects,
   orientAgentObjectToward,
@@ -23,7 +24,7 @@ import {
   trackAgentSubjects,
 } from '../src/engine/agent/spatialPrimitives';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
-import { createShotKeyframe } from '../src/engine/shotTimeline';
+import { createShotKeyframe, sampleShotTimeline } from '../src/engine/shotTimeline';
 import { touchProject } from '../src/state/slices/touchProject';
 
 function installMockDestructiveMutation() {
@@ -274,6 +275,78 @@ describe('agent API improvements', () => {
     expect(result.subjectDisplacements?.[0]?.displacementMeters ?? 0).toBeGreaterThan(3);
   });
 
+  it('preserves interpolated subject positions when tracking between existing keyframes', async () => {
+    const { project, actor, shot } = corridorProject();
+    let next = createShotKeyframe(project, shot.id, {
+      timeSeconds: 0,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'Start',
+    });
+    next = createShotKeyframe(next, shot.id, {
+      timeSeconds: 4,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [8, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'End',
+    });
+    useProjectStore.setState({ project: next, selectedShotId: shot.id });
+
+    const expectedStart = sampleShotTimeline(next, shot.id, 1).objectOverrides[actor.id]?.transform?.position;
+    const expectedEnd = sampleShotTimeline(next, shot.id, 3).objectOverrides[actor.id]?.transform?.position;
+    expect(expectedStart?.[0]).toBeCloseTo(2, 5);
+    expect(expectedEnd?.[0]).toBeCloseTo(6, 5);
+
+    const result = await trackAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      startTime: 1,
+      endTime: 3,
+      composition: 'medium',
+    });
+    expect(result.ok).toBe(true);
+
+    const updatedShot = useProjectStore.getState().project.shots[0]!;
+    const keyframes = [...updatedShot.cameraKeyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
+    const trackStart = keyframes.find((keyframe) => (
+      Math.abs((keyframe.objectOverrides?.[actor.id]?.transform?.position?.[0] ?? -999) - 2) < 0.01
+    ));
+    const trackEnd = keyframes.find((keyframe) => (
+      Math.abs((keyframe.objectOverrides?.[actor.id]?.transform?.position?.[0] ?? -999) - 6) < 0.01
+    ));
+    expect(trackStart).toBeTruthy();
+    expect(trackEnd).toBeTruthy();
+    expect(trackStart?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBeCloseTo(2, 5);
+    expect(trackEnd?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBeCloseTo(6, 5);
+  });
+
+  it('reports subject displacement from interpolated timeline states', () => {
+    const { project, actor, shot } = corridorProject();
+    let next = createShotKeyframe(project, shot.id, {
+      timeSeconds: 0,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'Start',
+    });
+    next = createShotKeyframe(next, shot.id, {
+      timeSeconds: 4,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [8, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'End',
+    });
+
+    const diagnostics = inspectAgentShotDiagnostics({ project: next, shot: next.shots[0]! });
+    const actorDisplacement = diagnostics.subjectDisplacements.find((item) => item.objectId === actor.id);
+    expect(actorDisplacement?.displacementMeters ?? 0).toBeCloseTo(8, 5);
+  });
+
   it('warns when trackSubjects sees no subject motion and identical cameras', async () => {
     const { project, actor, shot } = corridorProject();
     useProjectStore.setState({ project, selectedShotId: shot.id });
@@ -308,16 +381,28 @@ describe('agent API improvements', () => {
     expect(actorDiag?.groundClearanceMeters ?? 0).toBeLessThan(0);
   });
 
-  it('separates visible fraction from screen coverage using occlusion', () => {
+  it('separates visible fraction from screen coverage using cropping and occlusion', () => {
     const { project, actor, shot } = corridorProject();
-    actor.dimensions = [0.2, 0.4, 0.2];
-    actor.transform.scale = [1, 1, 1];
-    actor.transform.position = [0, 0.2, 4];
+    actor.transform.position = [0, 0.875, 4];
+    const telemetry = buildShotCompositionTelemetry({ project, shot });
+    const entry = telemetry.subjects.Actor;
+    expect(entry).toBeTruthy();
+    if (!entry) return;
+
     const diagnostics = inspectAgentShotDiagnostics({ project, shot });
     const actorDiag = diagnostics.subjects.find((item) => item.objectId === actor.id);
     expect(actorDiag).toBeTruthy();
     if (!actorDiag) return;
-    expect(actorDiag.screenCoverage).toBeLessThan(0.2);
+
+    const visibleArea = entry.bounds.visible?.areaCoverage ?? entry.bounds.areaCoverage;
+    const unclippedArea = entry.bounds.unclipped?.areaCoverage ?? 0;
+    const expected = unclippedArea > 0
+      ? Math.max(0, Math.min(1, (visibleArea / unclippedArea) * (1 - (entry.occlusionRatio ?? 0))))
+      : 0;
+
+    expect(actorDiag.screenCoverage).toBeCloseTo(visibleArea, 5);
+    expect(actorDiag.visibleFraction).toBeCloseTo(expected, 5);
+    expect(unclippedArea).toBeGreaterThan(visibleArea);
     expect(actorDiag.visibleFraction).toBeGreaterThan(actorDiag.screenCoverage);
   });
 

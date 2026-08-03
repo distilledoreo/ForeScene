@@ -665,7 +665,7 @@ export interface AgentShotDiagnosticsSubject {
   objectId: string;
   /** Visible projected area as a fraction of the frame (0–1). */
   screenCoverage: number;
-  /** Fraction of the subject that is unobstructed (0–1), not frame occupancy. */
+  /** Fraction of the subject visible in frame after cropping and occlusion (0–1). */
   visibleFraction: number;
   /** Signed distance from the subject AABB bottom to the identified floor (negative = below floor). */
   groundClearanceMeters: number;

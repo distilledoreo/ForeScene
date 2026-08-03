@@ -13,9 +13,23 @@ import {
   cameraIntersectsSolidGeometry,
   computeEnvironmentBounds,
   displacementMeters,
+  getEffectiveObject,
+  getShotEffectiveState,
   identifyFloorY,
   signedGroundClearanceMeters,
 } from './spatialShotState';
+
+function frameVisibleFraction(
+  bounds: { behindCamera: boolean; areaCoverage?: number; unclipped?: { areaCoverage: number }; visible?: { areaCoverage: number } },
+  occlusionRatio?: number,
+): number {
+  if (bounds.behindCamera) return 0;
+  const unclippedArea = bounds.unclipped?.areaCoverage ?? 0;
+  if (unclippedArea <= 0) return 0;
+  const visibleArea = bounds.visible?.areaCoverage ?? bounds.areaCoverage ?? 0;
+  const unobstructed = Math.max(0, Math.min(1, 1 - (occlusionRatio ?? 0)));
+  return Math.max(0, Math.min(1, (visibleArea / unclippedArea) * unobstructed));
+}
 
 function foregroundOcclusionFraction(
   telemetry: ReturnType<typeof buildShotCompositionTelemetry>,
@@ -34,19 +48,27 @@ function cameraDisplacementMeters(shot: Shot): number {
   return displacementMeters(start, end);
 }
 
-function subjectDisplacements(shot: Shot, objectIds: string[]): AgentSubjectDisplacement[] {
+function subjectDisplacements(
+  project: LocationProject,
+  shot: Shot,
+  objectIds: string[],
+): AgentSubjectDisplacement[] {
   const keyframes = [...shot.cameraKeyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
   if (keyframes.length < 2) {
     return objectIds.map((objectId) => ({ objectId, displacementMeters: 0 }));
   }
-  const startOverrides = keyframes[0]!.objectOverrides ?? shot.objectOverrides ?? {};
-  const endOverrides = keyframes[keyframes.length - 1]!.objectOverrides ?? shot.objectOverrides ?? {};
+  const startTime = keyframes[0]!.timeSeconds;
+  const endTime = keyframes[keyframes.length - 1]!.timeSeconds;
+  const startState = getShotEffectiveState(project, shot.id, startTime);
+  const endState = getShotEffectiveState(project, shot.id, endTime);
   return objectIds.map((objectId) => {
-    const start = startOverrides[objectId]?.transform?.position;
-    const end = endOverrides[objectId]?.transform?.position;
+    const startObject = startState ? getEffectiveObject(startState, objectId) : undefined;
+    const endObject = endState ? getEffectiveObject(endState, objectId) : undefined;
     return {
       objectId,
-      displacementMeters: start && end ? displacementMeters(start, end) : 0,
+      displacementMeters: startObject && endObject
+        ? displacementMeters(startObject.transform.position, endObject.transform.position)
+        : 0,
     };
   });
 }
@@ -68,9 +90,7 @@ export function inspectAgentShotDiagnostics(params: {
   const linkedPano = resolveShotLinkedPano(project, shot);
   const environmentBounds = computeEnvironmentBounds(project, shotForInspect);
   const resolvedObjects = resolveProjectForShot(project, shotForInspect).scene.objects;
-  const trackedObjectIds = resolvedObjects
-    .filter((object) => shotForInspect.objectOverrides?.[object.id])
-    .map((object) => object.id);
+  const trackedObjectIds = resolvedObjects.map((object) => object.id);
 
   const subjects: AgentShotDiagnosticsSubject[] = [];
   const objectByNameOrId = new Map<string, string>();
@@ -91,9 +111,7 @@ export function inspectAgentShotDiagnostics(params: {
     subjects.push({
       objectId,
       screenCoverage: entry.bounds.areaCoverage,
-      visibleFraction: entry.bounds.behindCamera
-        ? 0
-        : Math.max(0, Math.min(1, 1 - (entry.occlusionRatio ?? 0))),
+      visibleFraction: frameVisibleFraction(entry.bounds, entry.occlusionRatio),
       groundClearanceMeters: sceneObject
         ? signedGroundClearanceMeters(sceneObject, floorY)
         : 0,
@@ -117,7 +135,7 @@ export function inspectAgentShotDiagnostics(params: {
     cameraIntersectsSolidGeometry: cameraIntersectsSolidGeometry(project, shotForInspect),
     cameraInsideEnvironmentBounds: insideEnvironment,
     cameraDisplacementMeters: cameraDisplacementMeters(shot),
-    subjectDisplacements: subjectDisplacements(shot, trackedObjectIds),
+    subjectDisplacements: subjectDisplacements(project, shot, trackedObjectIds),
     diagnostics: [],
   };
 }

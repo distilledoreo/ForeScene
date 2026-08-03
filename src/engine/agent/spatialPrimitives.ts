@@ -433,6 +433,8 @@ export async function trackAgentSubjects(
   }
 
   const project = useProjectStore.getState().project;
+  const startState = getShotEffectiveState(project, input.shotId, start);
+  const endState = getShotEffectiveState(project, input.shotId, end);
   const displacement = measureSubjectDisplacement(project, input.shotId, input.subjectIds, start, end);
   const startSolved = solveSubjectsCameraAtTime(project, input.shotId, input.subjectIds, start, input.composition);
   if (!startSolved.camera) {
@@ -475,7 +477,8 @@ export async function trackAgentSubjects(
         timeSeconds: start,
         camera: startSolved.camera!,
         label: 'Track start',
-        snapshotShotStaging: true,
+        objectOverrides: startState?.shot.objectOverrides,
+        snapshotShotStaging: false,
       });
 
     next = endExisting
@@ -487,7 +490,8 @@ export async function trackAgentSubjects(
         timeSeconds: end,
         camera: endSolved.camera!,
         label: 'Track end',
-        snapshotShotStaging: true,
+        objectOverrides: endState?.shot.objectOverrides,
+        snapshotShotStaging: false,
       });
 
     return setShotTimelineDuration(next, input.shotId, end);
