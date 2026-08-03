@@ -74,6 +74,12 @@ export function getCameraMoveDurationSeconds(
   return clampDuration(last - first);
 }
 
+export function getLastKeyframeTime(keyframes: readonly CameraKeyframe[] = []): number {
+  const sorted = getSortedCameraKeyframes(keyframes);
+  if (sorted.length === 0) return 0;
+  return sorted[sorted.length - 1]!.timeSeconds;
+}
+
 export function setTwoPointCameraKeyframe(params: {
   keyframes: readonly CameraKeyframe[];
   slot: CameraMoveKeyframeSlot;

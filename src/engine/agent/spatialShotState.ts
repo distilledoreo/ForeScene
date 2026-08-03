@@ -18,6 +18,7 @@ import {
   updateShotObjectOverrides,
 } from '../shotSceneState';
 import { sampleShotTimeline } from '../shotTimeline';
+import { selectionBounds } from '../buildSelection';
 import { objectWorldAabb } from '../previs/compositionTelemetry';
 import { AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 
@@ -95,6 +96,27 @@ export function identifyFloorY(
   return Number.isFinite(bestTop) ? bestTop : 0;
 }
 
+export function effectiveObjectWorldAabb(object: SceneObject): { min: Vec3; max: Vec3 } {
+  const box = selectionBounds([object]);
+  return {
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+  };
+}
+
+export function groundObjectPositionOnFloor(
+  object: SceneObject,
+  floorY: number,
+): Vec3 {
+  const bounds = effectiveObjectWorldAabb(object);
+  const deltaY = floorY - bounds.min[1];
+  return [
+    object.transform.position[0],
+    object.transform.position[1] + deltaY,
+    object.transform.position[2],
+  ];
+}
+
 export function uprightFloorPositionForObject(
   object: SceneObject,
   floorY: number,
@@ -112,7 +134,7 @@ export function signedGroundClearanceMeters(
   object: SceneObject,
   floorY: number,
 ): number {
-  const box = objectWorldAabb(object);
+  const box = effectiveObjectWorldAabb(object);
   return box.min[1] - floorY;
 }
 

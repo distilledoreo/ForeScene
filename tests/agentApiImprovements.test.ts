@@ -16,6 +16,11 @@ import { useProjectStore } from '../src/state/useProjectStore';
 import { getCanonicalPano, withShotPanoLink } from '../src/engine/sync';
 import { setAgentShotPanorama } from '../src/engine/agent/shotPanorama';
 import { inspectAgentShotDiagnostics } from '../src/engine/agent/shotDiagnostics';
+import {
+  effectiveObjectWorldAabb,
+  getShotEffectiveState,
+  identifyFloorY,
+} from '../src/engine/agent/spatialShotState';
 import { buildShotCompositionTelemetry } from '../src/engine/previs/compositionTelemetry';
 import {
   frameAgentSubjects,
@@ -23,6 +28,7 @@ import {
   snapAgentObjectToFloor,
   trackAgentSubjects,
 } from '../src/engine/agent/spatialPrimitives';
+import { getCameraMoveDurationSeconds } from '../src/engine/cameraKeyframes';
 import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 import { createShotKeyframe, sampleShotTimeline } from '../src/engine/shotTimeline';
 import { touchProject } from '../src/state/slices/touchProject';
@@ -169,6 +175,137 @@ describe('agent API improvements', () => {
     expect(cleared.ok).toBe(true);
     expect(useProjectStore.getState().activePanoId).toBeUndefined();
     expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBeUndefined();
+  });
+
+  it('grounds objects using the bottom of their effective world bounds', async () => {
+    const floor = createSceneObject('floor', 1);
+    floor.dimensions = [10, 0.1, 10];
+    floor.transform.position = [0, 1, 0];
+
+    const box = createSceneObject('box', 1);
+    box.dimensions = [2, 4, 2];
+    box.transform.position = [0, 5, 0];
+    box.transform.rotation = [0, 45, 0];
+    box.transform.scale = [1, 2, 1];
+
+    const shot = createShot({ index: 1, camera: {
+      position: [0, 1.6, 6],
+      target: [0, 1.4, 0],
+      fovDegrees: 50,
+      aspectRatio: 16 / 9,
+      near: 0.1,
+      far: 100,
+    } });
+    const project = touchProject({
+      ...createDefaultProject(),
+      scene: { ...createDefaultProject().scene, objects: [floor, box] },
+      shots: [shot],
+    });
+    useProjectStore.setState({ project, selectedShotId: shot.id });
+
+    const result = await snapAgentObjectToFloor({ shotId: shot.id, object: { id: box.id } });
+    expect(result.ok).toBe(true);
+
+    const state = getShotEffectiveState(useProjectStore.getState().project, shot.id);
+    const grounded = state ? state.objects.find((object) => object.id === box.id) : undefined;
+    expect(grounded).toBeTruthy();
+    if (!grounded) return;
+    const bounds = effectiveObjectWorldAabb(grounded);
+    const floorY = identifyFloorY(project, [0, 5, 0]);
+    expect(Math.abs(bounds.min[1] - floorY)).toBeLessThan(0.001);
+    expect(box.transform.position[1]).toBe(5);
+  });
+
+  it('inspects explicitly requested subjects of any object type', () => {
+    const floor = createSceneObject('floor', 1);
+    floor.dimensions = [20, 0.1, 20];
+    floor.transform.position = [0, 0, 0];
+
+    const actor = createSceneObject('human_dummy', 1, [0, 0.875, 0]);
+    actor.name = 'Actor';
+
+    const prop = createSceneObject('box', 1);
+    prop.name = 'Crate';
+    prop.dimensions = [1, 1, 1];
+    prop.transform.position = [2, 0.5, 0];
+
+    const behind = createSceneObject('box', 2);
+    behind.name = 'Behind';
+    behind.dimensions = [1, 1, 1];
+    behind.transform.position = [0, 0.5, 12];
+
+    const shot = createShot({ index: 1, camera: {
+      position: [0, 1.6, 6],
+      target: [0, 1.4, 0],
+      fovDegrees: 50,
+      aspectRatio: 16 / 9,
+      near: 0.1,
+      far: 100,
+    } });
+    const stagedShot = {
+      ...shot,
+      objectOverrides: updateShotObjectOverrides(shot, prop, {
+        transform: { position: [2, 0.5, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+    };
+    const project = touchProject({
+      ...createDefaultProject(),
+      scene: { ...createDefaultProject().scene, objects: [floor, actor, prop, behind] },
+      shots: [stagedShot],
+    });
+
+    const diagnostics = inspectAgentShotDiagnostics({
+      project,
+      shot: stagedShot,
+      subjectIds: [actor.id, prop.id, behind.id],
+    });
+
+    expect(diagnostics.subjects.map((subject) => subject.objectId).sort()).toEqual(
+      [actor.id, behind.id, prop.id].sort(),
+    );
+
+    const actorDiag = diagnostics.subjects.find((subject) => subject.objectId === actor.id);
+    const propDiag = diagnostics.subjects.find((subject) => subject.objectId === prop.id);
+    const behindDiag = diagnostics.subjects.find((subject) => subject.objectId === behind.id);
+
+    expect(actorDiag?.screenCoverage ?? 0).toBeGreaterThan(0);
+    expect(actorDiag?.humanLandmarks?.eyes).toBeTruthy();
+    expect(propDiag?.screenCoverage ?? 0).toBeGreaterThan(0);
+    expect(behindDiag?.behindCamera).toBe(true);
+    expect(behindDiag?.screenCoverage ?? 1).toBe(0);
+  });
+
+  it('reports cropped and occluded metrics for explicit diagnostic subjects', () => {
+    const { project, actor, shot } = corridorProject();
+    const wall = createSceneObject('wall', 1);
+    wall.dimensions = [0.2, 2, 2];
+    wall.transform.position = [0.5, 1, 3];
+
+    actor.transform.position = [0, 0.875, 4];
+    const stagedShot = {
+      ...shot,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 4], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+    };
+    const nextProject = {
+      ...project,
+      scene: { ...project.scene, objects: [...project.scene.objects, wall] },
+      shots: [stagedShot],
+    };
+
+    const diagnostics = inspectAgentShotDiagnostics({
+      project: nextProject,
+      shot: stagedShot,
+      subjectIds: [actor.id, wall.id],
+    });
+
+    const actorDiag = diagnostics.subjects.find((subject) => subject.objectId === actor.id);
+    const wallDiag = diagnostics.subjects.find((subject) => subject.objectId === wall.id);
+    expect(actorDiag).toBeTruthy();
+    expect(wallDiag).toBeTruthy();
+    expect(actorDiag?.visibleFraction ?? 0).toBeLessThanOrEqual(1);
+    expect(wallDiag?.screenCoverage ?? 0).toBeGreaterThan(0);
   });
 
   it('snaps only shot staging, leaving the base scene transform intact', async () => {
@@ -321,6 +458,84 @@ describe('agent API improvements', () => {
     expect(trackEnd).toBeTruthy();
     expect(trackStart?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBeCloseTo(2, 5);
     expect(trackEnd?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBeCloseTo(6, 5);
+    expect(keyframes.map((keyframe) => keyframe.timeSeconds)).toEqual([0, 1, 3, 4]);
+  });
+
+  it('does not rescale existing keyframe timing when tracking within the timeline', async () => {
+    const { project, actor, shot } = corridorProject();
+    let next = createShotKeyframe(project, shot.id, {
+      timeSeconds: 0,
+      camera: shot.camera,
+      easing: 'easeInOut',
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'Start',
+    });
+    next = createShotKeyframe(next, shot.id, {
+      timeSeconds: 4,
+      camera: {
+        ...shot.camera,
+        position: [1, 1.6, 6],
+      },
+      easing: 'easeIn',
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [8, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'End',
+    });
+    useProjectStore.setState({ project: next, selectedShotId: shot.id });
+
+    const result = await trackAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      startTime: 1,
+      endTime: 3,
+    });
+    expect(result.ok).toBe(true);
+
+    const updatedShot = useProjectStore.getState().project.shots[0]!;
+    const keyframes = [...updatedShot.cameraKeyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
+    expect(keyframes.map((keyframe) => keyframe.timeSeconds)).toEqual([0, 1, 3, 4]);
+    expect(keyframes[0]?.easing).toBe('easeInOut');
+    expect(keyframes[3]?.easing).toBe('easeIn');
+    expect(keyframes[0]?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBe(0);
+    expect(keyframes[3]?.objectOverrides?.[actor.id]?.transform?.position?.[0]).toBe(8);
+    expect(getCameraMoveDurationSeconds(keyframes)).toBeCloseTo(4, 5);
+  });
+
+  it('extends the timeline without rescaling when tracking beyond the existing end', async () => {
+    const { project, actor, shot } = corridorProject();
+    let next = createShotKeyframe(project, shot.id, {
+      timeSeconds: 0,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'Start',
+    });
+    next = createShotKeyframe(next, shot.id, {
+      timeSeconds: 2,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [4, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'End',
+    });
+    useProjectStore.setState({ project: next, selectedShotId: shot.id });
+
+    const result = await trackAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      startTime: 1,
+      endTime: 5,
+    });
+    expect(result.ok).toBe(true);
+
+    const keyframes = [...useProjectStore.getState().project.shots[0]!.cameraKeyframes]
+      .sort((a, b) => a.timeSeconds - b.timeSeconds);
+    expect(keyframes.map((keyframe) => keyframe.timeSeconds)).toEqual([0, 1, 2, 5]);
+    expect(getCameraMoveDurationSeconds(keyframes)).toBeCloseTo(5, 5);
   });
 
   it('reports subject displacement from interpolated timeline states', () => {

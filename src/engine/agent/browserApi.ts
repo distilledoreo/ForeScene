@@ -455,7 +455,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return sampleAgentShotState(input);
     },
 
-    inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number }) {
+    inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number; subjectIds?: string[] }) {
       const blocked = requireInspectionAccess();
       if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       const project = readInspectionContext().project;
@@ -470,6 +470,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         project,
         shot,
         timeSeconds: input.timeSeconds,
+        subjectIds: input.subjectIds,
       });
       diagnostics.revisionId = readInspectionContext().revisionId;
       return diagnostics;

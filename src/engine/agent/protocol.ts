@@ -670,6 +670,9 @@ export interface AgentShotDiagnosticsSubject {
   /** Signed distance from the subject AABB bottom to the identified floor (negative = below floor). */
   groundClearanceMeters: number;
   occlusionRatio?: number;
+  behindCamera?: boolean;
+  clipped?: boolean;
+  humanLandmarks?: Record<string, { x: number; y: number; inFrame: boolean }>;
 }
 
 export interface AgentSubjectDisplacement {
@@ -1099,7 +1102,7 @@ export interface ForeSceneBrowserApi {
   inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
   sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
   sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample;
-  inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number }): AgentShotDiagnostics;
+  inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number; subjectIds?: string[] }): AgentShotDiagnostics;
   listLandmarks(): AgentLandmarkSummary[];
   createExportPlan(input?: AgentExportPlanRequest): AgentExportPlanResult;
 

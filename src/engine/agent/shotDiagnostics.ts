@@ -2,10 +2,13 @@
  * Shot diagnostics for the Agent API — deterministic visibility / framing checks.
  */
 
-import type { LocationProject, Shot } from '../../domain/types';
+import type { LocationProject, SceneObject, Shot } from '../../domain/types';
 import { resolveShotLinkedPano } from '../sync';
 import { resolveProjectForShot } from '../shotSceneState';
-import { buildShotCompositionTelemetry } from '../previs/compositionTelemetry';
+import {
+  buildShotCompositionTelemetry,
+  describeSceneObjectComposition,
+} from '../previs/compositionTelemetry';
 import { sampleShotTimeline } from '../shotTimeline';
 import type { AgentShotDiagnostics, AgentShotDiagnosticsSubject, AgentSubjectDisplacement } from './protocol';
 import {
@@ -73,10 +76,58 @@ function subjectDisplacements(
   });
 }
 
+function buildSubjectDiagnostic(
+  project: LocationProject,
+  shotForInspect: Shot,
+  object: SceneObject,
+): AgentShotDiagnosticsSubject {
+  const entry = describeSceneObjectComposition({
+    project,
+    shot: shotForInspect,
+    object,
+  });
+  const floorY = identifyFloorY(project, object.transform.position);
+  return {
+    objectId: object.id,
+    screenCoverage: entry.bounds.areaCoverage,
+    visibleFraction: frameVisibleFraction(entry.bounds, entry.occlusionRatio),
+    groundClearanceMeters: signedGroundClearanceMeters(object, floorY),
+    occlusionRatio: entry.occlusionRatio,
+    behindCamera: entry.bounds.behindCamera,
+    clipped: entry.bounds.clipped,
+    humanLandmarks: entry.landmarks,
+  };
+}
+
+function inferDiagnosticSubjectIds(
+  shot: Shot,
+  telemetry: ReturnType<typeof buildShotCompositionTelemetry>,
+  resolvedObjects: SceneObject[],
+): string[] {
+  const objectByNameOrId = new Map<string, string>();
+  for (const object of resolvedObjects) {
+    objectByNameOrId.set(object.id, object.id);
+    objectByNameOrId.set(object.name, object.id);
+  }
+
+  const ids = new Set<string>();
+  for (const key of Object.keys(telemetry.subjects)) {
+    ids.add(objectByNameOrId.get(key) ?? key);
+  }
+  for (const object of resolvedObjects) {
+    if (object.type === 'floor' || object.type === 'sun_marker' || object.visible === false) continue;
+    if (shot.objectOverrides?.[object.id]) {
+      ids.add(object.id);
+    }
+  }
+  return [...ids];
+}
+
 export function inspectAgentShotDiagnostics(params: {
   project: LocationProject;
   shot: Shot;
   timeSeconds?: number;
+  subjectIds?: string[];
 }): AgentShotDiagnostics {
   const { project, shot } = params;
   const sampled = params.timeSeconds !== undefined
@@ -90,33 +141,17 @@ export function inspectAgentShotDiagnostics(params: {
   const linkedPano = resolveShotLinkedPano(project, shot);
   const environmentBounds = computeEnvironmentBounds(project, shotForInspect);
   const resolvedObjects = resolveProjectForShot(project, shotForInspect).scene.objects;
-  const trackedObjectIds = resolvedObjects.map((object) => object.id);
+  const resolvedById = new Map(resolvedObjects.map((object) => [object.id, object]));
+
+  const subjectIds = params.subjectIds?.length
+    ? params.subjectIds
+    : inferDiagnosticSubjectIds(shotForInspect, telemetry, resolvedObjects);
 
   const subjects: AgentShotDiagnosticsSubject[] = [];
-  const objectByNameOrId = new Map<string, string>();
-  for (const object of resolvedObjects) {
-    objectByNameOrId.set(object.id, object.id);
-    objectByNameOrId.set(object.name, object.id);
-  }
-
-  const seen = new Set<string>();
-  for (const [key, entry] of Object.entries(telemetry.subjects)) {
-    const objectId = objectByNameOrId.get(key) ?? key;
-    if (seen.has(objectId)) continue;
-    seen.add(objectId);
-    const sceneObject = resolvedObjects.find((candidate) => candidate.id === objectId);
-    const floorY = sceneObject
-      ? identifyFloorY(project, sceneObject.transform.position)
-      : 0;
-    subjects.push({
-      objectId,
-      screenCoverage: entry.bounds.areaCoverage,
-      visibleFraction: frameVisibleFraction(entry.bounds, entry.occlusionRatio),
-      groundClearanceMeters: sceneObject
-        ? signedGroundClearanceMeters(sceneObject, floorY)
-        : 0,
-      occlusionRatio: entry.occlusionRatio,
-    });
+  for (const objectId of subjectIds) {
+    const sceneObject = resolvedById.get(objectId);
+    if (!sceneObject || sceneObject.visible === false) continue;
+    subjects.push(buildSubjectDiagnostic(project, shotForInspect, sceneObject));
   }
 
   const cameraPosition = shotForInspect.camera.position;
@@ -135,7 +170,7 @@ export function inspectAgentShotDiagnostics(params: {
     cameraIntersectsSolidGeometry: cameraIntersectsSolidGeometry(project, shotForInspect),
     cameraInsideEnvironmentBounds: insideEnvironment,
     cameraDisplacementMeters: cameraDisplacementMeters(shot),
-    subjectDisplacements: subjectDisplacements(project, shot, trackedObjectIds),
+    subjectDisplacements: subjectDisplacements(project, shot, subjectIds),
     diagnostics: [],
   };
 }

@@ -57,6 +57,7 @@ const OPERATION_DOCS: Record<string, AgentOperationDescription> = {
     input: {
       shotId: 'string',
       timeSeconds: 'number (optional)',
+      subjectIds: 'string[] (optional — inspect any renderable object by id)',
     },
     returns: 'AgentShotDiagnostics',
   },

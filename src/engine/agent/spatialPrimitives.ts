@@ -25,7 +25,6 @@ import {
 } from './diagnostics';
 import {
   createShotKeyframe,
-  setShotTimelineDuration,
   updateShotKeyframe,
 } from '../shotTimeline';
 import type {
@@ -53,6 +52,7 @@ import {
   getEffectiveObject,
   getShotEffectiveState,
   identifyFloorY,
+  groundObjectPositionOnFloor,
   uprightFloorPositionForObject,
 } from './spatialShotState';
 
@@ -236,7 +236,7 @@ export async function snapAgentObjectToFloor(
   }
 
   const floorY = identifyFloorY(project, object.transform.position);
-  const nextPosition = uprightFloorPositionForObject(object, floorY);
+  const nextPosition = groundObjectPositionOnFloor(object, floorY);
   const commit = await commitProjectMutation('Snap object to floor (shot staging)', (current) => (
     applyShotStagingTransform(current, input.shotId!, object.id, { position: nextPosition })
   ));
@@ -287,7 +287,7 @@ export async function placeAgentObjectNearLandmark(
   ]);
   const nextPosition: Vec3 = [
     landmark.position[0] + offset[0],
-    uprightFloorPositionForObject(object, floorY)[1],
+    groundObjectPositionOnFloor(object, floorY)[1],
     landmark.position[2] + offset[2],
   ];
 
@@ -494,7 +494,7 @@ export async function trackAgentSubjects(
         snapshotShotStaging: false,
       });
 
-    return setShotTimelineDuration(next, input.shotId, end);
+    return next;
   });
 
   const hasWarnings = diagnostics.some((item) => item.severity === 'warning' || item.severity === 'error');

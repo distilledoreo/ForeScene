@@ -153,7 +153,7 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 
 `snapObjectToFloor({ shotId, object })`, `placeObjectNearLandmark`, `frameSubjects`, `orientObjectToward`, and `trackSubjects` follow this model.
 
-`trackSubjects` samples subject transforms at `startTime` and `endTime`, solves distinct cameras, and warns when subject displacement is negligible or the cameras are identical.
+`trackSubjects` samples subject transforms at `startTime` and `endTime`, solves distinct cameras, and warns when subject displacement is negligible or the cameras are identical. Tracking inserts or updates keyframes at the requested times without rescaling existing timeline timing.
 
 ### Timeline helpers
 
@@ -161,11 +161,17 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 
 ### Shot diagnostics
 
-`inspectShotDiagnostics({ shotId, timeSeconds? })` returns:
+`inspectShotDiagnostics({ shotId, timeSeconds?, subjectIds? })` returns diagnostics for explicitly requested objects of any type, or infers likely subjects when `subjectIds` is omitted.
+
+Per-subject fields:
 
 - `screenCoverage` — projected frame occupancy
 - `visibleFraction` — in-frame visible subject fraction (`visibleArea / unclippedArea * (1 - occlusionRatio)`)
 - `groundClearanceMeters` — signed distance to identified floor (negative = below floor)
+- `behindCamera`, `clipped`, `occlusionRatio`
+- `humanLandmarks` — optional head/body landmarks for humanoid objects
+
+Shot-level fields:
 - `cameraIntersectsSolidGeometry` — camera inside a wall/box/column
 - `cameraInsideEnvironmentBounds` — camera inside inferred navigable envelope
 - `linkedPanoramaResolved` — panorama link resolves (not a render confirmation)
