@@ -61,4 +61,42 @@ test.describe('@heavy agent:production rapid-review', () => {
       await rm(outputDir, { recursive: true, force: true });
     }
   });
+
+  test('motion shot with renderControlVideo succeeds when control videos are skipped', async ({
+    browserName,
+    baseURL,
+  }) => {
+    test.skip(browserName !== 'chromium', 'Chromium-only Agent CLI orchestration');
+    test.setTimeout(600_000);
+
+    const outputDir = path.join(os.tmpdir(), `forescene-production-motion-e2e-${process.pid}-${Date.now()}`);
+    const profileDir = path.join(outputDir, 'browser-profile');
+    await rm(outputDir, { recursive: true, force: true });
+    await mkdir(profileDir, { recursive: true });
+
+    const manifestPath = path.resolve('examples/previs/rapid-review-motion.json');
+    const url = baseURL ?? 'http://127.0.0.1:4173';
+
+    try {
+      const result = await runProduction({
+        manifestPath,
+        url,
+        headless: true,
+        writeAccess: true,
+        persistWrite: false,
+        resetProject: true,
+        outputDir,
+        profileDir,
+        mode: 'rapid-review',
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.controlVideosRendered).toBe(0);
+      expect(result.shotsRequested).toBe(2);
+      expect(result.framesRendered).toBe(2);
+      expect(await pathExists(path.join(outputDir, 'shots', '020.mp4'))).toBe(false);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
 });

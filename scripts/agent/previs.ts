@@ -58,6 +58,8 @@ import {
   renderProfileFingerprint,
   emptyProductionTiming,
   ProductionTimeBudget,
+  ProductionTimeBudgetExceededError,
+  hasMissingControlVideos,
   type ProductionRunTiming,
 } from '../../src/engine/previs/index';
 import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession';
@@ -116,6 +118,7 @@ export interface PrevisCliResult {
   timing?: ProductionRunTiming;
   sourceRevisionId?: string;
   resultRevisionId?: string;
+  budgetExceeded?: boolean;
   error?: string;
 }
 
@@ -808,6 +811,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     profileDir: options.profileDir,
   });
 
+  let framesRendered = 0;
+  let controlVideosRendered = 0;
+  let controlVideosFailed = 0;
+
   try {
     timeBudget?.assertWithinBudget('open_package');
     await waitForAgentIdle(session.page);
@@ -1303,7 +1310,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     const renderingStartedAt = Date.now();
     state = setPhase(state, 'render', 'in_progress');
     await openWorkspace(session.page, 'shots');
-    let framesRendered = 0;
     const renderSession = await createPersistentRenderSession(
       session.page,
       renderProfile,
@@ -1331,7 +1337,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           shotNumber: definition.shotNumber,
           locationId: definition.locationId,
           framePath: path.join(outputDir, 'shots', `${definition.shotNumber}.png`),
-          debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
         });
       }
 
@@ -1388,8 +1393,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         await writeJson(runStatePath, state);
       }
 
-      let controlVideosRendered = 0;
-      let controlVideosFailed = 0;
+      controlVideosRendered = 0;
+      controlVideosFailed = 0;
       if (!skipControlVideos) {
         for (const definition of manifest.shots) {
           if (!definition.motion?.renderControlVideo) continue;
@@ -1781,10 +1786,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const shotState = state.shots[shot.shotNumber];
       return shotState?.compile === 'complete' && shotState.render !== 'complete';
     });
-    const missingControlVideos = manifest.shots.some((shot) => {
-      if (!shot.motion?.renderControlVideo) return false;
-      const shotState = state.shots[shot.shotNumber];
-      return shotState?.compile === 'complete' && shotState.video !== 'complete';
+    const missingControlVideos = hasMissingControlVideos({
+      shots: manifest.shots,
+      shotStates: state.shots,
+      skipControlVideos,
     });
 
     const summary: PrevisCliResult = {
@@ -1825,6 +1830,26 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const descriptor = await renderSession.close();
       await writeJson(path.join(outputDir, 'render-session.json'), descriptor);
     }
+  } catch (error) {
+    timing.totalMs = Date.now() - runStartedAt;
+    if (error instanceof ProductionTimeBudgetExceededError) {
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        budgetExceeded: true,
+        phase: error.phase,
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        framesRendered,
+        controlVideosRendered,
+        controlVideosFailed,
+        timing,
+        sourceRevisionId,
+        error: error.message,
+      };
+    }
+    throw error;
   } finally {
     await session.close();
   }

@@ -10,6 +10,7 @@ import {
   previsPhaseToProductionPhase,
   ProductionTimeBudget,
   ProductionTimeBudgetExceededError,
+  hasMissingControlVideos,
   RAPID_REVIEW_PROFILE,
   renderProfileFingerprint,
   resolveProductionConfig,
@@ -138,6 +139,25 @@ describe('production run state machine', () => {
     expect(migrated.state.shots['010']?.render).toBe('pending');
     expect(migrated.state.shots['010']?.framePath).toBeUndefined();
     expect(migrated.state.phases.render).toBe('pending');
+  });
+});
+
+describe('control video skipping', () => {
+  it('ignores missing control videos when rapid-review skips them', () => {
+    const shots = [{ shotNumber: '020', motion: { renderControlVideo: true } }];
+    const shotStates = { '020': { compile: 'complete', video: 'pending' } };
+
+    expect(hasMissingControlVideos({
+      skipControlVideos: true,
+      shots,
+      shotStates,
+    })).toBe(false);
+
+    expect(hasMissingControlVideos({
+      skipControlVideos: false,
+      shots,
+      shotStates,
+    })).toBe(true);
   });
 });
 

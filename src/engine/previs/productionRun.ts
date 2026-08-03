@@ -254,3 +254,16 @@ export class ProductionTimeBudget {
     }
   }
 }
+
+export function hasMissingControlVideos(params: {
+  shots: Array<{ shotNumber: string; motion?: { renderControlVideo?: boolean } }>;
+  shotStates: Record<string, { compile?: string; video?: string } | undefined>;
+  skipControlVideos: boolean;
+}): boolean {
+  if (params.skipControlVideos) return false;
+  return params.shots.some((shot) => {
+    if (!shot.motion?.renderControlVideo) return false;
+    const shotState = params.shotStates[shot.shotNumber];
+    return shotState?.compile === 'complete' && shotState.video !== 'complete';
+  });
+}

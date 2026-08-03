@@ -31,13 +31,19 @@ function mapPrevisResultToProductionRun(
     totalMs: result.timing?.totalMs ?? (Date.now() - params.startedAt),
   };
 
-  const status = deriveProductionRunStatus({
-    ok: result.ok,
-    failed: result.failed ?? 0,
-    warnings: result.warnings ?? 0,
-    reviewRequiredShotIds,
-    error: result.error,
-  });
+  const status = result.budgetExceeded
+    ? 'needs_review' as const
+    : deriveProductionRunStatus({
+      ok: result.ok,
+      failed: result.failed ?? 0,
+      warnings: result.warnings ?? 0,
+      reviewRequiredShotIds,
+      error: result.error,
+    });
+
+  const phase = result.budgetExceeded
+    ? (result.phase as ProductionRunResult['phase'])
+    : (result.ok ? 'complete' : previsPhaseToProductionPhase(result.phase as never));
 
   const artifactPaths = result.artifactPaths ?? [
     result.contactSheet,
@@ -50,7 +56,7 @@ function mapPrevisResultToProductionRun(
     status,
     mode: params.mode ?? 'rapid-review',
     renderProfileId: params.renderProfileId as ProductionRunResult['renderProfileId'],
-    phase: result.ok ? 'complete' : previsPhaseToProductionPhase(result.phase as never),
+    phase,
     ok: result.ok,
     sourceRevisionId: result.sourceRevisionId,
     resultRevisionId: result.resultRevisionId,

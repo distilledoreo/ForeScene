@@ -198,9 +198,6 @@ export class PersistentRenderSession {
     }
 
     await writeDataUrlPng(browserResult.pngDataUrl, job.framePath);
-    if (job.debugUiPath) {
-      await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
-    }
 
     this.shotsRendered += 1;
     return frame;
@@ -247,9 +244,6 @@ export class PersistentRenderSession {
       }
 
       await writeDataUrlPng(browserResult.pngDataUrl, job.framePath);
-      if (job.debugUiPath) {
-        await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
-      }
       this.shotsRendered += 1;
       results.push(frame);
     }
