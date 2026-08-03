@@ -22,14 +22,13 @@ function mapPrevisResultToProductionRun(
     renderProfileId: string;
     outputDir: string;
     startedAt: number;
-    phaseTimings: Partial<ProductionRunResult['timing']>;
   },
 ): ProductionRunResult {
-  const reviewRequiredShotIds: string[] = [];
+  const reviewRequiredShotIds = result.reviewRequiredShotIds ?? [];
   const timing = {
     ...emptyProductionTiming(),
-    ...params.phaseTimings,
-    totalMs: Date.now() - params.startedAt,
+    ...result.timing,
+    totalMs: result.timing?.totalMs ?? (Date.now() - params.startedAt),
   };
 
   const status = deriveProductionRunStatus({
@@ -40,9 +39,11 @@ function mapPrevisResultToProductionRun(
     error: result.error,
   });
 
-  const artifactIds: string[] = [];
-  if (result.contactSheet) artifactIds.push(result.contactSheet);
-  if (result.package) artifactIds.push(result.package);
+  const artifactPaths = result.artifactPaths ?? [
+    result.contactSheet,
+    result.package,
+    path.join(params.outputDir, 'validation.json'),
+  ].filter((value): value is string => Boolean(value));
 
   return {
     runId: params.runId,
@@ -51,6 +52,8 @@ function mapPrevisResultToProductionRun(
     renderProfileId: params.renderProfileId as ProductionRunResult['renderProfileId'],
     phase: result.ok ? 'complete' : previsPhaseToProductionPhase(result.phase as never),
     ok: result.ok,
+    sourceRevisionId: result.sourceRevisionId,
+    resultRevisionId: result.resultRevisionId,
     projectId: result.projectId,
     manifestHash: result.manifestHash,
     runStatePath: result.runStatePath,
@@ -67,7 +70,7 @@ function mapPrevisResultToProductionRun(
     warnings: result.warnings ?? 0,
     failed: result.failed ?? 0,
     diagnostics: result.diagnostics as ProductionRunResult['diagnostics'],
-    artifactIds,
+    artifactPaths,
     artifacts: {
       contactSheet: result.contactSheet,
       package: result.package,
@@ -118,7 +121,6 @@ export async function runProduction(options: ProductionRunOptions): Promise<Prod
     renderProfileId: config.renderProfileId,
     outputDir,
     startedAt,
-    phaseTimings: {},
   });
 }
 

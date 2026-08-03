@@ -139,7 +139,8 @@ export interface ProductionRunResult {
   failed: number;
 
   diagnostics?: PrevisDiagnostic[];
-  artifactIds: string[];
+  /** Filesystem paths to run artifacts (contact sheet, package, etc.). */
+  artifactPaths: string[];
 
   artifacts: {
     contactSheet?: string;
@@ -219,4 +220,37 @@ export function emptyProductionTiming(): ProductionRunTiming {
     repairMs: 0,
     totalMs: 0,
   };
+}
+
+export class ProductionTimeBudgetExceededError extends Error {
+  readonly phase: string;
+
+  constructor(phase: string) {
+    super(`Production time budget exceeded during ${phase}.`);
+    this.name = 'ProductionTimeBudgetExceededError';
+    this.phase = phase;
+  }
+}
+
+/** Enforces an optional wall-clock budget across production phases. */
+export class ProductionTimeBudget {
+  private readonly deadlineMs: number;
+
+  constructor(seconds: number, startedAt = Date.now()) {
+    this.deadlineMs = startedAt + seconds * 1000;
+  }
+
+  remainingMs(): number {
+    return Math.max(0, this.deadlineMs - Date.now());
+  }
+
+  isExpired(): boolean {
+    return this.remainingMs() <= 0;
+  }
+
+  assertWithinBudget(phase: string): void {
+    if (this.isExpired()) {
+      throw new ProductionTimeBudgetExceededError(phase);
+    }
+  }
 }

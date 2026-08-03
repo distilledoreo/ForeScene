@@ -8,6 +8,7 @@ export interface RenderSessionShotJob {
   shotId: string;
   shotNumber: string;
   framePath: string;
+  locationId?: string;
   timeSeconds?: number;
   debugUiPath?: string;
 }

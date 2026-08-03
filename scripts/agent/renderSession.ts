@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Page } from '@playwright/test';
 import {
   buildRenderInputFromProfile,
+  groupJobsByLocation,
   type RenderSessionBatchResult,
   type RenderSessionDescriptor,
   type RenderSessionFrameResult,
@@ -20,6 +21,17 @@ import {
 import { waitForAgentIdle } from './browser';
 import { captureSceneScreenshot } from './screenshot';
 
+type BrowserRenderResult = {
+  ok: boolean;
+  pngDataUrl?: string;
+  width: number;
+  height: number;
+  pixelStats?: RenderSessionFrameResult['pixelStats'];
+  revisionId?: string;
+  source?: string;
+  diagnostics?: Array<{ code?: string; message?: string }>;
+};
+
 async function writeDataUrlPng(dataUrl: string, filePath: string): Promise<void> {
   const match = /^data:image\/png;base64,(.+)$/i.exec(dataUrl);
   if (!match?.[1]) {
@@ -27,6 +39,18 @@ async function writeDataUrlPng(dataUrl: string, filePath: string): Promise<void>
   }
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, Buffer.from(match[1], 'base64'));
+}
+
+function isCanonicalSource(source: string | undefined): boolean {
+  return source === 'canonical_clay_renderer' || source === 'canonical_projected_renderer';
+}
+
+function needsViewportFallback(result: BrowserRenderResult): boolean {
+  if (result.ok) return false;
+  const code = result.diagnostics?.[0]?.code ?? '';
+  return code === 'render_not_ready'
+    || code === 'viewport_not_ready'
+    || code === 'busy';
 }
 
 export class PersistentRenderSession {
@@ -81,17 +105,47 @@ export class PersistentRenderSession {
     await waitForAgentIdle(this.page);
     const status = await this.page.evaluate(() => window.foreScene!.getStatus());
     this.projectId = status.projectId;
+    this.revisionId = status.revisionId;
     this.projectLoaded = true;
   }
 
-  async renderShot(job: RenderSessionShotJob): Promise<RenderSessionFrameResult> {
+  private assertOpen(): void {
     if (this.closed) {
       throw new Error('Render session is closed.');
     }
-    await this.ensureProjectLoaded();
+  }
 
+  private frameResultFromBrowser(
+    job: RenderSessionShotJob,
+    result: BrowserRenderResult,
+  ): RenderSessionFrameResult {
+    return {
+      ok: result.ok && Boolean(result.pngDataUrl),
+      shotId: job.shotId,
+      shotNumber: job.shotNumber,
+      framePath: job.framePath,
+      width: result.width,
+      height: result.height,
+      pixelStats: result.pixelStats,
+      revisionId: result.revisionId,
+      error: result.ok ? undefined : (result.diagnostics?.[0]?.message ?? 'Clean frame render failed.'),
+      fromCanonicalRenderer: isCanonicalSource(result.source),
+      renderProfileId: this.profile.id,
+    };
+  }
+
+  private async tryDirectRender(job: RenderSessionShotJob): Promise<BrowserRenderResult> {
     const input = buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds);
+    const result = await this.page.evaluate(async (payload) => {
+      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      return window.foreScene!.renderShotFrame(payload);
+    }, input);
+    if (result.revisionId) this.revisionId = result.revisionId;
+    this.lastRenderAt = new Date().toISOString();
+    return result;
+  }
 
+  private async renderWithViewport(job: RenderSessionShotJob): Promise<BrowserRenderResult> {
     await this.page.evaluate(async (payload) => {
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
       await window.foreScene!.applyPlan({
@@ -122,76 +176,98 @@ export class PersistentRenderSession {
       await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
     }
 
-    const result = await this.page.evaluate(async (payload) => {
-      return window.foreScene!.renderShotFrame(payload);
-    }, input);
+    return this.tryDirectRender(job);
+  }
 
-    this.lastRenderAt = new Date().toISOString();
-    if (result.revisionId) this.revisionId = result.revisionId;
+  async renderShot(job: RenderSessionShotJob): Promise<RenderSessionFrameResult> {
+    this.assertOpen();
+    await this.ensureProjectLoaded();
 
-    if (!result.ok || !result.pngDataUrl) {
+    let browserResult = await this.tryDirectRender(job);
+    if (!browserResult.ok && needsViewportFallback(browserResult)) {
+      browserResult = await this.renderWithViewport(job);
+    }
+
+    const frame = this.frameResultFromBrowser(job, browserResult);
+    if (!frame.ok || !browserResult.pngDataUrl) {
       if (job.debugUiPath) {
         await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
       }
       this.shotsFailed += 1;
-      return {
-        ok: false,
-        shotId: job.shotId,
-        shotNumber: job.shotNumber,
-        framePath: job.framePath,
-        width: result.width,
-        height: result.height,
-        pixelStats: result.pixelStats,
-        revisionId: result.revisionId,
-        error: result.diagnostics?.[0]?.message ?? 'Clean frame render failed.',
-        fromCanonicalRenderer: false,
-        renderProfileId: this.profile.id,
-      };
+      return frame;
     }
 
-    await writeDataUrlPng(result.pngDataUrl, job.framePath);
-
+    await writeDataUrlPng(browserResult.pngDataUrl, job.framePath);
     if (job.debugUiPath) {
       await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
     }
 
     this.shotsRendered += 1;
-    return {
-      ok: true,
-      shotId: job.shotId,
-      shotNumber: job.shotNumber,
-      framePath: job.framePath,
-      width: result.width,
-      height: result.height,
-      pixelStats: result.pixelStats,
-      revisionId: result.revisionId,
-      fromCanonicalRenderer: result.source === 'canonical_clay_renderer'
-        || result.source === 'canonical_projected_renderer',
-      renderProfileId: this.profile.id,
-    };
+    return frame;
+  }
+
+  private async renderLocationGroup(jobs: RenderSessionShotJob[]): Promise<RenderSessionFrameResult[]> {
+    if (jobs.length === 0) return [];
+    if (jobs.length === 1) {
+      return [await this.renderShot(jobs[0]!)];
+    }
+
+    const inputs = jobs.map((job) => buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds));
+    const batch = await this.page.evaluate(async (payload) => {
+      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      return window.foreScene!.renderShotBatch({ jobs: payload.inputs });
+    }, { inputs });
+
+    const results: RenderSessionFrameResult[] = [];
+    for (let index = 0; index < jobs.length; index += 1) {
+      const job = jobs[index]!;
+      const browserResult = batch[index] as BrowserRenderResult | undefined;
+      if (!browserResult) {
+        results.push(await this.renderShot(job));
+        continue;
+      }
+
+      if (browserResult.revisionId) this.revisionId = browserResult.revisionId;
+      this.lastRenderAt = new Date().toISOString();
+
+      let frame = this.frameResultFromBrowser(job, browserResult);
+      if (!frame.ok && needsViewportFallback(browserResult)) {
+        frame = await this.renderShot(job);
+        results.push(frame);
+        continue;
+      }
+
+      if (!frame.ok || !browserResult.pngDataUrl) {
+        if (job.debugUiPath) {
+          await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
+        }
+        this.shotsFailed += 1;
+        results.push(frame);
+        continue;
+      }
+
+      await writeDataUrlPng(browserResult.pngDataUrl, job.framePath);
+      if (job.debugUiPath) {
+        await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
+      }
+      this.shotsRendered += 1;
+      results.push(frame);
+    }
+
+    return results;
   }
 
   async renderBatch(
     jobs: RenderSessionShotJob[],
     options?: { locationOrder?: string[] },
   ): Promise<RenderSessionBatchResult> {
-    const locationGroups = new Map<string, RenderSessionShotJob[]>();
-    for (const job of jobs) {
-      const key = job.shotNumber;
-      const list = locationGroups.get(key) ?? [];
-      list.push(job);
-      locationGroups.set(key, list);
-    }
+    this.assertOpen();
+    await this.ensureProjectLoaded();
 
-    // Group by location when jobs carry locationId via an extended type.
-    const grouped = options?.locationOrder?.length
-      ? jobs
-      : jobs;
-
+    const groups = groupJobsByLocation(jobs, options?.locationOrder);
     const results: RenderSessionFrameResult[] = [];
-    for (const job of grouped) {
-      const result = await this.renderShot(job);
-      results.push(result);
+    for (const group of groups) {
+      results.push(...await this.renderLocationGroup(group.jobs));
     }
 
     return {

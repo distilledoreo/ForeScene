@@ -22,12 +22,19 @@ export interface RenderProfile {
   fallbackAppearance?: RenderAppearance;
   peopleVariant?: RenderPeopleVariant;
   content?: RenderContentMode;
+  /** Single frame per static shot today; adaptive sampling reserved for a later milestone. */
   staticSampling: RenderSampling;
+  /** Event-aware motion sampling reserved — currently behaves like staticSampling. */
   motionSampling: RenderSampling;
+  /** Draft/standard/final tiers reserved — not passed to the renderer yet. */
   antialiasing: RenderQuality;
+  /** See antialiasing — not passed to the renderer yet. */
   shadows: RenderQuality;
+  /** Reserved — depth pass planning deferred. */
   renderDepth: boolean;
+  /** Reserved — clean-plate pass planning deferred. */
   renderCleanPlate: boolean;
+  /** Reserved — characters-only pass planning deferred. */
   renderCharactersOnly: boolean;
   renderVideo: boolean;
   /** Skip final package export during rapid review. */

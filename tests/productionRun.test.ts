@@ -8,6 +8,8 @@ import {
   groupJobsByLocation,
   migrateRenderProfileChange,
   previsPhaseToProductionPhase,
+  ProductionTimeBudget,
+  ProductionTimeBudgetExceededError,
   RAPID_REVIEW_PROFILE,
   renderProfileFingerprint,
   resolveProductionConfig,
@@ -136,6 +138,19 @@ describe('production run state machine', () => {
     expect(migrated.state.shots['010']?.render).toBe('pending');
     expect(migrated.state.shots['010']?.framePath).toBeUndefined();
     expect(migrated.state.phases.render).toBe('pending');
+  });
+});
+
+describe('production time budget', () => {
+  it('throws when the budget is exceeded', () => {
+    const budget = new ProductionTimeBudget(0, Date.now() - 1000);
+    expect(() => budget.assertWithinBudget('render_review_frames')).toThrow(ProductionTimeBudgetExceededError);
+  });
+
+  it('reports remaining time while within budget', () => {
+    const budget = new ProductionTimeBudget(60);
+    expect(budget.isExpired()).toBe(false);
+    expect(budget.remainingMs()).toBeGreaterThan(0);
   });
 });
 
