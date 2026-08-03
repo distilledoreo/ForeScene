@@ -69,12 +69,13 @@ export function markProjectAssetUnavailable(
   project: LocationProject,
   assetId: string,
   status: Exclude<AssetResolutionStatus, 'available'>,
+  detail?: string,
 ): ProjectOpenWarning | undefined {
   const asset = project.assets.assets[assetId];
   if (!asset) return undefined;
   asset.resolutionStatus = status;
   asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
-  return createProjectOpenWarning(project, asset, status);
+  return createProjectOpenWarning(project, asset, status, detail);
 }
 
 export function listMissingProjectAssets(project: LocationProject): ProjectAsset[] {

@@ -1,6 +1,6 @@
 import type { LocationProject, ProjectAsset } from '../domain/types';
 import { dataUrlToBlob } from './fileTransfers';
-import { MISSING_ASSET_URI_PREFIX, MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
+import { getModelAssetStorageKey, MISSING_ASSET_URI_PREFIX, MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import {
   deleteModelAsset,
   getModelAsset,
@@ -292,18 +292,17 @@ async function ensureProjectAssetResource(asset: ProjectAsset): Promise<ProjectR
 }
 
 async function resolveModelBytes(asset: ProjectAsset): Promise<ArrayBuffer> {
-  if (asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
-    const bytes = await getModelAsset(asset.uri.slice(MODEL_ASSET_URI_PREFIX.length));
+  if (asset.uri.startsWith('data:')) return dataUrlToBlob(asset.uri).arrayBuffer();
+  const sourceKey = getModelAssetStorageKey(asset);
+  if (sourceKey) {
+    const bytes = await getModelAsset(sourceKey);
     if (bytes) return bytes;
   }
-  if (asset.uri.startsWith('data:')) return dataUrlToBlob(asset.uri).arrayBuffer();
   throw new Error(`Model asset ${asset.name} cannot be resolved from local storage.`);
 }
 
 async function ensureModelResource(asset: ProjectAsset): Promise<ProjectRevisionBinaryResource> {
-  const sourceKey = asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-    ? asset.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-    : undefined;
+  const sourceKey = asset.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(asset);
   if (sourceKey?.startsWith(MODEL_RESOURCE_PREFIX)) {
     const existing = await verifyModelResource(asset, sourceKey);
     const sha256 = digestFromRecoveryResourceKey(sourceKey) ?? await sha256Digest(existing);
@@ -360,9 +359,7 @@ async function estimateNewRevisionBytes(project: LocationProject): Promise<numbe
     }
     if (asset.type === 'model') {
       if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
-      const key = source.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-        ? source.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-        : undefined;
+      const key = source.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(source);
       if (key?.startsWith(MODEL_RESOURCE_PREFIX)) continue;
       const bytes = await resolveModelBytes(source);
       const cached = key ? modelResourceCache.get(key) : undefined;
@@ -600,10 +597,20 @@ async function hydrateRevision(record: ProjectRevisionRecord): Promise<LocationP
       }
       continue;
     }
-    if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
-      const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
+    if (asset.type === 'model' && asset.resolutionStatus !== 'missing' && asset.resolutionStatus !== 'corrupt' && asset.resolutionStatus !== 'unsupported') {
+      const key = asset.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(asset);
+      if (!key) {
+        if (asset.uri.startsWith('data:')) {
+          continue;
+        }
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+        continue;
+      }
       try {
         await verifyModelResource(asset, key, resourceMetadataFor(record, 'model', key));
+        asset.storageKey = key;
+        asset.uri = `${MODEL_ASSET_URI_PREFIX}${key}`;
       } catch (error) {
         if (!isRecoverableAssetFailure(error)) throw error;
         asset.resolutionStatus = 'missing';
@@ -737,9 +744,7 @@ export async function removeLocalProjectHistory(projectId: string, liveProject?:
     .filter((key): key is string => Boolean(key)));
   const liveModelKeys = new Set(Object.values(liveProject?.assets.assets ?? {})
     .filter((asset) => asset.type === 'model')
-    .map((asset) => asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-      ? asset.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-      : undefined)
+    .map((asset) => getModelAssetStorageKey(asset))
     .filter((key): key is string => Boolean(key)));
   const staleProjectAssetKeys = projectAssetKeys.filter((key) => (
     (key.startsWith(PROJECT_ASSET_RESOURCE_PREFIX) && !retained.projectAssetKeys.has(key) && !liveProjectAssetKeys.has(key))

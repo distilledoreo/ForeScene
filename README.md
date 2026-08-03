@@ -212,7 +212,7 @@ Top-level fields include:
 - Pano reference `rotation[1]` stores the calibrated yaw offset in degrees. A value of `0` means image center (`u=0.5`) faces world `+Z`; positive values rotate that image center toward world `+X`.
 - `landmarks`: named continuity anchors used in prompts and packages.
 - `shots`: camera truth, status, linked pano, selected landmarks, per-shot object overrides, prompt overrides, and export settings.
-- `assets`: imported/rendered images, poseable-rig payloads, and texture-free model meshes. Model geometry is referenced by `panoref-idb:` key into IndexedDB; older base64 data URLs still load and migrate to binary on next save.
+- `assets`: imported/rendered images, poseable-rig payloads, and texture-free model meshes. Model geometry is referenced by a stable local key (with older URI/storage schemes and base64 data URLs still accepted), and every referenced model is included in `.fsp` backups; unresolved binaries open as placeholders.
 - `settings`: project-wide settings including `settings.projectedStyle`.
 - `workflow`: persisted production-path checkpoints for reference approval, landed framing, and package export.
 

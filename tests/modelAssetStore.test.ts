@@ -37,6 +37,37 @@ describe('binary model asset storage', () => {
     expect(await getModelAsset(reopened.assets.assets.mesh.uri.slice(MODEL_ASSET_URI_PREFIX.length))).toBeTruthy();
   });
 
+  it.each([
+    ['panoref-idb:', undefined],
+    ['panoref-model:', undefined],
+    ['panoref-asset:', 'model-resource:normalized'],
+  ] as const)('packages a model regardless of its persisted URI scheme (%s)', async (prefix, storageKey) => {
+    const key = storageKey ?? 'model-resource:normalized';
+    const packed = encodeBinaryGrayboxMesh(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2]));
+    await putModelAsset(key, packed.buffer);
+    const project = createDefaultProject();
+    project.assets.assets.mesh = {
+      id: 'mesh',
+      type: 'model',
+      name: 'normalized.glb',
+      uri: `${prefix}${key}`,
+      ...(storageKey ? { storageKey } : {}),
+      createdAt: new Date(0).toISOString(),
+    };
+    project.scene.objects.push({ id: 'model-object', name: 'Model', type: 'imported_model', transform: createTransform(), dimensions: [1, 1, 0.001], category: 'architecture', locked: false, visible: true, modelAssetId: 'mesh' });
+
+    const packageBlob = await createProjectPackage(project);
+    const zip = await JSZip.loadAsync(await packageBlob.arrayBuffer());
+    const manifest = JSON.parse(await zip.file('project.json')!.async('text')) as typeof project;
+    const packaged = manifest.assets.assets.mesh;
+
+    expect(packaged.uri).toBe(`${MODEL_ASSET_URI_PREFIX}${key}`);
+    expect(zip.file(`model-assets/${encodeURIComponent(key)}.bin`)).toBeTruthy();
+    await expect(readProjectFile(new File([packageBlob], 'normalized.fsp'))).resolves.toMatchObject({
+      assets: { assets: { mesh: { uri: expect.stringContaining(`${MODEL_ASSET_URI_PREFIX}import/`) } } },
+    });
+  });
+
   it('migrates legacy base64 geometry into a binary package on save', async () => {
     const legacy = encodePackedGrayboxMesh(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2]));
     const project = createDefaultProject();
