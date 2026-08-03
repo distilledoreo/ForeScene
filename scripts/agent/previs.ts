@@ -35,6 +35,7 @@ import {
   isCanonicalFrame,
   isRepairableIssue,
   migrateRenderPipelineVersion,
+  migrateRenderProfileChange,
   parsePrevisProductionManifest,
   parseRunState,
   preflightContactSheet,
@@ -51,9 +52,14 @@ import {
   type PrevisRunState,
   type RemovedShotEntry,
   type ShotCompositionTelemetry,
+  type RenderProfile,
+  DELIVERY_PROFILE,
+  resolveRenderProfileForMode,
+  renderProfileFingerprint,
 } from '../../src/engine/previs/index';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
+import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -71,6 +77,16 @@ export interface PrevisCliOptions {
   profileDir?: string;
   /** Explicitly authorize heavy/extreme character imports for this run. */
   allowHeavyCharacterImports?: boolean;
+  /** Production mode — rapid-review uses low-res frames and skips control videos. */
+  mode?: 'rapid-review' | 'delivery' | 'previs';
+  renderProfile?: RenderProfile;
+  renderProfileId?: string;
+  renderProfileFingerprint?: string;
+  runId?: string;
+  autoRepair?: boolean;
+  maxRepairPasses?: number;
+  timeBudgetSeconds?: number;
+  skipControlVideos?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -145,7 +161,12 @@ async function renderCleanShotFrame(
   page: Page,
   shotId: string,
   framePath: string,
-  options?: { debugUiPath?: string },
+  options?: {
+    debugUiPath?: string;
+    profile?: RenderProfile;
+    renderSession?: PersistentRenderSession;
+    shotNumber?: string;
+  },
 ): Promise<{
   ok: boolean;
   width: number;
@@ -162,6 +183,25 @@ async function renderCleanShotFrame(
   error?: string;
   fromCanonicalRenderer: boolean;
 }> {
+  if (options?.renderSession) {
+    const result = await options.renderSession.renderShot({
+      shotId,
+      shotNumber: options.shotNumber ?? shotId,
+      framePath,
+      debugUiPath: options.debugUiPath,
+    });
+    return {
+      ok: result.ok,
+      width: result.width,
+      height: result.height,
+      pixelStats: result.pixelStats,
+      revisionId: result.revisionId,
+      error: result.error,
+      fromCanonicalRenderer: result.fromCanonicalRenderer,
+    };
+  }
+
+  const profile = options?.profile ?? DELIVERY_PROFILE;
   await page.evaluate(async (id) => {
     await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
     await window.foreScene!.applyPlan({
@@ -194,12 +234,24 @@ async function renderCleanShotFrame(
     await captureSceneScreenshot(page, options.debugUiPath).catch(() => undefined);
   }
 
-  const result = await page.evaluate(async (id) => {
+  const result = await page.evaluate(async (payload) => {
     return window.foreScene!.renderShotFrame({
-      shotId: id,
-      appearance: 'clay',
+      shotId: payload.shotId,
+      appearance: payload.appearance,
+      peopleVariant: payload.peopleVariant,
+      content: payload.content,
+      width: payload.width,
+      height: payload.height,
     });
-  }, shotId);
+  }, {
+    shotId,
+    appearance: profile.appearance,
+    peopleVariant: profile.peopleVariant,
+    content: profile.content,
+    ...(profile.overrideDimensions
+      ? { width: profile.width, height: profile.height }
+      : {}),
+  });
 
   if (!result.ok || !result.pngDataUrl) {
     if (options?.debugUiPath) {
@@ -564,6 +616,16 @@ function resolveMappingIds(
 
 export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCliResult> {
   const outputDir = path.resolve(options.outputDir);
+  const mode = options.mode ?? 'previs';
+  const renderProfile = options.renderProfile ?? resolveRenderProfileForMode(mode);
+  const renderProfileFingerprintValue = options.renderProfileFingerprint
+    ?? renderProfileFingerprint(renderProfile);
+  const runId = options.runId ?? `previs_${Date.now().toString(36)}`;
+  const autoRepair = options.autoRepair ?? true;
+  const maxRepairPasses = options.maxRepairPasses ?? 3;
+  const skipControlVideos = options.skipControlVideos ?? !renderProfile.renderVideo;
+  const skipPackage = options.skipPackage ?? renderProfile.skipPackage;
+
   await mkdir(outputDir, { recursive: true });
   await mkdir(path.join(outputDir, 'logs'), { recursive: true });
   await mkdir(path.join(outputDir, 'shots'), { recursive: true });
@@ -650,6 +712,15 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     updateManifest: options.updateManifest,
   });
   let state = loaded.state;
+  const profileMigration = migrateRenderProfileChange(state, renderProfileFingerprintValue);
+  state = profileMigration.state;
+  state = {
+    ...state,
+    runId,
+    mode,
+    renderProfileId: renderProfile.id,
+    renderProfileFingerprint: renderProfileFingerprintValue,
+  };
   const runStatePath = path.join(outputDir, 'run-state.json');
 
   if (loaded.error && loaded.resumed && !loaded.updated) {
@@ -1208,6 +1279,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     state = setPhase(state, 'render', 'in_progress');
     await openWorkspace(session.page, 'shots');
     let framesRendered = 0;
+    const renderSession = await createPersistentRenderSession(
+      session.page,
+      renderProfile,
+      `${runId}_render`,
+    );
 
     for (const definition of manifest.shots) {
       const shotState = state.shots[definition.shotNumber];
@@ -1233,6 +1309,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
           const frame = await renderCleanShotFrame(session.page, shotId, framePath, {
             debugUiPath,
+            renderSession,
+            shotNumber: definition.shotNumber,
           });
           if (!frame.ok) {
             throw new Error(frame.error ?? 'Clean frame render failed');
@@ -1269,7 +1347,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
     let controlVideosRendered = 0;
     let controlVideosFailed = 0;
-    for (const definition of manifest.shots) {
+    if (!skipControlVideos) {
+      for (const definition of manifest.shots) {
       if (!definition.motion?.renderControlVideo) continue;
       const shotState = state.shots[definition.shotNumber];
       if (!shotState || shotState.compile !== 'complete') continue;
@@ -1308,8 +1387,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           lastError: error instanceof Error ? error.message : String(error),
         });
       }
-      await writeJson(runStatePath, state);
+        await writeJson(runStatePath, state);
+      }
     }
+    await renderSession.close();
+    await writeJson(path.join(outputDir, 'render-session.json'), renderSession.toDescriptor());
     state = setPhase(state, 'render', 'complete');
     await writeJson(runStatePath, state);
 
@@ -1380,9 +1462,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
       let repairAttempts = shotState?.repairAttempts ?? 0;
       while (
-        finalResult.status !== 'passed'
+        autoRepair
+        && finalResult.status !== 'passed'
         && finalResult.issues.some((issue) => isRepairableIssue(issue.code))
-        && repairAttempts < 3
+        && repairAttempts < maxRepairPasses
         && shotState?.shotId
       ) {
         // Always re-read live project so objectOverrides match current staging.
@@ -1435,7 +1518,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           session.page,
           shotState.shotId,
           framePath,
-          { debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`) },
+          {
+            debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
+            renderSession,
+            shotNumber: definition.shotNumber,
+          },
         );
         if (!reframe.ok || !reframe.fromCanonicalRenderer) {
           finalResult = {
@@ -1589,7 +1676,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
     let packagePath: string | undefined;
     let packageFailed = false;
-    if (!options.skipPackage) {
+    if (!skipPackage) {
       state = setPhase(state, 'package', 'in_progress');
       const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 });
       const pack = await session.page.evaluate(async () => {
@@ -1642,9 +1729,16 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       package: packagePath,
       manifestHash,
       runStatePath,
+      phase: 'complete',
       ...(packageFailed ? { error: 'Package export failed.' } : {}),
     };
-    await writeJson(path.join(outputDir, 'summary.json'), summary);
+    await writeJson(path.join(outputDir, 'summary.json'), {
+      ...summary,
+      runId,
+      mode,
+      renderProfileId: renderProfile.id,
+      renderProfileFingerprint: renderProfileFingerprintValue,
+    });
     state = touchRunState(state);
     await writeJson(runStatePath, state);
     return summary;

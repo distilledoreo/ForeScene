@@ -35,6 +35,7 @@
     "agent:run": "tsx scripts/agent/cli.ts run",
     "agent:package": "tsx scripts/agent/cli.ts package",
     "agent:previs": "tsx scripts/agent/cli.ts previs",
+    "agent:production": "tsx scripts/agent/cli.ts production",
     "agent:render-stills": "tsx scripts/agent/cli.ts render-stills",
     "agent:contact-sheet": "tsx scripts/agent/cli.ts contact-sheet",
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
