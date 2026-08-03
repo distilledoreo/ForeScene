@@ -4,7 +4,7 @@
 
 import type { Workspace } from '../../domain/types';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
-import { compileProduction, plansForSceneSetup } from '../previs/productionCompiler';
+import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -41,6 +41,23 @@ function mapPrevisDiagnostics(items: Array<{ code: string; message: string; seve
       ? agentWarning(item.code, item.message)
       : agentError(item.code, item.message)
   ));
+}
+
+function mergeAgentPlans(plans: import('./protocol').ForeSceneAgentPlan[]): import('./protocol').ForeSceneAgentPlan {
+  if (plans.length === 0) {
+    return {
+      version: 1,
+      planId: 'production-compile-empty',
+      description: 'Production compile (no commands)',
+      commands: [],
+    };
+  }
+  return {
+    version: 1,
+    planId: `production-compile-${plans[0]!.planId}`.slice(0, 80),
+    description: plans.map((plan) => plan.description).filter(Boolean).join(' · '),
+    commands: plans.flatMap((plan) => plan.commands),
+  };
 }
 
 function chainPreparePlans(
@@ -165,10 +182,25 @@ export async function bindAgentManifestAssets(input: {
     }));
   });
 
+  const locationBindingIds = Object.keys(input.bindings).filter((id) => (
+    parsed.manifest!.locations.some((location) => location.id === id)
+  ));
+  const bindingWarnings = locationBindingIds.length > 0
+    ? [agentWarning(
+      'location_binding_limited',
+      'Simple locationId→objectId binding records only the object reference and zone origin. '
+        + 'Anchors, blocker geometry, and template geography are not populated — shots may lack '
+        + 'location-specific solver context until rich location bindings are supported.',
+    )]
+    : [];
+
   return {
     ok: true,
     shotCount: parsed.manifest.shots.length,
-    diagnostics: mapPrevisDiagnostics(parsed.warnings.filter((item) => item.severity === 'warning')),
+    diagnostics: [
+      ...bindingWarnings,
+      ...mapPrevisDiagnostics(parsed.warnings.filter((item) => item.severity === 'warning')),
+    ],
   };
 }
 
@@ -187,15 +219,16 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
 
   const assetBindings = readPersistedManifestBindings();
   const result = compileProduction(parsed.manifest, { assetBindings });
-  const plans = plansForSceneSetup(result);
-  const chained = chainPreparePlans(plans, readLiveSource());
+  const setupPlans = plansForProductionCompile(result);
+  const mergedPlan = mergeAgentPlans(setupPlans);
+  const chained = chainPreparePlans([mergedPlan], readLiveSource());
   if (!chained.ok) {
     return { ok: false, diagnostics: chained.diagnostics };
   }
 
   return {
     ok: result.ok,
-    planCount: plans.length,
+    planCount: setupPlans.length,
     commandCount: chained.commandCount,
     diagnostics: mapPrevisDiagnostics(result.diagnostics.filter((item) => item.severity === 'error')),
   };
@@ -224,8 +257,9 @@ export async function applyAgentProductionCompile(input: {
 
   const assetBindings = readPersistedManifestBindings();
   const result = compileProduction(parsed.manifest, { assetBindings });
-  const plans = plansForSceneSetup(result);
-  const chained = chainPreparePlans(plans, readLiveSource());
+  const setupPlans = plansForProductionCompile(result);
+  const mergedPlan = mergeAgentPlans(setupPlans);
+  const chained = chainPreparePlans([mergedPlan], readLiveSource());
   if (!chained.ok) {
     return { ok: false, diagnostics: chained.diagnostics };
   }

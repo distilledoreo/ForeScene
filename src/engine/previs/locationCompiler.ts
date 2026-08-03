@@ -102,6 +102,7 @@ export function compileLocationsPhase(
 
     const boundObjectId = options.assetBindings?.[location.id];
     if (boundObjectId) {
+      // Limited binding: maps one existing object id only — no template anchors/blockers.
       const origin = locationZoneOrigin(index);
       origins.push(origin);
       next.locationOrigins[location.id] = origin;

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { createBlankGrayboxProject } from '../src/engine/previs/blankProject';
+import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import { createDefaultProject, createSceneObject, createShot } from '../src/domain/defaults';
 import type { LocationProject, ObjectGroup, Transform } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
@@ -23,10 +27,12 @@ import {
   submitAgentJob,
   getAgentJob,
   cancelAgentJob,
+  resumeAgentJob,
   resetAgentJobsForTests,
   waitForAgentJob,
 } from '../src/engine/agent/jobQueue';
 import {
+  applyAgentProductionCompile,
   bindAgentManifestAssets,
   inspectAgentProductionStatus,
   resetAgentProductionManifestBindingsForTests,
@@ -346,9 +352,9 @@ describe('agent API robustness', () => {
     const { compileProduction } = await import('../src/engine/previs/productionCompiler');
     const manifest = {
       version: 1 as const,
-      project: { name: 'Demo', aspectRatio: '16:9' },
+      project: { name: 'Demo', aspectRatio: '16:9' as const },
       cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
-      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' as const }],
       shots: [{
         id: 'shot_1',
         shotNumber: '001',
@@ -365,10 +371,76 @@ describe('agent API robustness', () => {
       bindings: { hero: heroObject!.id },
     });
 
-    const result = compileProduction(manifest, {
+    const result = compileProduction(manifest as PrevisProductionManifestV1, {
       assetBindings: { hero: heroObject!.id },
     });
     expect(result.cast.plan.commands.length).toBe(0);
     expect(result.cast.context.entities['cast.hero']?.objectId).toBe(heroObject!.id);
   });
+
+  it('applyProductionCompile authors every manifest shot in the project', async () => {
+    useProjectStore.getState().setProject(createBlankGrayboxProject({
+      name: 'Production compile test',
+      aspectRatio: '16:9',
+    }));
+
+    const manifest = JSON.parse(
+      readFileSync(path.resolve('examples/previs/minimal-dialogue.json'), 'utf8'),
+    ) as { shots: Array<{ shotNumber: string }> };
+    const manifestShotNumbers = manifest.shots.map((shot) => shot.shotNumber);
+
+    const result = await applyAgentProductionCompile({ manifest });
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+
+    const projectShotNumbers = new Set(
+      useProjectStore.getState().project.shots.map((shot) => shot.shotNumber),
+    );
+    for (const shotNumber of manifestShotNumbers) {
+      expect(projectShotNumbers.has(shotNumber)).toBe(true);
+    }
+  });
+
+  it('does not mark failed job items complete when continueOnError is false', async () => {
+    setAgentRenderShotFrameImpl(async () => {
+      throw new Error('Simulated render failure.');
+    });
+
+    const submitted = submitAgentJob({
+      type: 'render-shot-batch',
+      jobs: [{ shotId: 'shot_retry' }],
+      continueOnError: false,
+    });
+    expect(submitted.ok).toBe(true);
+
+    const failed = await waitForAgentJob(submitted.jobId!);
+    expect(failed.status).toBe('failed');
+    expect(failed.completedItems).toBe(0);
+
+    let renderCalls = 0;
+    setAgentRenderShotFrameImpl(async (input) => {
+      renderCalls += 1;
+      return {
+        ok: true,
+        status: 'completed',
+        shotId: input.shotId,
+        revisionId: 'rev_retry',
+        width: 32,
+        height: 32,
+        artifact: buildInlineArtifact({
+          mimeType: 'image/png',
+          dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        }),
+        pngDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        diagnostics: [],
+      };
+    });
+
+    const resumed = await resumeAgentJob(submitted.jobId!);
+    expect(resumed.ok).toBe(true);
+
+    const completed = await waitForAgentJob(submitted.jobId!, { timeoutMs: 5000 });
+    expect(completed.status).toBe('completed_with_warnings');
+    expect(completed.completedItems).toBe(1);
+    expect(renderCalls).toBe(1);
+  }, 15000);
 });

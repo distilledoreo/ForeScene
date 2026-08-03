@@ -20,6 +20,8 @@ interface StoredJob extends AgentJobProgress {
   abortController?: AbortController;
   resumeIndex: number;
   completedIndexes: Set<number>;
+  /** Bumps on each runJob invocation so stale catch blocks cannot clobber a newer run. */
+  runGeneration: number;
 }
 
 function updateJobCheckpoint(job: StoredJob) {
@@ -71,7 +73,19 @@ function isTerminalStatus(status: AgentJobStatus): boolean {
     || status === 'cancelled';
 }
 
+/**
+ * Idle states for waitForAgentJob — the job is not actively executing items.
+ * Failed jobs with remaining work are still idle; use resumeAgentJob to retry
+ * unsettled items (when continueOnError was false, the failed index is not in
+ * completedIndexes).
+ */
+function isJobWaitComplete(progress: AgentJobProgress): boolean {
+  return progress.status !== 'pending' && progress.status !== 'running';
+}
+
 async function runJob(job: StoredJob): Promise<void> {
+  const runGeneration = job.runGeneration + 1;
+  job.runGeneration = runGeneration;
   job.status = 'running';
   job.message = 'Job started.';
   notify(job);
@@ -146,11 +160,15 @@ async function runJob(job: StoredJob): Promise<void> {
       if (!continueOnError) {
         job.status = 'failed';
         job.message = diagnostic.message;
-        markJobItemSettled(job, index);
-        settledCount = job.completedIndexes.size;
+        // Do not mark failed index as completed — resume will retry this item.
         notify(job);
         throw error;
       }
+      // continueOnError: count failed items as settled so the batch can finish.
+      markJobItemSettled(job, index);
+      settledCount = job.completedIndexes.size;
+      notify(job);
+      return;
     }
 
     markJobItemSettled(job, index);
@@ -188,9 +206,10 @@ async function runJob(job: StoredJob): Promise<void> {
     job.revisionId = useProjectSafetyStore.getState().activeRevisionId;
     notify(job);
   } catch {
-    const status = job.status as AgentJobStatus;
-    if (!isTerminalStatus(status)) {
+    if (job.runGeneration !== runGeneration) return;
+    if (job.status === 'running') {
       job.status = 'failed';
+      job.message = 'Job failed.';
       notify(job);
     }
   }
@@ -228,6 +247,7 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     abortController: new AbortController(),
     artifactIds: [],
     completedIndexes: new Set(),
+    runGeneration: 0,
   };
   jobs.set(jobId, job);
 
@@ -271,6 +291,7 @@ export async function resumeAgentJob(jobId: string): Promise<AgentSubmitJobResul
     && job.resumeIndex < job.totalItems
   ) {
     job.abortController = new AbortController();
+    job.status = 'pending';
     void runJob(job);
     return { ok: true, jobId, status: 'running', diagnostics: [] };
   }
@@ -293,7 +314,7 @@ export function waitForAgentJob(
   options: { timeoutMs?: number } = {},
 ): Promise<AgentJobProgress> {
   const existing = getAgentJob(jobId);
-  if (existing && isTerminalStatus(existing.status)) {
+  if (existing && isJobWaitComplete(existing)) {
     return Promise.resolve(existing);
   }
 
@@ -307,7 +328,7 @@ export function waitForAgentJob(
       : undefined;
 
     unsub = subscribeToAgentJobProgress(jobId, (progress) => {
-      if (isTerminalStatus(progress.status)) {
+      if (isJobWaitComplete(progress)) {
         if (timer) clearTimeout(timer);
         unsub?.();
         resolve(progress);

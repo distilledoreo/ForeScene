@@ -86,3 +86,11 @@ export function plansForSceneSetup(result: ProductionCompileResult): ForeSceneAg
   if (result.props.plan.commands.length > 0) plans.push(result.props.plan);
   return plans;
 }
+
+/** Scene setup plus every compiled shot batch — use for full manifest apply/preview. */
+export function plansForProductionCompile(result: ProductionCompileResult): ForeSceneAgentPlan[] {
+  return [
+    ...plansForSceneSetup(result),
+    ...result.shotBatches.map((batch) => batch.plan),
+  ].filter((plan) => plan.commands.length > 0);
+}
