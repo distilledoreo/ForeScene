@@ -38,6 +38,9 @@ import {
 } from './videoRenderControl';
 import { resetAgentProject } from './projectReset';
 import { restoreProjectRevision } from '../projectSafety';
+import { getAssetInstanceIds, getAssetShotIds, listMissingProjectAssets } from '../projectAssetRecovery';
+import { relinkModelAssetIntoProject } from '../modelImportService';
+import { touchProject } from '../../state/slices/touchProject';
 import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
@@ -66,6 +69,7 @@ import type {
   AgentExportPlanResult,
   AgentModelImportInput,
   AgentModelImportResult,
+  AgentMissingAssetSummary,
   AgentObjectInspection,
   AgentObjectQuery,
   AgentPackageExportRequest,
@@ -219,6 +223,7 @@ export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
     workspace: projectState.workspace as Workspace | undefined,
     revisionId: safety.activeRevisionId,
     projectUpdatedAt: project?.updatedAt,
+    missingAssetCount: project ? listMissingProjectAssets(project).length : 0,
     appMode,
     busy: {
       criticalWrite: safety.criticalWrite,
@@ -255,6 +260,52 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       }
       return inspectProjectSnapshot(readInspectionContext());
+    },
+
+    listMissingAssets(): AgentMissingAssetSummary[] {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      return listMissingProjectAssets(project).map((asset) => ({
+        assetId: asset.id,
+        name: asset.name,
+        originalFileName: asset.originalFileName,
+        status: asset.resolutionStatus as AgentMissingAssetSummary['status'],
+        instanceObjectIds: getAssetInstanceIds(project, asset.id),
+        affectedShotIds: getAssetShotIds(project, asset.id),
+      }));
+    },
+
+    async relinkAsset(input) {
+      if (useAgentControlStore.getState().controlMode !== 'read-write') {
+        return { ok: false, diagnostics: [writeAccessRequiredDiagnostic('Relink asset')] };
+      }
+      try {
+        const result = await relinkModelAssetIntoProject(input.file, input.assetId, { mode: input.mode });
+        return { ok: true, assetId: result.assetId, diagnostics: [] };
+      } catch (error) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Asset relink failed.')] };
+      }
+    },
+
+    async removeMissingAsset(assetId) {
+      if (useAgentControlStore.getState().controlMode !== 'read-write') {
+        return { ok: false, diagnostics: [writeAccessRequiredDiagnostic('Remove missing asset')] };
+      }
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      try {
+        if (!runDestructive) throw new Error('Project persistence is not ready.');
+        await runDestructive('Remove missing asset', () => {
+          useProjectStore.setState((state) => {
+            const assets = { ...state.project.assets.assets };
+            delete assets[assetId];
+            return { project: touchProject({ ...state.project, assets: { assets }, scene: { ...state.project.scene, objects: state.project.scene.objects.filter((object) => object.modelAssetId !== assetId) } }) };
+          });
+        });
+        return { ok: true, diagnostics: [] };
+      } catch (error) {
+        return { ok: false, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, error instanceof Error ? error.message : 'Asset removal failed.')] };
+      }
     },
 
     getProjectDocument(): LocationProject {
@@ -305,7 +356,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           `No object with id "${resolved.id}".`,
         );
       }
-      return inspectObjectSnapshot(object);
+      return inspectObjectSnapshot(object, project);
     },
 
     listShots() {

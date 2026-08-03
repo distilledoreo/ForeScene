@@ -18,6 +18,7 @@ import type {
 } from '../domain/types';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES } from './cameraMoveCubemap';
+import type { ProjectOpenWarning } from './projectAssetRecovery';
 import {
   characterMotionMp4Path,
   characterPassIncludesGreenMp4,
@@ -965,6 +966,8 @@ export interface ShotPackageManifest {
     kind: PlannedFileKind;
     required: boolean;
   }>;
+  /** Non-blocking asset recovery warnings carried into shot handoff metadata. */
+  missingAssets?: ProjectOpenWarning[];
 }
 
 /** Legacy shot manifest view of a planned shot (excludes manifest.json itself). */

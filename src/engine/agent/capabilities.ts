@@ -12,6 +12,7 @@ export const AGENT_INSPECT_COMMANDS = [
   'app.capabilities',
   'project.inspect',
   'project.document',
+  'asset.missing.list',
   'shot.document',
   'object.list',
   'object.find',
@@ -73,6 +74,8 @@ export const AGENT_MUTATE_COMMANDS = [
   'character.import',
   'character.importSavedRig',
   'model.import',
+  'asset.relink',
+  'asset.missing.remove',
 ] as const;
 
 export const AGENT_DEFERRED_COMMANDS = [
@@ -99,6 +102,7 @@ export function buildAgentCapabilities(
     packageExport: true,
     characterImport: true,
     projectReplacement: writeAccess,
+    missingAssetRecovery: writeAccess,
     timelineInspection: controlMode !== 'off',
     timelineSampling: controlMode !== 'off',
     commands: {

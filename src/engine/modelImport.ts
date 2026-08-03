@@ -464,6 +464,15 @@ async function buildSeparateResult(args: BuildArgs): Promise<ModelImportBatchRes
       uri: `${MODEL_ASSET_URI_PREFIX}${binaryKey}`,
       mimeType: 'application/vnd.panoref.graybox-mesh',
       createdAt: now,
+      originalFileName: args.file.name,
+      byteSize: args.file.size,
+      resolutionStatus: 'available',
+      dimensions: [...source.dimensions] as Vec3,
+      bounds: {
+        min: source.dimensions.map((value) => -value / 2) as Vec3,
+        max: source.dimensions.map((value) => value / 2) as Vec3,
+      },
+      meshCount: 1,
       metadata: {
         sourceName,
         bridgeFileName: sourceSceneName ? args.file.name : undefined,
@@ -620,6 +629,11 @@ async function buildCombinedResult(args: BuildArgs): Promise<ModelImportBatchRes
     uri: `${MODEL_ASSET_URI_PREFIX}${binaryKey}`,
     mimeType: 'application/vnd.panoref.graybox-mesh',
     createdAt: now,
+    originalFileName: args.file.name,
+    byteSize: args.file.size,
+    resolutionStatus: 'available',
+    dimensions: [...dimensions] as Vec3,
+    meshCount: sourceUnits.length,
     metadata: {
       sourceName,
       bridgeFileName: sourceSceneName ? args.file.name : undefined,

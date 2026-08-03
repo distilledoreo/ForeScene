@@ -1,6 +1,6 @@
 import type { LocationProject, ProjectAsset } from '../domain/types';
 import { dataUrlToBlob } from './fileTransfers';
-import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
+import { getModelAssetStorageKey, MISSING_ASSET_URI_PREFIX, MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
 import {
   deleteModelAsset,
   getModelAsset,
@@ -130,6 +130,15 @@ function copyProject(project: LocationProject): LocationProject {
 
 function isRasterOrVideoAsset(asset: ProjectAsset): boolean {
   return asset.type === 'image' || asset.type === 'video';
+}
+
+function isRecoverableAssetFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes('cannot be resolved')
+    || message.includes('unavailable')
+    || message.includes('missing binary')
+    || message.includes('empty')
+    || message.includes('invalid');
 }
 
 function storageKeyFromAsset(asset: Pick<ProjectAsset, 'storageKey' | 'uri'>): string | undefined {
@@ -283,18 +292,17 @@ async function ensureProjectAssetResource(asset: ProjectAsset): Promise<ProjectR
 }
 
 async function resolveModelBytes(asset: ProjectAsset): Promise<ArrayBuffer> {
-  if (asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
-    const bytes = await getModelAsset(asset.uri.slice(MODEL_ASSET_URI_PREFIX.length));
+  if (asset.uri.startsWith('data:')) return dataUrlToBlob(asset.uri).arrayBuffer();
+  const sourceKey = getModelAssetStorageKey(asset);
+  if (sourceKey) {
+    const bytes = await getModelAsset(sourceKey);
     if (bytes) return bytes;
   }
-  if (asset.uri.startsWith('data:')) return dataUrlToBlob(asset.uri).arrayBuffer();
   throw new Error(`Model asset ${asset.name} cannot be resolved from local storage.`);
 }
 
 async function ensureModelResource(asset: ProjectAsset): Promise<ProjectRevisionBinaryResource> {
-  const sourceKey = asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-    ? asset.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-    : undefined;
+  const sourceKey = asset.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(asset);
   if (sourceKey?.startsWith(MODEL_RESOURCE_PREFIX)) {
     const existing = await verifyModelResource(asset, sourceKey);
     const sha256 = digestFromRecoveryResourceKey(sourceKey) ?? await sha256Digest(existing);
@@ -342,6 +350,7 @@ async function estimateNewRevisionBytes(project: LocationProject): Promise<numbe
   for (const asset of Object.values(pruneUnreferencedProjectAssets(project).assets.assets)) {
     const source = project.assets.assets[asset.id] ?? asset;
     if (isRasterOrVideoAsset(asset)) {
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
       const key = storageKeyFromAsset(source);
       if (key?.startsWith(PROJECT_ASSET_RESOURCE_PREFIX)) continue;
       const blob = await resolveAssetBlob(source);
@@ -349,9 +358,8 @@ async function estimateNewRevisionBytes(project: LocationProject): Promise<numbe
       continue;
     }
     if (asset.type === 'model') {
-      const key = source.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-        ? source.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-        : undefined;
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      const key = source.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(source);
       if (key?.startsWith(MODEL_RESOURCE_PREFIX)) continue;
       const bytes = await resolveModelBytes(source);
       const cached = key ? modelResourceCache.get(key) : undefined;
@@ -440,18 +448,32 @@ async function createRevisionRecord(
   for (const asset of Object.values(portable.assets.assets)) {
     const sourceAsset = project.assets.assets[asset.id] ?? asset;
     if (isRasterOrVideoAsset(asset)) {
-      const resource = await ensureProjectAssetResource(sourceAsset);
-      asset.storageKey = resource.key;
-      asset.uri = `${PROJECT_ASSET_URI_PREFIX}${resource.key}`;
-      projectAssetKeys.push(resource.key);
-      projectAssets.push(resource);
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      try {
+        const resource = await ensureProjectAssetResource(sourceAsset);
+        asset.storageKey = resource.key;
+        asset.uri = `${PROJECT_ASSET_URI_PREFIX}${resource.key}`;
+        projectAssetKeys.push(resource.key);
+        projectAssets.push(resource);
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
       continue;
     }
     if (asset.type === 'model') {
-      const resource = await ensureModelResource(sourceAsset);
-      asset.uri = `${MODEL_ASSET_URI_PREFIX}${resource.key}`;
-      modelAssetKeys.push(resource.key);
-      models.push(resource);
+      if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      try {
+        const resource = await ensureModelResource(sourceAsset);
+        asset.uri = `${MODEL_ASSET_URI_PREFIX}${resource.key}`;
+        modelAssetKeys.push(resource.key);
+        models.push(resource);
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
     }
   }
 
@@ -560,18 +582,40 @@ async function hydrateRevision(record: ProjectRevisionRecord): Promise<LocationP
         }
         continue;
       }
-      const key = storageKeyFromAsset(asset);
-      if (!key) throw new Error(`Recovery revision is missing a storage key for ${asset.name}.`);
-      await verifyProjectAssetResource(asset, key, resourceMetadataFor(record, 'projectAsset', key));
-      const uri = await resolveProjectAssetUri(asset);
-      if (!uri) throw new Error(`Recovery revision is missing binary asset ${asset.name}.`);
-      asset.storageKey = key;
-      asset.uri = uri;
+      try {
+        const key = storageKeyFromAsset(asset);
+        if (!key) throw new Error(`Recovery revision is missing a storage key for ${asset.name}.`);
+        await verifyProjectAssetResource(asset, key, resourceMetadataFor(record, 'projectAsset', key));
+        const uri = await resolveProjectAssetUri(asset);
+        if (!uri) throw new Error(`Recovery revision is missing binary asset ${asset.name}.`);
+        asset.storageKey = key;
+        asset.uri = uri;
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
       continue;
     }
-    if (asset.type === 'model' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
-      const key = asset.uri.slice(MODEL_ASSET_URI_PREFIX.length);
-      await verifyModelResource(asset, key, resourceMetadataFor(record, 'model', key));
+    if (asset.type === 'model' && asset.resolutionStatus !== 'missing' && asset.resolutionStatus !== 'corrupt' && asset.resolutionStatus !== 'unsupported') {
+      const key = asset.uri.startsWith('data:') ? undefined : getModelAssetStorageKey(asset);
+      if (!key) {
+        if (asset.uri.startsWith('data:')) {
+          continue;
+        }
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+        continue;
+      }
+      try {
+        await verifyModelResource(asset, key, resourceMetadataFor(record, 'model', key));
+        asset.storageKey = key;
+        asset.uri = `${MODEL_ASSET_URI_PREFIX}${key}`;
+      } catch (error) {
+        if (!isRecoverableAssetFailure(error)) throw error;
+        asset.resolutionStatus = 'missing';
+        asset.uri = `${MISSING_ASSET_URI_PREFIX}${asset.id}`;
+      }
     }
   }
   return project;
@@ -700,9 +744,7 @@ export async function removeLocalProjectHistory(projectId: string, liveProject?:
     .filter((key): key is string => Boolean(key)));
   const liveModelKeys = new Set(Object.values(liveProject?.assets.assets ?? {})
     .filter((asset) => asset.type === 'model')
-    .map((asset) => asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)
-      ? asset.uri.slice(MODEL_ASSET_URI_PREFIX.length)
-      : undefined)
+    .map((asset) => getModelAssetStorageKey(asset))
     .filter((key): key is string => Boolean(key)));
   const staleProjectAssetKeys = projectAssetKeys.filter((key) => (
     (key.startsWith(PROJECT_ASSET_RESOURCE_PREFIX) && !retained.projectAssetKeys.has(key) && !liveProjectAssetKeys.has(key))

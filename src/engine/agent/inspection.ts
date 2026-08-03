@@ -21,12 +21,14 @@ import type {
   AgentObjectQuery,
   AgentObjectSummary,
   AgentProjectInspection,
+  AgentMissingAssetSummary,
   AgentShotInspection,
   AgentShotSummary,
   AgentShotTimeSample,
   AgentShotTimelineInspection,
 } from './protocol';
 import { inspectShotTimeline as inspectTimeline, sampleShotTimeline } from '../shotTimeline';
+import { getAssetInstanceIds, getAssetShotIds, listMissingProjectAssets } from '../projectAssetRecovery';
 
 export interface AgentInspectionContext {
   project: LocationProject;
@@ -68,10 +70,19 @@ export function inspectProjectSnapshot(
     selectedObjectIds: [...ctx.selectedObjectIds],
     selectedShotId: ctx.selectedShotId,
     revisionId: ctx.revisionId,
+    missingAssetCount: listMissingProjectAssets(project).length,
+    missingAssets: listMissingProjectAssets(project).map((asset): AgentMissingAssetSummary => ({
+      assetId: asset.id,
+      name: asset.name,
+      originalFileName: asset.originalFileName,
+      status: asset.resolutionStatus as AgentMissingAssetSummary['status'],
+      instanceObjectIds: getAssetInstanceIds(project, asset.id),
+      affectedShotIds: getAssetShotIds(project, asset.id),
+    })),
   };
 }
 
-export function summarizeObject(object: SceneObject): AgentObjectSummary {
+export function summarizeObject(object: SceneObject, project?: LocationProject): AgentObjectSummary {
   return {
     id: object.id,
     name: object.name,
@@ -82,12 +93,15 @@ export function summarizeObject(object: SceneObject): AgentObjectSummary {
     position: cloneVec3(object.transform.position),
     hasHumanPose: Boolean(object.humanPose),
     isPoseable: Boolean(object.poseableCharacter),
+    assetStatus: object.modelAssetId && project
+      ? project.assets.assets[object.modelAssetId]?.resolutionStatus ?? 'missing'
+      : undefined,
   };
 }
 
-export function inspectObjectSnapshot(object: SceneObject): AgentObjectInspection {
+export function inspectObjectSnapshot(object: SceneObject, project?: LocationProject): AgentObjectInspection {
   return {
-    ...summarizeObject(object),
+    ...summarizeObject(object, project),
     transform: {
       position: cloneVec3(object.transform.position),
       rotation: cloneVec3(object.transform.rotation),
@@ -118,7 +132,7 @@ export function listObjectsSnapshot(
       if (query.locked !== undefined && object.locked !== query.locked) return false;
       return true;
     })
-    .map(summarizeObject);
+    .map((object) => summarizeObject(object, project));
 }
 
 export function summarizeShot(shot: Shot): AgentShotSummary {
