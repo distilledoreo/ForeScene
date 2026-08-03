@@ -89,6 +89,7 @@ function parseArgs(argv: string[]) {
     retryBatch: undefined as string | undefined,
     rollbackBatch: undefined as string | undefined,
     finalize: false,
+    json: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -160,6 +161,8 @@ function parseArgs(argv: string[]) {
       args.retryBatch = argv[++index];
     } else if (token === '--rollback') {
       args.rollbackBatch = argv[++index];
+    } else if (token === '--json') {
+      args.json = true;
     } else if (token === '--finalize') {
       args.finalize = true;
     } else if (token === '--shot') {
@@ -1047,6 +1050,33 @@ async function main() {
       output: args.output,
       profile: args.profile,
     });
+    return;
+  }
+
+  if (args.command === 'help') {
+    if (args.json) {
+      printJson({
+        commands: [
+          'inspect', 'preview', 'apply', 'screenshot', 'frame', 'video', 'package',
+          'verify', 'run', 'previs', 'render-stills', 'contact-sheet', 'help',
+        ],
+        discovery: {
+          describeCapabilities: 'window.foreScene.describeCapabilities()',
+          describeOperation: 'window.foreScene.describeOperation(name)',
+          getAgentSchema: 'window.foreScene.getAgentSchema()',
+        },
+        artifactRetrieval: {
+          renderShotFrame: 'result.artifact (inline dataUrl) + result.status',
+          renderShotVideo: 'result.artifact.artifactId → downloadArtifact({ artifactId })',
+          exportPackage: 'result.artifact.artifactId → downloadArtifact({ artifactId })',
+          exportProjectBackup: 'window.foreScene.exportProjectBackup()',
+        },
+      });
+    } else {
+      printErr('ForeScene Agent CLI — use --json for machine-readable help.');
+      printErr('Discovery: window.foreScene.describeCapabilities()');
+      printErr('Schema: window.foreScene.getAgentSchema()');
+    }
     return;
   }
 

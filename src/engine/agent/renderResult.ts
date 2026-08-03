@@ -1,0 +1,53 @@
+/**
+ * Normalize Agent render / export results with consistent status semantics.
+ * Separates artifact production from quality diagnostics so `ok` has one meaning.
+ */
+
+import type { AgentDiagnostic } from './diagnostics';
+import type {
+  AgentArtifactHandle,
+  AgentArtifactInline,
+  AgentOperationStatus,
+} from './protocol';
+
+export function deriveOperationOk(status: AgentOperationStatus): boolean {
+  return status === 'completed' || status === 'completed_with_warnings';
+}
+
+export function deriveOperationStatus(params: {
+  hasArtifact: boolean;
+  diagnostics: AgentDiagnostic[];
+  stale?: boolean;
+  cancelled?: boolean;
+  busy?: boolean;
+}): AgentOperationStatus {
+  if (params.busy) return 'busy';
+  if (params.cancelled) return 'cancelled';
+  if (params.stale) return 'stale_revision';
+  if (!params.hasArtifact) return 'failed';
+  const hasErrors = params.diagnostics.some((item) => item.severity === 'error');
+  if (hasErrors) return 'completed_with_warnings';
+  const hasWarnings = params.diagnostics.some((item) => item.severity === 'warning');
+  if (hasWarnings) return 'completed_with_warnings';
+  return 'completed';
+}
+
+export function buildInlineArtifact(params: {
+  mimeType: string;
+  dataUrl: string;
+}): AgentArtifactInline {
+  const base64 = params.dataUrl.includes(',')
+    ? params.dataUrl.slice(params.dataUrl.indexOf(',') + 1)
+    : params.dataUrl;
+  const byteLength = Math.floor((base64.length * 3) / 4);
+  return {
+    kind: 'inline',
+    mimeType: params.mimeType,
+    dataUrl: params.dataUrl,
+    byteLength,
+  };
+}
+
+export function buildHandleArtifact(handle: AgentArtifactHandle): AgentArtifactHandle {
+  return handle;
+}

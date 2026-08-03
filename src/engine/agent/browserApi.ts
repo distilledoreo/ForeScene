@@ -109,6 +109,29 @@ import {
   createModelImportPlan,
 } from '../modelImport';
 import { importModelIntoProject } from '../modelImportService';
+import { downloadAgentArtifact } from './artifactRegistry';
+import {
+  describeAgentCapabilities,
+  describeAgentOperation,
+  getAgentSchema,
+} from './discovery';
+import { exportAgentProjectBackup } from './projectBackupControl';
+import { buildInlineArtifact, deriveOperationOk, deriveOperationStatus } from './renderResult';
+import { refreshAgentRevision } from './revisionSync';
+import { setAgentShotPanorama } from './shotPanorama';
+import { inspectAgentShotDiagnostics } from './shotDiagnostics';
+import {
+  frameAgentSubjects,
+  orientAgentObjectToward,
+  placeAgentObjectNearLandmark,
+  snapAgentObjectToFloor,
+  trackAgentSubjects,
+} from './spatialPrimitives';
+import {
+  captureAgentShotStateAsKeyframe,
+  sampleAgentShotState,
+  upsertAgentObjectKeyframe,
+} from './timelineHelpers';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -252,6 +275,18 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     getCapabilities() {
       return buildAgentCapabilities(useAgentControlStore.getState().controlMode);
+    },
+
+    describeCapabilities() {
+      return describeAgentCapabilities(useAgentControlStore.getState().controlMode);
+    },
+
+    describeOperation(operation: string) {
+      return describeAgentOperation(operation);
+    },
+
+    getAgentSchema() {
+      return getAgentSchema();
     },
 
     inspectProject(): AgentProjectInspection {
@@ -414,6 +449,32 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return sampleShotAtTimeSnapshot(project, resolved.id, input.timeSeconds);
     },
 
+    sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      return sampleAgentShotState(input);
+    },
+
+    inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number }) {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const shot = project.shots.find((candidate) => candidate.id === input.shotId);
+      if (!shot) {
+        throw new AgentApiError(
+          AGENT_DIAGNOSTIC_CODES.targetNotFound,
+          `No shot with id "${input.shotId}".`,
+        );
+      }
+      const diagnostics = inspectAgentShotDiagnostics({
+        project,
+        shot,
+        timeSeconds: input.timeSeconds,
+      });
+      diagnostics.revisionId = readInspectionContext().revisionId;
+      return diagnostics;
+    },
+
     listLandmarks() {
       const blocked = requireInspectionAccess();
       if (blocked) {
@@ -464,6 +525,56 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       // Never escalate — only demote to read-only (or keep off).
       useAgentControlStore.getState().setControlMode(current === 'off' ? 'off' : 'read-only');
       return getForeSceneAgentStatus();
+    },
+
+    setShotPanorama(input) {
+      return setAgentShotPanorama(input);
+    },
+
+    refreshRevision() {
+      return refreshAgentRevision().then((result) => ({
+        ok: result.revisionId !== undefined,
+        status: result.revisionId ? 'completed' as const : 'failed' as const,
+        revisionId: result.revisionId,
+        fingerprint: result.fingerprint,
+        diagnostics: result.diagnostics,
+      }));
+    },
+
+    downloadArtifact(input) {
+      return downloadAgentArtifact(input);
+    },
+
+    exportProjectBackup(input = {}) {
+      return exportAgentProjectBackup(input);
+    },
+
+    snapObjectToFloor(input) {
+      return snapAgentObjectToFloor(input);
+    },
+
+    placeObjectNearLandmark(input) {
+      return placeAgentObjectNearLandmark(input);
+    },
+
+    frameSubjects(input) {
+      return frameAgentSubjects(input);
+    },
+
+    orientObjectToward(input) {
+      return orientAgentObjectToward(input);
+    },
+
+    trackSubjects(input) {
+      return trackAgentSubjects(input);
+    },
+
+    captureShotStateAsKeyframe(input) {
+      return captureAgentShotStateAsKeyframe(input);
+    },
+
+    upsertObjectKeyframe(input) {
+      return upsertAgentObjectKeyframe(input);
     },
 
     async previewPlan(plan: unknown): Promise<AgentPlanPreviewResult> {
@@ -570,7 +681,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     async exportPackage(input: AgentPackageExportRequest = {}): Promise<AgentPackageExportResult> {
       const blocked = requireInspectionAccess();
       if (blocked) {
-        return { ok: false, diagnostics: blocked };
+        return { ok: false, status: 'failed', diagnostics: blocked };
       }
       return exportAgentPackage(input);
     },
@@ -929,6 +1040,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (blocked) {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: '',
           width: 0,
@@ -943,6 +1055,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (!project) {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: '',
           width: 0,
@@ -957,6 +1070,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (!shot) {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: safety.activeRevisionId ?? '',
           width: 0,
@@ -981,6 +1095,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       } catch (error) {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: revisionAtStart,
           width,
@@ -1006,6 +1121,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (content === 'characters_only' && peopleVariant === 'clean_plate') {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: revisionAtStart,
           width,
@@ -1019,6 +1135,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (appearance === 'depth' && content === 'characters_only') {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: revisionAtStart,
           width,
@@ -1080,6 +1197,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         if (revisionAtStart && revisionNow && revisionAtStart !== revisionNow) {
           return {
             ok: false,
+            status: 'stale_revision',
             shotId: input.shotId,
             revisionId: revisionNow,
             width: renderedWidth,
@@ -1097,8 +1215,6 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           };
         }
 
-        // Prefer WebGL readPixels stats; fall back to decoding the PNG data URL
-        // when readback is flaky (preserveDrawingBuffer races, partial buffers).
         const allowFlatFrame = content === 'characters_only' || peopleVariant === 'clean_plate';
         let rejection = rejectFrameStats(pixelStats, allowFlatFrame);
         if ((!pixelStats || rejection) && pngDataUrl) {
@@ -1111,43 +1227,32 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             // Keep original rejection.
           }
         }
+
+        const qualityDiagnostics = rejection
+          ? [agentError(rejection.code, rejection.message)]
+          : [];
+
         if (depth) {
           depth.grayscalePixelRatio = await grayscalePixelRatioFromDataUrl(pngDataUrl);
           if (depth.grayscalePixelRatio < 0.995) {
-            return {
-              ok: false,
-              shotId: input.shotId,
-              revisionId: revisionNow,
-              width: renderedWidth,
-              height: renderedHeight,
-              pngDataUrl,
-              pixelStats,
-              depth,
-              diagnostics: [agentError(
-                'depth_not_grayscale',
-                `Depth renderer produced non-grayscale pixels (ratio ${depth.grayscalePixelRatio.toFixed(4)}).`,
-              )],
-            };
+            qualityDiagnostics.push(agentError(
+              'depth_not_grayscale',
+              `Depth renderer produced non-grayscale pixels (ratio ${depth.grayscalePixelRatio.toFixed(4)}).`,
+            ));
           }
         }
-        if (rejection) {
-          return {
-            ok: false,
-            shotId: input.shotId,
-            revisionId: revisionNow,
-            width: renderedWidth,
-            height: renderedHeight,
-            pngDataUrl,
-            pixelStats,
-            depth,
-            diagnostics: [
-              agentError(rejection.code, rejection.message),
-            ],
-          };
-        }
+
+        const artifact = pngDataUrl
+          ? buildInlineArtifact({ mimeType: 'image/png', dataUrl: pngDataUrl })
+          : undefined;
+        const status = deriveOperationStatus({
+          hasArtifact: Boolean(artifact),
+          diagnostics: qualityDiagnostics,
+        });
 
         return {
-          ok: true,
+          ok: deriveOperationOk(status),
+          status,
           shotId: input.shotId,
           revisionId: revisionNow,
           width: renderedWidth,
@@ -1156,6 +1261,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             requestedTimeSeconds: timeSample.requestedTimeSeconds,
             sampledTimeSeconds: timeSample.sampledTimeSeconds,
           } : {}),
+          artifact,
           pngDataUrl,
           pixelStats,
           appearance,
@@ -1163,10 +1269,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           content,
           depth,
           source,
+          diagnostics: qualityDiagnostics,
         };
       } catch (error) {
         return {
           ok: false,
+          status: 'failed',
           shotId: input.shotId,
           revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
           width: 0,

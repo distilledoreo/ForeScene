@@ -102,6 +102,67 @@ copy exact staging rather than infer it from summary inspection fields.
 }
 ```
 
+## Agent API v1 improvements
+
+### Shot panorama
+
+```ts
+await foreScene.setShotPanorama({ shotId, panoId: 'pano_…' });
+await foreScene.setShotPanorama({ shotId, panoId: null }); // unlink
+```
+
+Atomically updates `linkedPanoId`, `panoCrop`, active panorama state, and persistence.
+
+### Render / export result contract
+
+Render and export operations now return a stable `status` plus optional `artifact`:
+
+| `status` | Meaning |
+|----------|---------|
+| `completed` | Artifact produced, no quality issues |
+| `completed_with_warnings` | Artifact produced; inspect `diagnostics` |
+| `failed` | No usable artifact |
+| `stale_revision` | Project changed during render |
+| `cancelled` / `busy` | Operation did not complete |
+
+`ok` is `true` when `status` is `completed` or `completed_with_warnings` — a frame with `frame_zero_variance` still returns the PNG in `artifact` / `pngDataUrl`.
+
+### Artifact handles
+
+Video render, package export, and project backup register blobs in-memory:
+
+```ts
+const video = await foreScene.renderShotVideo({ shotId, download: false });
+const bytes = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const backup = await foreScene.exportProjectBackup({ download: false });
+```
+
+### Discovery
+
+```ts
+foreScene.describeCapabilities();
+foreScene.describeOperation('setShotPanorama');
+foreScene.getAgentSchema();
+```
+
+CLI: `npm run agent:help -- --json`
+
+### Spatial primitives
+
+`snapObjectToFloor`, `placeObjectNearLandmark`, `frameSubjects`, `orientObjectToward`, and `trackSubjects` wrap the previs solvers so agents avoid raw world-coordinate guessing.
+
+### Timeline helpers
+
+`sampleShotState`, `captureShotStateAsKeyframe`, and `upsertObjectKeyframe` preserve explicit staging at timeline times.
+
+### Shot diagnostics
+
+`inspectShotDiagnostics({ shotId, timeSeconds? })` returns screen coverage, visibility, grounding, occlusion, and motion displacement without judging cinematic taste.
+
+### Revision sync
+
+Every mutation returns `revisionId`. Call `refreshRevision()` before retrying after `stale_revision`.
+
 ## Export planning
 
 `createExportPlan({ shotIds?: string[] })` calls the same pure `createExportPlan()` engine used by the Export workspace. It does not render or download anything.

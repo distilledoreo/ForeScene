@@ -487,8 +487,10 @@ export interface AgentPlanDiff {
 
 export interface AgentPlanApplyResult {
   ok: boolean;
+  status?: AgentOperationStatus;
   planId?: string;
   verifiedRevisionId?: string;
+  revisionId?: string;
   summary?: AgentPlanSummary;
   diagnostics: AgentDiagnostic[];
 }
@@ -539,9 +541,12 @@ export interface AgentPackageExportProgressSnapshot {
 
 export interface AgentPackageExportResult {
   ok: boolean;
+  status: AgentOperationStatus;
+  artifact?: AgentArtifactHandle;
   fileName?: string;
   manifestPaths?: string[];
   shotIds?: string[];
+  revisionId?: string;
   diagnostics: AgentDiagnostic[];
   progress?: AgentPackageExportProgressSnapshot;
   warnings?: string[];
@@ -597,12 +602,225 @@ export interface AgentRenderPixelStats {
   sampledUniqueColorCount: number;
 }
 
+export type AgentOperationStatus =
+  | 'completed'
+  | 'completed_with_warnings'
+  | 'failed'
+  | 'stale_revision'
+  | 'cancelled'
+  | 'busy';
+
+export interface AgentArtifactInline {
+  kind: 'inline';
+  mimeType: string;
+  dataUrl: string;
+  byteLength?: number;
+}
+
+export interface AgentArtifactHandle {
+  artifactId: string;
+  mimeType: string;
+  fileName: string;
+  byteLength: number;
+  revisionId?: string;
+}
+
+export type AgentArtifact = AgentArtifactInline | (AgentArtifactHandle & { kind?: 'handle' });
+
+export interface AgentArtifactDownloadResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  artifact?: AgentArtifactHandle;
+  dataUrl?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotPanoramaResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId: string;
+  linkedPanoId?: string;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProjectBackupResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  artifact?: AgentArtifactHandle;
+  fileName?: string;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentRevisionRefreshResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  revisionId?: string;
+  fingerprint?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotDiagnosticsSubject {
+  objectId: string;
+  screenCoverage: number;
+  visibleFraction: number;
+  groundClearanceMeters: number;
+  occlusionRatio?: number;
+}
+
+export interface AgentShotDiagnostics {
+  shotId: string;
+  revisionId?: string;
+  sampledTimeSeconds?: number;
+  subjects: AgentShotDiagnosticsSubject[];
+  foregroundOcclusionFraction: number;
+  linkedPanoramaRendered: boolean;
+  linkedPanoId?: string;
+  cameraInsideEnvironmentBounds: boolean;
+  motionDisplacementMeters: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentSnapObjectToFloorInput {
+  object: AgentEntityTarget;
+  shotId?: string;
+}
+
+export interface AgentSnapObjectToFloorResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  objectId?: string;
+  position?: [number, number, number];
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentPlaceObjectNearLandmarkInput {
+  object: AgentEntityTarget;
+  landmark: AgentEntityTarget;
+  offset?: [number, number, number];
+}
+
+export interface AgentPlaceObjectNearLandmarkResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  objectId?: string;
+  landmarkId?: string;
+  position?: [number, number, number];
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentOrientObjectTowardInput {
+  object: AgentEntityTarget;
+  target: AgentEntityTarget;
+}
+
+export interface AgentOrientObjectTowardResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  objectId?: string;
+  targetId?: string;
+  rotation?: [number, number, number];
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentFrameSubjectsInput {
+  shotId: string;
+  subjectIds: string[];
+  composition?: string;
+  shotSize?: string;
+  padding?: number;
+}
+
+export interface AgentFrameSubjectsResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId?: string;
+  camera?: CameraData;
+  measuredCoverage?: number;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentTrackSubjectsInput {
+  shotId: string;
+  subjectIds: string[];
+  startTime?: number;
+  endTime?: number;
+  composition?: string;
+  shotSize?: string;
+  padding?: number;
+}
+
+export interface AgentTrackSubjectsResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId?: string;
+  startTimeSeconds?: number;
+  endTimeSeconds?: number;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentCaptureKeyframeResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId?: string;
+  keyframeId?: string;
+  timeSeconds?: number;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentUpsertObjectKeyframeInput {
+  shotId: string;
+  objectId: string;
+  timeSeconds: number;
+  preserveExplicitState?: boolean;
+  transform?: Transform;
+  visible?: boolean;
+  humanPose?: HumanPose;
+  posePreset?: string;
+}
+
+export interface AgentUpsertObjectKeyframeResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId?: string;
+  objectId?: string;
+  keyframeId?: string;
+  timeSeconds?: number;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentOperationDescription {
+  name: string;
+  category: 'inspect' | 'mutation' | 'runtime';
+  summary: string;
+  writeAccess: boolean;
+  input?: Record<string, string>;
+  returns: string;
+}
+
+export interface AgentSchemaDocument {
+  apiVersion: typeof FORESCENE_AGENT_API_VERSION;
+  plan: Record<string, unknown>;
+  results: Record<string, unknown>;
+  diagnostics: Record<string, unknown>;
+}
+
 export interface AgentRenderShotFrameResult {
   ok: boolean;
+  status: AgentOperationStatus;
   shotId: string;
   revisionId: string;
   width: number;
   height: number;
+  artifact?: AgentArtifactInline;
   pngDataUrl?: string;
   pixelStats?: AgentRenderPixelStats;
   requestedTimeSeconds?: number;
@@ -617,7 +835,7 @@ export interface AgentRenderShotFrameResult {
     invert: boolean;
     grayscalePixelRatio: number;
   };
-  diagnostics?: AgentDiagnostic[];
+  diagnostics: AgentDiagnostic[];
   /** Marks the shared renderer used to produce this exact pass. */
   source?:
     | 'canonical_clay_renderer'
@@ -659,8 +877,10 @@ export interface AgentShotVideoProgress {
 
 export interface AgentShotVideoRenderResult {
   ok: boolean;
+  status: AgentOperationStatus;
   shotId?: string;
   assetId?: string;
+  artifact?: AgentArtifactHandle;
   fileName?: string;
   width?: number;
   height?: number;
@@ -668,6 +888,7 @@ export interface AgentShotVideoRenderResult {
   frameRate?: number;
   mimeType?: string;
   encodeMode?: 'render' | 'quickPreview';
+  revisionId?: string;
   diagnostics: AgentDiagnostic[];
   progress?: AgentShotVideoProgress;
 }
@@ -824,6 +1045,21 @@ export interface ForeSceneBrowserApi {
 
   getStatus(): ForeSceneAgentStatus;
   getCapabilities(): ForeSceneAgentCapabilities;
+  describeCapabilities(): {
+    apiVersion: typeof FORESCENE_AGENT_API_VERSION;
+    controlMode: AgentControlMode;
+    capabilities: ForeSceneAgentCapabilities;
+    operations: string[];
+    commands: {
+      inspect: string[];
+      mutate: string[];
+      deferred: string[];
+    };
+    renderResultContract: Record<string, unknown>;
+    revisionContract: Record<string, unknown>;
+  };
+  describeOperation(operation: string): AgentOperationDescription | undefined;
+  getAgentSchema(): AgentSchemaDocument;
 
   inspectProject(): AgentProjectInspection;
   listMissingAssets(): AgentMissingAssetSummary[];
@@ -842,6 +1078,8 @@ export interface ForeSceneBrowserApi {
   inspectShot(target: AgentEntityTarget): AgentShotInspection;
   inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
   sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
+  sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample;
+  inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number }): AgentShotDiagnostics;
   listLandmarks(): AgentLandmarkSummary[];
   createExportPlan(input?: AgentExportPlanRequest): AgentExportPlanResult;
 
@@ -850,6 +1088,19 @@ export interface ForeSceneBrowserApi {
    * Escalation to read-write is UI / CLI-bootstrap only — this never grants writes.
    */
   disableWrites(): ForeSceneAgentStatus;
+
+  setShotPanorama(input: { shotId: string; panoId: string | null }): Promise<AgentShotPanoramaResult>;
+  refreshRevision(): Promise<AgentRevisionRefreshResult>;
+  downloadArtifact(input: { artifactId: string; download?: boolean }): Promise<AgentArtifactDownloadResult>;
+  exportProjectBackup(input?: { download?: boolean }): Promise<AgentProjectBackupResult>;
+
+  snapObjectToFloor(input: AgentSnapObjectToFloorInput): Promise<AgentSnapObjectToFloorResult>;
+  placeObjectNearLandmark(input: AgentPlaceObjectNearLandmarkInput): Promise<AgentPlaceObjectNearLandmarkResult>;
+  frameSubjects(input: AgentFrameSubjectsInput): Promise<AgentFrameSubjectsResult>;
+  orientObjectToward(input: AgentOrientObjectTowardInput): Promise<AgentOrientObjectTowardResult>;
+  trackSubjects(input: AgentTrackSubjectsInput): Promise<AgentTrackSubjectsResult>;
+  captureShotStateAsKeyframe(input: { shotId: string; timeSeconds: number }): Promise<AgentCaptureKeyframeResult>;
+  upsertObjectKeyframe(input: AgentUpsertObjectKeyframeInput): Promise<AgentUpsertObjectKeyframeResult>;
 
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
