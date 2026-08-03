@@ -106,7 +106,7 @@ export async function setAgentShotPanorama(input: {
         });
         const selectedShotId = state.selectedShotId;
         const activePanoId = selectedShotId === input.shotId
-          ? (nextLinkedPanoId ?? state.activePanoId)
+          ? nextLinkedPanoId
           : state.activePanoId;
         return {
           project: nextProject,

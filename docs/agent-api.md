@@ -149,7 +149,11 @@ CLI: `npm run agent:help -- --json`
 
 ### Spatial primitives
 
-`snapObjectToFloor`, `placeObjectNearLandmark`, `frameSubjects`, `orientObjectToward`, and `trackSubjects` wrap the previs solvers so agents avoid raw world-coordinate guessing.
+All spatial primitives are **shot-scoped** — they read shot-effective transforms and write sparse `shot.objectOverrides` (never base `scene.objects`).
+
+`snapObjectToFloor({ shotId, object })`, `placeObjectNearLandmark`, `frameSubjects`, `orientObjectToward`, and `trackSubjects` follow this model.
+
+`trackSubjects` samples subject transforms at `startTime` and `endTime`, solves distinct cameras, and warns when subject displacement is negligible or the cameras are identical.
 
 ### Timeline helpers
 
@@ -157,7 +161,15 @@ CLI: `npm run agent:help -- --json`
 
 ### Shot diagnostics
 
-`inspectShotDiagnostics({ shotId, timeSeconds? })` returns screen coverage, visibility, grounding, occlusion, and motion displacement without judging cinematic taste.
+`inspectShotDiagnostics({ shotId, timeSeconds? })` returns:
+
+- `screenCoverage` — projected frame occupancy
+- `visibleFraction` — unobstructed subject fraction (`1 - occlusionRatio`)
+- `groundClearanceMeters` — signed distance to identified floor (negative = below floor)
+- `cameraIntersectsSolidGeometry` — camera inside a wall/box/column
+- `cameraInsideEnvironmentBounds` — camera inside inferred navigable envelope
+- `linkedPanoramaResolved` — panorama link resolves (not a render confirmation)
+- `cameraDisplacementMeters` and `subjectDisplacements`
 
 ### Revision sync
 

@@ -1,18 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultProject, createPanoReference } from '../src/domain/defaults';
-import type { LocationProject } from '../src/domain/types';
+import { createDefaultProject, createPanoReference, createSceneObject, createShot } from '../src/domain/defaults';
+import type { LocationProject, SceneObject, Shot } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
-import { resetAgentArtifactRegistryForTests, registerAgentArtifact } from '../src/engine/agent/artifactRegistry';
-import { describeAgentOperation, getAgentSchema } from '../src/engine/agent/discovery';
+import {
+  getAgentArtifactBlob,
+  registerAgentArtifact,
+  resetAgentArtifactRegistryForTests,
+} from '../src/engine/agent/artifactRegistry';
 import { deriveOperationOk, deriveOperationStatus } from '../src/engine/agent/renderResult';
 import { resetAgentPackageExportControl } from '../src/engine/agent/packageExportControl';
 import { resetAgentShotVideoRenderControl } from '../src/engine/agent/videoRenderControl';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
 import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useProjectStore } from '../src/state/useProjectStore';
-import { withShotPanoLink, getCanonicalPano } from '../src/engine/sync';
+import { getCanonicalPano, withShotPanoLink } from '../src/engine/sync';
 import { setAgentShotPanorama } from '../src/engine/agent/shotPanorama';
 import { inspectAgentShotDiagnostics } from '../src/engine/agent/shotDiagnostics';
+import {
+  frameAgentSubjects,
+  orientAgentObjectToward,
+  snapAgentObjectToFloor,
+  trackAgentSubjects,
+} from '../src/engine/agent/spatialPrimitives';
+import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
+import { createShotKeyframe } from '../src/engine/shotTimeline';
+import { touchProject } from '../src/state/slices/touchProject';
 
 function installMockDestructiveMutation() {
   useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
@@ -72,6 +84,32 @@ function projectWithPano(): LocationProject {
   };
 }
 
+function corridorProject(): { project: LocationProject; actor: SceneObject; shot: Shot } {
+  const floor = createSceneObject('floor', 1);
+  floor.dimensions = [8, 0.1, 20];
+  floor.transform.position = [0, 0, 0];
+
+  const actor = createSceneObject('human_dummy', 1, [0, 0.875, 0]);
+  actor.name = 'Actor';
+
+  const shot = createShot({ index: 1, camera: {
+    position: [0, 1.6, 6],
+    target: [0, 1.4, 0],
+    fovDegrees: 50,
+    aspectRatio: 16 / 9,
+    near: 0.1,
+    far: 100,
+  } });
+
+  const project = touchProject({
+    ...createDefaultProject(),
+    scene: { ...createDefaultProject().scene, objects: [floor, actor] },
+    shots: [shot],
+  });
+
+  return { project, actor, shot };
+}
+
 describe('agent API improvements', () => {
   beforeEach(() => {
     resetAgentArtifactRegistryForTests();
@@ -84,7 +122,7 @@ describe('agent API improvements', () => {
       workspace: 'shots',
       selectedObjectIds: [],
       selectedShotId: project.shots[0]?.id,
-      activePanoId: undefined,
+      activePanoId: project.panoRefs[0]?.id,
       isRenderingGraybox: false,
       isExportingPackage: false,
     });
@@ -107,46 +145,180 @@ describe('agent API improvements', () => {
     expect(deriveOperationOk(status)).toBe(true);
   });
 
-  it('registers and describes artifact handles', () => {
+  it('retrieves artifact bytes matching the registered blob', async () => {
+    const payload = 'forescene-artifact-bytes';
     const handle = registerAgentArtifact({
-      blob: new Blob(['hello'], { type: 'text/plain' }),
+      blob: new Blob([payload], { type: 'text/plain' }),
       mimeType: 'text/plain',
-      fileName: 'hello.txt',
-      revisionId: 'rev_test',
+      fileName: 'payload.txt',
     });
-    expect(handle.artifactId).toMatch(/^artifact_/);
-    expect(handle.byteLength).toBeGreaterThan(0);
-    expect(describeAgentOperation('downloadArtifact')?.name).toBe('downloadArtifact');
-    expect(getAgentSchema().apiVersion).toBe(1);
+    const blob = getAgentArtifactBlob(handle.artifactId);
+    expect(blob).toBeTruthy();
+    const text = await blob!.text();
+    expect(text).toBe(payload);
   });
 
-  it('sets and clears shot panorama links', async () => {
+  it('clears linked panorama and active pano when unlinking the selected shot', async () => {
     const project = useProjectStore.getState().project;
     const shot = project.shots[0]!;
-    const canonical = getCanonicalPano(project);
-    expect(canonical).toBeTruthy();
+    const canonical = getCanonicalPano(project)!;
 
-    const linked = await setAgentShotPanorama({ shotId: shot.id, panoId: canonical!.id });
-    expect(linked.ok).toBe(true);
-    expect(linked.linkedPanoId).toBe(canonical!.id);
-
+    useProjectStore.setState({ activePanoId: canonical.id, selectedShotId: shot.id });
     const cleared = await setAgentShotPanorama({ shotId: shot.id, panoId: null });
     expect(cleared.ok).toBe(true);
-    expect(cleared.linkedPanoId).toBeUndefined();
-
-    const updatedShot = useProjectStore.getState().project.shots.find((item) => item.id === shot.id);
-    expect(updatedShot?.linkedPanoId).toBeUndefined();
-    expect(updatedShot?.panoCrop).toBeUndefined();
+    expect(useProjectStore.getState().activePanoId).toBeUndefined();
+    expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBeUndefined();
   });
 
-  it('returns shot diagnostics with subject coverage fields', () => {
-    const project = useProjectStore.getState().project;
-    const shot = project.shots[0]!;
+  it('snaps only shot staging, leaving the base scene transform intact', async () => {
+    const { project, actor, shot } = corridorProject();
+    actor.transform.position = [0, 5, 0];
+    useProjectStore.setState({ project, selectedShotId: shot.id });
+
+    const result = await snapAgentObjectToFloor({
+      shotId: shot.id,
+      object: { id: actor.id },
+    });
+    expect(result.ok).toBe(true);
+
+    const base = useProjectStore.getState().project.scene.objects.find((item) => item.id === actor.id);
+    expect(base?.transform.position[1]).toBe(5);
+
+    const overrideY = useProjectStore.getState().project.shots[0]?.objectOverrides?.[actor.id]?.transform?.position?.[1];
+    expect(overrideY).toBeCloseTo(0.925, 2);
+  });
+
+  it('orients using shot-effective positions rather than base scene parking transforms', async () => {
+    const { project, actor, shot } = corridorProject();
+    const target = createSceneObject('human_dummy', 2, [4, 0.875, 0]);
+    target.name = 'Target';
+    actor.transform.position = [0, 0.875, -10];
+    const stagedShot = {
+      ...shot,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: {
+          position: [0, 0.875, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+        },
+      }),
+    };
+    useProjectStore.setState({
+      project: { ...project, scene: { ...project.scene, objects: [...project.scene.objects, target] } , shots: [stagedShot] },
+      selectedShotId: shot.id,
+    });
+
+    const result = await orientAgentObjectToward({
+      shotId: shot.id,
+      object: { id: actor.id },
+      target: { id: target.id },
+    });
+    expect(result.ok).toBe(true);
+    const yaw = useProjectStore.getState().project.shots[0]?.objectOverrides?.[actor.id]?.transform?.rotation?.[1] ?? 0;
+    expect(Math.abs(yaw)).toBeGreaterThan(10);
+  });
+
+  it('frames subjects from shot staging overrides', async () => {
+    const { project, actor, shot } = corridorProject();
+    actor.transform.position = [0, 0.875, -20];
+    const stagedShot = {
+      ...shot,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: {
+          position: [2, 0.875, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+        },
+      }),
+    };
+    useProjectStore.setState({ project: { ...project, shots: [stagedShot] }, selectedShotId: shot.id });
+
+    const result = await frameAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      composition: 'medium',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.camera?.target[0]).toBeGreaterThan(1);
+  });
+
+  it('tracks subjects with different start and end cameras when subjects move', async () => {
+    const { project, actor, shot } = corridorProject();
+    let next = createShotKeyframe(project, shot.id, {
+      timeSeconds: 0,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'Start',
+    });
+    next = createShotKeyframe(next, shot.id, {
+      timeSeconds: 3,
+      camera: shot.camera,
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [4, 0.875, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+      label: 'End',
+    });
+    useProjectStore.setState({ project: next, selectedShotId: shot.id });
+
+    const result = await trackAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      startTime: 0,
+      endTime: 3,
+      composition: 'medium',
+    });
+    expect(result.ok).toBe(true);
+    expect((result.cameraDisplacementMeters ?? 0)).toBeGreaterThan(0.1);
+    expect(result.subjectDisplacements?.[0]?.displacementMeters ?? 0).toBeGreaterThan(3);
+  });
+
+  it('warns when trackSubjects sees no subject motion and identical cameras', async () => {
+    const { project, actor, shot } = corridorProject();
+    useProjectStore.setState({ project, selectedShotId: shot.id });
+
+    const result = await trackAgentSubjects({
+      shotId: shot.id,
+      subjectIds: [actor.id],
+      startTime: 0,
+      endTime: 3,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('completed_with_warnings');
+    expect(result.diagnostics.some((item) => item.code === 'track_no_motion')).toBe(true);
+  });
+
+  it('reports camera outside environment bounds and below-floor penetration', () => {
+    const { project, actor, shot } = corridorProject();
+    const outsideShot: Shot = {
+      ...shot,
+      camera: {
+        ...shot.camera,
+        position: [20, 1.6, 0],
+        target: [0, 1.4, 0],
+      },
+      objectOverrides: updateShotObjectOverrides(shot, actor, {
+        transform: { position: [0, -0.5, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      }),
+    };
+    const diagnostics = inspectAgentShotDiagnostics({ project, shot: outsideShot });
+    expect(diagnostics.cameraInsideEnvironmentBounds).toBe(false);
+    const actorDiag = diagnostics.subjects.find((item) => item.objectId === actor.id);
+    expect(actorDiag?.groundClearanceMeters ?? 0).toBeLessThan(0);
+  });
+
+  it('separates visible fraction from screen coverage using occlusion', () => {
+    const { project, actor, shot } = corridorProject();
+    actor.dimensions = [0.2, 0.4, 0.2];
+    actor.transform.scale = [1, 1, 1];
+    actor.transform.position = [0, 0.2, 4];
     const diagnostics = inspectAgentShotDiagnostics({ project, shot });
-    expect(diagnostics.shotId).toBe(shot.id);
-    expect(Array.isArray(diagnostics.subjects)).toBe(true);
-    expect(typeof diagnostics.cameraInsideEnvironmentBounds).toBe('boolean');
-    expect(typeof diagnostics.motionDisplacementMeters).toBe('number');
+    const actorDiag = diagnostics.subjects.find((item) => item.objectId === actor.id);
+    expect(actorDiag).toBeTruthy();
+    if (!actorDiag) return;
+    expect(actorDiag.screenCoverage).toBeLessThan(0.2);
+    expect(actorDiag.visibleFraction).toBeGreaterThan(actorDiag.screenCoverage);
   });
 
   it('recomputes pano crop when linking via withShotPanoLink helper', () => {

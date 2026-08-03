@@ -63,17 +63,18 @@ const OPERATION_DOCS: Record<string, AgentOperationDescription> = {
   snapObjectToFloor: {
     name: 'snapObjectToFloor',
     category: 'mutation',
-    summary: 'Ground an upright object on the floor plane.',
+    summary: 'Ground an upright object on the identified floor for one shot via objectOverrides.',
     writeAccess: true,
-    input: { object: 'AgentEntityTarget', shotId: 'string (optional)' },
+    input: { shotId: 'string', object: 'AgentEntityTarget' },
     returns: 'AgentSnapObjectToFloorResult',
   },
   placeObjectNearLandmark: {
     name: 'placeObjectNearLandmark',
     category: 'mutation',
-    summary: 'Place an object relative to a landmark with an optional offset.',
+    summary: 'Place an object relative to a landmark for one shot via objectOverrides.',
     writeAccess: true,
     input: {
+      shotId: 'string',
       object: 'AgentEntityTarget',
       landmark: 'AgentEntityTarget',
       offset: '[x, y, z] (optional)',
@@ -97,15 +98,15 @@ const OPERATION_DOCS: Record<string, AgentOperationDescription> = {
   orientObjectToward: {
     name: 'orientObjectToward',
     category: 'mutation',
-    summary: 'Rotate an object to face another object.',
+    summary: 'Rotate an object to face another object for one shot via objectOverrides.',
     writeAccess: true,
-    input: { object: 'AgentEntityTarget', target: 'AgentEntityTarget' },
+    input: { shotId: 'string', object: 'AgentEntityTarget', target: 'AgentEntityTarget' },
     returns: 'AgentOrientObjectTowardResult',
   },
   trackSubjects: {
     name: 'trackSubjects',
     category: 'mutation',
-    summary: 'Create start/end keyframes that frame subjects across a time range.',
+    summary: 'Create start/end keyframes that frame subjects at their timeline positions.',
     writeAccess: true,
     input: {
       shotId: 'string',

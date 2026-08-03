@@ -663,10 +663,18 @@ export interface AgentRevisionRefreshResult {
 
 export interface AgentShotDiagnosticsSubject {
   objectId: string;
+  /** Visible projected area as a fraction of the frame (0–1). */
   screenCoverage: number;
+  /** Fraction of the subject that is unobstructed (0–1), not frame occupancy. */
   visibleFraction: number;
+  /** Signed distance from the subject AABB bottom to the identified floor (negative = below floor). */
   groundClearanceMeters: number;
   occlusionRatio?: number;
+}
+
+export interface AgentSubjectDisplacement {
+  objectId: string;
+  displacementMeters: number;
 }
 
 export interface AgentShotDiagnostics {
@@ -675,21 +683,27 @@ export interface AgentShotDiagnostics {
   sampledTimeSeconds?: number;
   subjects: AgentShotDiagnosticsSubject[];
   foregroundOcclusionFraction: number;
-  linkedPanoramaRendered: boolean;
+  /** True when a linked panorama resolves for the shot (not a render confirmation). */
+  linkedPanoramaResolved: boolean;
   linkedPanoId?: string;
-  cameraInsideEnvironmentBounds: boolean;
-  motionDisplacementMeters: number;
+  /** True when the camera position intersects solid geometry. */
+  cameraIntersectsSolidGeometry: boolean;
+  /** True when the camera is inside the navigable environment envelope, if one can be inferred. */
+  cameraInsideEnvironmentBounds?: boolean;
+  cameraDisplacementMeters: number;
+  subjectDisplacements: AgentSubjectDisplacement[];
   diagnostics: AgentDiagnostic[];
 }
 
 export interface AgentSnapObjectToFloorInput {
+  shotId: string;
   object: AgentEntityTarget;
-  shotId?: string;
 }
 
 export interface AgentSnapObjectToFloorResult {
   ok: boolean;
   status: AgentOperationStatus;
+  shotId?: string;
   objectId?: string;
   position?: [number, number, number];
   revisionId?: string;
@@ -697,6 +711,7 @@ export interface AgentSnapObjectToFloorResult {
 }
 
 export interface AgentPlaceObjectNearLandmarkInput {
+  shotId: string;
   object: AgentEntityTarget;
   landmark: AgentEntityTarget;
   offset?: [number, number, number];
@@ -705,6 +720,7 @@ export interface AgentPlaceObjectNearLandmarkInput {
 export interface AgentPlaceObjectNearLandmarkResult {
   ok: boolean;
   status: AgentOperationStatus;
+  shotId?: string;
   objectId?: string;
   landmarkId?: string;
   position?: [number, number, number];
@@ -713,6 +729,7 @@ export interface AgentPlaceObjectNearLandmarkResult {
 }
 
 export interface AgentOrientObjectTowardInput {
+  shotId: string;
   object: AgentEntityTarget;
   target: AgentEntityTarget;
 }
@@ -720,6 +737,7 @@ export interface AgentOrientObjectTowardInput {
 export interface AgentOrientObjectTowardResult {
   ok: boolean;
   status: AgentOperationStatus;
+  shotId?: string;
   objectId?: string;
   targetId?: string;
   rotation?: [number, number, number];
@@ -761,6 +779,8 @@ export interface AgentTrackSubjectsResult {
   shotId?: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
+  cameraDisplacementMeters?: number;
+  subjectDisplacements?: AgentSubjectDisplacement[];
   revisionId?: string;
   diagnostics: AgentDiagnostic[];
 }
