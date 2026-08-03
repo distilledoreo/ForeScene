@@ -21,6 +21,10 @@ import {
   identifyFloorY,
   signedGroundClearanceMeters,
 } from './spatialShotState';
+import {
+  agentError,
+  agentWarning,
+} from './diagnostics';
 
 function frameVisibleFraction(
   bounds: { behindCamera: boolean; areaCoverage?: number; unclipped?: { areaCoverage: number }; visible?: { areaCoverage: number } },
@@ -80,13 +84,14 @@ function buildSubjectDiagnostic(
   project: LocationProject,
   shotForInspect: Shot,
   object: SceneObject,
+  effectiveObjects: SceneObject[],
 ): AgentShotDiagnosticsSubject {
   const entry = describeSceneObjectComposition({
     project,
     shot: shotForInspect,
     object,
   });
-  const floorY = identifyFloorY(project, object.transform.position);
+  const floorY = identifyFloorY(project, object.transform.position, effectiveObjects);
   return {
     objectId: object.id,
     screenCoverage: entry.bounds.areaCoverage,
@@ -148,11 +153,32 @@ export function inspectAgentShotDiagnostics(params: {
     : inferDiagnosticSubjectIds(shotForInspect, telemetry, resolvedObjects);
 
   const subjects: AgentShotDiagnosticsSubject[] = [];
+  const diagnostics: import('./diagnostics').AgentDiagnostic[] = [];
+  const expectedSubjectIds = params.subjectIds?.length ? [...params.subjectIds] : undefined;
+
   for (const objectId of subjectIds) {
     const sceneObject = resolvedById.get(objectId);
-    if (!sceneObject || sceneObject.visible === false) continue;
-    subjects.push(buildSubjectDiagnostic(project, shotForInspect, sceneObject));
+    if (!sceneObject) {
+      diagnostics.push(agentError(
+        'subject_missing',
+        `Diagnostic subject "${objectId}" is not present in the shot-effective scene.`,
+        { candidates: [objectId] },
+      ));
+      continue;
+    }
+    if (sceneObject.visible === false) {
+      diagnostics.push(agentWarning(
+        'subject_hidden',
+        `Diagnostic subject "${objectId}" is hidden in the shot-effective scene.`,
+      ));
+      continue;
+    }
+    subjects.push(buildSubjectDiagnostic(project, shotForInspect, sceneObject, resolvedObjects));
   }
+
+  const projectedPanoramaVisible = Boolean(linkedPano)
+    && Boolean(shotForInspect.linkedPanoId)
+    && subjects.some((subject) => subject.visibleFraction > 0);
 
   const cameraPosition = shotForInspect.camera.position;
   const insideEnvironment = environmentBounds
@@ -167,10 +193,12 @@ export function inspectAgentShotDiagnostics(params: {
     foregroundOcclusionFraction: foregroundOcclusionFraction(telemetry),
     linkedPanoramaResolved: Boolean(linkedPano),
     linkedPanoId: shot.linkedPanoId,
+    projectedPanoramaVisible,
     cameraIntersectsSolidGeometry: cameraIntersectsSolidGeometry(project, shotForInspect),
     cameraInsideEnvironmentBounds: insideEnvironment,
     cameraDisplacementMeters: cameraDisplacementMeters(shot),
     subjectDisplacements: subjectDisplacements(project, shot, subjectIds),
-    diagnostics: [],
+    expectedSubjectIds,
+    diagnostics,
   };
 }

@@ -132,6 +132,80 @@ import {
   sampleAgentShotState,
   upsertAgentObjectKeyframe,
 } from './timelineHelpers';
+import {
+  openAgentProjectPackage,
+  validateAgentProjectPackage,
+  cloneAgentProjectRevision,
+  getAgentLoadedProjectSource,
+} from './projectImportControl';
+import {
+  importAgentPanoramaReference,
+  updateAgentPanoramaReference,
+  renderAgentGrayboxPanorama,
+  approveAgentPanoramaReference,
+  acceptAgentReferenceAlignment,
+  removeAgentPanoramaReference,
+  setAgentPanoramaCaptureOrigin,
+  inspectAgentPanoramaProjection,
+} from './panoramaReferenceControl';
+import {
+  createAgentObjectGroup,
+  diagnoseAgentObjectGroup,
+  inspectAgentObjectGroup,
+  listAgentObjectGroups,
+  stageAgentObjectGroup,
+  inferImportAssemblyGroups,
+} from './objectGroupControl';
+import {
+  cancelAgentJob,
+  getAgentJob,
+  resumeAgentJob,
+  submitAgentJob,
+  subscribeToAgentJobProgress,
+} from './jobQueue';
+import {
+  compareAgentAdjacentShots,
+  duplicateAgentShot,
+  inspectAgentSequenceContinuity,
+  listAgentShotMedia,
+  reorderAgentShots,
+} from './sequenceReviewControl';
+import {
+  applyAgentPosePreset,
+  copyAgentPoseBetweenShots,
+  exportAgentRigPackage,
+  inspectAgentCharacterPose,
+  mirrorAgentPose,
+  resetAgentJointPose,
+  setAgentJointRotation,
+} from './poseControl';
+import {
+  cleanupAgentUnreferencedAssets,
+  compareAgentProjectRevisions,
+  inspectAgentBrowserStorage,
+  inspectAgentProjectHealth,
+  listAgentProjectRevisions,
+  repairAgentProjectIntegrity,
+  restoreAgentProjectRevision,
+} from './projectHealthControl';
+import {
+  applyAgentProductionCompile,
+  bindAgentManifestAssets,
+  inspectAgentProductionStatus,
+  previewAgentProductionCompile,
+  validateAgentProductionManifest,
+} from './productionManifestControl';
+import {
+  applyAgentSetBlueprint,
+  patchAgentProjectSettings,
+  validateAgentSetBlueprint,
+} from './setBlueprintControl';
+import {
+  deleteAgentArtifact,
+  getAgentArtifactStatus,
+  listAgentArtifacts,
+  persistAgentArtifact,
+} from './artifactRegistry';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -816,6 +890,300 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     discardCharacterImportAnalysis(analysisId) {
       return discardCharacterImportAnalysis(analysisId);
+    },
+
+    openProjectPackage(input) {
+      return openAgentProjectPackage(input);
+    },
+
+    validateProjectPackage(input) {
+      return validateAgentProjectPackage(input);
+    },
+
+    cloneProjectRevision(input) {
+      return cloneAgentProjectRevision(input);
+    },
+
+    getLoadedProjectSource() {
+      return getAgentLoadedProjectSource();
+    },
+
+    importPanoramaReference(input) {
+      return importAgentPanoramaReference(input);
+    },
+
+    updatePanoramaReference(input) {
+      return updateAgentPanoramaReference(input);
+    },
+
+    renderGrayboxPanorama(input) {
+      return renderAgentGrayboxPanorama(input);
+    },
+
+    approvePanoramaReference(input) {
+      return approveAgentPanoramaReference(input);
+    },
+
+    acceptReferenceAlignment(input) {
+      return acceptAgentReferenceAlignment(input);
+    },
+
+    removePanoramaReference(input) {
+      return removeAgentPanoramaReference(input);
+    },
+
+    setPanoramaCaptureOrigin(input) {
+      return setAgentPanoramaCaptureOrigin(input);
+    },
+
+    inspectPanoramaProjection(input) {
+      return inspectAgentPanoramaProjection(input);
+    },
+
+    validateSetBlueprint(input) {
+      return Promise.resolve(validateAgentSetBlueprint(input));
+    },
+
+    applySetBlueprint(input) {
+      return applyAgentSetBlueprint(input);
+    },
+
+    patchProjectSettings(input) {
+      return patchAgentProjectSettings(input);
+    },
+
+    createObjectGroup(input) {
+      return createAgentObjectGroup(input);
+    },
+
+    inspectObjectGroup(input) {
+      return inspectAgentObjectGroup(input.groupId);
+    },
+
+    listObjectGroups() {
+      const explicit = listAgentObjectGroups();
+      if (explicit.length > 0) return explicit;
+      return inferImportAssemblyGroups(readInspectionContext().project);
+    },
+
+    stageObjectGroup(input) {
+      return stageAgentObjectGroup(input);
+    },
+
+    diagnoseObjectGroup(input) {
+      return diagnoseAgentObjectGroup(input);
+    },
+
+    submitJob(input) {
+      return Promise.resolve(submitAgentJob(input));
+    },
+
+    getJob(jobId) {
+      return getAgentJob(jobId);
+    },
+
+    cancelJob(jobId) {
+      return cancelAgentJob(jobId);
+    },
+
+    resumeJob(jobId) {
+      return resumeAgentJob(jobId);
+    },
+
+    subscribeToJobProgress(jobId, listener) {
+      return subscribeToAgentJobProgress(jobId, listener);
+    },
+
+    duplicateShot(input) {
+      return duplicateAgentShot(input);
+    },
+
+    reorderShots(input) {
+      return reorderAgentShots(input);
+    },
+
+    captureShotThumbnail(input) {
+      return api.renderShotFrame({
+        shotId: input.shotId,
+        timeSeconds: input.timeSeconds,
+        appearance: 'clay',
+      });
+    },
+
+    listShotMedia(input) {
+      return listAgentShotMedia(input);
+    },
+
+    compareAdjacentShots(input) {
+      return compareAgentAdjacentShots(input);
+    },
+
+    inspectSequenceContinuity(input) {
+      return inspectAgentSequenceContinuity(input);
+    },
+
+    async renderStoryboard(input) {
+      const results = await api.renderShotBatch({ jobs: input.shotIds.map((shotId) => ({ shotId })) });
+      const first = results[0];
+      return first ?? {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError('render_failed', 'No shots rendered.')],
+      };
+    },
+
+    renderAnimaticPreview(input) {
+      const firstShotId = input.shotIds[0];
+      if (!firstShotId) {
+        return Promise.resolve({
+          ok: false,
+          status: 'failed' as const,
+          diagnostics: [agentError('shot_not_found', 'renderAnimaticPreview requires at least one shot id.')],
+        });
+      }
+      return renderAgentShotVideo({ shotId: firstShotId });
+    },
+
+    inspectCharacterPose(input) {
+      return inspectAgentCharacterPose(input);
+    },
+
+    setJointRotation(input) {
+      return setAgentJointRotation(input);
+    },
+
+    applyPosePreset(input) {
+      return applyAgentPosePreset(input);
+    },
+
+    mirrorPose(input) {
+      return mirrorAgentPose(input);
+    },
+
+    resetJointPose(input) {
+      return resetAgentJointPose(input);
+    },
+
+    copyPoseBetweenShots(input) {
+      return copyAgentPoseBetweenShots(input);
+    },
+
+    exportRigPackage(input) {
+      return exportAgentRigPackage(input);
+    },
+
+    listProjectRevisions() {
+      return listAgentProjectRevisions();
+    },
+
+    inspectProjectHealth() {
+      return inspectAgentProjectHealth();
+    },
+
+    inspectBrowserStorage() {
+      return inspectAgentBrowserStorage();
+    },
+
+    restoreProjectRevision(input) {
+      return restoreAgentProjectRevision(input);
+    },
+
+    compareProjectRevisions(input) {
+      return compareAgentProjectRevisions(input);
+    },
+
+    cleanupUnreferencedAssets() {
+      return cleanupAgentUnreferencedAssets();
+    },
+
+    repairProjectIntegrity() {
+      return repairAgentProjectIntegrity();
+    },
+
+    listArtifacts(input) {
+      return listAgentArtifacts(input ?? {});
+    },
+
+    persistArtifact(input) {
+      return persistAgentArtifact(input.artifactId);
+    },
+
+    deleteArtifact(input) {
+      return deleteAgentArtifact(input.artifactId);
+    },
+
+    getArtifactStatus(input) {
+      return getAgentArtifactStatus(input.artifactId);
+    },
+
+    validateProductionManifest(input) {
+      return validateAgentProductionManifest(input);
+    },
+
+    bindManifestAssets(input) {
+      return bindAgentManifestAssets(input);
+    },
+
+    previewProductionCompile(input) {
+      return previewAgentProductionCompile(input);
+    },
+
+    applyProductionCompile(input) {
+      return applyAgentProductionCompile(input);
+    },
+
+    inspectProductionStatus() {
+      return inspectAgentProductionStatus();
+    },
+
+    inspectShotsDiagnostics(input) {
+      const ctx = readInspectionContext();
+      return input.shots.map((entry) => {
+        const shot = ctx.project.shots.find((candidate) => candidate.id === entry.shotId);
+        if (!shot) {
+          return {
+            shotId: entry.shotId,
+            subjects: [],
+            foregroundOcclusionFraction: 0,
+            linkedPanoramaResolved: false,
+            cameraIntersectsSolidGeometry: false,
+            cameraDisplacementMeters: 0,
+            subjectDisplacements: [],
+            diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${entry.shotId}".`)],
+          };
+        }
+        return inspectAgentShotDiagnostics({
+          project: ctx.project,
+          shot,
+          timeSeconds: entry.timeSeconds,
+          subjectIds: entry.subjectIds,
+        });
+      });
+    },
+
+    async frameSubjectsBatch(input) {
+      return Promise.all(input.shots.map((shotInput) => frameAgentSubjects(shotInput)));
+    },
+
+    async renderShotBatch(input) {
+      return Promise.all(input.jobs.map((job) => api.renderShotFrame(job)));
+    },
+
+    renderPassMatrix(input) {
+      return Promise.resolve(submitAgentJob({
+        type: 'render-pass-matrix',
+        shotIds: input.shotIds,
+        jobs: input.passes,
+        concurrency: input.concurrency,
+        continueOnError: true,
+      }));
+    },
+
+    createContactSheets(input) {
+      return Promise.resolve(submitAgentJob({
+        type: 'create-contact-sheets',
+        jobs: input.artifactIds,
+      }));
     },
 
     async waitForIdle(options?: { timeoutMs?: number }): Promise<ForeSceneAgentStatus> {

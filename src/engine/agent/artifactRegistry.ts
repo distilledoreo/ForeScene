@@ -13,6 +13,10 @@ interface StoredArtifact {
   fileName: string;
   revisionId?: string;
   createdAt: number;
+  jobId?: string;
+  shotId?: string;
+  persisted?: boolean;
+  persistedKey?: string;
 }
 
 const registry = new Map<string, StoredArtifact>();
@@ -28,6 +32,8 @@ export function registerAgentArtifact(params: {
   mimeType: string;
   fileName: string;
   revisionId?: string;
+  jobId?: string;
+  shotId?: string;
 }): AgentArtifactHandle {
   const id = nextArtifactId();
   registry.set(id, {
@@ -36,6 +42,8 @@ export function registerAgentArtifact(params: {
     mimeType: params.mimeType,
     fileName: params.fileName,
     revisionId: params.revisionId,
+    jobId: params.jobId,
+    shotId: params.shotId,
     createdAt: Date.now(),
   });
   return {
@@ -115,4 +123,96 @@ export async function downloadAgentArtifact(input: {
 export function resetAgentArtifactRegistryForTests(): void {
   registry.clear();
   artifactCounter = 0;
+}
+
+export function listAgentArtifacts(filter: {
+  jobId?: string;
+  revisionId?: string;
+  shotId?: string;
+} = {}): import('./protocol').AgentArtifactListItem[] {
+  return [...registry.values()]
+    .filter((stored) => (
+      (!filter.jobId || stored.jobId === filter.jobId)
+      && (!filter.revisionId || stored.revisionId === filter.revisionId)
+      && (!filter.shotId || stored.shotId === filter.shotId)
+    ))
+    .map((stored) => ({
+      artifactId: stored.id,
+      mimeType: stored.mimeType,
+      fileName: stored.fileName,
+      byteLength: stored.blob.size,
+      revisionId: stored.revisionId,
+      createdAt: stored.createdAt,
+      persisted: stored.persisted,
+    }));
+}
+
+export async function persistAgentArtifact(artifactId: string): Promise<import('./protocol').AgentArtifactStatusResult> {
+  const stored = registry.get(artifactId);
+  if (!stored) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'artifact_not_found',
+        message: `No artifact with id "${artifactId}".`,
+        severity: 'error',
+      }],
+    };
+  }
+  const { storeProjectAssetBlob } = await import('../projectAssetStore');
+  const { createId } = await import('../../utils/ids');
+  const projectId = (await import('../../state/useProjectStore')).useProjectStore.getState().project.id;
+  const assetId = createId('asset');
+  const asset = storeProjectAssetBlob(projectId, {
+    id: assetId,
+    type: 'image',
+    name: stored.fileName,
+    uri: '',
+    mimeType: stored.mimeType,
+    createdAt: new Date().toISOString(),
+  }, stored.blob);
+  stored.persisted = true;
+  stored.persistedKey = asset.id;
+  return {
+    ok: true,
+    artifact: {
+      artifactId: stored.id,
+      mimeType: stored.mimeType,
+      fileName: stored.fileName,
+      byteLength: stored.blob.size,
+      revisionId: stored.revisionId,
+    },
+    persisted: true,
+    diagnostics: [],
+  };
+}
+
+export function deleteAgentArtifact(artifactId: string): { ok: boolean } {
+  return { ok: registry.delete(artifactId) };
+}
+
+export function getAgentArtifactStatus(artifactId: string): import('./protocol').AgentArtifactStatusResult {
+  const stored = registry.get(artifactId);
+  if (!stored) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'artifact_not_found',
+        message: `No artifact with id "${artifactId}".`,
+        severity: 'error',
+      }],
+    };
+  }
+  return {
+    ok: true,
+    artifact: {
+      artifactId: stored.id,
+      mimeType: stored.mimeType,
+      fileName: stored.fileName,
+      byteLength: stored.blob.size,
+      revisionId: stored.revisionId,
+    },
+    persisted: stored.persisted,
+    diagnostics: [],
+  };
 }
