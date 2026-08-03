@@ -257,32 +257,38 @@ export async function persistAgentArtifact(artifactId: string): Promise<import('
   }
 }
 
-export function deleteAgentArtifact(artifactId: string): { ok: boolean } {
+export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boolean }> {
   const stored = registry.get(artifactId);
   if (!stored) return { ok: false };
 
+  if (stored.persisted || stored.persistedKey || stored.projectAssetId) {
+    if (useAgentControlStore.getState().controlMode !== 'read-write') {
+      return { ok: false };
+    }
+  }
+
   if (stored.persistedKey) {
-    void import('../projectAssetStore').then(({ deleteProjectAssetBlob }) => (
-      deleteProjectAssetBlob(stored.persistedKey!)
-    ));
+    const { deleteProjectAssetBlob } = await import('../projectAssetStore');
+    await deleteProjectAssetBlob(stored.persistedKey);
   }
 
   if (stored.projectAssetId) {
     const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
-    if (runDestructive && useAgentControlStore.getState().controlMode === 'read-write') {
-      void runDestructive('Remove persisted agent artifact', () => {
-        useProjectStore.setState((state) => {
-          const assets = { ...state.project.assets.assets };
-          delete assets[stored.projectAssetId!];
-          return {
-            project: touchProject({
-              ...state.project,
-              assets: { assets },
-            }),
-          };
-        });
-      });
+    if (!runDestructive) {
+      return { ok: false };
     }
+    await runDestructive('Remove persisted agent artifact', () => {
+      useProjectStore.setState((state) => {
+        const assets = { ...state.project.assets.assets };
+        delete assets[stored.projectAssetId!];
+        return {
+          project: touchProject({
+            ...state.project,
+            assets: { assets },
+          }),
+        };
+      });
+    });
   }
 
   return { ok: registry.delete(artifactId) };

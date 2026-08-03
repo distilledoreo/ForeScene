@@ -26,30 +26,35 @@ export interface ProductionCompileResult {
   diagnostics: PrevisDiagnostic[];
 }
 
+export interface ProductionCompileOptions {
+  existingContext?: CompiledProductionContext;
+  skipShotNumbers?: Set<string>;
+  existingShotIds?: Record<string, string>;
+  batchSize?: number;
+  /** Manifest entity id → existing scene object id — skips create commands for bound entities. */
+  assetBindings?: Record<string, string>;
+}
+
 export function compileProduction(
   manifest: PrevisProductionManifestV1,
-  options: {
-    existingContext?: CompiledProductionContext;
-    skipShotNumbers?: Set<string>;
-    existingShotIds?: Record<string, string>;
-    batchSize?: number;
-  } = {},
+  options: ProductionCompileOptions = {},
 ): ProductionCompileResult {
   const diagnostics: PrevisDiagnostic[] = [
     ...validateManifestShotNumbers(manifest),
   ];
 
   let context = options.existingContext ?? createEmptyCompiledContext();
+  const phaseOptions = { assetBindings: options.assetBindings };
 
-  const locations = compileLocationsPhase(manifest, context);
+  const locations = compileLocationsPhase(manifest, context, phaseOptions);
   diagnostics.push(...locations.diagnostics);
   context = locations.context;
 
-  const cast = compileCastPhase(manifest, context);
+  const cast = compileCastPhase(manifest, context, phaseOptions);
   diagnostics.push(...cast.diagnostics);
   context = cast.context;
 
-  const props = compilePropsPhase(manifest, context);
+  const props = compilePropsPhase(manifest, context, phaseOptions);
   diagnostics.push(...props.diagnostics);
   context = props.context;
 

@@ -8,6 +8,7 @@ import { compileProduction, plansForSceneSetup } from '../previs/productionCompi
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
+import { touchProject } from '../../state/slices/touchProject';
 import { agentError, agentWarning, writeAccessRequiredDiagnostic } from './diagnostics';
 import type {
   AgentProductionCompilePreviewResult,
@@ -16,8 +17,6 @@ import type {
 import { prepareAgentPlan, type PreparedAgentPlan } from './planCompiler';
 import { projectFingerprint } from './planDiff';
 import { commitPreparedPlanToStore } from './transaction';
-
-const manifestBindingsByProjectId = new Map<string, Record<string, string>>();
 
 function readLiveSource() {
   const projectState = useProjectStore.getState();
@@ -29,6 +28,11 @@ function readLiveSource() {
     activePanoId: projectState.activePanoId,
     gridSnap: projectState.gridSnap,
   };
+}
+
+function readPersistedManifestBindings(): Record<string, string> {
+  const project = useProjectStore.getState().project;
+  return { ...(project.workflow.productionManifestAssetBindings ?? {}) };
 }
 
 function mapPrevisDiagnostics(items: Array<{ code: string; message: string; severity: string }>) {
@@ -72,7 +76,15 @@ function chainPreparePlans(
 }
 
 export function resetAgentProductionManifestBindingsForTests(): void {
-  manifestBindingsByProjectId.clear();
+  useProjectStore.setState((state) => ({
+    project: touchProject({
+      ...state.project,
+      workflow: {
+        ...state.project.workflow,
+        productionManifestAssetBindings: undefined,
+      },
+    }),
+  }));
 }
 
 export function validateAgentProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult {
@@ -90,10 +102,17 @@ export function validateAgentProductionManifest(input: { manifest: unknown }): A
   };
 }
 
-export function bindAgentManifestAssets(input: {
+export async function bindAgentManifestAssets(input: {
   manifest: unknown;
   bindings: Record<string, string>;
-}): AgentProductionManifestValidateResult {
+}): Promise<AgentProductionManifestValidateResult> {
+  if (useAgentControlStore.getState().controlMode !== 'read-write') {
+    return {
+      ok: false,
+      diagnostics: [writeAccessRequiredDiagnostic('bindManifestAssets')],
+    };
+  }
+
   const parsed = parsePrevisProductionManifest(input.manifest);
   if (parsed.errors.length > 0 || !parsed.manifest) {
     return {
@@ -115,8 +134,36 @@ export function bindAgentManifestAssets(input: {
     };
   }
 
-  const projectId = useProjectStore.getState().project.id;
-  manifestBindingsByProjectId.set(projectId, { ...input.bindings });
+  const project = useProjectStore.getState().project;
+  const missingObjects = Object.values(input.bindings).filter((objectId) => (
+    !project.scene.objects.some((object) => object.id === objectId)
+  ));
+  if (missingObjects.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [agentError('object_not_found', 'Bound scene objects not found: ' + missingObjects.join(', ') + '.')],
+    };
+  }
+
+  const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+  if (!runDestructive) {
+    return {
+      ok: false,
+      diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')],
+    };
+  }
+
+  await runDestructive('Bind manifest assets', () => {
+    useProjectStore.setState((state) => ({
+      project: touchProject({
+        ...state.project,
+        workflow: {
+          ...state.project.workflow,
+          productionManifestAssetBindings: { ...input.bindings },
+        },
+      }),
+    }));
+  });
 
   return {
     ok: true,
@@ -125,8 +172,8 @@ export function bindAgentManifestAssets(input: {
   };
 }
 
-export function getAgentManifestBindings(projectId: string): Record<string, string> | undefined {
-  return manifestBindingsByProjectId.get(projectId);
+export function getAgentManifestBindings(): Record<string, string> {
+  return readPersistedManifestBindings();
 }
 
 export function previewAgentProductionCompile(input: { manifest: unknown }): AgentProductionCompilePreviewResult {
@@ -138,7 +185,8 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
     };
   }
 
-  const result = compileProduction(parsed.manifest);
+  const assetBindings = readPersistedManifestBindings();
+  const result = compileProduction(parsed.manifest, { assetBindings });
   const plans = plansForSceneSetup(result);
   const chained = chainPreparePlans(plans, readLiveSource());
   if (!chained.ok) {
@@ -174,7 +222,8 @@ export async function applyAgentProductionCompile(input: {
     return { ok: false, diagnostics: preview.diagnostics };
   }
 
-  const result = compileProduction(parsed.manifest);
+  const assetBindings = readPersistedManifestBindings();
+  const result = compileProduction(parsed.manifest, { assetBindings });
   const plans = plansForSceneSetup(result);
   const chained = chainPreparePlans(plans, readLiveSource());
   if (!chained.ok) {
@@ -221,11 +270,11 @@ export async function applyAgentProductionCompile(input: {
 
 export function inspectAgentProductionStatus() {
   const project = useProjectStore.getState().project;
-  const bindings = manifestBindingsByProjectId.get(project.id);
+  const bindings = readPersistedManifestBindings();
   return {
-    manifestBound: Boolean(bindings && Object.keys(bindings).length > 0),
+    manifestBound: Object.keys(bindings).length > 0,
     shotCount: project.shots.length,
-    bindingCount: bindings ? Object.keys(bindings).length : 0,
+    bindingCount: Object.keys(bindings).length,
     diagnostics: [],
   };
 }

@@ -204,6 +204,10 @@ export function expandJobItems(input: {
     }
     return items;
   }
-  if (input.shotIds) return input.shotIds;
+  if (input.shotIds) {
+    return input.shotIds.map((shotId) => (
+      typeof shotId === 'string' ? { shotId } : shotId
+    ));
+  }
   return [];
 }

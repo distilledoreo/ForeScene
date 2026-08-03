@@ -1537,12 +1537,12 @@ export interface ForeSceneBrowserApi {
   // Artifact registry extensions
   listArtifacts(input?: { jobId?: string; revisionId?: string; shotId?: string }): AgentArtifactListItem[];
   persistArtifact(input: { artifactId: string }): Promise<AgentArtifactStatusResult>;
-  deleteArtifact(input: { artifactId: string }): { ok: boolean };
+  deleteArtifact(input: { artifactId: string }): Promise<{ ok: boolean }>;
   getArtifactStatus(input: { artifactId: string }): AgentArtifactStatusResult;
 
   // Production manifest compiler
   validateProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult;
-  bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): AgentProductionManifestValidateResult;
+  bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): Promise<AgentProductionManifestValidateResult>;
   previewProductionCompile(input: { manifest: unknown }): AgentProductionCompilePreviewResult;
   applyProductionCompile(input: { manifest: unknown; preserveCurrentAsRecovery?: boolean }): Promise<AgentPlanApplyResult>;
   inspectProductionStatus(): { manifestBound: boolean; shotCount: number; diagnostics: AgentDiagnostic[] };

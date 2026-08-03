@@ -281,9 +281,9 @@ describe('agent API robustness', () => {
     expect(listed[0]?.fileName).toBe('shot.png');
   });
 
-  it('binds manifest assets and reports manifestBound status', () => {
+  it('binds manifest assets and reports manifestBound status', async () => {
     const manifest = {
-      version: 1,
+      version: 1 as const,
       project: { name: 'Demo', aspectRatio: '16:9' },
       cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
       locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
@@ -297,14 +297,18 @@ describe('agent API robustness', () => {
         camera: { template: 'medium', subjects: ['hero'] },
       }],
     };
-    const bound = bindAgentManifestAssets({
+    const heroObject = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'human_dummy');
+    expect(heroObject).toBeTruthy();
+
+    const bound = await bindAgentManifestAssets({
       manifest,
-      bindings: { hero: 'object_hero' },
+      bindings: { hero: heroObject!.id },
     });
     expect(bound.ok).toBe(true);
     const status = inspectAgentProductionStatus();
     expect(status.manifestBound).toBe(true);
     expect(status.bindingCount).toBe(1);
+    expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.hero).toBe(heroObject!.id);
   });
 
   it('blocks restoreProjectRevision in read-only mode', async () => {
@@ -336,5 +340,35 @@ describe('agent API robustness', () => {
     expect(keyframe).toBeTruthy();
     expect(keyframe?.objectOverrides?.[object!.id]?.humanPose?.joints.rightLowerArm).toBeTruthy();
     expect(shot.objectOverrides?.[object!.id]?.humanPose).toBeUndefined();
+  });
+
+  it('skips cast create commands when manifest assets are bound', async () => {
+    const { compileProduction } = await import('../src/engine/previs/productionCompiler');
+    const manifest = {
+      version: 1 as const,
+      project: { name: 'Demo', aspectRatio: '16:9' },
+      cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
+      shots: [{
+        id: 'shot_1',
+        shotNumber: '001',
+        name: 'Hero shot',
+        description: 'Hero in room.',
+        locationId: 'loc',
+        subjects: ['hero'],
+        camera: { template: 'medium', subjects: ['hero'] },
+      }],
+    };
+    const heroObject = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'human_dummy');
+    await bindAgentManifestAssets({
+      manifest,
+      bindings: { hero: heroObject!.id },
+    });
+
+    const result = compileProduction(manifest, {
+      assetBindings: { hero: heroObject!.id },
+    });
+    expect(result.cast.plan.commands.length).toBe(0);
+    expect(result.cast.context.entities['cast.hero']?.objectId).toBe(heroObject!.id);
   });
 });

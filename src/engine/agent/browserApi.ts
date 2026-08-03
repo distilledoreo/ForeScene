@@ -17,6 +17,7 @@ import {
   rejectRenderPixelStats,
   type RenderPixelStats,
 } from '../previs/renderPixelStats';
+import { buildContactSheetSpec } from '../previs/contactSheet';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -1153,13 +1154,27 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
       const dataUrl = await blobToDataUrlFromBlob(blob);
       const artifact = buildInlineArtifact({ mimeType: 'image/png', dataUrl });
+      const sheetSpec = buildContactSheetSpec({
+        title: 'Storyboard',
+        shots: artifactIds.map((id, idx) => ({
+          shotNumber: String(idx + 1).padStart(3, '0'),
+          name: id,
+          framePath: id,
+          status: 'rendered',
+          warningCount: 0,
+          fromCanonicalRenderer: true,
+        })),
+      });
+      const rows = Math.ceil(artifactIds.length / sheetSpec.columns);
+      const storyboardWidth = sheetSpec.columns * sheetSpec.cellWidth;
+      const storyboardHeight = rows * sheetSpec.cellHeight;
       return {
         ok: true,
         status: sheetProgress.status === 'completed_with_warnings' ? 'completed_with_warnings' : 'completed',
         shotId: input.shotIds[0] ?? '',
         revisionId: sheetProgress.revisionId ?? progress.revisionId ?? '',
-        width: 0,
-        height: 0,
+        width: storyboardWidth,
+        height: storyboardHeight,
         artifact,
         pngDataUrl: dataUrl,
         diagnostics: sheetProgress.errors ?? [],

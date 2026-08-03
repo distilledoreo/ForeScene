@@ -2,8 +2,10 @@
  * Rigid transforms for logical object groups — preserves member offsets relative to pivot.
  */
 
+import * as THREE from 'three';
 import type { SceneObject, Transform, Vec3 } from '../../domain/types';
 import { selectionBounds } from '../buildSelection';
+import { degreesToRadians } from '../sync';
 
 export function groupPivotFromObjects(objects: SceneObject[]): Vec3 {
   if (objects.length === 0) return [0, 0, 0];
@@ -15,14 +17,41 @@ export function groupPivotFromObjects(objects: SceneObject[]): Vec3 {
   ];
 }
 
-function rotateYawYUp(offset: Vec3, yawDegrees: number): Vec3 {
-  const rad = (yawDegrees * Math.PI) / 180;
-  const c = Math.cos(rad);
-  const s = Math.sin(rad);
+function transformOffset(offset: Vec3, rotationDegrees: Vec3, scale: Vec3): Vec3 {
+  const vector = new THREE.Vector3(
+    offset[0] * scale[0],
+    offset[1] * scale[1],
+    offset[2] * scale[2],
+  );
+  const euler = new THREE.Euler(
+    degreesToRadians(rotationDegrees[0]),
+    degreesToRadians(rotationDegrees[1]),
+    degreesToRadians(rotationDegrees[2]),
+    'XYZ',
+  );
+  vector.applyEuler(euler);
+  return [vector.x, vector.y, vector.z];
+}
+
+function composeEulerDegrees(memberRotation: Vec3, groupRotation: Vec3): Vec3 {
+  const memberQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    degreesToRadians(memberRotation[0]),
+    degreesToRadians(memberRotation[1]),
+    degreesToRadians(memberRotation[2]),
+    'XYZ',
+  ));
+  const groupQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    degreesToRadians(groupRotation[0]),
+    degreesToRadians(groupRotation[1]),
+    degreesToRadians(groupRotation[2]),
+    'XYZ',
+  ));
+  const composed = groupQuat.multiply(memberQuat);
+  const euler = new THREE.Euler().setFromQuaternion(composed, 'XYZ');
   return [
-    offset[0] * c + offset[2] * s,
-    offset[1],
-    -offset[0] * s + offset[2] * c,
+    (euler.x * 180) / Math.PI,
+    (euler.y * 180) / Math.PI,
+    (euler.z * 180) / Math.PI,
   ];
 }
 
@@ -35,7 +64,6 @@ export function computeRigidGroupMemberTransforms(
   groupTransform: Transform,
 ): Map<string, Transform> {
   const results = new Map<string, Transform>();
-  const yaw = groupTransform.rotation[1] ?? 0;
   const scale = groupTransform.scale;
 
   for (const member of members) {
@@ -44,12 +72,7 @@ export function computeRigidGroupMemberTransforms(
       member.transform.position[1] - pivot[1],
       member.transform.position[2] - pivot[2],
     ];
-    const scaled: Vec3 = [
-      rel[0] * scale[0],
-      rel[1] * scale[1],
-      rel[2] * scale[2],
-    ];
-    const rotated = rotateYawYUp(scaled, yaw);
+    const rotated = transformOffset(rel, groupTransform.rotation, scale);
     const newPosition: Vec3 = [
       groupTransform.position[0] + rotated[0],
       groupTransform.position[1] + rotated[1],
@@ -57,11 +80,7 @@ export function computeRigidGroupMemberTransforms(
     ];
     results.set(member.id, {
       position: newPosition,
-      rotation: [
-        member.transform.rotation[0] + (groupTransform.rotation[0] - 0),
-        member.transform.rotation[1] + (groupTransform.rotation[1] - 0),
-        member.transform.rotation[2] + (groupTransform.rotation[2] - 0),
-      ],
+      rotation: composeEulerDegrees(member.transform.rotation, groupTransform.rotation),
       scale: [
         member.transform.scale[0] * scale[0],
         member.transform.scale[1] * scale[1],

@@ -692,6 +692,8 @@ export interface ProjectWorkflow {
   shotFramingAcceptedAtByShotId: Record<string, string>;
   aiBriefSentAtByShotId: Record<string, string>;
   finalPackageExportedAtByShotId: Record<string, string>;
+  /** Manifest entity id → existing scene object id for production compile binding. */
+  productionManifestAssetBindings?: Record<string, string>;
 }
 
 export interface ProjectSettings {

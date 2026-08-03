@@ -19,6 +19,20 @@ interface StoredJob extends AgentJobProgress {
   listeners: Set<(progress: AgentJobProgress) => void>;
   abortController?: AbortController;
   resumeIndex: number;
+  completedIndexes: Set<number>;
+}
+
+function updateJobCheckpoint(job: StoredJob) {
+  job.completedItems = job.completedIndexes.size;
+  job.progress = job.totalItems > 0 ? job.completedIndexes.size / job.totalItems : 1;
+  let prefix = 0;
+  while (job.completedIndexes.has(prefix)) prefix += 1;
+  job.resumeIndex = prefix;
+}
+
+function markJobItemSettled(job: StoredJob, index: number) {
+  job.completedIndexes.add(index);
+  updateJobCheckpoint(job);
 }
 
 const jobs = new Map<string, StoredJob>();
@@ -71,7 +85,6 @@ async function runJob(job: StoredJob): Promise<void> {
   job.totalItems = items.length;
   const concurrency = Math.max(1, job.input.concurrency ?? 1);
   const continueOnError = job.input.continueOnError ?? true;
-  const startIndex = job.resumeIndex;
   const handler = AGENT_JOB_HANDLERS[job.type];
 
   if (!handler) {
@@ -82,7 +95,7 @@ async function runJob(job: StoredJob): Promise<void> {
     return;
   }
 
-  let settledCount = job.completedItems;
+  let settledCount = job.completedIndexes.size;
   const artifactIds = [...(job.artifactIds ?? [])];
   const registerArtifact = (artifactId: string) => {
     if (!artifactIds.includes(artifactId)) artifactIds.push(artifactId);
@@ -133,31 +146,35 @@ async function runJob(job: StoredJob): Promise<void> {
       if (!continueOnError) {
         job.status = 'failed';
         job.message = diagnostic.message;
-        settledCount += 1;
-        job.completedItems = settledCount;
-        job.progress = job.totalItems > 0 ? settledCount / job.totalItems : 1;
-        job.resumeIndex = index + 1;
+        markJobItemSettled(job, index);
+        settledCount = job.completedIndexes.size;
         notify(job);
         throw error;
       }
     }
 
-    settledCount += 1;
-    job.completedItems = settledCount;
-    job.progress = job.totalItems > 0 ? settledCount / job.totalItems : 1;
-    job.resumeIndex = index + 1;
+    markJobItemSettled(job, index);
+    settledCount = job.completedIndexes.size;
     notify(job);
   };
 
   try {
-    let cursor = startIndex;
-    const workers = Array.from({ length: Math.min(concurrency, Math.max(1, items.length - startIndex)) }, async () => {
-      while (cursor < items.length) {
+    let nextGrab = job.resumeIndex;
+    const workerCount = Math.min(concurrency, Math.max(1, items.length));
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
         if (job.abortController?.signal.aborted) break;
-        const index = cursor;
-        cursor += 1;
-        if (index >= items.length) break;
-        await runItem(index, items[index]);
+        let index: number | undefined;
+        while (nextGrab < items.length) {
+          const candidate = nextGrab;
+          nextGrab += 1;
+          if (!job.completedIndexes.has(candidate)) {
+            index = candidate;
+            break;
+          }
+        }
+        if (index === undefined) break;
+        await runItem(index, items[index]!);
       }
     });
     await Promise.all(workers);
@@ -210,6 +227,7 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     resumeIndex: 0,
     abortController: new AbortController(),
     artifactIds: [],
+    completedIndexes: new Set(),
   };
   jobs.set(jobId, job);
 
@@ -248,7 +266,10 @@ export async function resumeAgentJob(jobId: string): Promise<AgentSubmitJobResul
   if (job.status === 'running') {
     return { ok: true, jobId, status: job.status, diagnostics: [] };
   }
-  if (job.status !== 'paused' && job.status !== 'failed' && job.resumeIndex < job.totalItems) {
+  if (
+    (job.status === 'paused' || job.status === 'failed')
+    && job.resumeIndex < job.totalItems
+  ) {
     job.abortController = new AbortController();
     void runJob(job);
     return { ok: true, jobId, status: 'running', diagnostics: [] };
