@@ -161,6 +161,37 @@ export function buildShotCompositionTelemetry(params: {
   };
 }
 
+/** Project one scene object for composition / diagnostics (any renderable type). */
+export function describeSceneObjectComposition(params: {
+  project: LocationProject;
+  shot: Shot;
+  object: SceneObject;
+  frameWidth?: number;
+  frameHeight?: number;
+}): ShotCompositionSubject {
+  const width = params.frameWidth ?? params.shot.exportSettings.width ?? 1280;
+  const height = params.frameHeight ?? params.shot.exportSettings.height ?? 720;
+  const resolved = resolveProjectForShot(params.project, params.shot);
+  const matrices = buildCameraMatrices(params.shot.camera, width, height);
+  const solidBlockersAll = resolved.scene.objects
+    .filter((candidate) => (
+      SOLID_TYPES.has(candidate.type)
+      && candidate.visible !== false
+    ))
+    .map((candidate) => {
+      const box = objectWorldAabb(candidate);
+      return { objectId: candidate.id, min: box.min, max: box.max };
+    });
+  return describeSubject(
+    params.object,
+    matrices,
+    width,
+    height,
+    params.shot.camera.position,
+    solidBlockersAll,
+  );
+}
+
 export function objectWorldAabb(object: SceneObject): { min: Vec3; max: Vec3 } {
   const hx = (object.dimensions[0] * object.transform.scale[0]) / 2;
   const hy = (object.dimensions[1] * object.transform.scale[1]) / 2;

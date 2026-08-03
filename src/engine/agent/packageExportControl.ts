@@ -20,6 +20,8 @@ import {
 } from '../exportPlan';
 import { listMissingProjectAssetWarnings } from '../projectAssetRecovery';
 import { awaitAgentNotBusy } from './busy';
+import { registerAgentArtifact } from './artifactRegistry';
+import { deriveOperationOk, deriveOperationStatus } from './renderResult';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -43,6 +45,7 @@ export function cancelAgentPackageExport(): AgentPackageExportResult {
   if (!abortController) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           AGENT_DIAGNOSTIC_CODES.invalidArgument,
@@ -62,7 +65,8 @@ export function cancelAgentPackageExport(): AgentPackageExportResult {
     indeterminate: false,
   };
   return {
-    ok: true,
+    ok: false,
+    status: 'cancelled',
     diagnostics: [],
     progress: latestProgress,
   };
@@ -140,11 +144,12 @@ export async function exportAgentPackage(
   input: AgentPackageExportRequest = {},
 ): Promise<AgentPackageExportResult> {
   const writeBlocked = requireWriteAccess();
-  if (writeBlocked) return { ok: false, diagnostics: writeBlocked };
+  if (writeBlocked) return { ok: false, status: 'failed', diagnostics: writeBlocked };
 
   if (abortController || useProjectStore.getState().isExportingPackage) {
     return {
       ok: false,
+      status: 'busy',
       diagnostics: [
         agentError(
           AGENT_DIAGNOSTIC_CODES.busy,
@@ -155,12 +160,13 @@ export async function exportAgentPackage(
   }
 
   const stillBusy = await awaitAgentNotBusy();
-  if (stillBusy) return { ok: false, diagnostics: stillBusy };
+  if (stillBusy) return { ok: false, status: 'busy', diagnostics: stillBusy };
 
   const flushProject = useProjectSafetyStore.getState().flushProject;
   if (!flushProject) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           AGENT_DIAGNOSTIC_CODES.busy,
@@ -176,6 +182,7 @@ export async function exportAgentPackage(
   } catch (error) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           'export_flush_failed',
@@ -187,6 +194,7 @@ export async function exportAgentPackage(
   if (!verified) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           'export_no_revision',
@@ -199,11 +207,12 @@ export async function exportAgentPackage(
   const exportProject = verified.project;
   const { shots, diagnostics } = resolveShots(exportProject, input.shotIds);
   if (diagnostics.some((item) => item.severity === 'error')) {
-    return { ok: false, diagnostics };
+    return { ok: false, status: 'failed', diagnostics };
   }
   if (shots.length === 0) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           AGENT_DIAGNOSTIC_CODES.invalidArgument,
@@ -220,6 +229,7 @@ export async function exportAgentPackage(
   if (planHasBlockingErrors(plan)) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [
         agentError(
           'export_blocked',
@@ -270,11 +280,23 @@ export async function exportAgentPackage(
       indeterminate: false,
     };
 
+    const revisionId = verified.revision.id;
+    const artifact = registerAgentArtifact({
+      blob: result.blob,
+      mimeType: 'application/zip',
+      fileName: result.fileName,
+      revisionId,
+    });
+    const status = deriveOperationStatus({ hasArtifact: true, diagnostics: [] });
+
     return {
-      ok: true,
+      ok: deriveOperationOk(status),
+      status,
+      artifact,
       fileName: result.fileName,
       manifestPaths: result.manifestPaths,
       shotIds: shots.map((shot) => shot.id),
+      revisionId,
       diagnostics: [],
       warnings: listMissingProjectAssetWarnings(exportProject).map((warning) => warning.message),
       progress: latestProgress,
@@ -291,6 +313,7 @@ export async function exportAgentPackage(
       };
       return {
         ok: false,
+        status: 'cancelled',
         diagnostics: [
           agentError('export_cancelled', 'Package export was cancelled.'),
         ],
@@ -310,6 +333,7 @@ export async function exportAgentPackage(
     };
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [agentError('export_failed', message)],
       progress: latestProgress,
       shotIds: shots.map((shot) => shot.id),

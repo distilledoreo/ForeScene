@@ -7,6 +7,8 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { awaitAgentNotBusy } from './busy';
 import { fingerprintShotTimeline } from '../shotTimeline';
+import { registerAgentArtifact } from './artifactRegistry';
+import { deriveOperationOk, deriveOperationStatus } from './renderResult';
 import {
   isAgentShotVideoRenderActive,
   setAgentShotVideoRenderActive,
@@ -36,6 +38,7 @@ export function cancelAgentShotVideoRender(): AgentShotVideoRenderResult {
   if (!abortController) {
     return {
       ok: false,
+      status: 'failed',
       diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'No shot video render is in progress.')],
       progress: latestProgress ?? undefined,
     };
@@ -49,7 +52,7 @@ export function cancelAgentShotVideoRender(): AgentShotVideoRenderResult {
     completedFrames: latestProgress?.completedFrames,
     totalFrames: latestProgress?.totalFrames,
   };
-  return { ok: true, shotId: latestProgress.shotId, diagnostics: [], progress: latestProgress };
+  return { ok: true, status: 'cancelled', shotId: latestProgress.shotId, diagnostics: [], progress: latestProgress };
 }
 
 function requireWriteAccess(): AgentDiagnostic[] | null {
@@ -87,24 +90,24 @@ export async function renderAgentShotVideo(
   input: AgentShotVideoRenderInput,
 ): Promise<AgentShotVideoRenderResult> {
   const blocked = requireWriteAccess();
-  if (blocked) return { ok: false, diagnostics: blocked };
-  if (abortController) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'A shot video render is already in progress.')] };
+  if (blocked) return { ok: false, status: 'failed', diagnostics: blocked };
+  if (abortController) return { ok: false, status: 'busy', shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'A shot video render is already in progress.')] };
   const busy = await awaitAgentNotBusy();
-  if (busy) return { ok: false, shotId: input.shotId, diagnostics: busy };
+  if (busy) return { ok: false, status: 'busy', shotId: input.shotId, diagnostics: busy };
 
   const flushProject = useProjectSafetyStore.getState().flushProject;
-  if (!flushProject) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')] };
+  if (!flushProject) return { ok: false, status: 'failed', shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')] };
   let verified: { project: LocationProject } | undefined;
   try {
     verified = await flushProject('Verified save before agent shot video render');
   } catch (error) {
-    return { ok: false, shotId: input.shotId, diagnostics: [agentError('video_render_flush_failed', error instanceof Error ? error.message : 'Failed to save before video render.')] };
+    return { ok: false, status: 'failed', shotId: input.shotId, diagnostics: [agentError('video_render_flush_failed', error instanceof Error ? error.message : 'Failed to save before video render.')] };
   }
-  if (!verified) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'No verified project revision is available.')] };
+  if (!verified) return { ok: false, status: 'failed', shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'No verified project revision is available.')] };
   const project = verified.project;
   const shot = project.shots.find((candidate) => candidate.id === input.shotId);
-  if (!shot) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${input.shotId}".`)] };
-  if (shot.cameraKeyframes.length < 2) return { ok: false, shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Shot video render requires at least two keyframes.')] };
+  if (!shot) return { ok: false, status: 'failed', shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${input.shotId}".`)] };
+  if (shot.cameraKeyframes.length < 2) return { ok: false, status: 'failed', shotId: input.shotId, diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'Shot video render requires at least two keyframes.')] };
   const timelineFingerprintAtStart = fingerprintShotTimeline(shot);
 
   const attachToShot = input.attachToShot !== false;
@@ -114,6 +117,7 @@ export async function renderAgentShotVideo(
   if (!['720p', '1080p', '4k'].includes(resolutionPreset)) {
     return {
       ok: false,
+      status: 'failed',
       shotId: shot.id,
       diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `Unsupported video resolution preset "${String(resolutionPreset)}".`)],
     };
@@ -153,6 +157,7 @@ export async function renderAgentShotVideo(
         };
         return {
           ok: false,
+          status: 'stale_revision',
           shotId: shot.id,
           fileName: renderName(shot),
           width: video.width,
@@ -161,6 +166,12 @@ export async function renderAgentShotVideo(
           frameRate: video.frameRate,
           mimeType: video.mimeType,
           encodeMode: video.encodeMode,
+          artifact: registerAgentArtifact({
+            blob: video.blob,
+            mimeType: video.mimeType,
+            fileName: renderName(shot),
+            revisionId: useProjectSafetyStore.getState().activeRevisionId,
+          }),
           diagnostics: [agentError(
             AGENT_DIAGNOSTIC_CODES.staleRevision,
             'Shot timeline changed during video render; the generated video was not attached.',
@@ -192,11 +203,21 @@ export async function renderAgentShotVideo(
       }
     }
     if (shouldDownload) downloadBlob(video.blob, renderName(shot));
+    const revisionId = useProjectSafetyStore.getState().activeRevisionId;
+    const artifact = registerAgentArtifact({
+      blob: video.blob,
+      mimeType: video.mimeType,
+      fileName: renderName(shot),
+      revisionId,
+    });
     latestProgress = { phase: 'complete', progress: 1, shotId: shot.id, message: shouldDownload ? 'Shot video rendered and downloaded.' : 'Shot video rendered.' };
+    const status = deriveOperationStatus({ hasArtifact: true, diagnostics: [] });
     return {
-      ok: true,
+      ok: deriveOperationOk(status),
+      status,
       shotId: shot.id,
       assetId,
+      artifact,
       fileName: renderName(shot),
       width: video.width,
       height: video.height,
@@ -204,6 +225,7 @@ export async function renderAgentShotVideo(
       frameRate: video.frameRate,
       mimeType: video.mimeType,
       encodeMode: video.encodeMode,
+      revisionId,
       diagnostics: [],
       progress: latestProgress,
     };
@@ -219,7 +241,13 @@ export async function renderAgentShotVideo(
       completedFrames: latestProgress?.completedFrames,
       totalFrames: latestProgress?.totalFrames,
     };
-    return { ok: false, shotId: shot.id, diagnostics: [agentError(cancelled ? 'video_render_cancelled' : 'video_render_failed', latestProgress.message, { })], progress: latestProgress };
+    return {
+      ok: false,
+      status: cancelled ? 'cancelled' : 'failed',
+      shotId: shot.id,
+      diagnostics: [agentError(cancelled ? 'video_render_cancelled' : 'video_render_failed', latestProgress.message, { })],
+      progress: latestProgress,
+    };
   } finally {
     abortController = null;
     setAgentShotVideoRenderActive(false);

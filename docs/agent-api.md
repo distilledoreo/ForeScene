@@ -102,6 +102,85 @@ copy exact staging rather than infer it from summary inspection fields.
 }
 ```
 
+## Agent API v1 improvements
+
+### Shot panorama
+
+```ts
+await foreScene.setShotPanorama({ shotId, panoId: 'pano_…' });
+await foreScene.setShotPanorama({ shotId, panoId: null }); // unlink
+```
+
+Atomically updates `linkedPanoId`, `panoCrop`, active panorama state, and persistence.
+
+### Render / export result contract
+
+Render and export operations now return a stable `status` plus optional `artifact`:
+
+| `status` | Meaning |
+|----------|---------|
+| `completed` | Artifact produced, no quality issues |
+| `completed_with_warnings` | Artifact produced; inspect `diagnostics` |
+| `failed` | No usable artifact |
+| `stale_revision` | Project changed during render |
+| `cancelled` / `busy` | Operation did not complete |
+
+`ok` is `true` when `status` is `completed` or `completed_with_warnings` — a frame with `frame_zero_variance` still returns the PNG in `artifact` / `pngDataUrl`.
+
+### Artifact handles
+
+Video render, package export, and project backup register blobs in-memory:
+
+```ts
+const video = await foreScene.renderShotVideo({ shotId, download: false });
+const bytes = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const backup = await foreScene.exportProjectBackup({ download: false });
+```
+
+### Discovery
+
+```ts
+foreScene.describeCapabilities();
+foreScene.describeOperation('setShotPanorama');
+foreScene.getAgentSchema();
+```
+
+CLI: `npm run agent:help -- --json`
+
+### Spatial primitives
+
+All spatial primitives are **shot-scoped** — they read shot-effective transforms and write sparse `shot.objectOverrides` (never base `scene.objects`).
+
+`snapObjectToFloor({ shotId, object })`, `placeObjectNearLandmark`, `frameSubjects`, `orientObjectToward`, and `trackSubjects` follow this model.
+
+`trackSubjects` samples subject transforms at `startTime` and `endTime`, solves distinct cameras, and warns when subject displacement is negligible or the cameras are identical. Tracking inserts or updates keyframes at the requested times without rescaling existing timeline timing.
+
+### Timeline helpers
+
+`sampleShotState`, `captureShotStateAsKeyframe`, and `upsertObjectKeyframe` preserve explicit staging at timeline times.
+
+### Shot diagnostics
+
+`inspectShotDiagnostics({ shotId, timeSeconds?, subjectIds? })` returns diagnostics for explicitly requested objects of any type, or infers likely subjects when `subjectIds` is omitted.
+
+Per-subject fields:
+
+- `screenCoverage` — projected frame occupancy
+- `visibleFraction` — in-frame visible subject fraction (`visibleArea / unclippedArea * (1 - occlusionRatio)`)
+- `groundClearanceMeters` — signed distance to identified floor (negative = below floor)
+- `behindCamera`, `clipped`, `occlusionRatio`
+- `humanLandmarks` — optional head/body landmarks for humanoid objects
+
+Shot-level fields:
+- `cameraIntersectsSolidGeometry` — camera inside a wall/box/column
+- `cameraInsideEnvironmentBounds` — camera inside inferred navigable envelope
+- `linkedPanoramaResolved` — panorama link resolves (not a render confirmation)
+- `cameraDisplacementMeters` and `subjectDisplacements`
+
+### Revision sync
+
+Every mutation returns `revisionId`. Call `refreshRevision()` before retrying after `stale_revision`.
+
 ## Export planning
 
 `createExportPlan({ shotIds?: string[] })` calls the same pure `createExportPlan()` engine used by the Export workspace. It does not render or download anything.

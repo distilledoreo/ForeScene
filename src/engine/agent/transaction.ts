@@ -205,8 +205,10 @@ export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResu
 
   return {
     ok: true,
+    status: 'completed',
     planId: prepared.planId,
     verifiedRevisionId,
+    revisionId: verifiedRevisionId,
     summary: prepared.summary,
     diagnostics: prepared.warnings,
   };

@@ -396,3 +396,87 @@ export function resolveExistingShotTarget(
     ],
   };
 }
+
+export function resolveExistingLandmarkTarget(
+  project: LocationProject,
+  target: AgentEntityTarget,
+): ResolveTargetResult {
+  if ('id' in target && typeof target.id === 'string') {
+    const found = project.landmarks.some((landmark) => landmark.id === target.id);
+    if (!found) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            `No landmark with id "${target.id}".`,
+            { path: 'landmark.id' },
+          ),
+        ],
+      };
+    }
+    return { ok: true, id: target.id };
+  }
+
+  if ('ref' in target) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.notImplemented,
+          'Plan-local refs are only resolvable during plan preparation.',
+          { path: 'landmark.ref' },
+        ),
+      ],
+    };
+  }
+
+  if ('query' in target) {
+    const match = target.query.match ?? 'contains';
+    const name = target.query.name;
+    const matches = project.landmarks.filter((landmark) => {
+      if (name === undefined) return true;
+      return nameMatches(landmark.name, name, match)
+        || (landmark.displayName ? nameMatches(landmark.displayName, name, match) : false);
+    });
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            'No landmark matched the query.',
+            { path: 'landmark.query' },
+          ),
+        ],
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.ambiguousTarget,
+            `Landmark query matched ${matches.length} entities; refine the query.`,
+            {
+              path: 'landmark.query',
+              candidates: matches.map((landmark) => landmark.id),
+            },
+          ),
+        ],
+      };
+    }
+    return { ok: true, id: matches[0]!.id };
+  }
+
+  return {
+    ok: false,
+    diagnostics: [
+      agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'Landmark target must include id, ref, or query.',
+        { path: 'landmark' },
+      ),
+    ],
+  };
+}
