@@ -8,6 +8,7 @@ import {
   applyClosedWorldShotPresence,
   deriveDynamicObjectUniverse,
   inspectShotPresence,
+  resolveShotPresenceAtTime,
   verifyShotPresence,
 } from '../src/engine/previs/shotPresence';
 
@@ -99,6 +100,23 @@ describe('closed-world shot presence', () => {
     expect(inspection.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'unexpected_dynamic_object', objectId: prop.id }),
     ]));
+  });
+
+  it('resolves keyframed presence expectations across timeline samples', () => {
+    const contract = {
+      expectedVisibleObjectIds: ['lead'],
+      expectedVisibleGroupIds: [],
+      allowUnspecifiedDynamicObjects: false,
+      base: { expectedVisibleObjectIds: ['lead'], expectedVisibleGroupIds: [] },
+      timeline: [
+        { timeSeconds: 0, expectedVisibleObjectIds: ['lead'], expectedVisibleGroupIds: [] },
+        { timeSeconds: 2, expectedVisibleObjectIds: ['lead', 'guest'], expectedVisibleGroupIds: [] },
+      ],
+      allowedTransitions: [{ entityId: 'guest', from: false, to: true }],
+    };
+    expect(resolveShotPresenceAtTime(contract, 0).expectedVisibleObjectIds).toEqual(['lead']);
+    expect(resolveShotPresenceAtTime(contract, 1).expectedVisibleObjectIds).toEqual(['lead']);
+    expect(resolveShotPresenceAtTime(contract, 2).expectedVisibleObjectIds).toEqual(['lead', 'guest']);
   });
 
   it('samples timeline states and catches a keyframe that introduces an extra object', () => {

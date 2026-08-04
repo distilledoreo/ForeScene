@@ -104,13 +104,18 @@ describe('production gates and capability canary', () => {
 
   it('requires an explicit reason to override a failed canary', () => {
     let state = createProductionGateState('run-2');
-    state = completeProductionGate(state, 'VERIFY_CANARY_STATE', { ok: true });
-    state = completeProductionGate(state, 'VERIFY_CANARY_OUTPUT', { ok: true });
     const plan = planProductionCanary({ candidates: [{ shotId: 'shot.001', shotNumber: '001', capabilities: ['location'] }] });
     const result = runProductionCanary(plan, [{ ...passingResult('shot.001'), panoramaOk: false }]);
+    state = startProductionGate(state, 'AUTHOR_CANARY');
+    state = completeProductionGate(state, 'AUTHOR_CANARY', { ok: true });
+    state = completeProductionGate(state, 'VERIFY_CANARY_STATE', { ok: false, diagnostics: result.diagnostics });
+    state = completeProductionGate(state, 'RENDER_CANARY', { ok: false, diagnostics: result.diagnostics });
+    state = completeProductionGate(state, 'VERIFY_CANARY_OUTPUT', { ok: false, diagnostics: result.diagnostics });
+    state = { ...state, canaryPlan: plan, canaryResult: result };
     state = approveProductionCanary(state, result, 'Director approved clay-only review; panorama is optional for this pass.');
     expect(state.canaryApproved).toBe(true);
     expect(state.overrideReason).toContain('Director approved');
     expect(canAdvanceFullStillRun(state)).toBe(true);
+    expect(state.gates.VERIFY_CANARY_OUTPUT.status).toBe('passed_with_override');
   });
 });

@@ -7,6 +7,7 @@ import type {
   SceneObject,
 } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from './manifest';
+import type { ProductionBindingMode } from './productionBindingMode';
 
 export type ProductionConfigurationDiagnosticCode =
   | 'missing_binding'
@@ -316,7 +317,9 @@ function validateEnvironmentContracts(
 export function validateProductionConfiguration(
   project: LocationProject,
   manifest: PrevisProductionManifestV1,
+  options: { mode?: ProductionBindingMode } = {},
 ): ProductionConfigurationValidationResult {
+  const mode = options.mode ?? 'prepared';
   const config = getProductionConfiguration(project);
   const diagnostics: ProductionConfigurationDiagnostic[] = [];
   const entities = manifestEntities(manifest);
@@ -334,6 +337,9 @@ export function validateProductionConfiguration(
   for (const entity of entities) {
     const binding = config.bindings[entity.id];
     if (!binding) {
+      if (mode === 'greenfield') {
+        continue;
+      }
       diagnostics.push(diagnostic('missing_binding', `No prepared production binding exists for ${entity.kind} entity "${entity.id}".`, {
         entityId: entity.id,
       }));

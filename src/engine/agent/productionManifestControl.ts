@@ -2,8 +2,10 @@
  * Agent API production manifest compiler endpoints.
  */
 
-import type { Workspace } from '../../domain/types';
+import type { LocationProject, Workspace } from '../../domain/types';
+import type { PrevisProductionManifestV1 } from '../previs/manifest';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
+import { buildProductionCompileEntityBindings, buildProductionCompileLocationBindings } from '../previs/productionCompileBindings';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
@@ -33,6 +35,44 @@ function readLiveSource() {
 function readPersistedManifestBindings(): Record<string, string> {
   const project = useProjectStore.getState().project;
   return { ...(project.workflow.productionManifestAssetBindings ?? {}) };
+}
+
+function readCompileAssetBindings(project: LocationProject): Record<string, string> {
+  const bindings = { ...readPersistedManifestBindings() };
+  const production = project.workflow.production;
+  if (!production) return bindings;
+  for (const [entityId, binding] of Object.entries(production.bindings)) {
+    if (binding.kind === 'object' && !bindings[entityId]) {
+      bindings[entityId] = binding.objectId;
+    }
+    if (binding.kind === 'location' && !bindings[binding.locationId]) {
+      const locationDef = production.locations[binding.locationId];
+      const anchorObjectId = locationDef?.objectIds[0];
+      if (anchorObjectId) bindings[binding.locationId] = anchorObjectId;
+    }
+    if (binding.kind === 'location' && !bindings[entityId]) {
+      const locationDef = production.locations[binding.locationId];
+      const anchorObjectId = locationDef?.objectIds[0];
+      if (anchorObjectId) bindings[entityId] = anchorObjectId;
+    }
+  }
+  return bindings;
+}
+
+function existingShotIdsForManifest(
+  project: LocationProject,
+  manifest: PrevisProductionManifestV1,
+): Record<string, string> {
+  const existingShotIds: Record<string, string> = {};
+  for (const definition of manifest.shots) {
+    const match = project.shots.find((shot) => (
+      shot.shotNumber === definition.shotNumber
+      || shot.productionShotId === definition.id
+      || shot.productionShotId === definition.shotNumber
+    ));
+    if (match) existingShotIds[definition.shotNumber] = match.id;
+  }
+  return existingShotIds;
 }
 
 function mapPrevisDiagnostics(items: Array<{ code: string; message: string; severity: string }>) {
@@ -217,10 +257,15 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
     };
   }
 
-  const assetBindings = readPersistedManifestBindings();
+  const project = useProjectStore.getState().project;
+  const entityBindings = buildProductionCompileEntityBindings(project);
+  const locationBindings = buildProductionCompileLocationBindings(project);
   const result = compileProduction(parsed.manifest, {
-    assetBindings,
-    presenceProject: useProjectStore.getState().project,
+    assetBindings: readCompileAssetBindings(project),
+    entityBindings,
+    locationBindings,
+    presenceProject: project,
+    existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
   });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);
@@ -240,6 +285,7 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
 export async function applyAgentProductionCompile(input: {
   manifest: unknown;
   preserveCurrentAsRecovery?: boolean;
+  onlyShotIds?: string[];
 }) {
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
     return {
@@ -258,10 +304,22 @@ export async function applyAgentProductionCompile(input: {
     return { ok: false, diagnostics: preview.diagnostics };
   }
 
-  const assetBindings = readPersistedManifestBindings();
+  const project = useProjectStore.getState().project;
+  const onlyShotIds = new Set(input.onlyShotIds ?? []);
+  const skipShotNumbers = onlyShotIds.size > 0
+    ? new Set(parsed.manifest.shots
+      .filter((shot) => !onlyShotIds.has(shot.id))
+      .map((shot) => shot.shotNumber))
+    : undefined;
+  const entityBindings = buildProductionCompileEntityBindings(project);
+  const locationBindings = buildProductionCompileLocationBindings(project);
   const result = compileProduction(parsed.manifest, {
-    assetBindings,
-    presenceProject: useProjectStore.getState().project,
+    assetBindings: readCompileAssetBindings(project),
+    entityBindings,
+    locationBindings,
+    presenceProject: project,
+    existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
+    ...(skipShotNumbers ? { skipShotNumbers } : {}),
   });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);

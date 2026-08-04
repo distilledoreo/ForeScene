@@ -45,7 +45,18 @@ export type GateFailurePolicy =
   | 'skip_item'
   | 'continue_with_warning';
 
-export type ProductionGateStatus = 'pending' | 'running' | 'passed' | 'failed' | 'paused' | 'skipped';
+export type ProductionGateStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'passed_with_override'
+  | 'failed'
+  | 'paused'
+  | 'skipped';
+
+export function isProductionGatePassing(status: ProductionGateStatus): boolean {
+  return status === 'passed' || status === 'passed_with_override';
+}
 
 export const DEFAULT_GATE_FAILURE_POLICIES: Record<ProductionGate, GateFailurePolicy> = {
   VALIDATE_INPUT: 'abort_and_rollback',
@@ -119,6 +130,11 @@ export interface ProductionGateState {
   motionWorkingRevisionId?: string;
   motionWorkingProjectId?: string;
   overrideReason?: string;
+  projectId?: string;
+  sourceProjectFingerprint?: string;
+  manifestHash?: string;
+  recoveryRevisionId?: string;
+  runGeneration?: number;
   updatedAt: string;
 }
 
@@ -378,7 +394,7 @@ export function completeProductionGate(
   };
   const index = PRODUCTION_GATE_ORDER.indexOf(gate);
   const nextGate = PRODUCTION_GATE_ORDER[index + 1];
-  return nextGate && status === 'passed'
+  return nextGate && isProductionGatePassing(status)
     ? { ...next, currentGate: nextGate }
     : next;
 }
@@ -397,7 +413,31 @@ export function approveProductionCanary(
       status: 'paused',
     }, now);
   }
-  const next = completeProductionGate(state, 'WAIT_FOR_CANARY_APPROVAL', {
+  let next = state;
+  if (override && !result.ok) {
+    for (const gate of ['VERIFY_CANARY_STATE', 'RENDER_CANARY', 'VERIFY_CANARY_OUTPUT'] as const) {
+      const record = next.gates[gate];
+      if (!isProductionGatePassing(record.status)) {
+        next = {
+          ...next,
+          gates: {
+            ...next.gates,
+            [gate]: {
+              ...record,
+              status: 'passed_with_override',
+              completedAt: now,
+              diagnostics: [
+                ...record.diagnostics,
+                { code: 'canary_override', message: override, severity: 'warning', gate },
+              ],
+            },
+          },
+          updatedAt: now,
+        };
+      }
+    }
+  }
+  next = completeProductionGate(next, 'WAIT_FOR_CANARY_APPROVAL', {
     ok: true,
     diagnostics: override ? [{ code: 'canary_override', message: override, severity: 'warning' }] : [],
   }, now);
@@ -414,9 +454,9 @@ export function approveProductionCanary(
 export function canAdvanceFullStillRun(state: ProductionGateState): boolean {
   return state.canaryApproved
     && state.fullRunUnlocked
-    && state.gates.VERIFY_CANARY_STATE.status === 'passed'
-    && state.gates.VERIFY_CANARY_OUTPUT.status === 'passed'
-    && state.gates.WAIT_FOR_CANARY_APPROVAL.status === 'passed';
+    && isProductionGatePassing(state.gates.VERIFY_CANARY_STATE.status)
+    && isProductionGatePassing(state.gates.VERIFY_CANARY_OUTPUT.status)
+    && isProductionGatePassing(state.gates.WAIT_FOR_CANARY_APPROVAL.status);
 }
 
 export function approveStillLayout(

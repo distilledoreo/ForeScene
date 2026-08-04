@@ -15,6 +15,7 @@ import type {
   Shot,
   ShotObjectOverrides,
   ShotPresenceContract,
+  ShotPresenceState,
 } from '../../domain/types';
 import { getSortedCameraKeyframes } from '../cameraKeyframes';
 import { interpolateObjectOverrides } from '../objectKeyframes';
@@ -115,11 +116,11 @@ export function deriveDynamicObjectUniverse(
 
   const boundDynamicObjectIds = new Set<string>();
   const configuration = getProductionConfiguration(project);
-  for (const [entityId, binding] of Object.entries(configuration.bindings)) {
+  for (const [, binding] of Object.entries(configuration.bindings)) {
     // Location bindings describe set geography, not a shot-presence subject.
-    if (binding.kind === 'object' && !entityId.startsWith('locations.')) {
+    if (binding.kind === 'object') {
       boundDynamicObjectIds.add(binding.objectId);
-    } else if (binding.kind === 'group' && !entityId.startsWith('locations.')) {
+    } else if (binding.kind === 'group') {
       for (const objectId of groups[binding.groupId]?.objectIds ?? []) {
         boundDynamicObjectIds.add(objectId);
       }
@@ -143,6 +144,44 @@ export function deriveDynamicObjectUniverse(
   });
 }
 
+/** Resolve the base presence state, honoring explicit base or legacy top-level fields. */
+export function resolveShotPresenceBase(contract: ShotPresenceContract): ShotPresenceState {
+  return contract.base ?? {
+    expectedVisibleObjectIds: contract.expectedVisibleObjectIds,
+    expectedVisibleGroupIds: contract.expectedVisibleGroupIds,
+  };
+}
+
+/** Resolve expected visibility at a timeline sample. */
+export function resolveShotPresenceAtTime(
+  contract: ShotPresenceContract,
+  timeSeconds: number,
+): ShotPresenceState {
+  const timeline = [...(contract.timeline ?? [])].sort((a, b) => a.timeSeconds - b.timeSeconds);
+  let current = resolveShotPresenceBase(contract);
+  for (const entry of timeline) {
+    if (entry.timeSeconds > timeSeconds) break;
+    current = {
+      expectedVisibleObjectIds: entry.expectedVisibleObjectIds,
+      expectedVisibleGroupIds: entry.expectedVisibleGroupIds,
+    };
+  }
+  return current;
+}
+
+function transitionAllowed(
+  contract: ShotPresenceContract,
+  entityId: string,
+  fromVisible: boolean,
+  toVisible: boolean,
+): boolean {
+  return (contract.allowedTransitions ?? []).some((transition) => (
+    transition.entityId === entityId
+    && transition.from === fromVisible
+    && transition.to === toVisible
+  ));
+}
+
 /** Find a persisted shot contract by stable shot id, production id, or number. */
 export function getShotPresenceContract(
   project: LocationProject,
@@ -159,12 +198,17 @@ export function getShotPresenceContract(
 export function resolveExpectedShotPresence(
   project: LocationProject,
   contract?: ShotPresenceContract,
+  timeSeconds = 0,
 ): ShotPresenceResolution {
   const dynamic = new Set(deriveDynamicObjectUniverse(project).map((item) => item.objectId));
   const expected = new Set<string>();
   const diagnostics: ShotPresenceDiagnostic[] = [];
-  const expectedVisibleObjectIds = contract?.expectedVisibleObjectIds ?? [];
-  const expectedVisibleGroupIds = contract?.expectedVisibleGroupIds ?? [];
+  const state = contract ? resolveShotPresenceAtTime(contract, timeSeconds) : {
+    expectedVisibleObjectIds: [],
+    expectedVisibleGroupIds: [],
+  };
+  const expectedVisibleObjectIds = state.expectedVisibleObjectIds;
+  const expectedVisibleGroupIds = state.expectedVisibleGroupIds;
 
   for (const objectId of expectedVisibleObjectIds) {
     const object = project.scene.objects.find((item) => item.id === objectId);
@@ -251,6 +295,7 @@ export function inspectShotPresence(
   }
 
   const contract = contractInput ?? getShotPresenceContract(project, shot);
+  const hasTemporalContract = Boolean(contract?.timeline?.length || contract?.allowedTransitions?.length);
   const resolution = resolveExpectedShotPresence(project, contract);
   const dynamic = deriveDynamicObjectUniverse(project);
   const dynamicIds = dynamic.map((item) => item.objectId);
@@ -268,10 +313,29 @@ export function inspectShotPresence(
     }
   }
 
-  const expected = new Set(resolution.expectedVisibleObjectIds);
+  if (!contract) {
+    const uniqueDiagnostics = dedupeDiagnostics(diagnostics);
+    return {
+      ok: uniqueDiagnostics.length === 0,
+      shotId,
+      contractPresent: false,
+      expectedVisibleObjectIds: [],
+      expectedVisibleGroupIds: [],
+      dynamicObjectIds: dynamicIds,
+      actualVisibleObjectIds: [],
+      samples: [],
+      diagnostics: uniqueDiagnostics,
+    };
+  }
+
   const sampleTimes = presenceSampleTimes(shot);
   const samples: ShotPresenceSample[] = [];
+  const expectedBySample = new Map<number, Set<string>>();
   for (const timeSeconds of sampleTimes) {
+    const sampleResolution = resolveExpectedShotPresence(project, contract, timeSeconds);
+    diagnostics.push(...sampleResolution.diagnostics.map((item) => ({ ...item, shotId, sampleTimeSeconds: timeSeconds })));
+    const expected = new Set(sampleResolution.expectedVisibleObjectIds);
+    expectedBySample.set(timeSeconds, expected);
     const objectOverrides = timeSeconds === 0 && shot.cameraKeyframes.length === 0
       ? shot.objectOverrides ?? {}
       : interpolateObjectOverrides(
@@ -281,38 +345,67 @@ export function inspectShotPresence(
         project.scene.objects,
       );
     const visibleDynamicObjectIds = visibleDynamicIds(project, objectOverrides, dynamicIdSet);
+    const previousVisibleObjectIds = samples.at(-1)?.visibleDynamicObjectIds;
     const sampleDiagnostics = samplePresenceDiagnostics({
       project,
       dynamic,
       visibleDynamicObjectIds,
       expected,
-      resolution,
+      resolution: sampleResolution,
       shotId,
       timeSeconds,
+      contract,
+      previousVisibleObjectIds,
     });
     samples.push({ timeSeconds, visibleDynamicObjectIds, diagnostics: sampleDiagnostics });
     diagnostics.push(...sampleDiagnostics);
   }
 
-  const first = samples[0]?.visibleDynamicObjectIds ?? [];
-  const firstKey = first.join('|');
-  if (samples.some((sample) => sample.visibleDynamicObjectIds.join('|') !== firstKey)) {
-    diagnostics.push({
-      code: 'dynamic_presence_changed_over_time',
-      message: `Dynamic object presence changes across timeline samples for shot "${shotId}".`,
-      shotId,
-    });
+  if (!hasTemporalContract && samples.length > 1) {
+    const first = samples[0]?.visibleDynamicObjectIds ?? [];
+    const firstKey = first.join('|');
+    if (samples.some((sample) => sample.visibleDynamicObjectIds.join('|') !== firstKey)) {
+      diagnostics.push({
+        code: 'dynamic_presence_changed_over_time',
+        message: `Dynamic object presence changes across timeline samples for shot "${shotId}".`,
+        shotId,
+      });
+    }
+  } else if (contract.allowedTransitions?.length && samples.length > 1) {
+    for (let index = 1; index < samples.length; index += 1) {
+      const previous = new Set(samples[index - 1]!.visibleDynamicObjectIds);
+      const current = new Set(samples[index]!.visibleDynamicObjectIds);
+      const changedIds = [...new Set([...previous, ...current])].filter((objectId) => (
+        previous.has(objectId) !== current.has(objectId)
+      ));
+      for (const objectId of changedIds) {
+        const fromVisible = previous.has(objectId);
+        const toVisible = current.has(objectId);
+        if (!transitionAllowed(contract, objectId, fromVisible, toVisible)) {
+          diagnostics.push({
+            code: 'dynamic_presence_changed_over_time',
+            message: `Undeclared visibility transition for "${objectId}" between timeline samples.`,
+            shotId,
+            objectId,
+            sampleTimeSeconds: samples[index]!.timeSeconds,
+          });
+        }
+      }
+    }
   }
 
   const uniqueDiagnostics = dedupeDiagnostics(diagnostics);
+  const firstSample = samples[0];
   return {
     ok: uniqueDiagnostics.length === 0,
     shotId,
-    contractPresent: resolution.contractPresent,
-    expectedVisibleObjectIds: resolution.expectedVisibleObjectIds,
-    expectedVisibleGroupIds: resolution.expectedVisibleGroupIds,
+    contractPresent: true,
+    expectedVisibleObjectIds: firstSample
+      ? [...(expectedBySample.get(firstSample.timeSeconds) ?? [])]
+      : resolution.expectedVisibleObjectIds,
+    expectedVisibleGroupIds: resolveShotPresenceBase(contract).expectedVisibleGroupIds,
     dynamicObjectIds: dynamicIds,
-    actualVisibleObjectIds: first,
+    actualVisibleObjectIds: firstSample?.visibleDynamicObjectIds ?? [],
     samples,
     diagnostics: uniqueDiagnostics,
   };
@@ -424,6 +517,8 @@ function samplePresenceDiagnostics(input: {
   resolution: ShotPresenceResolution;
   shotId: string;
   timeSeconds: number;
+  contract?: ShotPresenceContract;
+  previousVisibleObjectIds?: readonly string[];
 }): ShotPresenceDiagnostic[] {
   const diagnostics: ShotPresenceDiagnostic[] = [];
   const visible = new Set(input.visibleDynamicObjectIds);
@@ -442,8 +537,16 @@ function samplePresenceDiagnostics(input: {
   }
 
   if (!input.resolution.allowUnspecifiedDynamicObjects) {
+    const previousVisible = new Set(input.previousVisibleObjectIds ?? []);
     for (const objectId of input.visibleDynamicObjectIds) {
       if (!input.expected.has(objectId)) {
+        if (
+          input.contract
+          && !previousVisible.has(objectId)
+          && transitionAllowed(input.contract, objectId, false, true)
+        ) {
+          continue;
+        }
         diagnostics.push({
           code: 'unexpected_dynamic_object',
           message: `Unexpected dynamic object "${objectId}" is visible at ${input.timeSeconds.toFixed(3)}s.`,

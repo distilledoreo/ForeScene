@@ -60,6 +60,8 @@ export interface MutationScopeVerificationOptions {
   allowedObjectIds?: readonly string[];
   requireCamerasUnchanged?: boolean;
   requireTimelinesUnchanged?: boolean;
+  /** Permit new shots/objects introduced by a scoped production compile. */
+  allowStructuralChanges?: boolean;
 }
 
 export interface MutationScopeVerificationResult {
@@ -82,8 +84,8 @@ export function verifyProjectMutationScope(
   const allowedObjects = new Set(options.allowedObjectIds ?? []);
 
   if (before.id !== after.id) errors.push('Project id changed during the verified mutation.');
-  if (!sameIds(before.shots, after.shots)) errors.push('Shot ids changed during the verified mutation.');
-  if (!sameIds(before.scene.objects, after.scene.objects)) errors.push('Scene object ids changed during the verified mutation.');
+  if (!options.allowStructuralChanges && !sameIds(before.shots, after.shots)) errors.push('Shot ids changed during the verified mutation.');
+  if (!options.allowStructuralChanges && !sameIds(before.scene.objects, after.scene.objects)) errors.push('Scene object ids changed during the verified mutation.');
   if (!sameIds(before.panoRefs, after.panoRefs)) errors.push('Panorama ids changed during the verified mutation.');
 
   const beforeObjects = new Map(before.scene.objects.map((object) => [object.id, object]));
@@ -362,6 +364,18 @@ async function restoreCheckpoint(
     projectStateRestored: true,
     diagnostics: [],
   };
+}
+
+/** Restore a verified production checkpoint and prove the live project matches the expected starting state. */
+export async function restoreProductionCheckpoint(input: {
+  revisionId: string;
+  expectedProject: LocationProject;
+}): Promise<VerifiedMutationRollbackResult> {
+  return restoreCheckpoint(
+    input.revisionId,
+    projectFingerprint(input.expectedProject),
+    projectStateFingerprint(input.expectedProject),
+  );
 }
 
 function sameIds<T extends { id: string }>(left: readonly T[], right: readonly T[]): boolean {
