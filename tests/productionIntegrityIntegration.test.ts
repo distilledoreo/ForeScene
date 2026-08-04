@@ -24,6 +24,7 @@ import {
   runAgentProduction,
   StaleProductionRunError,
 } from '../src/engine/agent/productionRunControl';
+import * as productionManifestControl from '../src/engine/agent/productionManifestControl';
 import { verifyCompiledShotIntegrity } from '../src/engine/agent/productionIntegrityVerification';
 import { restoreAgentProjectRevision } from '../src/engine/agent/projectHealthControl';
 import { projectFingerprint } from '../src/engine/agent/planDiff';
@@ -326,6 +327,26 @@ describe('production integrity integration', () => {
     });
     expect(attested.ok).toBe(true);
     expect(attested.gateState?.canaryResult?.ok).toBe(true);
+  });
+
+  it('rolls back and resolves when a canary is cancelled after compile', async () => {
+    const started = await runAgentProduction({ manifest, maxCanaryShots: 1 });
+    expect(started.ok).toBe(true);
+    const fingerprintBefore = projectFingerprint(useProjectStore.getState().project);
+    const realCompile = productionManifestControl.applyAgentProductionCompile;
+    const compileSpy = vi.spyOn(productionManifestControl, 'applyAgentProductionCompile').mockImplementation(async (input) => {
+      const result = await realCompile(input);
+      cancelAgentProductionRun(started.runId);
+      return result;
+    });
+    const canaryPromise = runAgentProductionCanary({ runId: started.runId });
+    const canary = await canaryPromise;
+    compileSpy.mockRestore();
+    expect(canary.ok).toBe(false);
+    expect(canary.diagnostics.some((item) => item.code === 'canary_interrupted')).toBe(true);
+    expect(projectFingerprint(useProjectStore.getState().project)).toBe(fingerprintBefore);
+    expect(getAgentProductionRun(started.runId)?.status).toBe('cancelled');
+    expect(vi.mocked(restoreAgentProjectRevision)).toHaveBeenCalled();
   });
 
   it('runs the full lifecycle from canary through still verification gate', async () => {

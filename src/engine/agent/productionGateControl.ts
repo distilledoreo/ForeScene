@@ -356,7 +356,7 @@ export async function runAgentProductionCanary(input: {
   });
   persistRuns();
   const rollbackDiagnostics = executed.rollbackDiagnostics.map((item) => agentError(item.code, item.message));
-  const gateOk = executed.result.ok && (!executed.rolledBack || executed.rollbackOk);
+  const gateOk = executed.result.ok && (!executed.rolledBack || executed.rollbackOk) && !executed.interrupted;
   return {
     ok: gateOk,
     runId: input.runId,

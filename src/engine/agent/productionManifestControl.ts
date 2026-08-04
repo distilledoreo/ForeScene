@@ -44,6 +44,16 @@ function readCompileAssetBindings(project: LocationProject): Record<string, stri
     if (binding.kind === 'object' && !bindings[entityId]) {
       bindings[entityId] = binding.objectId;
     }
+    if (binding.kind === 'location' && !bindings[binding.locationId]) {
+      const locationDef = production.locations[binding.locationId];
+      const anchorObjectId = locationDef?.objectIds[0];
+      if (anchorObjectId) bindings[binding.locationId] = anchorObjectId;
+    }
+    if (binding.kind === 'location' && !bindings[entityId]) {
+      const locationDef = production.locations[binding.locationId];
+      const anchorObjectId = locationDef?.objectIds[0];
+      if (anchorObjectId) bindings[entityId] = anchorObjectId;
+    }
   }
   return bindings;
 }

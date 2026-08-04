@@ -2,10 +2,15 @@
  * Explicit mutation expectations for scoped production compiles.
  */
 
-import type { LocationProject, Shot } from '../../domain/types';
+import type { LocationProject, SceneObject, Shot } from '../../domain/types';
 import type { PrevisProductionManifestV1, PrevisShotDefinition } from './manifest';
 import type { ProductionCanaryPlan } from './productionGates';
 import { getProductionConfiguration } from './productionConfiguration';
+import {
+  resolveProductionBindingMode,
+  type ProductionBindingMode,
+  type ProductionIntegrityMode,
+} from './productionBindingMode';
 
 export interface ProductionMutationExpectation {
   /** Existing shot ids that the compile is permitted to modify. */
@@ -14,6 +19,10 @@ export interface ProductionMutationExpectation {
   expectedCreatedProductionShotIds: ReadonlySet<string>;
   /** Existing scene object ids that the compile is permitted to modify. */
   allowedExistingObjectIds: ReadonlySet<string>;
+  /** Manifest entity ids that may appear on newly created scene objects. */
+  expectedCreatedEntityIds: ReadonlySet<string>;
+  /** Runtime object ids that may be created when known up front (optional). */
+  expectedCreatedObjectIds?: ReadonlySet<string>;
 }
 
 export interface ProductionMutationScopeResult {
@@ -40,6 +49,48 @@ function boundObjectIds(project: LocationProject): Set<string> {
   return ids;
 }
 
+function productionEntityId(object: SceneObject): string | undefined {
+  const value = object.metadata?.productionEntityId;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function manifestEntityIds(manifest: PrevisProductionManifestV1): string[] {
+  return [
+    ...manifest.cast.map((entity) => entity.id),
+    ...(manifest.props ?? []).map((entity) => entity.id),
+  ];
+}
+
+function boundEntityIds(project: LocationProject): Set<string> {
+  const bound = new Set<string>();
+  const production = project.workflow.production;
+  if (production) {
+    for (const entityId of Object.keys(production.bindings)) bound.add(entityId);
+  }
+  for (const entityId of Object.keys(project.workflow.productionManifestAssetBindings ?? {})) {
+    bound.add(entityId);
+  }
+  return bound;
+}
+
+function occupiedEntityIds(project: LocationProject): Map<string, string> {
+  const occupied = new Map<string, string>();
+  const production = project.workflow.production;
+  if (production) {
+    for (const [entityId, binding] of Object.entries(production.bindings)) {
+      if (binding.kind === 'object') occupied.set(entityId, binding.objectId);
+    }
+  }
+  for (const [entityId, objectId] of Object.entries(project.workflow.productionManifestAssetBindings ?? {})) {
+    if (!occupied.has(entityId)) occupied.set(entityId, objectId);
+  }
+  for (const object of project.scene.objects) {
+    const entityId = productionEntityId(object);
+    if (entityId && !occupied.has(entityId)) occupied.set(entityId, object.id);
+  }
+  return occupied;
+}
+
 /** Matches shotCompiler, which stamps compiled shots with the manifest shot number. */
 function compiledProductionShotId(definition: PrevisShotDefinition): string {
   return definition.shotNumber;
@@ -59,9 +110,21 @@ function beforeProjectHasManifestShot(before: LocationProject, definition: Previ
   return before.shots.some((shot) => beforeShotRepresentsManifestShot(shot, definition));
 }
 
+function expectedCreatedEntityIds(
+  before: LocationProject,
+  manifest: PrevisProductionManifestV1,
+  bindingMode: ProductionBindingMode,
+): Set<string> {
+  if (bindingMode === 'prepared') return new Set();
+  const bound = boundEntityIds(before);
+  return new Set(manifestEntityIds(manifest).filter((entityId) => !bound.has(entityId)));
+}
+
 function buildExpectation(
   before: LocationProject,
+  manifest: PrevisProductionManifestV1,
   definitions: PrevisShotDefinition[],
+  bindingMode: ProductionBindingMode,
 ): ProductionMutationExpectation {
   const allowedExistingShotIds = new Set(
     before.shots
@@ -77,6 +140,7 @@ function buildExpectation(
     allowedExistingShotIds,
     expectedCreatedProductionShotIds,
     allowedExistingObjectIds: boundObjectIds(before),
+    expectedCreatedEntityIds: expectedCreatedEntityIds(before, manifest, bindingMode),
   };
 }
 
@@ -84,22 +148,43 @@ export function buildCanaryMutationExpectation(
   before: LocationProject,
   plan: ProductionCanaryPlan,
   manifest: PrevisProductionManifestV1,
+  integrityMode: ProductionIntegrityMode = 'gated_production',
 ): ProductionMutationExpectation {
   const definitions = plan.shotIds
     .map((shotId) => manifest.shots.find((shot) => shot.id === shotId))
     .filter((shot): shot is PrevisShotDefinition => Boolean(shot));
-  return buildExpectation(before, definitions);
+  return buildExpectation(
+    before,
+    manifest,
+    definitions,
+    resolveProductionBindingMode(integrityMode),
+  );
 }
 
 export function buildFullStillMutationExpectation(
   before: LocationProject,
   manifest: PrevisProductionManifestV1,
+  integrityMode: ProductionIntegrityMode = 'gated_production',
 ): ProductionMutationExpectation {
-  return buildExpectation(before, manifest.shots);
+  return buildExpectation(
+    before,
+    manifest,
+    manifest.shots,
+    resolveProductionBindingMode(integrityMode),
+  );
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isAllowedNewObject(
+  object: SceneObject,
+  expectation: ProductionMutationExpectation,
+): boolean {
+  if (expectation.expectedCreatedObjectIds?.has(object.id)) return true;
+  const entityId = productionEntityId(object);
+  return Boolean(entityId && expectation.expectedCreatedEntityIds.has(entityId));
 }
 
 export function verifyProductionMutationScope(
@@ -140,9 +225,28 @@ export function verifyProductionMutationScope(
     }
   }
 
+  const occupiedBefore = occupiedEntityIds(before);
+  const newEntityAssignments = new Map<string, string>();
+
   for (const object of after.scene.objects) {
     const beforeObject = beforeObjects.get(object.id);
-    if (!beforeObject) continue;
+    if (!beforeObject) {
+      if (!isAllowedNewObject(object, expectation)) {
+        errors.push(`Unexpected new scene object "${object.id}" was created.`);
+        continue;
+      }
+      const entityId = productionEntityId(object);
+      if (entityId) {
+        if (occupiedBefore.has(entityId)) {
+          errors.push(`Duplicate scene object for production entity "${entityId}".`);
+        } else if (newEntityAssignments.has(entityId)) {
+          errors.push(`Duplicate scene object for production entity "${entityId}".`);
+        } else {
+          newEntityAssignments.set(entityId, object.id);
+        }
+      }
+      continue;
+    }
     if (!sameJson(beforeObject, object) && !expectation.allowedExistingObjectIds.has(object.id)) {
       errors.push(`Unrelated scene object "${object.id}" changed during production compile.`);
     }

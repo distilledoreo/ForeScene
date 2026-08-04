@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject } from '../src/domain/defaults';
+import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
 import {
   buildCanaryMutationExpectation,
   buildFullStillMutationExpectation,
@@ -13,7 +13,7 @@ const manifest: PrevisProductionManifestV1 = {
   project: { name: 'Scope fixture', aspectRatio: '16:9' },
   locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
   cast: [{ id: 'lead', name: 'Lead', type: 'human_dummy', defaultPose: 'standing-neutral' }],
-  props: [],
+  props: [{ id: 'sword', name: 'Sword', primitive: 'box' }],
   shots: [
     {
       id: 'shot.001',
@@ -35,6 +35,31 @@ const manifest: PrevisProductionManifestV1 = {
     },
   ],
 };
+
+function preparedProject() {
+  const before = createDefaultProject();
+  const lead = createSceneObject('human_dummy', 1);
+  lead.name = 'Lead';
+  before.scene.objects.push(lead);
+  before.workflow.production = {
+    schemaVersion: 1,
+    bindings: {
+      lead: { kind: 'object', objectId: lead.id },
+      room: { kind: 'location', locationId: 'room' },
+    },
+    locations: {
+      room: {
+        id: 'room',
+        objectIds: [],
+        objectGroupIds: [],
+        anchors: {},
+        blockerObjectIds: [],
+      },
+    },
+    shotContracts: {},
+  };
+  return { before, lead };
+}
 
 describe('production mutation scope', () => {
   it('rejects canary compiles that modify unrelated shots', () => {
@@ -88,5 +113,60 @@ describe('production mutation scope', () => {
     const result = verifyProductionMutationScope(before, after, expectation);
     expect(result.ok).toBe(false);
     expect(result.errors.some((message) => message.includes('was removed'))).toBe(true);
+  });
+
+  it('rejects unexpected new objects in prepared production', () => {
+    const { before } = preparedProject();
+    const plan = planProductionCanary({
+      candidates: [{ shotId: 'shot.001', shotNumber: '001', capabilities: ['location'] }],
+    });
+    const expectation = buildCanaryMutationExpectation(before, plan, manifest);
+    expect(expectation.expectedCreatedEntityIds.size).toBe(0);
+    const after = structuredClone(before);
+    const leaked = createSceneObject('box', 1);
+    leaked.name = 'Leaked helper';
+    after.scene.objects.push(leaked);
+    const result = verifyProductionMutationScope(before, after, expectation);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((message) => message.includes('Unexpected new scene object'))).toBe(true);
+  });
+
+  it('accepts expected greenfield objects tagged with productionEntityId metadata', () => {
+    const before = createDefaultProject();
+    const expectation = buildFullStillMutationExpectation(before, manifest, 'greenfield_production');
+    expect(expectation.expectedCreatedEntityIds.has('lead')).toBe(true);
+    expect(expectation.expectedCreatedEntityIds.has('sword')).toBe(true);
+    const after = structuredClone(before);
+    const lead = createSceneObject('human_dummy', 1);
+    lead.metadata = { productionEntityId: 'lead' };
+    after.scene.objects.push(lead);
+    const result = verifyProductionMutationScope(before, after, expectation);
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects duplicate objects for one semantic entity', () => {
+    const before = createDefaultProject();
+    const expectation = buildFullStillMutationExpectation(before, manifest, 'greenfield_production');
+    const after = structuredClone(before);
+    const first = createSceneObject('human_dummy', 1);
+    first.metadata = { productionEntityId: 'lead' };
+    const second = createSceneObject('human_dummy', 2);
+    second.metadata = { productionEntityId: 'lead' };
+    after.scene.objects.push(first, second);
+    const result = verifyProductionMutationScope(before, after, expectation);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((message) => message.includes('Duplicate scene object for production entity "lead"'))).toBe(true);
+  });
+
+  it('expects prepared production to create no new entities', () => {
+    const { before } = preparedProject();
+    const expectation = buildFullStillMutationExpectation(before, manifest);
+    expect([...expectation.expectedCreatedEntityIds]).toEqual([]);
+    const after = structuredClone(before);
+    const prop = createSceneObject('box', 1);
+    prop.metadata = { productionEntityId: 'sword' };
+    after.scene.objects.push(prop);
+    const result = verifyProductionMutationScope(before, after, expectation);
+    expect(result.ok).toBe(false);
   });
 });
