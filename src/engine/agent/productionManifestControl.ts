@@ -5,6 +5,7 @@
 import type { LocationProject, Workspace } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from '../previs/manifest';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
+import { buildProductionCompileEntityBindings } from '../previs/productionCompileBindings';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
@@ -257,9 +258,10 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
   }
 
   const project = useProjectStore.getState().project;
-  const assetBindings = readCompileAssetBindings(project);
+  const entityBindings = buildProductionCompileEntityBindings(project);
   const result = compileProduction(parsed.manifest, {
-    assetBindings,
+    assetBindings: readCompileAssetBindings(project),
+    entityBindings,
     presenceProject: project,
     existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
   });
@@ -301,15 +303,16 @@ export async function applyAgentProductionCompile(input: {
   }
 
   const project = useProjectStore.getState().project;
-  const assetBindings = readCompileAssetBindings(project);
   const onlyShotIds = new Set(input.onlyShotIds ?? []);
   const skipShotNumbers = onlyShotIds.size > 0
     ? new Set(parsed.manifest.shots
       .filter((shot) => !onlyShotIds.has(shot.id))
       .map((shot) => shot.shotNumber))
     : undefined;
+  const entityBindings = buildProductionCompileEntityBindings(project);
   const result = compileProduction(parsed.manifest, {
-    assetBindings,
+    assetBindings: readCompileAssetBindings(project),
+    entityBindings,
     presenceProject: project,
     existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
     ...(skipShotNumbers ? { skipShotNumbers } : {}),

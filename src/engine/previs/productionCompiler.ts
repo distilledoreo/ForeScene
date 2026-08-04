@@ -21,6 +21,7 @@ import {
   validateProductionCapabilities,
   type ProductionCapabilityValidationResult,
 } from './entityCapability';
+import type { ProductionCompileEntityBinding } from './productionCompileBindings';
 
 export interface ProductionCompileResult {
   ok: boolean;
@@ -40,6 +41,8 @@ export interface ProductionCompileOptions {
   batchSize?: number;
   /** Manifest entity id → existing scene object id — skips create commands for bound entities. */
   assetBindings?: Record<string, string>;
+  /** Manifest entity id → resolved object or multipart group binding. */
+  entityBindings?: Record<string, ProductionCompileEntityBinding>;
   /** Prepared project used to compile project-wide closed-world visibility. */
   presenceProject?: LocationProject;
 }
@@ -68,7 +71,10 @@ export function compileProduction(
   }
 
   let context = options.existingContext ?? createEmptyCompiledContext();
-  const phaseOptions = { assetBindings: options.assetBindings };
+  const phaseOptions = {
+    assetBindings: options.assetBindings,
+    entityBindings: options.entityBindings,
+  };
 
   const locations = compileLocationsPhase(manifest, context, phaseOptions);
   diagnostics.push(...locations.diagnostics);

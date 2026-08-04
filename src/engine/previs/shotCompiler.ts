@@ -3,7 +3,8 @@
  */
 
 import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../agent/protocol';
-import type { LocationProject, ShotPresenceContract, Vec3 } from '../../domain/types';
+import type { LocationProject, SceneObject, ShotPresenceContract, Transform, Vec3 } from '../../domain/types';
+import { computeRigidGroupMemberTransforms, groupPivotFromObjects } from '../agent/groupTransform';
 import {
   aspectRatioValue,
   type PrevisProductionManifestV1,
@@ -15,6 +16,7 @@ import {
   previsRef,
   type CompiledProductionContext,
 } from './locationCompiler';
+import type { PrevisEntityMapping } from './runState';
 import { solveBlockingBatch } from './blockingSolver';
 import {
   solveShotCamera,
@@ -401,10 +403,7 @@ function compileSingleShot(
   ]);
 
   for (const character of manifest.cast) {
-    const objectTarget = resolveEntityTarget(
-      context.entities[`cast.${character.id}`]?.objectId,
-      previsRef('cast', character.id),
-    );
+    const entityMapping = context.entities[`cast.${character.id}`];
     const isParticipant = shot.subjects.includes(character.id)
       || visibleIds.has(character.id);
     const isVisible = visibleIds.has(character.id);
@@ -416,7 +415,6 @@ function compileSingleShot(
     if (isParticipant) {
       const position = subjectPositions[character.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const rotation = blocking?.rotation ?? [0, 0, 0];
-      // Staging transform uses object center Y for humans: height/2 above floor contact.
       const height = character.height ?? 1.75;
       const transform = {
         position: [position[0], height / 2, position[2]] as Vec3,
@@ -424,29 +422,30 @@ function compileSingleShot(
         scale: [1, 1, 1] as Vec3,
       };
       effectiveStaticTransforms[character.id] = transform;
-      commands.push({
-        op: 'shot.stageObject',
-        shot: shotTarget,
-        object: objectTarget,
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('cast', character.id),
+        project: options.presenceProject,
         visible: isVisible,
         transform,
-        ...(pose ? { posePreset: pose } : {}),
+        posePreset: pose,
       });
     } else {
-      commands.push({
-        op: 'shot.stageObject',
-        shot: shotTarget,
-        object: objectTarget,
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('cast', character.id),
+        project: options.presenceProject,
         visible: false,
       });
     }
   }
 
   for (const prop of manifest.props ?? []) {
-    const objectTarget = resolveEntityTarget(
-      context.entities[`props.${prop.id}`]?.objectId,
-      previsRef('prop', prop.id),
-    );
+    const entityMapping = context.entities[`props.${prop.id}`];
     const inShot = visibleIds.has(prop.id);
     const blocking = blockingResults[prop.id];
     if (inShot) {
@@ -458,18 +457,22 @@ function compileSingleShot(
         scale: [1, 1, 1] as Vec3,
       };
       effectiveStaticTransforms[prop.id] = transform;
-      commands.push({
-        op: 'shot.stageObject',
-        shot: shotTarget,
-        object: objectTarget,
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('prop', prop.id),
+        project: options.presenceProject,
         visible: true,
         transform,
       });
     } else {
-      commands.push({
-        op: 'shot.stageObject',
-        shot: shotTarget,
-        object: objectTarget,
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('prop', prop.id),
+        project: options.presenceProject,
         visible: false,
       });
     }
@@ -530,14 +533,18 @@ function compileSingleShot(
         camera: keyframe.camera ?? {},
         ...(() => {
           const objects = [
-            ...(keyframe.staging?.map((staging) => {
+            ...(keyframe.staging?.flatMap((staging) => {
+              const castMapping = context.entities[`cast.${staging.subject}`];
+              const propMapping = context.entities[`props.${staging.subject}`];
+              const mapping = castMapping ?? propMapping;
+              const prefix = manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop';
               const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
-              return {
-                object: resolveEntityTarget(
-                  context.entities[`cast.${staging.subject}`]?.objectId
-                    ?? context.entities[`props.${staging.subject}`]?.objectId,
-                  previsRef(manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop', staging.subject),
-                ),
+              const targets = manifestEntityStageObjectTargets(
+                mapping,
+                previsRef(prefix, staging.subject),
+              );
+              return targets.map((object) => ({
+                object,
                 ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
                 ...(staging.transform ? {
                   transform: {
@@ -550,7 +557,7 @@ function compileSingleShot(
                   },
                 } : {}),
                 ...(resolvedPose ? { posePreset: resolvedPose } : {}),
-              };
+              }));
             }) ?? []),
             ...(closedWorldPresence?.dynamicObjectIds.map((objectId) => ({
               object: { id: objectId },
@@ -645,6 +652,68 @@ function resolveEntityTarget(
   if (stored && looksLikeEntityId(stored)) return { id: stored };
   if (stored && !looksLikeEntityId(stored)) return { ref: stored };
   return { ref: fallbackRef };
+}
+
+function manifestEntityStageObjectTargets(
+  mapping: PrevisEntityMapping | undefined,
+  fallbackRef: string,
+): Array<{ id: string } | { ref: string }> {
+  if (mapping?.groupId && mapping.objectIds?.length) {
+    return mapping.objectIds.map((objectId) => ({ id: objectId }));
+  }
+  return [resolveEntityTarget(mapping?.objectId, fallbackRef)];
+}
+
+function appendManifestEntityStageCommands(input: {
+  commands: ForeSceneAgentCommand[];
+  shotTarget: { id: string } | { ref: string };
+  mapping: PrevisEntityMapping | undefined;
+  fallbackRef: string;
+  project: LocationProject | undefined;
+  visible: boolean;
+  transform?: Transform;
+  posePreset?: string;
+}): void {
+  const mapping = input.mapping;
+  if (mapping?.groupId && mapping.objectIds?.length && input.project) {
+    const members = mapping.objectIds
+      .map((objectId) => input.project!.scene.objects.find((object) => object.id === objectId))
+      .filter((member): member is SceneObject => Boolean(member));
+    if (members.length > 0 && input.transform) {
+      const pivot = groupPivotFromObjects(members);
+      const memberTransforms = computeRigidGroupMemberTransforms(members, pivot, input.transform);
+      for (const objectId of mapping.objectIds) {
+        const transform = memberTransforms.get(objectId);
+        input.commands.push({
+          op: 'shot.stageObject',
+          shot: input.shotTarget,
+          object: { id: objectId },
+          visible: input.visible,
+          ...(transform ? { transform } : {}),
+        });
+      }
+      return;
+    }
+    for (const objectId of mapping.objectIds) {
+      input.commands.push({
+        op: 'shot.stageObject',
+        shot: input.shotTarget,
+        object: { id: objectId },
+        visible: input.visible,
+        ...(input.transform ? { transform: input.transform } : {}),
+      });
+    }
+    return;
+  }
+  const objectTarget = resolveEntityTarget(mapping?.objectId, input.fallbackRef);
+  input.commands.push({
+    op: 'shot.stageObject',
+    shot: input.shotTarget,
+    object: objectTarget,
+    visible: input.visible,
+    ...(input.transform ? { transform: input.transform } : {}),
+    ...(input.posePreset ? { posePreset: input.posePreset } : {}),
+  });
 }
 
 /**

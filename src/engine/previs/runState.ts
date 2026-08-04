@@ -29,6 +29,8 @@ export type PrevisRenderSource = 'canonical_clay_renderer' | 'ui_screenshot' | '
 export interface PrevisEntityMapping {
   objectIds?: string[];
   objectId?: string;
+  /** Logical multipart assembly bound to a manifest entity. */
+  groupId?: string;
   shotId?: string;
   anchors?: Record<string, string>;
   zoneOrigin?: [number, number, number];
