@@ -237,6 +237,22 @@ export function linkAllShotsToCanonicalPano(project: LocationProject): LocationP
   };
 }
 
+/** Preserve explicit per-shot pano assignments when hydrating an opened project. */
+export function preserveShotPanoLinks(project: LocationProject): LocationProject {
+  const canonical = getCanonicalPano(project);
+  if (!canonical) return project;
+  return {
+    ...project,
+    shots: project.shots.map((shot) => {
+      const explicitPanoId = shot.linkedPanoId ?? shot.panoCrop?.panoId;
+      const linkedPano = explicitPanoId
+        ? project.panoRefs.find((pano) => pano.id === explicitPanoId)
+        : undefined;
+      return withShotPanoLink(project, shot, linkedPano ?? canonical);
+    }),
+  };
+}
+
 export function getPanoCropSettingsForShot(
   shotCamera: CameraData,
   pano: PanoReference,

@@ -46,6 +46,7 @@ import {
   getPanoCropSettingsForShot,
   linkAllShotsToCanonicalPano,
   panoViewFromCamera,
+  preserveShotPanoLinks,
   withShotPanoLink,
   yawPitchToDirection,
   add,
@@ -152,7 +153,7 @@ export const createProjectSlice: StateCreator<
 
   setProject: (project) => {
     const linkedProject = pruneUnreferencedProjectAssets(
-      linkAllShotsToCanonicalPano(ensureProjectExportConfiguration(project)),
+      preserveShotPanoLinks(ensureProjectExportConfiguration(project)),
     );
     const canonical = linkedProject.panoRefs.find((pano) => pano.isCanonical) ?? linkedProject.panoRefs[0];
     const firstShot = linkedProject.shots[0];
