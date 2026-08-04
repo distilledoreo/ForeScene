@@ -12,9 +12,9 @@ import { dataUrlToBlob } from './fileTransfers';
 import { createProjectAssetStorageKey } from './projectAssetStore';
 
 /** Product schema lineage (manifest field). */
-export const SCHEMA_VERSIONS = ['0.1', '0.2', '1.0', '1.1'] as const;
+export const SCHEMA_VERSIONS = ['0.1', '0.2', '1.0', '1.1', '1.2'] as const;
 export type MigratableSchemaVersion = (typeof SCHEMA_VERSIONS)[number];
-export const CURRENT_SCHEMA_VERSION: ProjectVersion = '1.1';
+export const CURRENT_SCHEMA_VERSION: ProjectVersion = '1.2';
 
 /** Binary payloads produced by pure migration; stage only after the project is accepted. */
 export interface PendingProjectAsset {
@@ -177,10 +177,53 @@ export function migrateProject10To11(project: LocationProject): LocationProject 
   };
 }
 
+/**
+ * 1.1 → 1.2: formalize production bindings and contract storage.
+ *
+ * The legacy binding map remains in the workflow as a compatibility bridge for
+ * older Agent API callers, but every legacy object reference is also represented
+ * as a typed `production.bindings` entry. Running this migration more than once
+ * is safe: existing typed bindings win and are not rewritten.
+ */
+export function migrateProject11To12(project: LocationProject): LocationProject {
+  const existing = project.workflow.production;
+  const legacyBindings = project.workflow.productionManifestAssetBindings ?? {};
+  const bindings = { ...(existing?.bindings ?? {}) };
+
+  for (const [entityId, objectId] of Object.entries(legacyBindings)) {
+    if (!Object.prototype.hasOwnProperty.call(bindings, entityId)) {
+      bindings[entityId] = { kind: 'object', objectId };
+    }
+  }
+
+  const hasProductionConfiguration = Boolean(existing) || Object.keys(legacyBindings).length > 0;
+  return {
+    ...project,
+    schemaVersion: '1.2',
+    workflow: {
+      ...project.workflow,
+      ...(hasProductionConfiguration
+        ? {
+          production: {
+            schemaVersion: 1,
+            bindings,
+            locations: { ...(existing?.locations ?? {}) },
+            shotContracts: { ...(existing?.shotContracts ?? {}) },
+            ...(existing?.poseSubstitutions
+              ? { poseSubstitutions: existing.poseSubstitutions.map((approval) => ({ ...approval })) }
+              : {}),
+          },
+        }
+        : {}),
+    },
+  };
+}
+
 export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
   { from: '0.1', to: '0.2', migrate: migrateProject01To02 },
   { from: '0.2', to: '1.0', migrate: migrateProject02To10 },
   { from: '1.0', to: '1.1', migrate: migrateProject10To11 },
+  { from: '1.1', to: '1.2', migrate: migrateProject11To12 },
 ];
 
 export function listMigrationPath(

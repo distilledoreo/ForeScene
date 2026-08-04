@@ -308,6 +308,8 @@ function applyCommand(
       return applyShotUpdateDescription(ctx, command, refs, diff, path);
     case 'shot.updateCamera':
       return applyShotUpdateCamera(ctx, command, refs, diff, path);
+    case 'shot.setPanorama':
+      return applyShotSetPanorama(ctx, command, refs, diff, path);
     case 'shot.select':
       return applyShotSelect(ctx, command, refs, path);
     case 'shot.copyStagingToNext':
@@ -887,6 +889,75 @@ function applyShotUpdateCamera(
   if (!diff.shotsCreated.includes(updated.id)) {
     diff.shotsUpdated.push(updated.id);
   }
+  return { ok: true, warnings: [] };
+}
+
+function applyShotSetPanorama(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'shot.setPanorama' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const shotResolved = resolveShotTarget(ctx.project, command.shot, refs);
+  if (!shotResolved.ok) {
+    return {
+      ok: false,
+      diagnostics: shotResolved.diagnostics.map((item) => ({
+        ...item,
+        path: item.path ? `${path}.${item.path}` : path,
+      })),
+      warnings: [],
+    };
+  }
+  const shot = ctx.project.shots.find((candidate) => candidate.id === shotResolved.id);
+  if (!shot) {
+    return {
+      ok: false,
+      diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${shotResolved.id}".`, { path })],
+      warnings: [],
+    };
+  }
+
+  let pano;
+  const panoTarget = command.pano;
+  if (panoTarget) {
+    if (!('id' in panoTarget)) {
+      return {
+        ok: false,
+        diagnostics: [agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'shot.setPanorama requires a panorama id target; panorama refs are not queryable.',
+          { path: `${path}.pano` },
+        )],
+        warnings: [],
+      };
+    }
+    pano = ctx.project.panoRefs.find((candidate) => candidate.id === panoTarget.id);
+    if (!pano) {
+      return {
+        ok: false,
+        diagnostics: [agentError(
+          AGENT_DIAGNOSTIC_CODES.targetNotFound,
+          `No panorama with id "${panoTarget.id}".`,
+          { path: `${path}.pano.id` },
+        )],
+        warnings: [],
+      };
+    }
+  }
+
+  const linked = withShotPanoLink(ctx.project, shot, pano);
+  ctx.project = touchProject({
+    ...ctx.project,
+    shots: ctx.project.shots.map((candidate) => (
+      candidate.id === shot.id
+        ? { ...linked, updatedAt: new Date().toISOString() }
+        : candidate
+    )),
+  });
+  if (!diff.shotsCreated.includes(shot.id)) diff.shotsUpdated.push(shot.id);
+  if (linked.linkedPanoId) ctx.activePanoId = linked.linkedPanoId;
   return { ok: true, warnings: [] };
 }
 

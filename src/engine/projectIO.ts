@@ -33,6 +33,7 @@ import {
 } from './projectAssetStore';
 import {
   CURRENT_SCHEMA_VERSION,
+  migrateProject11To12,
   migrateProjectToCurrent,
   stripEphemeralKeyframePreviewUris,
 } from './schemaMigrations';
@@ -52,7 +53,11 @@ export function serializeProject(project: LocationProject): string {
 }
 
 function createPortableProject(project: LocationProject): LocationProject {
-  const withExportConfig = ensureProjectExportConfiguration(project);
+  // Production bindings are a lightweight schema concern and can be upgraded
+  // without decoding unrelated inline media. Full asset/keyframe migrations
+  // remain on parse/recovery, where their pending binaries can be staged safely.
+  const withProductionConfiguration = migrateProject11To12(project);
+  const withExportConfig = ensureProjectExportConfiguration(withProductionConfiguration);
   const withoutEphemeral = stripEphemeralKeyframePreviewUris(withExportConfig);
   const portable = structuredClone(pruneUnreferencedProjectAssets(withoutEphemeral));
   portable.schemaVersion = CURRENT_SCHEMA_VERSION;

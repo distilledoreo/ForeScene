@@ -11,6 +11,7 @@ import {
   PanoReference,
   ProjectAsset,
   ProjectExportConfiguration,
+  ProductionConfiguration,
   SceneObject,
   SceneObjectType,
   ProjectedStyleSettings,
@@ -93,6 +94,25 @@ export const defaultProjectWorkflow: ProjectWorkflow = {
   finalPackageExportedAtByShotId: {},
 };
 
+export function normalizeProductionConfiguration(
+  configuration?: Partial<ProductionConfiguration> | null,
+): ProductionConfiguration | undefined {
+  if (!configuration || typeof configuration !== 'object') return undefined;
+  const normalized: ProductionConfiguration = {
+    schemaVersion: 1,
+    bindings: { ...(configuration.bindings ?? {}) },
+    locations: { ...(configuration.locations ?? {}) },
+    shotContracts: { ...(configuration.shotContracts ?? {}) },
+  };
+  if (Array.isArray(configuration.poseSubstitutions)) {
+    normalized.poseSubstitutions = configuration.poseSubstitutions.map((approval) => ({
+      ...approval,
+      ...(approval.shotIds ? { shotIds: [...approval.shotIds] } : {}),
+    }));
+  }
+  return normalized;
+}
+
 export function normalizeProjectWorkflow(workflow?: Partial<ProjectWorkflow>): ProjectWorkflow {
   return {
     grayboxApprovedForReferenceAt: workflow?.grayboxApprovedForReferenceAt,
@@ -100,6 +120,10 @@ export function normalizeProjectWorkflow(workflow?: Partial<ProjectWorkflow>): P
     shotFramingAcceptedAtByShotId: { ...workflow?.shotFramingAcceptedAtByShotId },
     aiBriefSentAtByShotId: { ...workflow?.aiBriefSentAtByShotId },
     finalPackageExportedAtByShotId: { ...workflow?.finalPackageExportedAtByShotId },
+    production: normalizeProductionConfiguration(workflow?.production),
+    productionManifestAssetBindings: workflow?.productionManifestAssetBindings
+      ? { ...workflow.productionManifestAssetBindings }
+      : undefined,
   };
 }
 

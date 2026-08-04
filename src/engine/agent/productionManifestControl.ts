@@ -218,7 +218,10 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
   }
 
   const assetBindings = readPersistedManifestBindings();
-  const result = compileProduction(parsed.manifest, { assetBindings });
+  const result = compileProduction(parsed.manifest, {
+    assetBindings,
+    presenceProject: useProjectStore.getState().project,
+  });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);
   const chained = chainPreparePlans([mergedPlan], readLiveSource());
@@ -256,7 +259,10 @@ export async function applyAgentProductionCompile(input: {
   }
 
   const assetBindings = readPersistedManifestBindings();
-  const result = compileProduction(parsed.manifest, { assetBindings });
+  const result = compileProduction(parsed.manifest, {
+    assetBindings,
+    presenceProject: useProjectStore.getState().project,
+  });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);
   const chained = chainPreparePlans([mergedPlan], readLiveSource());

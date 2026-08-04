@@ -11,6 +11,10 @@ export interface RenderSessionShotJob {
   locationId?: string;
   timeSeconds?: number;
   debugUiPath?: string;
+  /** Capture a successful UI screenshot only when an operator explicitly asks. */
+  captureDebugUi?: boolean;
+  /** Content-addressed render inputs for resumable/cache-aware runs. */
+  renderFingerprint?: string;
 }
 
 export interface RenderSessionFrameResult {
@@ -32,6 +36,7 @@ export interface RenderSessionFrameResult {
   error?: string;
   fromCanonicalRenderer: boolean;
   renderProfileId: string;
+  renderFingerprint?: string;
 }
 
 export interface RenderSessionBatchResult {

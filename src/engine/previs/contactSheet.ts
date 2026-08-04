@@ -10,6 +10,15 @@ export interface ContactSheetShotEntry {
   warningCount: number;
   /** Must be true for paths produced by the canonical clean clay renderer. */
   fromCanonicalRenderer?: boolean;
+  sampleTimeSeconds?: number;
+  locationId?: string;
+  cameraRecipe?: string;
+  presenceStatus?: string;
+  panoramaStatus?: string;
+  compositionError?: number;
+  reviewStatus?: string;
+  cacheHit?: boolean;
+  badges?: string[];
 }
 
 export interface ContactSheetSpec {
@@ -165,6 +174,17 @@ export function contactSheetHtml(spec: ContactSheetSpec): string {
         : shot.status === 'failed'
           ? '#dc2626'
           : '#64748b';
+    const badges = [
+      shot.sampleTimeSeconds === undefined ? undefined : `t=${shot.sampleTimeSeconds.toFixed(2)}s`,
+      shot.locationId ? `location:${shot.locationId}` : undefined,
+      shot.cameraRecipe ? `camera:${shot.cameraRecipe}` : undefined,
+      shot.presenceStatus ? `presence:${shot.presenceStatus}` : undefined,
+      shot.panoramaStatus ? `pano:${shot.panoramaStatus}` : undefined,
+      shot.compositionError === undefined ? undefined : `composition:${shot.compositionError.toFixed(3)}`,
+      shot.reviewStatus ? `review:${shot.reviewStatus}` : undefined,
+      shot.cacheHit === undefined ? undefined : shot.cacheHit ? 'cache:hit' : 'cache:miss',
+      ...(shot.badges ?? []),
+    ].filter((badge): badge is string => Boolean(badge));
     return `
       <article class="card">
         <div class="meta">
@@ -175,6 +195,7 @@ export function contactSheetHtml(spec: ContactSheetSpec): string {
         <div class="status" style="color:${statusColor}">
           ${escapeHtml(shot.status)}${shot.warningCount > 0 ? ` · ${shot.warningCount} warning(s)` : ''}
         </div>
+        ${badges.length > 0 ? `<div class="badges">${badges.map((badge) => `<span>${escapeHtml(badge)}</span>`).join('')}</div>` : ''}
       </article>
     `;
   }).join('\n');
@@ -195,6 +216,8 @@ export function contactSheetHtml(spec: ContactSheetSpec): string {
   .name { color: #e5e7eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   img { display: block; width: ${spec.cellWidth}px; height: ${spec.cellHeight - 40}px; object-fit: cover; background: #0f172a; }
   .status { padding: 6px 10px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .badges { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 10px; }
+  .badges span { background: #334155; border-radius: 3px; color: #cbd5e1; font-size: 10px; padding: 3px 5px; }
 </style>
 </head>
 <body>

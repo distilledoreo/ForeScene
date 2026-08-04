@@ -116,3 +116,18 @@ Keyframe constraints:
 - `renderControlVideo: true` is for temporal information, not every shot.
 
 See [motion-authoring.md](motion-authoring.md) for coordinate derivation and temporal review.
+
+## Production-integrity review
+
+Prepared projects should use the gated production workflow described in the
+main skill and `docs/previs-production-manifest.md`. The runner validates typed
+bindings, asset capabilities, exact dynamic presence, panorama routing, and
+composition contracts before a capability-covering canary. Approve the primary
+still layout before creating a motion working revision.
+
+Review output is project-wide: the master sequence, location sheets, and
+adjacent-shot continuity strips are written under `review/`; motion triptychs
+are added when event-aware motion samples are supplied.
+Tile metadata includes shot identity, sample time, location, camera recipe,
+presence/panorama/composition status, diagnostics, and cache-hit state. Review
+feedback produces repair intents only; it does not directly mutate the project.

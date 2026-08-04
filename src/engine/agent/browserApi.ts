@@ -25,6 +25,7 @@ import { useProjectStore } from '../../state/useProjectStore';
 import { buildAgentCapabilities } from './capabilities';
 import { previewAgentPlan } from './planCompiler';
 import { applyAgentPlan, undoLastAgentPlan } from './transaction';
+import { runVerifiedProxyReplacement } from './verifiedProxyReplacement';
 import { listAgentHistory } from './history';
 import {
   cancelAgentPackageExport,
@@ -79,7 +80,11 @@ import type {
   AgentPlanApplyResult,
   AgentPlanHistoryEntry,
   AgentPlanPreviewResult,
+  AgentProductionRunResult,
+  AgentMotionWorkingRevisionResult,
   AgentRefinementCheckpointResult,
+  AgentVerifiedProxyReplacementInput,
+  AgentVerifiedProxyReplacementResult,
   AgentProjectInspection,
   AgentRenderShotFrameInput,
   AgentRenderShotFrameResult,
@@ -89,6 +94,7 @@ import type {
   AgentShotTimelineInspection,
   AgentShotVideoRenderInput,
   AgentShotVideoRenderResult,
+  AgentStillLayoutApprovalResult,
   AgentWaitForViewportReadyInput,
   AgentWaitForViewportReadyResult,
   ForeSceneAgentStatus,
@@ -121,6 +127,44 @@ import { exportAgentProjectBackup } from './projectBackupControl';
 import { buildInlineArtifact, deriveOperationOk, deriveOperationStatus } from './renderResult';
 import { refreshAgentRevision } from './revisionSync';
 import { setAgentShotPanorama } from './shotPanorama';
+import {
+  inspectAgentProjectionHealth,
+  inspectAgentShotEnvironmentContract,
+  verifyAgentShotPanorama,
+} from './shotEnvironmentControl';
+import {
+  inspectAgentShotCompositionError,
+  setAgentShotCompositionConstraints,
+  solveAgentShotToCompositionConstraints,
+  verifyAgentShotCompositionConstraints,
+} from './compositionConstraintControl';
+import {
+  approveAgentProductionCanary,
+  approveAgentStillLayout,
+  createAgentMotionWorkingRevision,
+  inspectAgentProductionGates,
+  inspectAgentStillLayoutApproval,
+  planAgentProductionCanary,
+  runAgentProductionCanary,
+} from './productionGateControl';
+import {
+  cancelAgentProductionRun,
+  getAgentProductionRun,
+  listAgentProductionRuns,
+  pauseAgentProductionRun,
+  resumeAgentProductionRun,
+  runAgentProduction,
+  subscribeAgentProductionRun,
+} from './productionRunControl';
+import { planReviewSamples as planReviewSamplesEngine } from '../previs/reviewSampling';
+import { buildProductionReviewArtifacts } from '../previs/productionReviewArtifacts';
+import {
+  clearAgentRenderCache,
+  explainAgentRenderCacheHit,
+  explainAgentRenderCacheMiss,
+  inspectAgentRenderCache,
+  invalidateAgentRenderDependencies,
+} from './renderCacheControl';
 import { inspectAgentShotDiagnostics } from './shotDiagnostics';
 import {
   frameAgentSubjects,
@@ -200,6 +244,23 @@ import {
   previewAgentProductionCompile,
   validateAgentProductionManifest,
 } from './productionManifestControl';
+import {
+  bindAgentProductionEntity,
+  defineAgentProductionLocation,
+  approveAgentPoseSubstitution,
+  inspectAgentEntityCapability,
+  inspectAgentProductionConfiguration,
+  removeAgentProductionBinding,
+  resolveAgentProductionPose,
+  validateAgentProductionCapabilities,
+  validateAgentProductionConfiguration,
+} from './productionConfigurationControl';
+import {
+  inspectAgentShotPresence,
+  repairAgentShotPresence,
+  setAgentShotPresenceContract,
+  verifyAgentShotPresence,
+} from './shotPresenceControl';
 import {
   applyAgentSetBlueprint,
   patchAgentProjectSettings,
@@ -692,6 +753,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     async applyPlan(plan: unknown): Promise<AgentPlanApplyResult> {
       return applyAgentPlan(plan);
+    },
+
+    async applyVerifiedProxyReplacement(
+      input: AgentVerifiedProxyReplacementInput,
+    ): Promise<AgentVerifiedProxyReplacementResult> {
+      return runVerifiedProxyReplacement(input);
     },
 
     async undoLastPlan(): Promise<AgentPlanApplyResult> {
@@ -1270,6 +1337,177 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     bindManifestAssets(input) {
       return bindAgentManifestAssets(input);
+    },
+
+    inspectProductionConfiguration() {
+      return inspectAgentProductionConfiguration();
+    },
+
+    validateProductionConfiguration(input) {
+      return validateAgentProductionConfiguration(input);
+    },
+
+    bindProductionEntity(input) {
+      return bindAgentProductionEntity(input);
+    },
+
+    defineProductionLocation(input) {
+      return defineAgentProductionLocation(input);
+    },
+
+    removeProductionBinding(input) {
+      return removeAgentProductionBinding(input);
+    },
+
+    inspectEntityCapability(input) {
+      return inspectAgentEntityCapability(input);
+    },
+
+    validateProductionCapabilities(input) {
+      return validateAgentProductionCapabilities(input);
+    },
+
+    resolveProductionPose(input) {
+      return resolveAgentProductionPose(input);
+    },
+
+    approvePoseSubstitution(input) {
+      return approveAgentPoseSubstitution(input);
+    },
+
+    setShotPresenceContract(input) {
+      return setAgentShotPresenceContract(input);
+    },
+
+    inspectShotPresence(input) {
+      return inspectAgentShotPresence(input);
+    },
+
+    verifyShotPresence(input) {
+      return verifyAgentShotPresence(input);
+    },
+
+    repairShotPresence(input) {
+      return repairAgentShotPresence(input);
+    },
+
+    inspectShotEnvironmentContract(input) {
+      return inspectAgentShotEnvironmentContract(input);
+    },
+
+    verifyShotPanorama(input) {
+      return verifyAgentShotPanorama(input);
+    },
+
+    inspectProjectionHealth(input) {
+      return inspectAgentProjectionHealth(input);
+    },
+
+    setShotCompositionConstraints(input) {
+      return setAgentShotCompositionConstraints(input);
+    },
+
+    inspectShotCompositionError(input) {
+      return inspectAgentShotCompositionError(input);
+    },
+
+    solveShotToCompositionConstraints(input) {
+      return solveAgentShotToCompositionConstraints(input);
+    },
+
+    verifyShotCompositionConstraints(input) {
+      return verifyAgentShotCompositionConstraints(input);
+    },
+
+    planProductionCanary(input) {
+      return planAgentProductionCanary(input);
+    },
+
+    runProductionCanary(input) {
+      return runAgentProductionCanary(input);
+    },
+
+    approveProductionCanary(input) {
+      return approveAgentProductionCanary(input);
+    },
+
+    runProduction(input): Promise<AgentProductionRunResult> {
+      return runAgentProduction(input);
+    },
+
+    getProductionRun(runId) {
+      return getAgentProductionRun(runId);
+    },
+
+    listProductionRuns() {
+      return listAgentProductionRuns();
+    },
+
+    pauseProductionRun(runId) {
+      return pauseAgentProductionRun(runId);
+    },
+
+    resumeProductionRun(runId) {
+      return resumeAgentProductionRun(runId);
+    },
+
+    cancelProductionRun(runId) {
+      return cancelAgentProductionRun(runId);
+    },
+
+    subscribeProductionRun(runId, listener) {
+      return subscribeAgentProductionRun(runId, listener);
+    },
+
+    approveStillLayout(input): Promise<AgentStillLayoutApprovalResult> {
+      return approveAgentStillLayout(input);
+    },
+
+    createMotionWorkingRevision(input): Promise<AgentMotionWorkingRevisionResult> {
+      return createAgentMotionWorkingRevision(input);
+    },
+
+    inspectStillLayoutApproval(input) {
+      return inspectAgentStillLayoutApproval(input);
+    },
+
+    planReviewSamples(input) {
+      const shot = useProjectStore.getState().project.shots.find((candidate) => candidate.id === input.shotId);
+      if (!shot) throw new Error(`Unknown shot '${input.shotId}'.`);
+      return planReviewSamplesEngine({
+        shotId: input.shotId,
+        shot,
+        strategy: input.strategy,
+        maxSamples: input.maxSamples,
+      });
+    },
+
+    planProductionReviewArtifacts(input) {
+      return buildProductionReviewArtifacts(input);
+    },
+
+    inspectRenderCache(input) {
+      return inspectAgentRenderCache(input);
+    },
+
+    explainRenderCacheHit(input) {
+      return explainAgentRenderCacheHit(input);
+    },
+
+    explainRenderCacheMiss(input) {
+      return explainAgentRenderCacheMiss(input);
+    },
+
+    invalidateRenderDependencies(input) {
+      return invalidateAgentRenderDependencies(input);
+    },
+
+    clearRenderCache(input) {
+      return clearAgentRenderCache(input);
+    },
+
+    inspectProductionGates(input) {
+      return inspectAgentProductionGates(input);
     },
 
     previewProductionCompile(input) {

@@ -62,6 +62,10 @@ export interface PrevisShotRunState {
   framePath?: string;
   /** Provenance of the frame at framePath — never infer from path alone. */
   renderSource?: PrevisRenderSource;
+  /** Content-addressed render inputs used to produce the frame. */
+  renderFingerprint?: string;
+  /** Whether the current frame was reused from the content-addressed cache. */
+  renderCacheHit?: boolean;
   video?: PrevisShotVideoStatus;
   videoPath?: string;
   videoAssetId?: string;
@@ -175,6 +179,8 @@ export function migrateRenderPipelineVersion(state: PrevisRunState): {
         validation: 'pending',
         framePath: undefined,
         renderSource: undefined,
+        renderFingerprint: undefined,
+        renderCacheHit: undefined,
         pixelStats: undefined,
         renderAttempts: 0,
         attempts: 0,
@@ -219,6 +225,8 @@ export function migrateRenderProfileChange(
         validation: 'pending',
         framePath: undefined,
         renderSource: undefined,
+        renderFingerprint: undefined,
+        renderCacheHit: undefined,
         pixelStats: undefined,
         renderAttempts: 0,
         attempts: 0,

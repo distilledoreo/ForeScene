@@ -117,6 +117,9 @@ export interface ProductionRunResult {
 
   phase: ProductionRunPhase;
   ok: boolean;
+  /** True when the run returned usable partial artifacts after a time budget. */
+  partial?: boolean;
+  budgetExceeded?: boolean;
 
   sourceRevisionId?: string;
   resultRevisionId?: string;
@@ -132,6 +135,9 @@ export interface ProductionRunResult {
   shotsRequested: number;
   shotsCreated: number;
   framesRendered: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheHitRate: number;
   controlVideosRendered: number;
   controlVideosFailed: number;
   passed: number;
@@ -145,6 +151,7 @@ export interface ProductionRunResult {
   artifacts: {
     contactSheet?: string;
     contactSheetHtml?: string;
+    reviewArtifacts?: string[];
     package?: string;
     validation?: string;
   };
@@ -230,6 +237,13 @@ export class ProductionTimeBudgetExceededError extends Error {
     this.name = 'ProductionTimeBudgetExceededError';
     this.phase = phase;
   }
+}
+
+export interface ProductionPartialResult {
+  partial: true;
+  budgetExceeded: true;
+  phase: ProductionRunPhase | string;
+  message: string;
 }
 
 /** Enforces an optional wall-clock budget across production phases. */

@@ -3,7 +3,7 @@
  */
 
 import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../agent/protocol';
-import type { Vec3 } from '../../domain/types';
+import type { LocationProject, ShotPresenceContract, Vec3 } from '../../domain/types';
 import {
   aspectRatioValue,
   type PrevisProductionManifestV1,
@@ -24,6 +24,13 @@ import {
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
 import { defaultPropDimensions } from './propDimensions';
+import {
+  deriveDynamicObjectUniverse,
+  getShotPresenceContract,
+  resolveExpectedShotPresence,
+} from './shotPresence';
+import { resolveProductionPose } from './entityCapability';
+import { resolveShotEnvironment } from './shotEnvironment';
 
 export { defaultPropDimensions } from './propDimensions';
 
@@ -51,6 +58,8 @@ export function compileShotList(
     skipShotNumbers?: Set<string>;
     /** Existing live shot ids keyed by shot number — compile as upsert instead of create. */
     existingShotIds?: Record<string, string>;
+    /** Prepared project used to enforce project-wide closed-world presence. */
+    presenceProject?: LocationProject;
   } = {},
 ): CompiledShotBatch[] {
   const batchSize = options.batchSize ?? PREVIS_SHOT_BATCH_SIZE;
@@ -62,6 +71,7 @@ export function compileShotList(
     const slice = pending.slice(index, index + batchSize);
     batches.push(compileShotBatch(manifest, context, slice, batches.length, {
       existingShotIds: options.existingShotIds,
+      presenceProject: options.presenceProject,
     }));
   }
 
@@ -75,6 +85,7 @@ export function compileShotBatch(
   batchIndex: number,
   options: {
     existingShotIds?: Record<string, string>;
+    presenceProject?: LocationProject;
   } = {},
 ): CompiledShotBatch {
   const diagnostics: PrevisDiagnostic[] = [];
@@ -97,6 +108,7 @@ export function compileShotBatch(
     try {
       const compiled = compileSingleShot(shot, manifest, context, aspect, {
         existingShotId: options.existingShotIds?.[shot.shotNumber],
+        presenceProject: options.presenceProject,
       });
       diagnostics.push(...compiled.diagnostics);
       commands.push(...compiled.commands);
@@ -143,7 +155,7 @@ function compileSingleShot(
   manifest: PrevisProductionManifestV1,
   context: CompiledProductionContext,
   aspectRatio: number,
-  options: { existingShotId?: string } = {},
+  options: { existingShotId?: string; presenceProject?: LocationProject } = {},
 ): {
   ok: boolean;
   commands: ForeSceneAgentCommand[];
@@ -251,6 +263,67 @@ function compileSingleShot(
     return { ok: false, commands: [], diagnostics, warnings };
   }
 
+  const requestedPoseBySubject = Object.fromEntries(
+    (shot.blocking ?? []).flatMap((instruction) => (
+      instruction.pose ? [[instruction.subject, instruction.pose]] : []
+    )),
+  );
+  const resolveCompilerPose = (entityId: string, requestedPose: string | undefined): string | undefined => {
+    if (!requestedPose) return undefined;
+    if (!options.presenceProject?.workflow.production) return resolvePrevisPosePresetId(requestedPose);
+    const resolution = resolveProductionPose({
+      project: options.presenceProject,
+      entityId,
+      requestedPose,
+      shotId: shot.id,
+    });
+    if (resolution.relationship === 'contradictory' || !resolution.resolvedPose) {
+      diagnostics.push(previsError(
+        'contradictory_pose_substitution',
+        resolution.reason ?? `Pose "${requestedPose}" cannot be resolved for entity "${entityId}".`,
+        { entityId: shot.id },
+      ));
+      return undefined;
+    }
+    if (resolution.requiresReview) {
+      warnings.push(resolution.reason ?? `Pose "${requestedPose}" requires production review.`);
+      diagnostics.push(previsWarning(
+        'pose_substitution_needs_review',
+        resolution.reason ?? `Pose "${requestedPose}" requires production review.`,
+        { entityId: shot.id },
+      ));
+    }
+    return resolution.resolvedPose;
+  };
+
+  const closedWorldPresence = resolveCompilerPresence(options.presenceProject, shot);
+  if (closedWorldPresence?.diagnostics.length) {
+    for (const item of closedWorldPresence.diagnostics) {
+      diagnostics.push(previsError('shot_presence_invalid', item.message, {
+        entityId: shot.id,
+      }));
+    }
+    return { ok: false, commands: [], diagnostics, warnings };
+  }
+
+  const environment = options.presenceProject
+    ? resolveShotEnvironment(options.presenceProject, {
+      id: shot.id,
+      shotNumber: shot.shotNumber,
+      productionShotId: shot.shotNumber,
+    })
+    : undefined;
+  if (environment?.diagnostics.length) {
+    for (const item of environment.diagnostics) {
+      diagnostics.push(item.severity === 'warning'
+        ? previsWarning(item.code, item.message, { entityId: shot.id })
+        : previsError(item.code, item.message, { entityId: shot.id }));
+    }
+    if (environment.diagnostics.some((item) => item.severity === 'error')) {
+      return { ok: false, commands: [], diagnostics, warnings };
+    }
+  }
+
   const shotRef = previsRef('shot', shot.shotNumber);
   const existingId = options.existingShotId;
   const shotTarget: { id: string } | { ref: string } = existingId
@@ -305,6 +378,17 @@ function compileSingleShot(
     });
   }
 
+  // Route the prepared panorama after the shot exists. This is an executable
+  // plan command rather than a direct store write, so preview/apply and
+  // production compilation share the same deterministic mutation path.
+  if (environment?.panorama) {
+    commands.push({
+      op: 'shot.setPanorama',
+      shot: shotTarget,
+      pano: { id: environment.panorama.id },
+    });
+  }
+
   // Visibility: participants listed only in shot.subjects may be staged off-camera
   // (e.g. medium of Alex while Blair remains a scene participant but not visible).
   // Prefer explicit requirements.visibleSubjects when present.
@@ -325,8 +409,9 @@ function compileSingleShot(
       || visibleIds.has(character.id);
     const isVisible = visibleIds.has(character.id);
     const blocking = blockingResults[character.id];
-    const pose = blocking?.posePreset
-      ?? (character.defaultPose ? resolvePrevisPosePresetId(character.defaultPose) : undefined);
+    const requestedPose = requestedPoseBySubject[character.id] ?? character.defaultPose;
+    const pose = resolveCompilerPose(character.id, requestedPose)
+      ?? (!options.presenceProject?.workflow.production ? blocking?.posePreset : undefined);
 
     if (isParticipant) {
       const position = subjectPositions[character.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
@@ -421,6 +506,20 @@ function compileSingleShot(
     });
   }
 
+  // Close the project-wide dynamic universe after manifest staging and camera
+  // wall-hide decisions. Existing prepared objects are addressed by id; newly
+  // authored manifest refs remain covered by the normal cast/prop loops above.
+  if (closedWorldPresence) {
+    for (const objectId of closedWorldPresence.dynamicObjectIds) {
+      commands.push({
+        op: 'shot.stageObject',
+        shot: shotTarget,
+        object: { id: objectId },
+        visible: closedWorldPresence.expectedVisibleObjectIds.has(objectId),
+      });
+    }
+  }
+
   if (shot.motion) {
     commands.push({
       op: 'shot.timeline.replace',
@@ -429,25 +528,37 @@ function compileSingleShot(
       keyframes: shot.motion.keyframes.map((keyframe) => ({
         timeSeconds: keyframe.timeSeconds,
         camera: keyframe.camera ?? {},
-        objects: keyframe.staging?.map((staging) => ({
-          object: resolveEntityTarget(
-            context.entities[`cast.${staging.subject}`]?.objectId
-              ?? context.entities[`props.${staging.subject}`]?.objectId,
-            previsRef(manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop', staging.subject),
-          ),
-          ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
-          ...(staging.transform ? {
-            transform: {
-              ...(effectiveStaticTransforms[staging.subject] ?? {
-                position: [0, 0, 0] as Vec3,
-                rotation: [0, 0, 0] as Vec3,
-                scale: [1, 1, 1] as Vec3,
-              }),
-              ...staging.transform,
-            },
-          } : {}),
-          ...(staging.posePreset ? { posePreset: staging.posePreset } : {}),
-        })),
+        ...(() => {
+          const objects = [
+            ...(keyframe.staging?.map((staging) => {
+              const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
+              return {
+                object: resolveEntityTarget(
+                  context.entities[`cast.${staging.subject}`]?.objectId
+                    ?? context.entities[`props.${staging.subject}`]?.objectId,
+                  previsRef(manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop', staging.subject),
+                ),
+                ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
+                ...(staging.transform ? {
+                  transform: {
+                    ...(effectiveStaticTransforms[staging.subject] ?? {
+                      position: [0, 0, 0] as Vec3,
+                      rotation: [0, 0, 0] as Vec3,
+                      scale: [1, 1, 1] as Vec3,
+                    }),
+                    ...staging.transform,
+                  },
+                } : {}),
+                ...(resolvedPose ? { posePreset: resolvedPose } : {}),
+              };
+            }) ?? []),
+            ...(closedWorldPresence?.dynamicObjectIds.map((objectId) => ({
+              object: { id: objectId },
+              visible: closedWorldPresence.expectedVisibleObjectIds.has(objectId),
+            })) ?? []),
+          ];
+          return objects.length > 0 ? { objects } : {};
+        })(),
       })),
     });
   }
@@ -471,6 +582,39 @@ function compileSingleShot(
       target: cameraSolve.camera.target,
       fovDegrees: cameraSolve.camera.fovDegrees,
     },
+  };
+}
+
+function resolveCompilerPresence(
+  project: LocationProject | undefined,
+  shot: PrevisShotDefinition,
+): {
+  dynamicObjectIds: string[];
+  expectedVisibleObjectIds: Set<string>;
+  contract: ShotPresenceContract;
+  diagnostics: Array<{ message: string }>;
+} | undefined {
+  if (!project) return undefined;
+  const contract = getShotPresenceContract(project, {
+    id: shot.id,
+    shotNumber: shot.shotNumber,
+    productionShotId: shot.shotNumber,
+  });
+  if (!contract) return undefined;
+  const resolution = resolveExpectedShotPresence(project, contract);
+  const unclassified = deriveDynamicObjectUniverse(project)
+    .filter((item) => item.classification === 'unclassified')
+    .map((item) => ({
+      message: `Dynamic object "${item.objectId}" has no usable production classification.`,
+    }));
+  return {
+    dynamicObjectIds: deriveDynamicObjectUniverse(project).map((item) => item.objectId),
+    expectedVisibleObjectIds: new Set(resolution.expectedVisibleObjectIds),
+    contract,
+    diagnostics: [
+      ...resolution.diagnostics.map((item) => ({ message: item.message })),
+      ...unclassified,
+    ],
   };
 }
 

@@ -21,6 +21,7 @@ import {
 } from './projectedStyle';
 import {
   acquireProjectedStyleTexture,
+  isProjectedStyleMaterial,
   releaseProjectedStyleTexture,
 } from './projectedStyleMaterials';
 import {
@@ -85,6 +86,10 @@ import {
   computeRenderPixelStats,
   type RenderPixelStats,
 } from './previs/renderPixelStats';
+import {
+  analyzeProjectionDebugPixels,
+  type ProjectionHealthMetrics,
+} from './previs/shotEnvironment';
 
 export interface ImageRenderResult {
   dataUrl: string;
@@ -92,6 +97,10 @@ export interface ImageRenderResult {
   height: number;
   /** Present when the render path computed canvas pixel sanity stats. */
   pixelStats?: RenderPixelStats;
+}
+
+export interface ProjectedHealthRenderResult extends ImageRenderResult {
+  projectionHealth: ProjectionHealthMetrics;
 }
 
 export {
@@ -1374,6 +1383,31 @@ export async function renderViewportProjected(
   width: number,
   height: number,
 ): Promise<ImageRenderResult> {
+  return renderViewportProjectedInternal(project, cameraData, width, height, false);
+}
+
+/**
+ * Render the projected frame and a renderer-derived coverage pass. The health
+ * pass uses the projected shader's ownership colors rather than white-pixel
+ * heuristics, so fallback geometry and actual panorama contribution are
+ * measured independently.
+ */
+export async function renderViewportProjectedWithHealth(
+  project: LocationProject,
+  cameraData: CameraData,
+  width: number,
+  height: number,
+): Promise<ProjectedHealthRenderResult> {
+  return renderViewportProjectedInternal(project, cameraData, width, height, true) as Promise<ProjectedHealthRenderResult>;
+}
+
+async function renderViewportProjectedInternal(
+  project: LocationProject,
+  cameraData: CameraData,
+  width: number,
+  height: number,
+  includeHealth: boolean,
+): Promise<ImageRenderResult & { projectionHealth?: ProjectionHealthMetrics }> {
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const resources = await loadProjectedSceneResources(renderer, project);
@@ -1388,6 +1422,12 @@ export async function renderViewportProjected(
     ...createFinalRenderSceneOptions(),
     appearance: 'projected',
     projected: resources.options,
+  });
+  let projectedMaterialCount = 0;
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    projectedMaterialCount += materials.filter((material) => isProjectedStyleMaterial(material)).length;
   });
   const clipping = computeCameraMoveClippingRange({
     scene,
@@ -1411,11 +1451,53 @@ export async function renderViewportProjected(
   renderer.render(scene, camera);
   const dataUrl = renderer.domElement.toDataURL('image/png');
 
+  let projectionHealth: ProjectionHealthMetrics | undefined;
+  if (includeHealth) {
+    const debugScene = buildScene(project, {
+      ...createFinalRenderSceneOptions(),
+      appearance: 'projected',
+      projected: {
+        ...resources.options,
+        settings: {
+          ...resources.options.settings,
+          occlusionDebugMode: 'coverage',
+        },
+      },
+    });
+    renderer.render(debugScene, camera);
+    const pixels = new Uint8Array(Math.max(0, width * height * 4));
+    let analyzed = analyzeProjectionDebugPixels(pixels, width, height);
+    try {
+      const gl = renderer.getContext();
+      if (gl && width > 0 && height > 0) {
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        analyzed = analyzeProjectionDebugPixels(pixels, width, height);
+      }
+    } catch {
+      // Keep zeroed metrics; the Agent result will expose the failed coverage
+      // rather than pretending a linked panorama proves projection health.
+    }
+    projectionHealth = {
+      projectedTextureAvailable: true,
+      occlusionMapAvailable: Boolean(
+        resources.options.occlusionTexture || resources.options.secondaryOcclusionTexture,
+      ),
+      projectedMaterialCount,
+      ...analyzed,
+    };
+    disposeScene(debugScene);
+  }
+
   disposeScene(scene);
   resources.dispose();
   disposeRenderer(renderer);
 
-  return { dataUrl, width, height };
+  return {
+    dataUrl,
+    width,
+    height,
+    ...(projectionHealth ? { projectionHealth } : {}),
+  };
 }
 
 export async function renderShotProjectedFrame(
@@ -1424,6 +1506,21 @@ export async function renderShotProjectedFrame(
   options: { peopleVariant?: PeopleRenderVariant } = {},
 ): Promise<ImageRenderResult> {
   return renderViewportProjected(
+    resolveProjectForShot(project, shot, {
+      contentMode: options.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene',
+    }),
+    shot.camera,
+    shot.exportSettings.width,
+    shot.exportSettings.height,
+  );
+}
+
+export async function renderShotProjectedFrameWithHealth(
+  project: LocationProject,
+  shot: Shot,
+  options: { peopleVariant?: PeopleRenderVariant } = {},
+): Promise<ProjectedHealthRenderResult> {
+  return renderViewportProjectedWithHealth(
     resolveProjectForShot(project, shot, {
       contentMode: options.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene',
     }),

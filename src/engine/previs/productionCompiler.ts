@@ -3,8 +3,10 @@
  */
 
 import type { ForeSceneAgentPlan } from '../agent/protocol';
+import type { LocationProject } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from './manifest';
 import type { PrevisDiagnostic } from './manifestDiagnostics';
+import { previsError, previsWarning } from './manifestDiagnostics';
 import {
   compileCastPhase,
   compileLocationsPhase,
@@ -15,6 +17,10 @@ import {
 } from './locationCompiler';
 import { compileShotList, type CompiledShotBatch } from './shotCompiler';
 import { validateManifestShotNumbers } from './shotValidator';
+import {
+  validateProductionCapabilities,
+  type ProductionCapabilityValidationResult,
+} from './entityCapability';
 
 export interface ProductionCompileResult {
   ok: boolean;
@@ -24,6 +30,7 @@ export interface ProductionCompileResult {
   props: CompilePhaseResult;
   shotBatches: CompiledShotBatch[];
   diagnostics: PrevisDiagnostic[];
+  capabilities?: ProductionCapabilityValidationResult;
 }
 
 export interface ProductionCompileOptions {
@@ -33,6 +40,8 @@ export interface ProductionCompileOptions {
   batchSize?: number;
   /** Manifest entity id → existing scene object id — skips create commands for bound entities. */
   assetBindings?: Record<string, string>;
+  /** Prepared project used to compile project-wide closed-world visibility. */
+  presenceProject?: LocationProject;
 }
 
 export function compileProduction(
@@ -42,6 +51,21 @@ export function compileProduction(
   const diagnostics: PrevisDiagnostic[] = [
     ...validateManifestShotNumbers(manifest),
   ];
+
+  const capabilities = options.presenceProject?.workflow.production
+    ? validateProductionCapabilities(options.presenceProject, manifest)
+    : undefined;
+  if (capabilities) {
+    diagnostics.push(...capabilities.diagnostics.map((item) => {
+      const extras = {
+        ...(item.entityId ? { entityId: item.entityId } : {}),
+        ...(item.shotId ? { path: `shots[id=${item.shotId}]` } : {}),
+      };
+      return item.severity === 'warning'
+        ? previsWarning(item.code, item.message, extras)
+        : previsError(item.code, item.message, extras);
+    }));
+  }
 
   let context = options.existingContext ?? createEmptyCompiledContext();
   const phaseOptions = { assetBindings: options.assetBindings };
@@ -62,6 +86,7 @@ export function compileProduction(
     skipShotNumbers: options.skipShotNumbers,
     existingShotIds: options.existingShotIds,
     batchSize: options.batchSize,
+    presenceProject: options.presenceProject,
   });
   for (const batch of shotBatches) {
     diagnostics.push(...batch.diagnostics);
@@ -76,6 +101,7 @@ export function compileProduction(
     props,
     shotBatches,
     diagnostics,
+    ...(capabilities ? { capabilities } : {}),
   };
 }
 

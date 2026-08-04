@@ -13,6 +13,11 @@ import {
 } from './compositionTelemetry';
 import { templateFramingBands } from './framingProfiles';
 import { otsPrimaryCropCoverage } from './cameraSolver';
+import { getShotPresenceContract, verifyShotPresence } from './shotPresence';
+import {
+  getShotCompositionContract,
+  verifyShotCompositionConstraints,
+} from './compositionConstraints';
 
 export type FrameValidationStatus = 'passed' | 'warning' | 'failed' | 'needs_review';
 
@@ -89,6 +94,52 @@ export function validateShotFrame(input: ValidateShotFrameInput): FrameValidatio
   }
 
   const resolved = resolveProjectForShot(project, shot);
+
+  // Presence contracts are project-wide postconditions. Only invoke the
+  // closed-world gate when this shot has an explicit contract so legacy shots
+  // without production preparation retain their existing validation behavior.
+  const presenceContract = getShotPresenceContract(project, shot);
+  if (presenceContract) {
+    const presence = verifyShotPresence(project, shot, presenceContract);
+    for (const diagnostic of presence.diagnostics) {
+      issues.push({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        subject: diagnostic.objectId,
+        expected: {
+          expectedVisibleObjectIds: presence.expectedVisibleObjectIds,
+          expectedVisibleGroupIds: presence.expectedVisibleGroupIds,
+        },
+        measured: {
+          actualVisibleObjectIds: presence.actualVisibleObjectIds,
+          ...(diagnostic.sampleTimeSeconds !== undefined
+            ? { sampleTimeSeconds: diagnostic.sampleTimeSeconds }
+            : {}),
+        },
+      });
+    }
+  }
+
+  // Reference-driven composition is a hard gate when a contract is present.
+  // The ordinary template checks below remain useful for legacy shots, while
+  // this comparison protects approved screen-space layout from generic bands.
+  const compositionContract = getShotCompositionContract(project, shot);
+  if (compositionContract) {
+    const composition = verifyShotCompositionConstraints(project, shot, compositionContract);
+    for (const diagnostic of composition.diagnostics) {
+      issues.push({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        subject: diagnostic.entityId,
+        expected: typeof diagnostic.expected === 'object' && diagnostic.expected !== null
+          ? diagnostic.expected as Record<string, unknown>
+          : { value: diagnostic.expected },
+        measured: typeof diagnostic.measured === 'object' && diagnostic.measured !== null
+          ? diagnostic.measured as Record<string, unknown>
+          : { value: diagnostic.measured },
+      });
+    }
+  }
 
   if (isCameraInsideSolidGeometry(camera.position, resolved)) {
     issues.push({
@@ -269,13 +320,21 @@ export function validateShotFrame(input: ValidateShotFrameInput): FrameValidatio
   };
 }
 
-const FAILURE_CODES = new Set([
+export const FAILURE_CODES = new Set<string>([
   'shot_missing',
   'camera_non_finite',
   'frame_missing',
   'frame_blank',
   'required_subject_missing',
   'render_not_ready',
+  'unexpected_dynamic_object',
+  'expected_dynamic_object_missing',
+  'expected_dynamic_object_hidden',
+  'partial_group_visibility',
+  'unclassified_dynamic_object',
+  'dynamic_presence_changed_over_time',
+  'composition_entity_missing',
+  'composition_constraint_out_of_tolerance',
 ]);
 
 function validateTemplateComposition(params: {

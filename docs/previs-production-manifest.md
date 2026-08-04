@@ -133,6 +133,230 @@ Accepted semantic poses:
 `standing-neutral`, `standing-alert`, `standing-defensive`, `walking`, `running`,
 `kneeling`, `seated`, `reaching`, `holding-object`, `shield-ready`, `sword-ready`, `injured`
 
+Prepared production projects may persist typed bindings and shot contracts under
+`workflow.production` (project schema `1.2`). A contract can bind an entity to
+an object or complete object group, require pose/deformation capabilities, and
+record an exact dynamic-presence set before compilation. Use the browser Agent
+API to inspect and validate these gates:
+
+```ts
+window.foreScene.inspectEntityCapability({ entityId: 'lead' });
+window.foreScene.validateProductionCapabilities({ manifest });
+window.foreScene.resolveProductionPose({
+  entityId: 'lead',
+  requestedPose: 'running',
+  shotId: 'shot-001',
+});
+```
+
+Native presets resolve as `exact`. Semantic fallbacks such as `running` → a
+single walking-contact pose are reported as `approximate` and require review;
+they are not treated as production-approved substitutions until an explicit
+`approvePoseSubstitution` record is persisted. A rig marked `requiresRerigging`
+or missing required joints blocks pose-dependent shots, while static geometry
+may still satisfy a static-only contract.
+
+Environment contracts route a shot to a prepared location panorama. The
+location must name `defaultPanoId` or `panoIds`; the compiler emits an
+executable `shot.setPanorama` command and verification compares the resulting
+shot link against the expected ID:
+
+```ts
+window.foreScene.inspectShotEnvironmentContract({ shotId: 'shot-001' });
+window.foreScene.verifyShotPanorama({ shotId: 'shot-001' });
+```
+
+When `requireProjection` is enabled, projected approval uses a WebGL coverage
+debug pass. `inspectProjectionHealth` reports projected-material count,
+panorama coverage, fallback ratio, and whether an occlusion map was available;
+a linked panorama ID by itself is not a projection-health result.
+
+```ts
+await window.foreScene.inspectProjectionHealth({
+  shotId: 'shot-001',
+  timeSeconds: 0,
+});
+```
+
+## Reference-driven composition
+
+An external storyboard or layout review may be reduced to normalized screen-space
+facts without putting image understanding in ForeScene. The contract can name
+subject and prop bounds, head/face points, screen regions, expected coverage,
+horizon/floor lines, and intentional foreground/background overlap:
+
+```ts
+await window.foreScene.setShotCompositionConstraints({
+  shotId: 'shot-001',
+  contract: {
+    referenceImageAssetId: 'storyboard-001',
+    subjects: [{
+      entityId: 'lead',
+      expectedBounds: { x: 0.32, y: 0.18, width: 0.28, height: 0.68 },
+      headPoint: [0.46, 0.2],
+      screenRegion: 'center',
+    }],
+    cropTolerance: 0.05,
+  },
+});
+window.foreScene.inspectShotCompositionError({ shotId: 'shot-001' });
+window.foreScene.verifyShotCompositionConstraints({ shotId: 'shot-001' });
+await window.foreScene.solveShotToCompositionConstraints({ shotId: 'shot-001' });
+```
+
+The deterministic solver may adjust only camera position, target, and FOV. It
+does not swap entities, alter poses or continuity state, change location, or
+replace assets. A saved composition contract is a hard first-frame gate, so a
+generic framing percentage is not enough when the approved reference places a
+subject elsewhere. Failed solves are not committed; inspect and repair the
+contract or the prepared asset before proceeding.
+
+## Verified mutations
+
+Mutations whose semantic result matters use a recovery checkpoint plus a
+postcondition check. The proxy-replacement adapter is available through:
+
+```ts
+await window.foreScene.applyVerifiedProxyReplacement({
+  proxyObjectId: 'proxy-lead',
+  replacementObjectId: 'lead-import',
+  requestedShotIds: ['shot-001'],
+  intendedShotIds: ['shot-001', 'shot-002'],
+  initializeVisibility: true,
+});
+```
+
+The result includes the preview, atomic apply result, verification report, and
+rollback report. A failed replacement is restored automatically to the
+checkpoint, including unaffected shot state; `restoreRefinementCheckpoint`
+remains available for an explicit operator rollback. Refinement batches also
+automatically restore their batch checkpoint after a blocking verification or
+review failure, leaving the batch pending for retry.
+
+## Production gates and canary
+
+Production orchestration is a gated state machine. Input, bindings, and asset
+capabilities are validated before a recovery revision and a small canary are
+authored. The canary uses a deterministic greedy set-cover over location,
+panorama, imported-character, pose, multipart, prop, visibility, camera-motion,
+and reference-composition capabilities. It emits only clay-with-subjects,
+characters-only, clean-plate, and (when required) projected-with-subjects
+review outputs.
+
+```ts
+const planned = window.foreScene.planProductionCanary({ manifest });
+const canary = window.foreScene.runProductionCanary({
+  runId: planned.runId!,
+  results: observedCanaryResults,
+});
+await window.foreScene.approveProductionCanary({ runId: planned.runId! });
+window.foreScene.inspectProductionGates({ runId: planned.runId });
+```
+
+The full still sequence remains locked until canary presence, capability,
+panorama, composition, unrelated-state, and output checks pass. A failed
+canary can only be overridden with a non-empty reason, which is retained in the
+gate report. Command success and artifact existence do not constitute visual
+approval.
+
+Still approval is a separate gate. After the full still sequence has passed
+verification, approval records the exact project fingerprint and reviewed
+shot/artifact IDs on a verified revision:
+
+```ts
+await window.foreScene.approveStillLayout({
+  runId: planned.runId!,
+  approvedShotIds: ['shot-001', 'shot-002'],
+  reviewArtifactIds: ['master-sheet'],
+  reviewRecord: 'Primary still layout approved for motion blocking.',
+});
+const motion = await window.foreScene.createMotionWorkingRevision({
+  runId: planned.runId!,
+});
+```
+
+Motion work is cloned into a separate persisted revision and never loads over
+the approved still revision. If the approved project fingerprint or an
+approved shot's camera, staging, pose, visibility, or panorama changes, the
+motion branch is rejected as stale.
+
+## Cached review and adaptive sampling
+
+Review frames are keyed by renderer version, profile, effective camera and
+staging at the sample time, linked panorama/style settings, relevant asset
+content hashes, and prepared-location revision. The run-state stores that key;
+an existing PNG is reused only when the current project produces the same key.
+Changing an unrelated dynamic object therefore does not invalidate every shot,
+while changing a camera, pose, panorama, or relevant location object does.
+
+```ts
+window.foreScene.planReviewSamples({
+  shotId: 'shot-001',
+  strategy: 'event-aware',
+  maxSamples: 3,
+});
+```
+
+Static shots plan one sample. Linear camera moves plan start/end; direction
+changes and visibility/pose events are preferred within the configured bound.
+Motion review remains sample-based until still approval; it does not imply a
+video or complete pass matrix.
+
+Browser callers can inspect and invalidate the persisted cache without changing
+the project:
+
+```ts
+window.foreScene.inspectRenderCache();
+window.foreScene.explainRenderCacheHit({ fingerprint });
+window.foreScene.invalidateRenderDependencies({ dependencyIds: ['object:obj-1'] });
+```
+
+## Project-wide review artifacts
+
+The production review planner groups the same canonical frames into compact,
+readable artifacts:
+
+- a master sequence sheet;
+- one sheet per prepared location;
+- motion triptychs using event-aware samples when motion frames are supplied; and
+- adjacent-shot continuity strips.
+
+Every tile carries the shot number/name, sample time, location, camera recipe,
+presence and panorama status, composition error when measured, review status,
+diagnostic badges, and cache-hit state. These are review evidence, not approval
+records. External visual feedback is normalized into repair intents and must be
+applied through previewed, verified mutations.
+
+The CLI writes the master sheet at `contact-sheet.png` and the grouped sheets
+under `review/`; `logs/production-review-artifacts.json` is the machine-readable
+index. No sheet or artifact-existence check is itself a visual approval.
+
+The same pure planner is available to browser callers when frames already live
+in the Agent artifact registry:
+
+```ts
+window.foreScene.planProductionReviewArtifacts({ frames });
+```
+
+## Browser-owned production runs
+
+The browser Agent API persists lifecycle state independently of the Node CLI,
+including the current gate, completed shot IDs, cache keys, artifact handles,
+blocking diagnostics, and explicit overrides. A restart can inspect the same
+run and resume only after the outstanding approval gate is satisfied:
+
+```ts
+const run = await window.foreScene.runProduction({ manifest });
+window.foreScene.subscribeProductionRun(run.runId, (state) => console.log(state.currentGate, state.status));
+window.foreScene.getProductionRun(run.runId);
+await window.foreScene.resumeProductionRun(run.runId);
+```
+
+`pauseProductionRun`, `resumeProductionRun`, and `cancelProductionRun` are
+stateful lifecycle operations. Cancellation preserves completed verified
+artifacts; it does not roll back the project unless a blocking mutation gate
+requires rollback.
+
 ## Camera templates
 
 `establishing`, `wide`, `full`, `medium`, `medium_close_up`, `close_up`,

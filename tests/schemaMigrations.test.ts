@@ -3,11 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultProject, createCameraKeyframe } from '../src/domain/defaults';
-import { parseProject, serializeProject } from '../src/engine/projectIO';
+import { createProjectPackage, parseProject, readProjectFile, serializeProject, validateProjectPackage } from '../src/engine/projectIO';
 import {
   CURRENT_SCHEMA_VERSION,
   collectPendingInlineProjectAssets,
   listMigrationPath,
+  migrateProject11To12,
   migrateProjectToCurrent,
   migrateProjectToCurrentResult,
   projectManifestHasEmbeddedKeyframeDataUrls,
@@ -21,6 +22,8 @@ import {
   listProjectAssetBlobKeys,
   resetProjectAssetStoreForTests,
 } from '../src/engine/projectAssetStore';
+import { loadProjectRevision, saveProjectRevision } from '../src/engine/projectSafety';
+import { resetProjectRevisionStoreForTests } from '../src/engine/projectRevisionStore';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'schema');
 const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -28,24 +31,25 @@ const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf
 describe('schema migrations', () => {
   afterEach(() => {
     resetProjectAssetStoreForTests();
+    return resetProjectRevisionStoreForTests();
   });
 
   it('lists ordered path 0.1 → 0.2 → 1.0', () => {
     const path = listMigrationPath('0.1', '1.0');
     expect(path.map((step) => `${step.from}->${step.to}`)).toEqual(['0.1->0.2', '0.2->1.0']);
-    expect(CURRENT_SCHEMA_VERSION).toBe('1.1');
+    expect(CURRENT_SCHEMA_VERSION).toBe('1.2');
   });
 
   it('migrates fixture 0.1 → current, save → reopen → export', async () => {
     const raw = readFileSync(join(fixturesDir, 'project-schema-0.1.json'), 'utf8');
     const loaded = parseProject(raw);
-    expect(loaded.schemaVersion).toBe('1.1');
+    expect(loaded.schemaVersion).toBe('1.2');
     expect(loaded.productVersion).toBe('0.1.0');
     expect(loaded.shots[0]?.camera.position[1]).toBeCloseTo(1.6, 5);
 
     const saved = serializeProject(loaded);
     const reopened = parseProject(saved);
-    expect(reopened.schemaVersion).toBe('1.1');
+    expect(reopened.schemaVersion).toBe('1.2');
     expect(reopened.name).toBe(loaded.name);
     expect(reopened.shots.length).toBe(loaded.shots.length);
 
@@ -57,7 +61,98 @@ describe('schema migrations', () => {
     expect(Object.keys(manifest as object).length).toBeGreaterThan(0);
     expect(getShotPackageBaseName(shot).length).toBeGreaterThan(0);
     // Portable JSON after migration must remain parseable for package handoff.
-    expect(JSON.parse(serializeProject(reopened)).schemaVersion).toBe('1.1');
+    expect(JSON.parse(serializeProject(reopened)).schemaVersion).toBe('1.2');
+  });
+
+  it('migrates legacy production bindings into typed contracts idempotently', async () => {
+    const base = createDefaultProject();
+    const legacy = {
+      ...base,
+      schemaVersion: '1.1' as const,
+      workflow: {
+        ...base.workflow,
+        productionManifestAssetBindings: {
+          'cast.lead': 'obj_lead',
+          'locations.interior': 'obj_interior',
+        },
+      },
+    };
+
+    const migrated = migrateProjectToCurrent(legacy);
+    expect(migrated.schemaVersion).toBe('1.2');
+    expect(migrated.workflow.production?.schemaVersion).toBe(1);
+    expect(migrated.workflow.production?.bindings).toEqual({
+      'cast.lead': { kind: 'object', objectId: 'obj_lead' },
+      'locations.interior': { kind: 'object', objectId: 'obj_interior' },
+    });
+    expect(migrateProject11To12(migrated)).toEqual(migrated);
+
+    const withContracts = {
+      ...migrated,
+      workflow: {
+        ...migrated.workflow,
+        production: {
+          ...migrated.workflow.production!,
+          bindings: {
+            ...migrated.workflow.production!.bindings,
+            'creature.primary': { kind: 'group' as const, groupId: 'group_creature' },
+            'environment.pano': { kind: 'panorama' as const, panoId: 'pano_interior' },
+          },
+          locations: {
+            interior: {
+              id: 'interior',
+              objectIds: ['obj_interior'],
+              objectGroupIds: ['group_creature'],
+              anchors: { hero: { position: [0, 0, 1] as [number, number, number], tags: ['hero'] } },
+              blockerObjectIds: ['obj_wall'],
+              cameraZones: [{ id: 'wide', bounds: {
+                min: [-2, 0, -2] as [number, number, number],
+                max: [2, 3, 4] as [number, number, number],
+              } }],
+              subjectZones: [],
+              panoIds: ['pano_interior'],
+              defaultPanoId: 'pano_interior',
+              cameraRecipeIds: ['wide-master'],
+            },
+          },
+          shotContracts: {
+            shot_001: {
+              presence: {
+                expectedVisibleObjectIds: ['obj_lead'],
+                expectedVisibleGroupIds: ['group_creature'],
+                allowUnspecifiedDynamicObjects: false,
+              },
+              environment: {
+                locationId: 'interior',
+                expectedPanoId: 'pano_interior',
+                requireProjection: true,
+                minimumProjectionCoverage: 0.9,
+              },
+            },
+          },
+          poseSubstitutions: [{
+            entityId: 'cast.lead',
+            requestedPose: 'running',
+            resolvedPose: 'walk',
+            relationship: 'approved_substitute' as const,
+            requiresReview: false,
+            reason: 'Approved static preview substitute',
+          }],
+        },
+      },
+    };
+
+    const reopened = parseProject(serializeProject(withContracts));
+    expect(reopened.workflow.production).toEqual(withContracts.workflow.production);
+
+    const packageBlob = await createProjectPackage(withContracts);
+    await validateProjectPackage(packageBlob);
+    const packaged = await readProjectFile(new File([await packageBlob.arrayBuffer()], 'prepared.fsp'));
+    expect(packaged.workflow.production).toEqual(withContracts.workflow.production);
+
+    const saved = await saveProjectRevision(withContracts, { reason: 'Production contract round trip' });
+    const recovered = await loadProjectRevision(saved.revision.id);
+    expect(recovered.project.workflow.production).toEqual(withContracts.workflow.production);
   });
 
   it('parse/migrate leave local asset storage untouched (pure validators)', async () => {
@@ -125,7 +220,7 @@ describe('schema migrations', () => {
     };
 
     const migrated = migrateProjectToCurrent(project);
-    expect(migrated.schemaVersion).toBe('1.1');
+    expect(migrated.schemaVersion).toBe('1.2');
     const kf = migrated.shots[0]?.cameraKeyframes[0];
     expect(kf?.previewAssetId).toBeTruthy();
     expect(migrated.assets.assets[kf!.previewAssetId!]).toBeTruthy();

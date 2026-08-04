@@ -24,7 +24,6 @@ import {
   type RefinementPlan,
   type RefinementState,
 } from '../../src/engine/agent/refinement';
-import { createProxyReplacementPlan, verifyProxyReplacement } from '../../src/engine/agent/proxyReplacement';
 import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
 import { projectFingerprint } from '../../src/engine/agent/planDiff';
 import type { ForeSceneAgentPlan } from '../../src/engine/agent/protocol';
@@ -289,40 +288,31 @@ async function replaceProxy(
   requestedShotIds: readonly string[],
   initializeVisibility: boolean,
 ) {
-  const before = await session.page.evaluate(() => {
-    const project = window.foreScene!.getProjectDocument();
-    const shots = project.shots.map((shot) => window.foreScene!.getShotDocument({ id: shot.id }));
-    return { ...project, shots };
-  });
-  const plan = createProxyReplacementPlan({
-    project: before,
-    shotDocuments: before.shots,
+  const verified = await session.page.evaluate((input) => window.foreScene!.applyVerifiedProxyReplacement(input), {
     proxyObjectId: entry.proxyObjectId,
     replacementObjectId,
-    requestedShotIds,
-    intendedShotIds: entry.shots,
+    requestedShotIds: [...requestedShotIds],
+    intendedShotIds: [...entry.shots],
     initializeVisibility,
+    description: `Replace proxy for refinement entry ${entry.id}`,
   });
-  if (!plan.ok) throw new Error(`Replacement ${entry.id} cannot be planned: ${plan.errors.join(' ')}`);
-  const preview = await session.page.evaluate((nextPlan) => window.foreScene!.previewPlan(nextPlan), plan.plan);
-  if (!preview.ok) throw new Error(`Replacement ${entry.id} preview failed: ${preview.diagnostics.map((item) => item.message).join('; ')}`);
-  const apply = await session.page.evaluate(async (nextPlan) => window.foreScene!.applyPlan(nextPlan), plan.plan);
+  if (!verified.ok || !verified.plan || !verified.preview || !verified.verification) {
+    const rollback = verified.rollback?.diagnostics.map((item) => item.message).join('; ');
+    throw new Error(`Replacement ${entry.id} failed verification: ${[
+      ...verified.diagnostics.map((item) => item.message),
+      ...(rollback ? [`Rollback: ${rollback}`] : []),
+    ].join('; ')}`);
+  }
+  const plan = {
+    plan: verified.plan,
+    preparedShots: verified.preparedShots ?? [],
+    affectedShots: verified.affectedShots ?? [],
+  };
+  const preview = verified.preview;
+  const apply = verified.apply;
   if (!apply.ok) throw new Error(`Replacement ${entry.id} apply failed: ${apply.diagnostics.map((item) => item.message).join('; ')}`);
   await waitForAgentIdle(session.page);
-  const after = await session.page.evaluate(() => {
-    const project = window.foreScene!.getProjectDocument();
-    return { ...project, shots: project.shots.map((shot) => window.foreScene!.getShotDocument({ id: shot.id })) };
-  });
-  const verification = verifyProxyReplacement({
-    beforeProject: before,
-    afterProject: after,
-    proxyObjectId: entry.proxyObjectId,
-    replacementObjectId,
-    preparedShots: plan.preparedShots,
-    affectedShots: plan.affectedShots,
-  });
-  if (!verification.ok) throw new Error(`Replacement ${entry.id} verification failed: ${verification.errors.join(' ')}`);
-  return { plan, preview, apply, verification };
+  return { plan, preview, apply, verification: verified.verification };
 }
 
 async function renderReviewMatrix(
@@ -911,6 +901,28 @@ export async function runRefinementCli(options: RefinementCliOptions): Promise<{
       state.batches[batchId]!.status = 'failed';
       state.batches[batchId]!.failure = error instanceof Error ? error.message : 'Unknown refinement failure.';
       report.error = state.batches[batchId]!.failure;
+    }
+    if (report.ok !== true) {
+      const failure = String(report.error ?? state.batches[batchId]!.failure ?? 'Refinement batch verification failed.');
+      try {
+        // A failed batch is not left as a dirty, failed working state. The
+        // checkpoint remains the operator-visible recovery point, while the
+        // pending state allows a retry without a separate rollback command.
+        await rollbackBatch(plan, state, batchId, session);
+        state.batches[batchId]!.failure = failure;
+        report.automaticRollback = {
+          ok: true,
+          revisionId: state.batches[batchId]!.startingRevisionId,
+          message: 'Blocking batch verification failure was rolled back automatically.',
+        };
+      } catch (rollbackError) {
+        state.batches[batchId]!.status = 'failed';
+        state.batches[batchId]!.failure = `${failure} Automatic rollback failed: ${rollbackError instanceof Error ? rollbackError.message : 'unknown rollback error.'}`;
+        report.automaticRollback = {
+          ok: false,
+          message: state.batches[batchId]!.failure,
+        };
+      }
     }
     report.completedAt = now();
     await writeJson(path.join(outputRoot, `batch-${batchId}-report.json`), report);

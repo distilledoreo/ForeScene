@@ -52,6 +52,7 @@ export const AGENT_EXECUTABLE_OPS = [
   'shot.rename',
   'shot.updateDescription',
   'shot.updateCamera',
+  'shot.setPanorama',
   'shot.select',
   'shot.copyStagingToNext',
   'shot.stageObject',

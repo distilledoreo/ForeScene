@@ -131,6 +131,7 @@ export class PersistentRenderSession {
       error: result.ok ? undefined : (result.diagnostics?.[0]?.message ?? 'Clean frame render failed.'),
       fromCanonicalRenderer: isCanonicalSource(result.source),
       renderProfileId: this.profile.id,
+      renderFingerprint: job.renderFingerprint,
     };
   }
 
