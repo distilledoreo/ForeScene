@@ -24,7 +24,7 @@ describe('missing asset recovery', () => {
     });
     const opened = parseProject(JSON.stringify(raw));
     const object = opened.scene.objects.find((candidate) => candidate.id === 'missing-object')!;
-    expect(opened.schemaVersion).toBe('1.1');
+    expect(opened.schemaVersion).toBe('1.2');
     expect(object.modelAssetId).not.toBe('legacyMesh');
     expect(opened.assets.assets[object.modelAssetId!]?.originalFileName).toBe('Temple.glb');
   });

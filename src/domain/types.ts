@@ -1,7 +1,22 @@
 export type Vec3 = [number, number, number];
 export type Euler = [number, number, number];
+export type Vec2 = [number, number];
+
+export interface Bounds3 {
+  min: Vec3;
+  max: Vec3;
+}
+
+/** Normalized screen-space rectangle: all values are expressed in [0, 1]. */
+export interface NormalizedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Supported project schema versions (load migrates older → current). */
-export type ProjectVersion = '0.1' | '0.2' | '1.0' | '1.1';
+export type ProjectVersion = '0.1' | '0.2' | '1.0' | '1.1' | '1.2';
 
 export type SceneObjectType =
   | 'floor'
@@ -108,6 +123,189 @@ export type HumanJointId =
   | 'rightLowerLegTwist'
   | 'rightFoot'
   | 'rightToeBase';
+
+export type ProductionObjectClass =
+  | 'static_environment'
+  | 'dynamic_subject'
+  | 'dynamic_prop'
+  | 'conditional_set_piece'
+  | 'helper'
+  | 'unclassified';
+
+export type ProductionEntityBinding =
+  | {
+      kind: 'object';
+      objectId: string;
+    }
+  | {
+      kind: 'group';
+      groupId: string;
+    }
+  | {
+      kind: 'location';
+      locationId: string;
+    }
+  | {
+      kind: 'panorama';
+      panoId: string;
+    };
+
+export interface ProductionLocationAnchor {
+  position: Vec3;
+  rotation?: Vec3;
+  tags?: string[];
+}
+
+export interface ProductionLocationZone {
+  id: string;
+  bounds: Bounds3;
+  tags?: string[];
+}
+
+export interface ProductionLocationDefinition {
+  id: string;
+  objectIds: string[];
+  objectGroupIds: string[];
+  anchors: Record<string, ProductionLocationAnchor>;
+  blockerObjectIds: string[];
+  cameraZones?: ProductionLocationZone[];
+  subjectZones?: ProductionLocationZone[];
+  panoIds?: string[];
+  defaultPanoId?: string;
+  cameraRecipeIds?: string[];
+}
+
+export interface ShotPresenceState {
+  expectedVisibleObjectIds: string[];
+  expectedVisibleGroupIds: string[];
+}
+
+export interface ShotPresenceTimelineState extends ShotPresenceState {
+  timeSeconds: number;
+}
+
+export interface ShotPresenceTransition {
+  entityId: string;
+  from: boolean;
+  to: boolean;
+}
+
+export interface ShotPresenceContract extends ShotPresenceState {
+  /** Defaults to false when omitted by a caller. */
+  allowUnspecifiedDynamicObjects: boolean;
+  /** Base visibility at t=0 when timeline keyframes are present. */
+  base?: ShotPresenceState;
+  /** Keyframed expected visibility sampled at or before each timeline time. */
+  timeline?: ShotPresenceTimelineState[];
+  /** Declared visibility transitions valid between timeline samples. */
+  allowedTransitions?: ShotPresenceTransition[];
+}
+
+export interface ShotEnvironmentContract {
+  locationId: string;
+  expectedPanoId?: string;
+  requireProjection?: boolean;
+  minimumProjectionCoverage?: number;
+}
+
+export interface CompositionConstraintWeights {
+  subjectPosition?: number;
+  subjectScale?: number;
+  headPoint?: number;
+  facePoint?: number;
+  propPosition?: number;
+  horizon?: number;
+  floorLine?: number;
+  crop?: number;
+  occlusion?: number;
+  cameraCollision?: number;
+}
+
+export interface ShotCompositionSubjectConstraint {
+  entityId: string;
+  expectedBounds?: NormalizedRect;
+  headPoint?: Vec2;
+  facePoint?: Vec2;
+  screenRegion?: 'left' | 'center' | 'right';
+  expectedCoverage?: [number, number];
+  expectedVisibility?: number;
+}
+
+export interface ShotCompositionPropConstraint {
+  entityId: string;
+  expectedBounds?: NormalizedRect;
+  expectedScreenPoint?: Vec2;
+}
+
+export interface ShotCompositionOcclusionIntent {
+  foregroundEntityId: string;
+  backgroundEntityId: string;
+  targetFraction?: [number, number];
+}
+
+export interface ShotCompositionConstraintSet {
+  referenceImageAssetId?: string;
+  subjects: ShotCompositionSubjectConstraint[];
+  props?: ShotCompositionPropConstraint[];
+  horizonY?: number;
+  floorLineY?: number;
+  cropTolerance?: number;
+  occlusionIntent?: ShotCompositionOcclusionIntent[];
+  weights?: CompositionConstraintWeights;
+}
+
+export interface EntityCapabilityRequirement {
+  entityId: string;
+  requires: {
+    renderable?: boolean;
+    rigidAssembly?: boolean;
+    poseable?: boolean;
+    deforming?: boolean;
+    timelinePoseable?: boolean;
+    joints?: HumanJointId[];
+  };
+}
+
+export type PoseResolutionRelationship =
+  | 'exact'
+  | 'approved_substitute'
+  | 'approximate'
+  | 'contradictory';
+
+export interface PoseResolution {
+  requestedPose: string;
+  resolvedPose?: string;
+  relationship: PoseResolutionRelationship;
+  requiresReview: boolean;
+  reason?: string;
+}
+
+export interface PoseSubstitutionApproval {
+  entityId: string;
+  requestedPose: string;
+  resolvedPose?: string;
+  relationship: PoseResolutionRelationship;
+  requiresReview: boolean;
+  shotIds?: string[];
+  reason?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+export interface ShotProductionContract {
+  presence?: ShotPresenceContract;
+  environment?: ShotEnvironmentContract;
+  composition?: ShotCompositionConstraintSet;
+  capabilityRequirements?: EntityCapabilityRequirement[];
+}
+
+export interface ProductionConfiguration {
+  schemaVersion: 1;
+  bindings: Record<string, ProductionEntityBinding>;
+  locations: Record<string, ProductionLocationDefinition>;
+  shotContracts: Record<string, ShotProductionContract>;
+  poseSubstitutions?: PoseSubstitutionApproval[];
+}
 
 export interface HumanJointPose {
   /** Local rotation relative to the character rest/bind pose. */
@@ -328,6 +526,8 @@ export interface SceneObject {
   /** Optional stable parent node for preserving hierarchy across asset recovery. */
   parentId?: string;
   importedModel?: ImportedModelInfo;
+  /** Explicit production classification; omitted values are derived by the compiler. */
+  productionClass?: ProductionObjectClass;
   /**
    * Poseable-character identity. Distinct from `transform` (set placement)
    * and `humanPose` (limb articulation).
@@ -692,7 +892,12 @@ export interface ProjectWorkflow {
   shotFramingAcceptedAtByShotId: Record<string, string>;
   aiBriefSentAtByShotId: Record<string, string>;
   finalPackageExportedAtByShotId: Record<string, string>;
-  /** Manifest entity id → existing scene object id for production compile binding. */
+  /** Formal production contracts and prepared entity/location bindings. */
+  production?: ProductionConfiguration;
+  /**
+   * @deprecated Read/write through `production.bindings` for new work. Kept as
+   * a compatibility bridge for older Agent API callers and old project files.
+   */
   productionManifestAssetBindings?: Record<string, string>;
 }
 

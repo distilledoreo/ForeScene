@@ -671,6 +671,48 @@ describe('strict template validation', () => {
     expect(result.status === 'failed' && result.issues.every((i) => i.code === 'shot_missing')).toBe(false);
   });
 
+  it('treats closed-world dynamic presence violations as hard frame failures', () => {
+    const project = createDefaultProject() as LocationProject;
+    const lead = makeHuman('lead-id', 'Lead', [0, 0, 0]);
+    const extra = makeHuman('extra-id', 'Extra', [1, 0, 0]);
+    project.scene.objects = [lead, extra];
+    const shot = makeShot(makeCamera({ position: [0, 1.5, 6], target: [0, 0.9, 0] }), '050');
+    project.shots = [shot];
+    project.workflow.production = {
+      schemaVersion: 1,
+      bindings: {},
+      locations: {},
+      shotContracts: {
+        [shot.id]: {
+          presence: {
+            expectedVisibleObjectIds: [lead.id],
+            expectedVisibleGroupIds: [],
+            allowUnspecifiedDynamicObjects: false,
+          },
+        },
+      },
+    };
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '050',
+        subjects: ['lead'],
+        camera: { template: 'wide', subjects: ['lead'] },
+        requirements: { visibleSubjects: ['lead'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { lead: 'Lead' },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unexpected_dynamic_object', subject: extra.id }),
+    ]));
+  });
+
   it('marks new issue codes as repairable', () => {
     expect(isRepairableIssue('framing_too_loose')).toBe(true);
     expect(isRepairableIssue('ots_foreground_too_large')).toBe(true);

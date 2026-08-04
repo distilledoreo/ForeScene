@@ -31,6 +31,39 @@ The individual Agent API operations and CLI commands are ForeScene's reusable, f
 
 The skill owns production interpretation, visual judgment, repair strategy, and the decision to continue or stop. ForeScene and the Agent API provide the operations, validation, preservation mechanisms, and export capabilities that the skill uses.
 
+## Production-integrity workflow
+
+For a manifest-backed production, prefer the gated `agent:production` entry
+point or the equivalent browser API over assembling an unattended sequence of
+lower-level `agent:previs` steps. The production workflow is:
+
+1. Inspect the project and choose Greenfield, Existing-project refinement, or
+   Export-only. Never reset a valuable project without explicit authorization.
+2. Validate `project.workflow.production` bindings, prepared locations, exact
+   shot presence contracts, panorama routing, required asset capabilities, and
+   approved pose substitutions before compilation.
+3. Create the recovery revision and run the deterministic capability-covering
+   canary. A canary failure blocks full authoring; an override requires a
+   written reason in the production report.
+4. Produce project-wide primary still sheets and inspect them visually. Do not
+   create the complete pass matrix or motion videos before primary still
+   approval.
+5. Record `approveStillLayout` against the verified revision, then clone that
+   approved layout for motion with `createMotionWorkingRevision`. Motion work
+   must not mutate the approved still revision.
+6. Use event-aware review samples and content-addressed reruns. A cache hit is
+   valid only when camera, effective staging/pose, panorama, relevant assets,
+   renderer/profile inputs, and location revision all match.
+7. Run motion review and final export only after the still gate. Command
+   success, artifact existence, and a linked panorama are not visual approval.
+
+The browser lifecycle is resumable through `runProduction`,
+`getProductionRun`, `listProductionRuns`, `pauseProductionRun`,
+`resumeProductionRun`, `cancelProductionRun`, and
+`subscribeProductionRun`. Preserve the run ID, gate state, recovery revision,
+approved-layout revision, cache keys, artifacts, and blocking diagnostics in
+the handoff record.
+
 ## Operating mode is a required first decision
 
 Before any write, inspect the live project and select one operating mode. Record the choice in the preservation preflight or export record.
@@ -95,6 +128,21 @@ npm run agent:previs -- \
   --reset-project \
   --output artifacts/previs
 ```
+
+For a normal prepared production, use the gated production runner instead:
+
+```bash
+npm run agent:production -- \
+  --manifest path/to/manifest.json \
+  --url https://ForeScene.distilledlabs.org \
+  --write \
+  --mode rapid-review \
+  --output artifacts/production
+```
+
+Do not interpret this command’s successful start or returned artifacts as
+approval. Stop at each blocking gate and retain the canary and still-layout
+review records.
 
 4. Work in gated 3–5-shot batches, not as one unattended run. Inspect and repair each batch before continuing.
 5. Configure and verify the output profile before package rendering, then validate every requested artifact and review record.
@@ -188,6 +236,10 @@ artifacts/previs/
 │   └── 010.mp4
 ├── contact-sheet.png
 ├── contact-sheet.html
+├── review/
+│   ├── location-*.png
+│   ├── motion-triptych-*.png (when motion samples are supplied)
+│   └── continuity-*.png
 ├── package.zip
 ├── validation.json
 ├── summary.json
@@ -195,6 +247,16 @@ artifacts/previs/
 ```
 
 `shots/*.png` must come from the canonical clean clay renderer (`window.foreScene.renderShotFrame`), not a UI screenshot. `debug/*-ui.png` is for human debugging only. A contact sheet is required for readable review but cannot replace opening suspicious individual frames.
+
+The production review planner supports a master sequence sheet,
+location-grouped sheets, motion triptychs, and adjacent-shot continuity strips.
+The runner emits motion triptychs when event-aware motion samples are supplied;
+otherwise it emits the available still-based sheets under `review/`.
+Use `logs/production-review-artifacts.json` to read each tile's shot identity,
+sample time, presence/panorama/composition diagnostics, review status, and cache
+state. Treat these sheets as compact evidence for review; route any repair
+proposal through a previewed, verified mutation and record the resulting review
+decision separately.
 
 For every motion shot, render and inspect `t = 0`, `t = duration / 2`, and `t = duration`; open or sample the MP4 itself. Confirm the MP4 exists, is nonempty, matches the shot/pass identity, and is newer than the relevant scene change.
 

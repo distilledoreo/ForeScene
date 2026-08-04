@@ -200,6 +200,8 @@ export function applyManifestUpdateToRunState(params: {
       issues: undefined,
       lastError: undefined,
       framePath: undefined,
+      renderFingerprint: undefined,
+      renderCacheHit: undefined,
       videoPath: undefined,
       videoAssetId: undefined,
       // Keep shotId if the live project still has it — recompile updates in place.

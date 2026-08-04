@@ -256,6 +256,8 @@ function parseCommand(
       return parseShotUpdateDescription(record, path, errors, warnings);
     case 'shot.updateCamera':
       return parseShotUpdateCamera(record, path, errors, warnings);
+    case 'shot.setPanorama':
+      return parseShotSetPanorama(record, path, errors);
     case 'shot.select':
       return parseShotSelect(record, path, errors);
     case 'shot.copyStagingToNext':
@@ -579,6 +581,24 @@ function parseShotSelect(
   const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
   if (!shot) return undefined;
   return { op: 'shot.select', shot };
+}
+
+function parseShotSetPanorama(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  if (record.pano === undefined) {
+    errors.push(agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'shot.setPanorama requires a pano target or null.', { path: `${path}.pano` }));
+    return undefined;
+  }
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (record.pano === null) {
+    return shot ? { op: 'shot.setPanorama', shot, pano: null } : undefined;
+  }
+  const pano = parseEntityTarget(record.pano, `${path}.pano`, errors);
+  if (!shot || !pano) return undefined;
+  return { op: 'shot.setPanorama', shot, pano };
 }
 
 function parseShotCopyStagingToNext(

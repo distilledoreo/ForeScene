@@ -29,6 +29,8 @@ import {
   compileCastPhaseWithPersistedEntities,
   compileShotList,
   contactSheetHtml,
+  buildProductionReviewArtifacts,
+  inspectShotCompositionError,
   createInitialRunState,
   firstIncompletePhase,
   hashPrevisManifest,
@@ -56,6 +58,7 @@ import {
   DELIVERY_PROFILE,
   resolveRenderProfileForMode,
   renderProfileFingerprint,
+  computeRenderFingerprint,
   emptyProductionTiming,
   ProductionTimeBudget,
   ProductionTimeBudgetExceededError,
@@ -105,6 +108,9 @@ export interface PrevisCliResult {
   shotsCreated?: number;
   importedCharacters?: number;
   framesRendered?: number;
+  cacheHits?: number;
+  cacheMisses?: number;
+  cacheHitRate?: number;
   controlVideosRendered?: number;
   controlVideosFailed?: number;
   passed?: number;
@@ -112,12 +118,14 @@ export interface PrevisCliResult {
   failed?: number;
   reviewRequiredShotIds?: string[];
   contactSheet?: string;
+  reviewArtifacts?: string[];
   package?: string;
   artifactPaths?: string[];
   diagnostics?: unknown[];
   timing?: ProductionRunTiming;
   sourceRevisionId?: string;
   resultRevisionId?: string;
+  partial?: boolean;
   budgetExceeded?: boolean;
   error?: string;
 }
@@ -175,6 +183,7 @@ async function renderCleanShotFrame(
   framePath: string,
   options?: {
     debugUiPath?: string;
+    captureDebugUi?: boolean;
     profile?: RenderProfile;
     renderSession?: PersistentRenderSession;
     shotNumber?: string;
@@ -201,6 +210,7 @@ async function renderCleanShotFrame(
       shotNumber: options.shotNumber ?? shotId,
       framePath,
       debugUiPath: options.debugUiPath,
+      captureDebugUi: options.captureDebugUi,
     });
     return {
       ok: result.ok,
@@ -282,8 +292,9 @@ async function renderCleanShotFrame(
 
   await writeDataUrlPng(result.pngDataUrl, framePath);
 
-  // Optional debug UI screenshot (never used as production frame).
-  if (options?.debugUiPath) {
+  // Optional debug UI screenshot (never used as production frame). Success
+  // screenshots are opt-in; failures are captured above for diagnosis.
+  if (options?.debugUiPath && options.captureDebugUi) {
     await captureSceneScreenshot(page, options.debugUiPath).catch(() => undefined);
   }
 
@@ -812,6 +823,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   });
 
   let framesRendered = 0;
+  let cacheHits = 0;
+  let cacheMisses = 0;
   let controlVideosRendered = 0;
   let controlVideosFailed = 0;
 
@@ -1319,12 +1332,28 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     try {
       const locationOrder = [...new Set(manifest.shots.map((shot) => shot.locationId))];
       const pendingJobs: RenderSessionShotJob[] = [];
+      const renderProject = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
 
       for (const definition of manifest.shots) {
         const shotState = state.shots[definition.shotNumber];
         if (!shotState || shotState.compile !== 'complete') continue;
-        if (isCanonicalFrame(shotState) && shotState.framePath && await pathExists(shotState.framePath)) {
+        const currentShot = renderProject.shots.find((item) => item.shotNumber === definition.shotNumber);
+        const renderFingerprint = currentShot
+          ? computeRenderFingerprint({
+            project: renderProject,
+            shot: currentShot,
+            profile: renderProfile,
+            rendererVersion: `forescene-renderer-${state.renderPipelineVersion ?? 1}`,
+            locationId: definition.locationId,
+          })
+          : undefined;
+        if (isCanonicalFrame(shotState)
+          && shotState.renderFingerprint === renderFingerprint?.key
+          && shotState.framePath
+          && await pathExists(shotState.framePath)) {
           framesRendered += 1;
+          cacheHits += 1;
+          state = upsertShotState(state, definition.shotNumber, { renderCacheHit: true });
           continue;
         }
 
@@ -1337,10 +1366,12 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           shotNumber: definition.shotNumber,
           locationId: definition.locationId,
           framePath: path.join(outputDir, 'shots', `${definition.shotNumber}.png`),
+          renderFingerprint: renderFingerprint?.key,
         });
       }
 
       if (pendingJobs.length > 0) {
+        cacheMisses += pendingJobs.length;
         timeBudget?.assertWithinBudget('render_review_frames');
         const batch = await renderSession.renderBatch(pendingJobs, { locationOrder });
         for (const frame of batch.results) {
@@ -1349,7 +1380,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           if (!frame.ok) {
             state = upsertShotState(state, frame.shotNumber, {
               render: 'failed',
+              framePath: undefined,
               renderSource: undefined,
+              renderFingerprint: undefined,
+              renderCacheHit: undefined,
               pixelStats: undefined,
               renderAttempts,
               attempts: renderAttempts,
@@ -1360,7 +1394,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           if (!frame.fromCanonicalRenderer) {
             state = upsertShotState(state, frame.shotNumber, {
               render: 'failed',
+              framePath: undefined,
               renderSource: undefined,
+              renderFingerprint: undefined,
+              renderCacheHit: undefined,
               pixelStats: undefined,
               renderAttempts,
               attempts: renderAttempts,
@@ -1372,7 +1409,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           if (!info || info.size < 32) {
             state = upsertShotState(state, frame.shotNumber, {
               render: 'failed',
+              framePath: undefined,
               renderSource: undefined,
+              renderFingerprint: undefined,
+              renderCacheHit: undefined,
               pixelStats: undefined,
               renderAttempts,
               attempts: renderAttempts,
@@ -1385,6 +1425,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             render: 'complete',
             framePath: frame.framePath,
             renderSource: 'canonical_clay_renderer',
+            renderFingerprint: frame.renderFingerprint,
+            renderCacheHit: false,
             pixelStats: frame.pixelStats,
             renderAttempts,
             attempts: renderAttempts,
@@ -1598,6 +1640,16 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
         project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
         shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
+        state = upsertShotState(state, definition.shotNumber, {
+          renderFingerprint: computeRenderFingerprint({
+            project,
+            shot: shot as Shot,
+            profile: renderProfile,
+            rendererVersion: `forescene-renderer-${state.renderPipelineVersion ?? 1}`,
+            locationId: definition.locationId,
+          }).key,
+          renderCacheHit: false,
+        });
         exists = await pathExists(framePath);
         byteSize = exists ? (await stat(framePath)).size : undefined;
 
@@ -1694,33 +1746,98 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(path.join(outputDir, 'logs', 'contact-sheet-preflight-failed.json'), preflight);
     }
 
-    const spec = buildContactSheetSpec({
-      title: `${manifest.project.name} — First Frames`,
-      shots: sheetEntries,
+    const reviewFrames = manifest.shots.map((definition) => {
+      const shotState = state.shots[definition.shotNumber];
+      const validation = validationResults.find((item) => item.shotNumber === definition.shotNumber);
+      const diagnosticCodes = validation?.issues.map((issue) => issue.code) ?? shotState?.issues?.map((issue) => issue.code) ?? [];
+      const presenceFailure = diagnosticCodes.some((code) => (
+        code === 'unexpected_dynamic_object'
+        || code === 'expected_dynamic_object_missing'
+        || code === 'expected_dynamic_object_hidden'
+        || code === 'partial_group_visibility'
+        || code === 'unclassified_dynamic_object'
+        || code === 'dynamic_presence_changed_over_time'
+      ));
+      const panoramaFailure = diagnosticCodes.some((code) => (
+        code === 'expected_panorama_missing'
+        || code === 'wrong_panorama_linked'
+        || code === 'panorama_not_in_location'
+      ));
+      const currentShot = project.shots.find((item) => item.shotNumber === definition.shotNumber);
+      const composition = currentShot ? inspectShotCompositionError(project, currentShot) : undefined;
+      const framePath = shotState?.framePath
+        ?? path.join(outputDir, 'shots', `${definition.shotNumber}.png`);
+      return {
+        shotId: currentShot?.id ?? definition.id,
+        shotNumber: definition.shotNumber,
+        name: definition.name,
+        framePath: path.resolve(framePath),
+        locationId: definition.locationId,
+        cameraRecipe: definition.camera.template,
+        warningCount: shotState?.issues?.length ?? 0,
+        presenceStatus: presenceFailure ? 'failed' : 'passed',
+        panoramaStatus: panoramaFailure ? 'failed' : currentShot?.linkedPanoId ? 'passed' : 'optional',
+        ...(composition?.contractPresent ? { compositionError: composition.totalWeightedError } : {}),
+        reviewStatus: shotState?.validation === 'passed'
+          ? 'approved' as const
+          : shotState?.validation === 'failed'
+            ? 'failed' as const
+            : 'needs_review' as const,
+        fromCanonicalRenderer: isCanonicalFrame(shotState),
+        ...(shotState?.renderCacheHit === undefined ? {} : { cacheHit: shotState.renderCacheHit }),
+        diagnosticCodes,
+      };
     });
-    const htmlPath = path.join(outputDir, 'contact-sheet.html');
-    await writeFile(htmlPath, contactSheetHtml({
-      ...spec,
-      shots: spec.shots.map((shot) => ({
-        ...shot,
-        framePath: `file://${shot.framePath}`,
-      })),
-    }), 'utf8');
+    const reviewPlan = buildProductionReviewArtifacts({ frames: reviewFrames });
+    await writeJson(path.join(outputDir, 'logs', 'production-review-artifacts.json'), reviewPlan);
 
+    const masterArtifact = reviewPlan.artifacts.find((artifact) => artifact.kind === 'master_sequence');
+    if (!masterArtifact) {
+      throw new Error('Production review artifact plan did not produce a master sequence sheet.');
+    }
+    const spec = {
+      ...masterArtifact.contactSheet,
+      title: `${manifest.project.name} — First Frames`,
+    };
+    const htmlPath = path.join(outputDir, 'contact-sheet.html');
     const contactSheetPath = path.join(outputDir, 'contact-sheet.png');
+    const reviewDir = path.join(outputDir, 'review');
+    await mkdir(reviewDir, { recursive: true });
+    const reviewArtifactPaths = [contactSheetPath, htmlPath];
     const sheetBrowser = await chromium.launch({ headless: true });
     try {
-      const sheetPage = await sheetBrowser.newPage({
-        viewport: {
-          width: Math.min(2400, spec.columns * spec.cellWidth + 80),
-          height: Math.min(
-            4000,
-            100 + Math.ceil(Math.max(1, spec.shots.length) / spec.columns) * (spec.cellHeight + 70),
-          ),
-        },
-      });
-      await sheetPage.goto(`file://${htmlPath.replace(/\\/g, '/')}`, { waitUntil: 'networkidle' });
-      await sheetPage.screenshot({ path: contactSheetPath, fullPage: true });
+      for (const artifact of reviewPlan.artifacts) {
+        const isMaster = artifact.id === masterArtifact.id;
+        const artifactSpec = isMaster ? spec : artifact.contactSheet;
+        const artifactBase = isMaster ? 'contact-sheet' : path.join('review', artifact.id);
+        const artifactHtmlPath = path.join(outputDir, `${artifactBase}.html`);
+        const artifactPngPath = path.join(outputDir, `${artifactBase}.png`);
+        await writeFile(artifactHtmlPath, contactSheetHtml({
+          ...artifactSpec,
+          shots: artifactSpec.shots.map((shot) => ({
+            ...shot,
+            framePath: `file://${shot.framePath}`,
+          })),
+        }), 'utf8');
+        const sheetPage = await sheetBrowser.newPage({
+          viewport: {
+            width: Math.min(2400, artifactSpec.columns * artifactSpec.cellWidth + 80),
+            height: Math.min(
+              4000,
+              100 + Math.ceil(Math.max(1, artifactSpec.shots.length) / artifactSpec.columns) * (artifactSpec.cellHeight + 70),
+            ),
+          },
+        });
+        try {
+          await sheetPage.goto(`file://${artifactHtmlPath.replace(/\\/g, '/')}`, { waitUntil: 'networkidle' });
+          await sheetPage.screenshot({ path: artifactPngPath, fullPage: true });
+        } finally {
+          await sheetPage.close();
+        }
+        if (!isMaster) {
+          reviewArtifactPaths.push(artifactPngPath, artifactHtmlPath);
+        }
+      }
     } finally {
       await sheetBrowser.close();
     }
@@ -1769,7 +1886,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
     const artifactPaths = [
       contactSheetPath,
+      ...reviewArtifactPaths.filter((filePath) => filePath !== contactSheetPath && filePath !== htmlPath),
       htmlPath,
+      path.join(outputDir, 'logs', 'production-review-artifacts.json'),
       packagePath,
       path.join(outputDir, 'validation.json'),
     ].filter((value): value is string => Boolean(value));
@@ -1799,6 +1918,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       shotsCreated,
       importedCharacters: importedCharacterCount,
       framesRendered,
+      cacheHits,
+      cacheMisses,
+      cacheHitRate: cacheHits + cacheMisses > 0 ? cacheHits / (cacheHits + cacheMisses) : 0,
       controlVideosRendered,
       controlVideosFailed,
       passed,
@@ -1806,6 +1928,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       failed,
       reviewRequiredShotIds,
       contactSheet: contactSheetPath,
+      reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
       artifactPaths,
       manifestHash,
@@ -1836,12 +1959,16 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(runStatePath, state);
       return {
         ok: false,
+        partial: true,
         budgetExceeded: true,
         phase: error.phase,
         projectId: state.projectId,
         manifestHash,
         runStatePath,
         framesRendered,
+        cacheHits,
+        cacheMisses,
+        cacheHitRate: cacheHits + cacheMisses > 0 ? cacheHits / (cacheHits + cacheMisses) : 0,
         controlVideosRendered,
         controlVideosFailed,
         timing,

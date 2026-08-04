@@ -11,11 +11,31 @@ export interface AgentSelectionState {
   workspace: Workspace;
 }
 
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? String(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+}
+
+function fingerprintHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 export function projectFingerprint(project: LocationProject): string {
-  // Include structural tokens so same-millisecond edits still invalidate undo.
+  // Keep the readable structural prefix for diagnostics, then include a
+  // content fingerprint so same-millisecond camera/staging edits invalidate
+  // stale plans and still-layout approvals as well.
   const objectIds = project.scene.objects.map((object) => object.id).join(',');
   const shotIds = project.shots.map((shot) => shot.id).join(',');
   const landmarkIds = project.landmarks.map((landmark) => landmark.id).join(',');
+  const stateHash = fingerprintHash(stableSerialize(project));
   return [
     project.id,
     project.updatedAt,
@@ -26,6 +46,7 @@ export function projectFingerprint(project: LocationProject): string {
     objectIds,
     shotIds,
     landmarkIds,
+    `state:${stateHash}`,
   ].join('|');
 }
 

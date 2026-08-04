@@ -17,6 +17,11 @@ import type {
   Workspace,
   HumanJointId,
   PoseableCharacterOrientation,
+  ProductionEntityBinding,
+  ProductionLocationDefinition,
+  ShotPresenceContract,
+  ShotCompositionConstraintSet,
+  PoseSubstitutionApproval,
 } from '../../domain/types';
 import type {
   ExportPackageType,
@@ -31,6 +36,30 @@ import type { AgentDiagnostic } from './diagnostics';
 import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
 import type { ImportBudgetEstimate } from '../modelImportBudget';
 import type { ModelImportMode, ModelImportSummary } from '../modelImport';
+import type {
+  EntityCapabilityProfile,
+  ProductionPoseResolution,
+} from '../previs/entityCapability';
+import type { ProjectionHealthMetrics } from '../previs/shotEnvironment';
+import type { CompositionEntityProjection } from '../previs/compositionConstraints';
+import type { ReviewSamplePlan } from '../previs/reviewSampling';
+import type {
+  ProductionReviewArtifactPlanResult,
+  ProductionReviewFrameInput,
+} from '../previs/productionReviewArtifacts';
+import type {
+  RenderCacheDecision,
+  RenderCacheInspection,
+  RenderFingerprint,
+} from '../previs/renderCache';
+import type {
+  ProductionCanaryPlan,
+  ProductionCanaryResult,
+  ProductionCanaryShotResult,
+  ProductionGate,
+  ProductionGateState,
+} from '../previs/productionGates';
+import type { ApprovedLayoutRevision } from '../previs/stillLayoutApproval';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -315,6 +344,11 @@ export type ForeSceneAgentCommand =
       op: 'shot.updateCamera';
       shot: AgentEntityTarget;
       camera: Partial<CameraData>;
+    }
+  | {
+      op: 'shot.setPanorama';
+      shot: AgentEntityTarget;
+      pano: AgentEntityTarget | null;
     }
   | {
       op: 'shot.select';
@@ -975,6 +1009,226 @@ export interface AgentProductionManifestValidateResult {
   diagnostics: AgentDiagnostic[];
 }
 
+export interface AgentProductionConfigurationInspection {
+  ok: boolean;
+  schemaVersion: 1;
+  bindings: Record<string, ProductionEntityBinding>;
+  locations: Record<string, ProductionLocationDefinition>;
+  shotContractCount: number;
+  poseSubstitutionCount: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export type AgentVerifiedMutationStatus =
+  | 'completed'
+  | 'rolled_back'
+  | 'paused'
+  | 'completed_with_warnings'
+  | 'failed';
+
+export interface AgentVerifiedProxyReplacementInput {
+  proxyObjectId: string;
+  replacementObjectId: string;
+  requestedShotIds?: string[];
+  intendedShotIds?: string[];
+  initializeVisibility?: boolean;
+  description?: string;
+}
+
+export interface AgentVerifiedMutationRollbackResult {
+  attempted: boolean;
+  ok: boolean;
+  checkpointRevisionId?: string;
+  restoredFingerprint?: string;
+  projectStateRestored: boolean;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentVerifiedProxyReplacementResult {
+  ok: boolean;
+  status: AgentVerifiedMutationStatus;
+  checkpointRevisionId?: string;
+  preview?: AgentPlanPreviewResult;
+  apply: AgentPlanApplyResult;
+  verification?: { ok: boolean; errors: string[] };
+  rollback?: AgentVerifiedMutationRollbackResult;
+  plan?: ForeSceneAgentPlan;
+  preparedShots?: Array<{ id: string; shotNumber: string; keyframeIds: string[] }>;
+  affectedShots?: Array<{ id: string; shotNumber: string; keyframeIds: string[] }>;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionConfigurationValidationResult {
+  ok: boolean;
+  checkedEntityIds: string[];
+  checkedLocationIds: string[];
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionConfigurationMutationResult {
+  ok: boolean;
+  revisionId?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentEntityCapabilityProfile extends EntityCapabilityProfile {}
+
+export interface AgentProductionCapabilitiesValidationResult {
+  ok: boolean;
+  profiles: Record<string, AgentEntityCapabilityProfile>;
+  checkedEntityIds: string[];
+  checkedShotIds: string[];
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionPoseResolution extends ProductionPoseResolution {}
+
+export interface AgentPoseSubstitutionMutationResult extends AgentProductionConfigurationMutationResult {
+  resolution?: AgentProductionPoseResolution;
+}
+
+export interface AgentShotPresenceSample {
+  timeSeconds: number;
+  visibleDynamicObjectIds: string[];
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotPresenceInspection {
+  ok: boolean;
+  shotId: string;
+  contractPresent: boolean;
+  expectedVisibleObjectIds: string[];
+  expectedVisibleGroupIds: string[];
+  dynamicObjectIds: string[];
+  actualVisibleObjectIds: string[];
+  samples: AgentShotPresenceSample[];
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotPresenceMutationResult {
+  ok: boolean;
+  revisionId?: string;
+  inspection?: AgentShotPresenceInspection;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotEnvironmentInspection {
+  ok: boolean;
+  shotId: string;
+  contractPresent: boolean;
+  locationId?: string;
+  expectedPanoId?: string;
+  actualPanoId?: string;
+  requireProjection: boolean;
+  minimumProjectionCoverage: number;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProjectionHealthInspection {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId: string;
+  revisionId: string;
+  sampledTimeSeconds?: number;
+  metrics?: ProjectionHealthMetrics;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotCompositionInspection {
+  ok: boolean;
+  shotId: string;
+  contractPresent: boolean;
+  totalWeightedError: number;
+  entities: Record<string, CompositionEntityProjection>;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentShotCompositionMutationResult {
+  ok: boolean;
+  status?: AgentOperationStatus;
+  revisionId?: string;
+  changed?: boolean;
+  iterations?: number;
+  before?: AgentShotCompositionInspection;
+  after?: AgentShotCompositionInspection;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionCanaryPlanResult {
+  ok: boolean;
+  runId?: string;
+  plan?: ProductionCanaryPlan;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionCanaryRunResult {
+  ok: boolean;
+  runId?: string;
+  result?: ProductionCanaryResult;
+  gateState?: ProductionGateState;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentProductionCanaryApprovalResult {
+  ok: boolean;
+  runId: string;
+  gateState?: ProductionGateState;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentStillLayoutApprovalResult {
+  ok: boolean;
+  status?: AgentOperationStatus;
+  runId: string;
+  revisionId?: string;
+  approvedLayoutRevision?: ApprovedLayoutRevision;
+  gateState?: ProductionGateState;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentMotionWorkingRevisionResult {
+  ok: boolean;
+  status?: AgentOperationStatus;
+  runId: string;
+  sourceRevisionId?: string;
+  workingRevisionId?: string;
+  workingProjectId?: string;
+  approvedLayoutRevision?: ApprovedLayoutRevision;
+  gateState?: ProductionGateState;
+  diagnostics: AgentDiagnostic[];
+}
+
+export type AgentProductionRunStatus = 'queued' | 'running' | 'paused' | 'needs_review' | 'completed' | 'failed' | 'cancelled';
+
+export interface AgentProductionRunState {
+  runId: string;
+  gateRunId: string;
+  status: AgentProductionRunStatus;
+  currentGate: ProductionGate;
+  manifest: unknown;
+  manifestHash?: string;
+  projectId?: string;
+  sourceProjectFingerprint?: string;
+  recoveryRevisionId?: string;
+  runGeneration?: number;
+  gateState: ProductionGateState;
+  completedShotIds: string[];
+  artifactIds: string[];
+  cacheKeys: Record<string, string>;
+  blockingDiagnostics: AgentDiagnostic[];
+  overrideApprovals: string[];
+  startedAt: string;
+  updatedAt: string;
+}
+
+export interface AgentProductionRunResult {
+  ok: boolean;
+  status: AgentProductionRunStatus;
+  runId: string;
+  state?: AgentProductionRunState;
+  diagnostics: AgentDiagnostic[];
+}
+
 export interface AgentProductionCompilePreviewResult {
   ok: boolean;
   planCount?: number;
@@ -1427,6 +1681,7 @@ export interface ForeSceneBrowserApi {
 
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
   applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
+  applyVerifiedProxyReplacement(input: AgentVerifiedProxyReplacementInput): Promise<AgentVerifiedProxyReplacementResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
   /** Create a verified local recovery point before a resumable refinement batch. */
@@ -1543,6 +1798,47 @@ export interface ForeSceneBrowserApi {
   // Production manifest compiler
   validateProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult;
   bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): Promise<AgentProductionManifestValidateResult>;
+  inspectProductionConfiguration(): AgentProductionConfigurationInspection;
+  validateProductionConfiguration(input: { manifest: unknown }): AgentProductionConfigurationValidationResult;
+  bindProductionEntity(input: { entityId: string; binding: ProductionEntityBinding }): Promise<AgentProductionConfigurationMutationResult>;
+  defineProductionLocation(input: { location: ProductionLocationDefinition }): Promise<AgentProductionConfigurationMutationResult>;
+  removeProductionBinding(input: { entityId: string }): Promise<AgentProductionConfigurationMutationResult>;
+  inspectEntityCapability(input: { entityId: string }): AgentEntityCapabilityProfile;
+  validateProductionCapabilities(input: { manifest?: unknown }): AgentProductionCapabilitiesValidationResult;
+  resolveProductionPose(input: { entityId: string; requestedPose: string; shotId?: string }): AgentProductionPoseResolution;
+  approvePoseSubstitution(input: { approval: PoseSubstitutionApproval }): Promise<AgentPoseSubstitutionMutationResult>;
+  setShotPresenceContract(input: { shotId: string; contract: ShotPresenceContract }): Promise<AgentShotPresenceMutationResult>;
+  inspectShotPresence(input: { shotId: string }): AgentShotPresenceInspection;
+  verifyShotPresence(input: { shotId: string }): AgentShotPresenceInspection;
+  repairShotPresence(input: { shotId: string }): Promise<AgentShotPresenceMutationResult>;
+  inspectShotEnvironmentContract(input: { shotId: string }): AgentShotEnvironmentInspection;
+  verifyShotPanorama(input: { shotId: string }): AgentShotEnvironmentInspection;
+  inspectProjectionHealth(input: { shotId: string; timeSeconds?: number; minimumCoverage?: number; requireProjection?: boolean }): Promise<AgentProjectionHealthInspection>;
+  setShotCompositionConstraints(input: { shotId: string; contract: ShotCompositionConstraintSet }): Promise<AgentShotCompositionMutationResult>;
+  inspectShotCompositionError(input: { shotId: string }): AgentShotCompositionInspection;
+  solveShotToCompositionConstraints(input: { shotId: string; maxIterations?: number }): Promise<AgentShotCompositionMutationResult>;
+  verifyShotCompositionConstraints(input: { shotId: string }): AgentShotCompositionInspection;
+  planProductionCanary(input: { manifest: unknown; maxShots?: number }): Promise<AgentProductionCanaryPlanResult>;
+  runProductionCanary(input: { runId: string }): Promise<AgentProductionCanaryRunResult>;
+  approveProductionCanary(input: { runId: string; overrideReason?: string }): AgentProductionCanaryApprovalResult;
+  runProduction(input: { manifest: unknown; maxCanaryShots?: number }): Promise<AgentProductionRunResult>;
+  getProductionRun(runId: string): AgentProductionRunState | undefined;
+  listProductionRuns(): AgentProductionRunState[];
+  pauseProductionRun(runId: string): AgentProductionRunResult;
+  resumeProductionRun(runId: string): Promise<AgentProductionRunResult>;
+  cancelProductionRun(runId: string): AgentProductionRunResult;
+  subscribeProductionRun(runId: string, listener: (state: AgentProductionRunState) => void): () => void;
+  approveStillLayout(input: { runId: string; approvedShotIds: string[]; reviewArtifactIds?: string[]; reviewRecord?: string }): Promise<AgentStillLayoutApprovalResult>;
+  createMotionWorkingRevision(input: { runId: string }): Promise<AgentMotionWorkingRevisionResult>;
+  inspectStillLayoutApproval(input: { runId?: string }): { ok: boolean; runId?: string; approvedLayoutRevision?: ApprovedLayoutRevision; gateState?: ProductionGateState; diagnostics: AgentDiagnostic[] };
+  planReviewSamples(input: { shotId: string; strategy?: 'event-aware' | 'single'; maxSamples?: number }): ReviewSamplePlan;
+  planProductionReviewArtifacts(input: { frames: ProductionReviewFrameInput[]; continuityStripSize?: number }): ProductionReviewArtifactPlanResult;
+  inspectRenderCache(input?: { projectId?: string }): RenderCacheInspection;
+  explainRenderCacheHit(input: { projectId?: string; fingerprint: RenderFingerprint }): RenderCacheDecision;
+  explainRenderCacheMiss(input: { projectId?: string; fingerprint: RenderFingerprint }): RenderCacheDecision;
+  invalidateRenderDependencies(input: { projectId?: string; dependencyIds: string[] }): RenderCacheInspection;
+  clearRenderCache(input?: { projectId?: string }): RenderCacheInspection;
+  inspectProductionGates(input: { runId?: string }): { ok: boolean; runId?: string; gateState?: ProductionGateState; diagnostics: AgentDiagnostic[] };
   previewProductionCompile(input: { manifest: unknown }): AgentProductionCompilePreviewResult;
   applyProductionCompile(input: { manifest: unknown; preserveCurrentAsRecovery?: boolean }): Promise<AgentPlanApplyResult>;
   inspectProductionStatus(): { manifestBound: boolean; shotCount: number; diagnostics: AgentDiagnostic[] };

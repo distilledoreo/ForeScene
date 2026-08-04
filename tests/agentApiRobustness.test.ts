@@ -37,6 +37,23 @@ import {
   inspectAgentProductionStatus,
   resetAgentProductionManifestBindingsForTests,
 } from '../src/engine/agent/productionManifestControl';
+import {
+  bindAgentProductionEntity,
+  defineAgentProductionLocation,
+  approveAgentPoseSubstitution,
+  inspectAgentEntityCapability,
+  inspectAgentProductionConfiguration,
+  removeAgentProductionBinding,
+  resolveAgentProductionPose,
+  validateAgentProductionCapabilities,
+  validateAgentProductionConfiguration,
+} from '../src/engine/agent/productionConfigurationControl';
+import {
+  inspectAgentShotPresence,
+  repairAgentShotPresence,
+  setAgentShotPresenceContract,
+} from '../src/engine/agent/shotPresenceControl';
+import { deriveDynamicObjectUniverse } from '../src/engine/previs/shotPresence';
 import { restoreAgentProjectRevision } from '../src/engine/agent/projectHealthControl';
 import { setAgentJointRotation } from '../src/engine/agent/poseControl';
 import {
@@ -315,6 +332,113 @@ describe('agent API robustness', () => {
     expect(status.manifestBound).toBe(true);
     expect(status.bindingCount).toBe(1);
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.hero).toBe(heroObject!.id);
+  });
+
+  it('persists typed production bindings and validates a prepared location', async () => {
+    const project = useProjectStore.getState().project;
+    const heroObject = project.scene.objects.find((object) => object.type === 'human_dummy')!;
+    const wall = project.scene.objects.find((object) => object.type === 'wall')!;
+    const manifest = {
+      version: 1 as const,
+      project: { name: 'Prepared Demo', aspectRatio: '16:9' as const },
+      cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy' as const }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' as const }],
+      shots: [{
+        id: 'shot_1',
+        shotNumber: '001',
+        name: 'Hero shot',
+        description: 'Hero in room.',
+        locationId: 'loc',
+        subjects: ['hero'],
+        camera: { template: 'medium' as const, subjects: ['hero'] },
+      }],
+    };
+
+    const location = await defineAgentProductionLocation({
+      location: {
+        id: 'loc',
+        objectIds: [wall.id],
+        objectGroupIds: [],
+        anchors: {},
+        blockerObjectIds: [],
+      },
+    });
+    expect(location.ok, JSON.stringify(location.diagnostics)).toBe(true);
+
+    const heroBinding = await bindAgentProductionEntity({
+      entityId: 'hero',
+      binding: { kind: 'object', objectId: heroObject.id },
+    });
+    expect(heroBinding.ok, JSON.stringify(heroBinding.diagnostics)).toBe(true);
+    const locationBinding = await bindAgentProductionEntity({
+      entityId: 'loc',
+      binding: { kind: 'location', locationId: 'loc' },
+    });
+    expect(locationBinding.ok, JSON.stringify(locationBinding.diagnostics)).toBe(true);
+
+    const inspection = inspectAgentProductionConfiguration();
+    expect(inspection.bindings.hero).toEqual({ kind: 'object', objectId: heroObject.id });
+    expect(inspection.locations.loc.objectIds).toEqual([wall.id]);
+
+    const validation = validateAgentProductionConfiguration({ manifest });
+    expect(validation.ok, JSON.stringify(validation.diagnostics)).toBe(true);
+
+    const capability = inspectAgentEntityCapability({ entityId: 'hero' });
+    expect(capability.readiness).toBe('ready');
+    const approximate = resolveAgentProductionPose({ entityId: 'hero', requestedPose: 'running' });
+    expect(approximate.relationship).toBe('approximate');
+    const approved = await approveAgentPoseSubstitution({
+      approval: {
+        entityId: 'hero',
+        requestedPose: 'running',
+        resolvedPose: 'walking',
+        relationship: 'approved_substitute',
+        requiresReview: false,
+      },
+    });
+    expect(approved.ok, JSON.stringify(approved.diagnostics)).toBe(true);
+    expect(resolveAgentProductionPose({ entityId: 'hero', requestedPose: 'running' }).relationship).toBe('approved_substitute');
+    expect(validateAgentProductionCapabilities({ manifest }).ok).toBe(true);
+
+    const removed = await removeAgentProductionBinding({ entityId: 'hero' });
+    expect(removed.ok, JSON.stringify(removed.diagnostics)).toBe(true);
+    expect(inspectAgentProductionConfiguration().bindings.hero).toBeUndefined();
+  });
+
+  it('sets, verifies, and repairs a closed-world shot presence contract', async () => {
+    const before = useProjectStore.getState().project;
+    const shot = before.shots[0]!;
+    const extra = createSceneObject('human_dummy', 2);
+    useProjectStore.setState({
+      project: {
+        ...before,
+        scene: { ...before.scene, objects: [...before.scene.objects, extra] },
+      },
+    });
+    const dynamicBefore = deriveDynamicObjectUniverse(useProjectStore.getState().project)
+      .map((item) => item.objectId)
+      .filter((objectId) => objectId !== extra.id);
+
+    const set = await setAgentShotPresenceContract({
+      shotId: shot.id,
+      contract: {
+        expectedVisibleObjectIds: dynamicBefore,
+        expectedVisibleGroupIds: [],
+        allowUnspecifiedDynamicObjects: false,
+      },
+    });
+    expect(set.ok, JSON.stringify(set.diagnostics)).toBe(true);
+
+    const failed = inspectAgentShotPresence({ shotId: shot.id });
+    expect(failed.ok).toBe(false);
+    expect(failed.diagnostics.some((item) => (
+      item.code === 'unexpected_dynamic_object' && item.message.includes(extra.id)
+    ))).toBe(true);
+
+    const repaired = await repairAgentShotPresence({ shotId: shot.id });
+    expect(repaired.ok, JSON.stringify(repaired.diagnostics)).toBe(true);
+    expect(repaired.inspection?.ok).toBe(true);
+    expect(repaired.inspection?.actualVisibleObjectIds).not.toContain(extra.id);
   });
 
   it('blocks restoreProjectRevision in read-only mode', async () => {
