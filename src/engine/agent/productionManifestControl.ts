@@ -240,6 +240,7 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
 export async function applyAgentProductionCompile(input: {
   manifest: unknown;
   preserveCurrentAsRecovery?: boolean;
+  onlyShotIds?: string[];
 }) {
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
     return {
@@ -259,9 +260,16 @@ export async function applyAgentProductionCompile(input: {
   }
 
   const assetBindings = readPersistedManifestBindings();
+  const onlyShotIds = new Set(input.onlyShotIds ?? []);
+  const skipShotNumbers = onlyShotIds.size > 0
+    ? new Set(parsed.manifest.shots
+      .filter((shot) => !onlyShotIds.has(shot.id))
+      .map((shot) => shot.shotNumber))
+    : undefined;
   const result = compileProduction(parsed.manifest, {
     assetBindings,
     presenceProject: useProjectStore.getState().project,
+    ...(skipShotNumbers ? { skipShotNumbers } : {}),
   });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);

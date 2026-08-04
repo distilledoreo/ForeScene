@@ -1207,6 +1207,10 @@ export interface AgentProductionRunState {
   currentGate: ProductionGate;
   manifest: unknown;
   manifestHash?: string;
+  projectId?: string;
+  sourceProjectFingerprint?: string;
+  recoveryRevisionId?: string;
+  runGeneration?: number;
   gateState: ProductionGateState;
   completedShotIds: string[];
   artifactIds: string[];
@@ -1814,8 +1818,8 @@ export interface ForeSceneBrowserApi {
   inspectShotCompositionError(input: { shotId: string }): AgentShotCompositionInspection;
   solveShotToCompositionConstraints(input: { shotId: string; maxIterations?: number }): Promise<AgentShotCompositionMutationResult>;
   verifyShotCompositionConstraints(input: { shotId: string }): AgentShotCompositionInspection;
-  planProductionCanary(input: { manifest: unknown; maxShots?: number }): AgentProductionCanaryPlanResult;
-  runProductionCanary(input: { runId: string; results: ProductionCanaryShotResult[] }): AgentProductionCanaryRunResult;
+  planProductionCanary(input: { manifest: unknown; maxShots?: number }): Promise<AgentProductionCanaryPlanResult>;
+  runProductionCanary(input: { runId: string; results?: ProductionCanaryShotResult[]; visualReviewApproved?: boolean }): Promise<AgentProductionCanaryRunResult>;
   approveProductionCanary(input: { runId: string; overrideReason?: string }): AgentProductionCanaryApprovalResult;
   runProduction(input: { manifest: unknown; maxCanaryShots?: number }): Promise<AgentProductionRunResult>;
   getProductionRun(runId: string): AgentProductionRunState | undefined;

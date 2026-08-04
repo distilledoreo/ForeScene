@@ -1,7 +1,12 @@
 /** Browser-side adapters for capability-driven production canary gates. */
 
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
-import { getProductionConfiguration } from '../previs/productionConfiguration';
+import { hashPrevisManifest } from '../previs/manifestHash';
+import {
+  getProductionConfiguration,
+  validateProductionConfiguration,
+} from '../previs/productionConfiguration';
+import { validateProductionCapabilities } from '../previs/entityCapability';
 import {
   approveProductionCanary as approveProductionCanaryEngine,
   approveStillLayout as approveStillLayoutEngine,
@@ -11,11 +16,13 @@ import {
   deriveProductionShotCapabilities,
   planProductionCanary as planProductionCanaryEngine,
   runProductionCanary as runProductionCanaryEngine,
+  startProductionGate,
   type ProductionCanaryPlan,
   type ProductionCanaryResult,
   type ProductionCanaryShotResult,
   type ProductionGateState,
 } from '../previs/productionGates';
+import { resolveProductionBindingMode } from '../previs/productionBindingMode';
 import {
   createApprovedLayoutRevision,
   createMotionWorkingRevision,
@@ -24,7 +31,9 @@ import {
 import { createProductionRunId } from '../previs/productionRun';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
-import { agentError, type AgentDiagnostic } from './diagnostics';
+import { agentError, agentWarning, type AgentDiagnostic } from './diagnostics';
+import { projectFingerprint } from './planDiff';
+import { executeProductionCanary } from './productionCanaryExecutor';
 import type {
   AgentProductionCanaryApprovalResult,
   AgentProductionCanaryPlanResult,
@@ -37,10 +46,16 @@ import { cloneAgentProjectRevision } from './projectImportControl';
 interface StoredProductionGateRun {
   gateState: ProductionGateState;
   manifest?: unknown;
+  projectId: string;
+  sourceProjectFingerprint: string;
+  manifestHash: string;
+  recoveryRevisionId?: string;
+  runGeneration: number;
 }
 
 const STORAGE_KEY = 'forescene.production.gate-runs.v1';
 const runs = new Map<string, StoredProductionGateRun>();
+let gateRunGeneration = 0;
 
 function loadRuns(): void {
   if (runs.size > 0 || typeof window === 'undefined') return;
@@ -50,8 +65,7 @@ function loadRuns(): void {
       if (value?.gateState?.runId) runs.set(runId, value);
     }
   } catch {
-    // A malformed local run must not prevent opening the project. The next
-    // planned run replaces it with a valid state.
+    // A malformed local run must not prevent opening the project.
   }
 }
 
@@ -60,8 +74,7 @@ function persistRuns(): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(runs.entries())));
   } catch {
-    // Persistence is best effort; project revisions remain the authoritative
-    // recovery mechanism for authored scene state.
+    // Persistence is best effort.
   }
 }
 
@@ -69,7 +82,7 @@ function diagnosticsFromManifest(raw: unknown) {
   const parsed = parsePrevisProductionManifest(raw);
   const diagnostics: AgentDiagnostic[] = [
     ...parsed.errors.map((item) => agentError(item.code, item.message)),
-    ...parsed.warnings.map((item) => agentError(item.code, item.message)),
+    ...parsed.warnings.map((item) => agentWarning(item.code, item.message)),
   ];
   return { parsed, diagnostics };
 }
@@ -79,33 +92,158 @@ function getRun(runId: string): StoredProductionGateRun | undefined {
   return runs.get(runId);
 }
 
-export function planAgentProductionCanary(input: {
+function assertGateRunContext(stored: StoredProductionGateRun): AgentDiagnostic[] {
+  const project = useProjectStore.getState().project;
+  const diagnostics: AgentDiagnostic[] = [];
+  if (project.id !== stored.projectId) {
+    diagnostics.push(agentError(
+      'production_run_project_mismatch',
+      `Production run belongs to project "${stored.projectId}" but the active project is "${project.id}".`,
+    ));
+  }
+  const manifestHash = stored.manifest ? hashPrevisManifest(stored.manifest) : undefined;
+  if (manifestHash && manifestHash !== stored.manifestHash) {
+    diagnostics.push(agentError(
+      'production_run_manifest_mismatch',
+      'The production manifest changed since this run was created.',
+    ));
+  }
+  return diagnostics;
+}
+
+async function createRecoveryCheckpoint(reason: string): Promise<string | undefined> {
+  const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+  if (!runDestructive) return undefined;
+  const verified = await runDestructive(reason, async () => {
+    // Snapshot only.
+  });
+  return verified?.revision.id;
+}
+
+function gatePasses(status: string): boolean {
+  return status === 'passed' || status === 'passed_with_override';
+}
+
+export async function planAgentProductionCanary(input: {
   manifest: unknown;
   maxShots?: number;
-}): AgentProductionCanaryPlanResult {
+}): Promise<AgentProductionCanaryPlanResult> {
   const parsedResult = diagnosticsFromManifest(input.manifest);
   if (!parsedResult.parsed.manifest || parsedResult.parsed.errors.length > 0) {
     return { ok: false, diagnostics: parsedResult.diagnostics };
   }
   const project = useProjectStore.getState().project;
+  const manifest = parsedResult.parsed.manifest;
+  const bindingMode = resolveProductionBindingMode('gated_production');
+  const runId = createProductionRunId();
+  let gateState = createProductionGateState(runId);
+  gateState = completeProductionGate(gateState, 'VALIDATE_INPUT', {
+    ok: parsedResult.parsed.errors.length === 0,
+    diagnostics: parsedResult.parsed.errors.map((item) => ({
+      code: item.code,
+      message: item.message,
+    })),
+  });
+  if (!gateState.gates.VALIDATE_INPUT.status.startsWith('passed')) {
+    return { ok: false, runId, diagnostics: parsedResult.diagnostics };
+  }
+
+  const configuration = validateProductionConfiguration(project, manifest, { mode: bindingMode });
+  gateState = completeProductionGate(gateState, 'VALIDATE_BINDINGS', {
+    ok: configuration.ok,
+    diagnostics: configuration.diagnostics.map((item) => ({
+      code: item.code,
+      message: item.message,
+      severity: item.severity,
+    })),
+  });
+  if (!configuration.ok) {
+    runs.set(runId, {
+      gateState,
+      manifest: input.manifest,
+      projectId: project.id,
+      sourceProjectFingerprint: projectFingerprint(project),
+      manifestHash: hashPrevisManifest(input.manifest),
+      runGeneration: ++gateRunGeneration,
+    });
+    persistRuns();
+    return {
+      ok: false,
+      runId,
+      diagnostics: [
+        ...parsedResult.diagnostics,
+        ...configuration.diagnostics.map((item) => agentError(item.code, item.message)),
+      ],
+    };
+  }
+
+  const capabilities = validateProductionCapabilities(project, manifest);
+  gateState = completeProductionGate(gateState, 'VALIDATE_CAPABILITIES', {
+    ok: capabilities.ok,
+    diagnostics: capabilities.diagnostics.map((item) => ({
+      code: item.code,
+      message: item.message,
+      severity: item.severity,
+    })),
+  });
+  if (!capabilities.ok) {
+    runs.set(runId, {
+      gateState,
+      manifest: input.manifest,
+      projectId: project.id,
+      sourceProjectFingerprint: projectFingerprint(project),
+      manifestHash: hashPrevisManifest(input.manifest),
+      runGeneration: ++gateRunGeneration,
+    });
+    persistRuns();
+    return {
+      ok: false,
+      runId,
+      diagnostics: [
+        ...parsedResult.diagnostics,
+        ...capabilities.diagnostics
+          .filter((item) => item.severity === 'error')
+          .map((item) => agentError(item.code, item.message)),
+      ],
+    };
+  }
+
+  const recoveryRevisionId = await createRecoveryCheckpoint('Recovery snapshot before production planning');
+  gateState = completeProductionGate(gateState, 'CREATE_RECOVERY_REVISION', {
+    ok: Boolean(recoveryRevisionId),
+    diagnostics: recoveryRevisionId
+      ? [{ code: 'recovery_revision_created', message: `Recovery revision ${recoveryRevisionId} created.` }]
+      : [{ code: 'recovery_revision_missing', message: 'Could not create a recovery checkpoint before planning.' }],
+  });
+  if (!recoveryRevisionId) {
+    runs.set(runId, {
+      gateState,
+      manifest: input.manifest,
+      projectId: project.id,
+      sourceProjectFingerprint: projectFingerprint(project),
+      manifestHash: hashPrevisManifest(input.manifest),
+      runGeneration: ++gateRunGeneration,
+    });
+    persistRuns();
+    return {
+      ok: false,
+      runId,
+      diagnostics: [agentError('recovery_revision_missing', 'Could not create a recovery checkpoint before planning.')],
+    };
+  }
+
   const production = getProductionConfiguration(project);
-  const candidates = parsedResult.parsed.manifest.shots.map((shot) => ({
+  const candidates = manifest.shots.map((shot) => ({
     shotId: shot.id,
     shotNumber: shot.shotNumber,
     capabilities: deriveProductionShotCapabilities({
       shot,
-      manifest: parsedResult.parsed.manifest!,
+      manifest,
       production,
       project,
     }),
   }));
   const plan = planProductionCanaryEngine({ candidates, maxShots: input.maxShots });
-  const runId = createProductionRunId();
-  let gateState = createProductionGateState(runId);
-  gateState = completeProductionGate(gateState, 'VALIDATE_INPUT', { ok: true });
-  gateState = completeProductionGate(gateState, 'VALIDATE_BINDINGS', { ok: true });
-  gateState = completeProductionGate(gateState, 'VALIDATE_CAPABILITIES', { ok: true });
-  gateState = completeProductionGate(gateState, 'CREATE_RECOVERY_REVISION', { ok: true });
   gateState = completeProductionGate(gateState, 'PLAN_CANARY', {
     ok: plan.complete,
     diagnostics: plan.uncoveredCapabilities.map((capability) => ({
@@ -113,8 +251,24 @@ export function planAgentProductionCanary(input: {
       message: `No canary shot covers capability "${capability}".`,
     })),
   });
-  gateState = { ...gateState, canaryPlan: plan };
-  runs.set(runId, { gateState, manifest: input.manifest });
+  gateState = {
+    ...gateState,
+    canaryPlan: plan,
+    projectId: project.id,
+    sourceProjectFingerprint: projectFingerprint(project),
+    manifestHash: hashPrevisManifest(input.manifest),
+    recoveryRevisionId,
+    runGeneration: ++gateRunGeneration,
+  };
+  runs.set(runId, {
+    gateState,
+    manifest: input.manifest,
+    projectId: project.id,
+    sourceProjectFingerprint: projectFingerprint(project),
+    manifestHash: hashPrevisManifest(input.manifest),
+    recoveryRevisionId,
+    runGeneration: gateState.runGeneration ?? gateRunGeneration,
+  });
   persistRuns();
   return {
     ok: plan.complete,
@@ -130,35 +284,102 @@ export function planAgentProductionCanary(input: {
   };
 }
 
-export function runAgentProductionCanary(input: {
+export async function runAgentProductionCanary(input: {
   runId: string;
-  results: ProductionCanaryShotResult[];
-}): AgentProductionCanaryRunResult {
+  results?: ProductionCanaryShotResult[];
+  visualReviewApproved?: boolean;
+}): Promise<AgentProductionCanaryRunResult> {
   const stored = getRun(input.runId);
   if (!stored) {
     return { ok: false, diagnostics: [agentError('production_run_not_found', `No production run "${input.runId}" exists.`)] };
+  }
+  const contextErrors = assertGateRunContext(stored);
+  if (contextErrors.length > 0) {
+    return { ok: false, runId: input.runId, diagnostics: contextErrors };
   }
   const plan = stored.gateState.canaryPlan;
   if (!plan) {
     return { ok: false, runId: input.runId, diagnostics: [agentError('canary_plan_missing', 'Plan the production canary before running it.')] };
   }
-  const result = runProductionCanaryEngine(plan, input.results);
-  let gateState = stored.gateState;
-  for (const gate of ['AUTHOR_CANARY', 'VERIFY_CANARY_STATE', 'RENDER_CANARY', 'VERIFY_CANARY_OUTPUT'] as const) {
-    gateState = completeProductionGate(gateState, gate, {
-      ok: result.ok,
-      diagnostics: result.diagnostics,
-    });
+  const parsed = parsePrevisProductionManifest(stored.manifest);
+  if (!parsed.manifest) {
+    return { ok: false, runId: input.runId, diagnostics: [agentError('production_manifest_invalid', 'Production manifest is invalid.')] };
   }
-  gateState = { ...gateState, canaryResult: result };
+
+  if (input.results) {
+    const result = runProductionCanaryEngine(plan, input.results);
+    let gateState = stored.gateState;
+    for (const gate of ['AUTHOR_CANARY', 'VERIFY_CANARY_STATE', 'RENDER_CANARY', 'VERIFY_CANARY_OUTPUT'] as const) {
+      gateState = completeProductionGate(gateState, gate, {
+        ok: result.ok,
+        diagnostics: result.diagnostics,
+      });
+    }
+    gateState = { ...gateState, canaryResult: result };
+    runs.set(input.runId, { ...stored, gateState });
+    persistRuns();
+    return {
+      ok: result.ok,
+      runId: input.runId,
+      result,
+      gateState,
+      diagnostics: result.diagnostics.map((item) => agentError(item.code, item.message)),
+    };
+  }
+
+  let gateState = startProductionGate(stored.gateState, 'AUTHOR_CANARY');
   runs.set(input.runId, { ...stored, gateState });
   persistRuns();
-  return {
-    ok: result.ok,
+
+  const executed = await executeProductionCanary({
     runId: input.runId,
-    result,
+    plan,
+    manifest: parsed.manifest,
+    assertActive: () => {
+      const latest = getRun(input.runId);
+      if (!latest || latest.runGeneration !== stored.runGeneration) {
+        throw new Error('Production canary run is stale.');
+      }
+      const errors = assertGateRunContext(latest);
+      if (errors.length > 0) throw new Error(errors[0]!.message);
+    },
+  });
+
+  gateState = completeProductionGate(gateState, 'AUTHOR_CANARY', {
+    ok: executed.authorDiagnostics.length === 0,
+    diagnostics: executed.authorDiagnostics,
+  });
+  gateState = completeProductionGate(gateState, 'VERIFY_CANARY_STATE', {
+    ok: executed.verifyDiagnostics.length === 0 && executed.result.shotResults.every((item) => (
+      item.presenceOk && item.capabilitiesOk && item.panoramaOk && item.compositionOk && !item.unrelatedStateChanged
+    )),
+    diagnostics: executed.verifyDiagnostics,
+  });
+  gateState = completeProductionGate(gateState, 'RENDER_CANARY', {
+    ok: executed.renderDiagnostics.length === 0,
+    diagnostics: executed.renderDiagnostics,
+  });
+  gateState = completeProductionGate(gateState, 'VERIFY_CANARY_OUTPUT', {
+    ok: executed.result.ok,
+    diagnostics: executed.result.diagnostics,
+  });
+  gateState = {
+    ...gateState,
+    canaryResult: executed.result,
+    recoveryRevisionId: executed.recoveryRevisionId ?? gateState.recoveryRevisionId,
+  };
+  runs.set(input.runId, {
+    ...stored,
     gateState,
-    diagnostics: result.diagnostics.map((item) => agentError(item.code, item.message)),
+    recoveryRevisionId: executed.recoveryRevisionId ?? stored.recoveryRevisionId,
+  });
+  persistRuns();
+  return {
+    ok: executed.result.ok,
+    runId: input.runId,
+    result: executed.result,
+    gateState,
+    diagnostics: executed.result.diagnostics.map((item) => agentError(item.code, item.message)),
   };
 }
 
@@ -168,6 +389,8 @@ export function approveAgentProductionCanary(input: {
 }): AgentProductionCanaryApprovalResult {
   const stored = getRun(input.runId);
   if (!stored) return { ok: false, runId: input.runId, diagnostics: [agentError('production_run_not_found', `No production run "${input.runId}" exists.`)] };
+  const contextErrors = assertGateRunContext(stored);
+  if (contextErrors.length > 0) return { ok: false, runId: input.runId, diagnostics: contextErrors };
   const result: ProductionCanaryResult | undefined = stored.gateState.canaryResult;
   if (!result) return { ok: false, runId: input.runId, diagnostics: [agentError('canary_result_missing', 'Run the production canary before approving it.')] };
   const gateState = approveProductionCanaryEngine(stored.gateState, result, input.overrideReason);
@@ -195,10 +418,17 @@ export async function approveAgentStillLayout(input: {
     runId: input.runId,
     diagnostics: [agentError('production_run_not_found', `No production run "${input.runId}" exists.`)],
   };
+  const contextErrors = assertGateRunContext(stored);
+  if (contextErrors.length > 0) return {
+    ok: false,
+    status: 'failed',
+    runId: input.runId,
+    diagnostics: contextErrors,
+  };
   const state = stored.gateState;
   const stillSequenceReady = canAdvanceFullStillRun(state)
-    && state.gates.AUTHOR_FULL_STILL_SEQUENCE.status === 'passed'
-    && state.gates.VERIFY_FULL_STILL_SEQUENCE.status === 'passed';
+    && gatePasses(state.gates.AUTHOR_FULL_STILL_SEQUENCE.status)
+    && gatePasses(state.gates.VERIFY_FULL_STILL_SEQUENCE.status);
   if (!stillSequenceReady) return {
     ok: false,
     status: 'failed',
@@ -264,6 +494,13 @@ export async function createAgentMotionWorkingRevision(input: {
     runId: input.runId,
     diagnostics: [agentError('production_run_not_found', `No production run "${input.runId}" exists.`)],
   };
+  const contextErrors = assertGateRunContext(stored);
+  if (contextErrors.length > 0) return {
+    ok: false,
+    status: 'failed',
+    runId: input.runId,
+    diagnostics: contextErrors,
+  };
   const approval = stored.gateState.approvedLayoutRevision;
   if (!stored.gateState.stillLayoutApproved || !approval) return {
     ok: false,
@@ -283,8 +520,6 @@ export async function createAgentMotionWorkingRevision(input: {
     gateState: stored.gateState,
     diagnostics: verification.errors.map((message) => agentError('still_layout_changed', message)),
   };
-  // Run the pure clone guard as part of the adapter before creating the
-  // persisted branch. The clone operation never loads the branch as current.
   createMotionWorkingRevision({
     project,
     approval,
@@ -339,9 +574,6 @@ export function inspectAgentStillLayoutApproval(input: { runId?: string }) {
   };
 }
 
-/** Internal browser-run adapter for advancing gates after a real compiler or
- * renderer phase has completed. External callers should use the named API
- * operations instead of mutating gate state directly. */
 export function updateAgentProductionGateState(
   runId: string,
   updater: (state: ProductionGateState) => ProductionGateState,
@@ -365,5 +597,12 @@ export function inspectAgentProductionGates(input: { runId?: string }) {
 
 export function resetAgentProductionGateRunsForTests(): void {
   runs.clear();
+  gateRunGeneration = 0;
   if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY);
 }
+
+export function __testOnlySetGateRun(runId: string, value: StoredProductionGateRun): void {
+  runs.set(runId, value);
+}
+
+export type { StoredProductionGateRun, ProductionCanaryPlan };

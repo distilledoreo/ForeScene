@@ -175,11 +175,30 @@ export interface ProductionLocationDefinition {
   cameraRecipeIds?: string[];
 }
 
-export interface ShotPresenceContract {
+export interface ShotPresenceState {
   expectedVisibleObjectIds: string[];
   expectedVisibleGroupIds: string[];
+}
+
+export interface ShotPresenceTimelineState extends ShotPresenceState {
+  timeSeconds: number;
+}
+
+export interface ShotPresenceTransition {
+  entityId: string;
+  from: boolean;
+  to: boolean;
+}
+
+export interface ShotPresenceContract extends ShotPresenceState {
   /** Defaults to false when omitted by a caller. */
   allowUnspecifiedDynamicObjects: boolean;
+  /** Base visibility at t=0 when timeline keyframes are present. */
+  base?: ShotPresenceState;
+  /** Keyframed expected visibility sampled at or before each timeline time. */
+  timeline?: ShotPresenceTimelineState[];
+  /** Declared visibility transitions valid between timeline samples. */
+  allowedTransitions?: ShotPresenceTransition[];
 }
 
 export interface ShotEnvironmentContract {
