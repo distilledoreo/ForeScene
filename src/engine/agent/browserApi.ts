@@ -18,6 +18,11 @@ import {
   type RenderPixelStats,
 } from '../previs/renderPixelStats';
 import { buildContactSheetSpec } from '../previs/contactSheet';
+import {
+  clearPoseApplicationReports,
+  ensurePoseableCharactersForProject,
+  getPoseApplicationReports,
+} from '../poseableCharacter';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -1903,6 +1908,24 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       }
 
       try {
+        await ensurePoseableCharactersForProject(project);
+      } catch (error) {
+        return {
+          ok: false,
+          status: 'failed',
+          shotId: input.shotId,
+          revisionId: revisionAtStart,
+          width,
+          height,
+          diagnostics: [agentError(
+            'poseable_character_assets_missing',
+            error instanceof Error ? error.message : String(error),
+          )],
+        };
+      }
+      clearPoseApplicationReports();
+
+      try {
         let pngDataUrl: string;
         let renderedWidth: number;
         let renderedHeight: number;
@@ -1986,6 +2009,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         const qualityDiagnostics = rejection
           ? [agentError(rejection.code, rejection.message)]
           : [];
+        const poseApplications = getPoseApplicationReports();
+        const poseFailures = poseApplications.filter((report) => !report.poseApplied);
+        qualityDiagnostics.push(...poseFailures.map((report) => agentError(
+          report.diagnostic.code,
+          report.diagnostic.message,
+        )));
 
         if (depth) {
           depth.grayscalePixelRatio = await grayscalePixelRatioFromDataUrl(pngDataUrl);
@@ -2004,10 +2033,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           hasArtifact: Boolean(artifact),
           diagnostics: qualityDiagnostics,
         });
+        const finalStatus = poseFailures.length > 0 ? 'failed' : status;
 
         return {
-          ok: deriveOperationOk(status),
-          status,
+          ok: deriveOperationOk(finalStatus),
+          status: finalStatus,
           shotId: input.shotId,
           revisionId: revisionNow,
           width: renderedWidth,
@@ -2024,6 +2054,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           content,
           depth,
           source,
+          poseApplications,
           diagnostics: qualityDiagnostics,
         };
       } catch (error) {

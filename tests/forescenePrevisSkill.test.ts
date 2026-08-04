@@ -19,7 +19,7 @@ import {
 import { parsePrevisProductionManifest } from '../src/engine/previs/manifestValidation';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const skillRoot = path.join(repoRoot, '.grok', 'skills', 'forescene-previs');
+const skillRoot = path.join(repoRoot, 'skills', 'forescene-previs');
 const skillPath = path.join(skillRoot, 'SKILL.md');
 const productionManifestPath = path.join(skillRoot, 'references', 'production-manifest.md');
 const shotTemplatesPath = path.join(skillRoot, 'references', 'shot-templates.md');

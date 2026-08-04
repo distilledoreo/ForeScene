@@ -3,6 +3,8 @@ import type {
   AssetRegistry,
   HumanJointId,
   HumanPose,
+  LocationProject,
+  PoseableRigAsset,
   PoseableCharacterSource,
   SceneObject,
 } from '../domain/types';
@@ -50,6 +52,37 @@ export interface PoseableCharacter {
   applyPose(instance: THREE.Object3D, pose: HumanPose | undefined): void;
 }
 
+export interface PoseableCharacterInstance {
+  objectId: string;
+  character: PoseableCharacter;
+  instance: THREE.Object3D;
+  sourceAssetId?: string;
+  rigAssetId?: string;
+  rigId?: string;
+  joints: readonly PoseableJoint[];
+  semanticJointMapping?: Partial<Record<HumanJointId, string>>;
+  markerData?: PoseableRigAsset['markers'];
+  bindMatrices?: PoseableRigAsset['bindMatrices'];
+}
+
+export type PoseApplicationDiagnosticCode =
+  | 'pose_applied'
+  | 'no_pose_override'
+  | 'pose_character_unresolved'
+  | 'pose_character_not_ready'
+  | 'pose_joint_mapping_missing'
+  | 'pose_application_failed';
+
+export interface PoseApplicationReport {
+  objectId?: string;
+  poseApplied: boolean;
+  source: 'live_registration' | 'hydrated_asset' | 'none';
+  diagnostic: {
+    code: PoseApplicationDiagnosticCode;
+    message: string;
+  };
+}
+
 export function getPoseableCharacterSource(
   object: Pick<SceneObject, 'type' | 'poseableCharacter'>,
 ): PoseableCharacterSource | undefined {
@@ -58,7 +91,7 @@ export function getPoseableCharacterSource(
 
 export function resolvePoseableCharacter(
   source: PoseableCharacterSource | undefined,
-  _assets?: AssetRegistry,
+  assets?: AssetRegistry,
 ): PoseableCharacter | undefined {
   if (!source) return undefined;
   if (source.kind === 'builtin') {
@@ -66,23 +99,38 @@ export function resolvePoseableCharacter(
     return builtinPoseableCharacters.get(source.characterId);
   }
   if (source.kind === 'importedRig') {
-    return importedRigPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
+    const key = `${source.assetId}:${source.rigId}`;
+    let character = importedRigPoseableCharacters.get(key);
+    if (!character && assets) {
+      hydratePoseableCharacters(assets, 'importedRig');
+      character = importedRigPoseableCharacters.get(key);
+    }
+    return character;
   }
   // Adapters are registered at import time and re-hydrated on project parse /
   // ensureAutoriggedCharactersForProject (see autoriggedPoseableCharacter.ts).
-  return autoriggedPoseableCharacters.get(`${source.assetId}:${source.rigId}`);
+  const key = `${source.assetId}:${source.rigId}`;
+  let character = autoriggedPoseableCharacters.get(key);
+  if (!character && assets) {
+    hydratePoseableCharacters(assets, 'autorigged');
+    character = autoriggedPoseableCharacters.get(key);
+  }
+  return character;
 }
 
 export function resolvePoseableCharacterForObject(
-  object: Pick<SceneObject, 'type' | 'poseableCharacter'>,
+  object: Pick<SceneObject, 'type' | 'poseableCharacter'> & Partial<Pick<SceneObject, 'id'>>,
   assets?: AssetRegistry,
 ): PoseableCharacter | undefined {
+  const live = object.id ? poseableCharacterInstances.get(object.id) : undefined;
+  if (live && (live.character.isReady() || !assets)) return live.character;
   return resolvePoseableCharacter(getPoseableCharacterSource(object), assets);
 }
 
 const builtinPoseableCharacters = new Map<string, PoseableCharacter>();
 const autoriggedPoseableCharacters = new Map<string, PoseableCharacter>();
 const importedRigPoseableCharacters = new Map<string, PoseableCharacter>();
+const poseableCharacterInstances = new Map<string, PoseableCharacterInstance>();
 
 /** Register the built-in mannequin adapter (called from builtinMannequinCharacter). */
 export function registerBuiltinPoseableCharacter(
@@ -109,20 +157,194 @@ export function registerImportedRigPoseableCharacter(
   importedRigPoseableCharacters.set(`${assetId}:${rigId}`, character);
 }
 
+/** Keep the currently rendered instance available to read evaluated joint transforms. */
+export function registerPoseableCharacterInstance(
+  objectId: string,
+  character: PoseableCharacter,
+  instance: THREE.Object3D,
+  metadata: {
+    object?: Pick<SceneObject, 'type' | 'poseableCharacter'>;
+    assets?: AssetRegistry;
+  } = {},
+): void {
+  const source = metadata.object ? getPoseableCharacterSource(metadata.object) : undefined;
+  const rigAsset = source && source.kind !== 'builtin'
+    ? metadata.assets?.assets[source.assetId]
+    : undefined;
+  const rig = rigAsset?.metadata?.poseableRig as PoseableRigAsset | undefined;
+  let joints: readonly PoseableJoint[] = [];
+  try {
+    joints = character.getJoints(instance);
+  } catch {
+    joints = [];
+  }
+  poseableCharacterInstances.set(objectId, {
+    objectId,
+    character,
+    instance,
+    ...(rig?.originalSourceAssetId || rig?.sourceMeshAssetId
+      ? { sourceAssetId: rig.originalSourceAssetId ?? rig.sourceMeshAssetId } : {}),
+    ...(source && source.kind !== 'builtin' ? { rigAssetId: source.assetId, rigId: source.rigId } : {}),
+    joints,
+    ...(rig?.importedRigBinding?.boneMap ? { semanticJointMapping: rig.importedRigBinding.boneMap } : {}),
+    ...(rig?.markers ? { markerData: rig.markers } : {}),
+    ...(rig?.bindMatrices ? { bindMatrices: rig.bindMatrices } : {}),
+  });
+}
+
+export function getPoseableCharacterInstance(objectId: string): PoseableCharacterInstance | undefined {
+  return poseableCharacterInstances.get(objectId);
+}
+
+export function resetPoseableCharacterInstancesForTests(): void {
+  poseableCharacterInstances.clear();
+}
+
+const poseableCharacterHydrators: Partial<Record<PoseableCharacterSource['kind'], (assets: AssetRegistry) => void>> = {};
+
+export function registerPoseableCharacterHydrator(
+  kind: PoseableCharacterSource['kind'],
+  hydrate: (assets: AssetRegistry) => void,
+): void {
+  poseableCharacterHydrators[kind] = hydrate;
+}
+
+function hydratePoseableCharacters(
+  assets: AssetRegistry,
+  kind: PoseableCharacterSource['kind'],
+): void {
+  poseableCharacterHydrators[kind]?.(assets);
+}
+
+const poseApplicationReports = new Map<string, PoseApplicationReport>();
+
+export function clearPoseApplicationReports(): void {
+  poseApplicationReports.clear();
+}
+
+export function getPoseApplicationReports(): PoseApplicationReport[] {
+  return [...poseApplicationReports.values()];
+}
+
+/** Ensure persisted saved-rig/autorig adapters are hydrated before a render rebuilds the scene. */
+export async function ensurePoseableCharactersForProject(
+  project: Pick<LocationProject, 'scene' | 'assets'>,
+): Promise<void> {
+  const [{ ensureAutoriggedCharactersForProject }, { ensureImportedRiggedCharactersForProject }] = await Promise.all([
+    import('./autoriggedPoseableCharacter'),
+    import('./importedRiggedPoseableCharacter'),
+  ]);
+  await Promise.all([
+    ensureAutoriggedCharactersForProject(project),
+    ensureImportedRiggedCharactersForProject(project),
+  ]);
+  const poseableObjects = project.scene.objects.filter((object) => (
+    object.poseableCharacter?.kind === 'autorigged'
+    || object.poseableCharacter?.kind === 'importedRig'
+  ));
+  for (const object of poseableObjects) {
+    const character = resolvePoseableCharacterForObject(object, project.assets);
+    if (!character) {
+      throw new Error(`Poseable character ${object.id} could not be hydrated from persisted assets.`);
+    }
+    await character.ensureLoaded();
+    if (!character.isReady()) {
+      throw new Error(`Poseable character ${object.id} remained unready after hydrated source loading.`);
+    }
+  }
+}
+
+function reportPoseApplication(result: PoseApplicationReport): PoseApplicationReport {
+  if (result.objectId) poseApplicationReports.set(result.objectId, result);
+  return result;
+}
+
 export const SKINNED_MESHES_USERDATA_KEY = 'panorefSkinnedMeshes';
 
 export function applyHumanPoseToObject3D(
   instance: THREE.Object3D,
-  object: Pick<SceneObject, 'type' | 'poseableCharacter' | 'humanPose'>,
-): void {
-  const character = resolvePoseableCharacterForObject(object);
-  if (!character) return;
-  if (!character.isReady()) return;
-  character.bindInstance(instance);
-  character.applyPose(instance, object.humanPose);
-  // Demand-rendered viewports may not tick; force skinned bone matrices once here.
-  // Adapters must not also traverse/update skeletons (single owner).
-  updateSkinnedMeshes(instance);
+  object: Pick<SceneObject, 'type' | 'poseableCharacter' | 'humanPose'> & Partial<Pick<SceneObject, 'id'>>,
+  assets?: AssetRegistry,
+): PoseApplicationReport | undefined {
+  if (!object.humanPose) return undefined;
+  const registered = object.id ? poseableCharacterInstances.get(object.id) : undefined;
+  const character = resolvePoseableCharacterForObject(object, assets);
+  const usingLiveRegistration = Boolean(registered && character === registered.character);
+  const source = usingLiveRegistration ? 'live_registration' : character ? 'hydrated_asset' : 'none';
+  if (!character) {
+    return reportPoseApplication({
+      objectId: object.id,
+      poseApplied: false,
+      source,
+      diagnostic: {
+        code: 'pose_character_unresolved',
+        message: `Pose override for ${object.id} could not resolve its hydrated poseable character from live registration or persisted assets.`,
+      },
+    });
+  }
+  if (!character.isReady()) {
+    return reportPoseApplication({
+      objectId: object.id,
+      poseApplied: false,
+      source,
+      diagnostic: {
+        code: 'pose_character_not_ready',
+        message: `Poseable character ${object.id} resolved, but its hydrated source skeleton is not ready.`,
+      },
+    });
+  }
+  try {
+    character.bindInstance(instance);
+    const joints = character.getJoints(instance);
+    const requestedJoints = Object.keys(object.humanPose.joints) as HumanJointId[];
+    const availableJoints = new Set(joints.map((joint) => joint.id));
+    const missingJoints = requestedJoints.filter((jointId) => !availableJoints.has(jointId));
+    if (requestedJoints.length > 0 && joints.length === 0) {
+      return reportPoseApplication({
+        objectId: object.id,
+        poseApplied: false,
+        source,
+        diagnostic: {
+          code: 'pose_joint_mapping_missing',
+          message: `Pose override for ${object.id} has no hydrated semantic bone mapping.`,
+        },
+      });
+    }
+    character.applyPose(instance, object.humanPose);
+    // Demand-rendered viewports may not tick; force skinned bone matrices once here.
+    // Adapters must not also traverse/update skeletons (single owner).
+    updateSkinnedMeshes(instance);
+    if (missingJoints.length > 0) {
+      return reportPoseApplication({
+        objectId: object.id,
+        poseApplied: false,
+        source,
+        diagnostic: {
+          code: 'pose_joint_mapping_missing',
+          message: `Pose override for ${object.id} references unmapped semantic joints: ${missingJoints.join(', ')}.`,
+        },
+      });
+    }
+    return reportPoseApplication({
+      objectId: object.id,
+      poseApplied: true,
+      source,
+      diagnostic: {
+        code: 'pose_applied',
+        message: `Applied persisted semantic pose to ${object.id}.`,
+      },
+    });
+  } catch (error) {
+    return reportPoseApplication({
+      objectId: object.id,
+      poseApplied: false,
+      source,
+      diagnostic: {
+        code: 'pose_application_failed',
+        message: `Failed to apply pose override for ${object.id}: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    });
+  }
 }
 
 /** Single owner of skeleton matrix updates after pose apply. Prefer cached mesh list. */

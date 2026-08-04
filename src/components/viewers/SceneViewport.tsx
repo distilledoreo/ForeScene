@@ -537,7 +537,9 @@ export function SceneViewport({
     const object = selectedId
       ? projectRef.current.scene.objects.find((item) => item.id === selectedId)
       : undefined;
-    const character = object ? resolvePoseableCharacterForObject(object) : undefined;
+    const character = object
+      ? resolvePoseableCharacterForObject(object, projectRef.current.assets)
+      : undefined;
 
     if (!poseActive || !object || !character) {
       poseJointsRef.current = [];
@@ -580,7 +582,7 @@ export function SceneViewport({
 
     character.bindInstance(instance);
     instance.updateMatrixWorld(true);
-    applyHumanPoseToObject3D(instance, object);
+    applyHumanPoseToObject3D(instance, object, projectRef.current.assets);
     const joints = character.getJoints(instance).filter((joint) => (
       (HUMAN_POSE_EDITABLE_JOINT_IDS as readonly string[]).includes(joint.id)
     ));
@@ -2304,6 +2306,7 @@ export function SceneViewport({
       nodes: sceneObjectNodesRef.current,
       objects: project.scene.objects,
       previous: objectSyncSnapshotsRef.current,
+      assets: project.assets,
     });
     objectSyncSnapshotsRef.current = nextPrevious;
 

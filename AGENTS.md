@@ -19,7 +19,13 @@ Preferred commands:
 - `npm run agent:contact-sheet`
 - `npm run agent:package`
 
-See `.grok/skills/forescene-previs/SKILL.md` and `docs/previs-production-manifest.md`.
+For ForeScene previs or production operation, read `skills/forescene-previs/SKILL.md`.
+Harness-specific copies under `.grok/`, `.claude/`, and `.kilo/` are generated
+adapters; do not edit them directly. Do not edit ForeScene source while
+operating the app unless the user explicitly authorizes switching from
+production operation to application development.
+
+See `docs/previs-production-manifest.md` for the manifest reference.
 
 **Developing ForeScene** — the user wants you to change the application itself. Normal source-code development is allowed; follow the validation levels below.
 

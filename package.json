@@ -16,6 +16,8 @@
     "test:all": "vitest run --config vitest.all.config.ts",
     "test:changed": "vitest run --config vitest.fast.config.ts --changed=origin/main",
     "goal:smoke": "node scripts/goal-workflow-smoke.mjs",
+    "sync:agent-skills": "node scripts/sync-agent-skills.mjs",
+    "verify:agent-skills": "node scripts/verify-agent-skills.mjs",
     "agent:inspect": "tsx scripts/agent/cli.ts inspect",
     "agent:help": "tsx scripts/agent/cli.ts help",
     "agent:analyze-character": "tsx scripts/agent/cli.ts analyze-character",

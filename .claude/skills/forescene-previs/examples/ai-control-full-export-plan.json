@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "description": "Configure full AI-control export matrix",
+  "commands": [
+    {
+      "op": "export.sceneDefaults.patch",
+      "patch": {
+        "peopleExportMode": "both",
+        "characterPass": {
+          "enabled": true,
+          "includeStill": true,
+          "includeMotion": true,
+          "motionFormat": "both",
+          "backgroundColor": "#00FF00",
+          "includeAttachedProps": true
+        },
+        "includeViewport": true,
+        "includeProjectedViewport": true,
+        "includeProjectedCameraMoveReferenceFrames": true,
+        "includeProjectedCameraMoveVideo": true,
+        "includeCameraMoveVideo": true,
+        "includeCameraMoveReferenceFrames": true,
+        "depth": {
+          "enabled": true,
+          "includeViewportStill": true,
+          "includeReferenceFrames": true,
+          "includeCameraMoveVideo": true,
+          "rangeMode": "auto",
+          "invert": false
+        }
+      }
+    }
+  ]
+}

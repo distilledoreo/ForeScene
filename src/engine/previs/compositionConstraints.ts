@@ -31,6 +31,9 @@ export type CompositionConstraintDiagnosticCode =
   | 'composition_entity_missing'
   | 'composition_constraint_out_of_tolerance';
 
+/** Normalized comparison epsilon for point/range values (about one pixel at 1k). */
+export const COMPOSITION_NUMERIC_EPSILON = 0.001;
+
 export interface CompositionConstraintDiagnostic {
   code: CompositionConstraintDiagnosticCode;
   message: string;
@@ -44,11 +47,18 @@ export interface CompositionEntityProjection {
   entityId: string;
   objectIds: string[];
   bounds?: NormalizedRect;
+  bodyBounds?: NormalizedRect;
+  assemblyBounds?: NormalizedRect;
   center?: Vec2;
   coverage?: number;
+  bodyCoverage?: number;
+  assemblyCoverage?: number;
   visibleFraction?: number;
   headPoint?: Vec2;
   facePoint?: Vec2;
+  footPoint?: Vec2;
+  feetY?: number;
+  completeAssemblyInFrame?: boolean;
   occlusionRatio?: number;
 }
 
@@ -139,6 +149,17 @@ function pointFromSubject(
   ];
 }
 
+function footPointFromSubject(telemetry: ShotCompositionSubject[]): Vec2 | undefined {
+  const points = telemetry
+    .map((entry) => entry.footPoint)
+    .filter((point): point is { x: number; y: number; inFrame: boolean } => Boolean(point));
+  if (points.length === 0) return undefined;
+  return [
+    points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    points.reduce((sum, point) => sum + point.y, 0) / points.length,
+  ];
+}
+
 function resolveEntityProjection(
   project: LocationProject,
   shot: Shot,
@@ -153,9 +174,13 @@ function resolveEntityProjection(
   });
   const width = shot.exportSettings.width || 1280;
   const height = shot.exportSettings.height || 720;
-  const bounds = unionRect(entries.map((entry) => rectFromBounds(entry.bounds, width, height)));
-  const coverage = entries.length > 0
-    ? entries.reduce((sum, entry) => sum + entry.bounds.areaCoverage, 0)
+  const bodyBounds = unionRect(entries.map((entry) => rectFromBounds(entry.bodyBounds ?? entry.bounds, width, height)));
+  const assemblyBounds = unionRect(entries.map((entry) => rectFromBounds(entry.assemblyBounds ?? entry.bounds, width, height)));
+  const bodyCoverage = entries.length > 0
+    ? entries.reduce((sum, entry) => sum + (entry.bodyCoverage ?? entry.bounds.areaCoverage), 0)
+    : 0;
+  const assemblyCoverage = entries.length > 0
+    ? entries.reduce((sum, entry) => sum + (entry.assemblyCoverage ?? entry.bounds.areaCoverage), 0)
     : 0;
   const visibleFraction = entries.length > 0
     ? entries.reduce((sum, entry) => sum + Math.max(0, 1 - (entry.occlusionRatio ?? 0)), 0) / entries.length
@@ -168,11 +193,16 @@ function resolveEntityProjection(
     projection: {
       entityId,
       objectIds,
-      ...(bounds ? { bounds, center: centerOf(bounds) } : {}),
-      coverage,
+      ...(bodyBounds ? { bounds: bodyBounds, bodyBounds, center: centerOf(bodyBounds) } : {}),
+      ...(assemblyBounds ? { assemblyBounds } : {}),
+      coverage: bodyCoverage,
+      bodyCoverage,
+      assemblyCoverage,
       visibleFraction,
       ...(pointFromSubject(telemetry, 'headTop') ? { headPoint: pointFromSubject(telemetry, 'headTop') } : {}),
       ...(pointFromSubject(telemetry, 'eyes') ? { facePoint: pointFromSubject(telemetry, 'eyes') } : {}),
+      ...(footPointFromSubject(telemetry) ? { footPoint: footPointFromSubject(telemetry), feetY: footPointFromSubject(telemetry)?.[1] } : {}),
+      completeAssemblyInFrame: entries.length > 0 && entries.every((entry) => entry.completeAssemblyInFrame === true),
       ...(entries.length > 0 ? {
         occlusionRatio: entries.reduce((sum, entry) => sum + (entry.occlusionRatio ?? 0), 0) / entries.length,
       } : {}),
@@ -182,8 +212,8 @@ function resolveEntityProjection(
 
 function rangeError(value: number | undefined, range: [number, number] | undefined): number {
   if (value === undefined || !range) return 0;
-  if (value < range[0]!) return range[0]! - value;
-  if (value > range[1]!) return value - range[1]!;
+  if (value < range[0]! - COMPOSITION_NUMERIC_EPSILON) return range[0]! - value - COMPOSITION_NUMERIC_EPSILON;
+  if (value > range[1]! + COMPOSITION_NUMERIC_EPSILON) return value - range[1]! - COMPOSITION_NUMERIC_EPSILON;
   return 0;
 }
 
@@ -199,7 +229,7 @@ function rectError(actual: NormalizedRect | undefined, expected: NormalizedRect 
 
 function pointError(actual: Vec2 | undefined, expected: Vec2 | undefined): number {
   if (!actual || !expected) return 1;
-  return Math.hypot(actual[0] - expected[0], actual[1] - expected[1]);
+  return Math.max(0, Math.hypot(actual[0] - expected[0], actual[1] - expected[1]) - COMPOSITION_NUMERIC_EPSILON);
 }
 
 function addConstraintError(
@@ -328,6 +358,28 @@ export function inspectShotCompositionError(
         weight: weights.facePoint ?? 1,
       });
     }
+    if (subject.expectedFootPoint) {
+      totalWeightedError += addConstraintError(diagnostics, {
+        entityId: subject.entityId,
+        message: `Subject "${subject.entityId}" foot point is outside the reference tolerance.`,
+        expected: subject.expectedFootPoint,
+        measured: resolved.footPoint,
+        error: pointError(resolved.footPoint, subject.expectedFootPoint),
+        tolerance,
+        weight: weights.subjectPosition ?? 1,
+      });
+    }
+    if (subject.expectedFeetY) {
+      totalWeightedError += addConstraintError(diagnostics, {
+        entityId: subject.entityId,
+        message: `Subject "${subject.entityId}" feet Y is outside the reference range.`,
+        expected: subject.expectedFeetY,
+        measured: resolved.feetY,
+        error: rangeError(resolved.feetY, subject.expectedFeetY),
+        tolerance: 0,
+        weight: weights.subjectPosition ?? 1,
+      });
+    }
     if (subject.expectedCoverage) {
       totalWeightedError += addConstraintError(diagnostics, {
         entityId: subject.entityId,
@@ -348,6 +400,17 @@ export function inspectShotCompositionError(
         error: Math.abs((resolved.visibleFraction ?? 0) - subject.expectedVisibility),
         tolerance,
         weight: weights.occlusion ?? 1,
+      });
+    }
+    if (subject.completeAssemblyInFrame && !resolved.completeAssemblyInFrame) {
+      totalWeightedError += addConstraintError(diagnostics, {
+        entityId: subject.entityId,
+        message: `Subject "${subject.entityId}" complete assembly is cropped.`,
+        expected: true,
+        measured: resolved.completeAssemblyInFrame,
+        error: 1,
+        tolerance: 0,
+        weight: weights.crop ?? 1,
       });
     }
     if (subject.screenRegion && resolved.center) {

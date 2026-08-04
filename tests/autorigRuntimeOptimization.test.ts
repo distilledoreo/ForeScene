@@ -24,6 +24,7 @@ import {
   skinBufferCacheKey,
   skinnedPrototypeCacheKey,
   SHARED_SKINNED_MATERIAL_USERDATA,
+  loadSkinWeightBuffersFromUri,
 } from '../src/engine/autorigSkinnedMesh';
 import {
   buildAutorigRigInventoryKey,
@@ -90,6 +91,23 @@ describe('autorig skin persist / migrate (compact metadata)', () => {
     expect(next.skin?.weights).toBeUndefined();
     expect(() => assertCompactPoseableSkin(next.skin)).not.toThrow();
     expect(poseableSkinExceedsInlineBudget(next.skin)).toBe(false);
+  });
+
+  it('loads poseable skin payloads through legacy local asset URI prefixes', async () => {
+    const written = await writeSkinWeightBinaryAsset({
+      influencesPerVertex: 1,
+      indices: new Uint16Array([0, 0]),
+      weights: new Float32Array([1, 1]),
+      jointOrder: ['hips'],
+    });
+
+    const loaded = await loadSkinWeightBuffersFromUri(
+      written.uri.replace('panoref-idb:', 'panoref-asset:'),
+      ['hips'],
+    );
+
+    expect(loaded.indices).toEqual(new Uint16Array([0, 0]));
+    expect(loaded.weights).toEqual(new Float32Array([1, 1]));
   });
 
   it('serialize strips legacy dual-storage inline arrays while keeping skinAssetId', () => {

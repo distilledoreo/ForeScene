@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { AssetRegistry, HumanJointId, PoseableRigAsset, Vec3 } from '../domain/types';
 import { HUMAN_JOINT_IDS, HUMAN_JOINT_LABELS } from './humanPose';
 import { HUMAN_JOINT_PARENT } from './humanoidSkeleton';
-import { MODEL_ASSET_URI_PREFIX } from './importedMeshConstants';
+import { getModelAssetStorageKey } from './importedMeshConstants';
 import { getModelAsset } from './modelAssetStore';
 import type { SkinWeightBuffers } from './autorigSkinWeights';
 
@@ -145,10 +145,10 @@ export async function loadSkinWeightBuffers(
 }
 
 export async function loadSkinWeightBuffersFromUri(uri: string, jointOrder: HumanJointId[]): Promise<SkinWeightBuffers> {
-  if (!uri.startsWith(MODEL_ASSET_URI_PREFIX)) {
+  const key = getModelAssetStorageKey({ uri });
+  if (!key) {
     throw new Error('Skin payload URI must be a local model asset.');
   }
-  const key = uri.slice(MODEL_ASSET_URI_PREFIX.length);
   const bytes = await getModelAsset(key);
   if (!bytes) throw new Error('Skin payload is missing from local storage.');
   const view = new DataView(bytes);

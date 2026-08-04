@@ -226,9 +226,12 @@ export interface ShotCompositionSubjectConstraint {
   expectedBounds?: NormalizedRect;
   headPoint?: Vec2;
   facePoint?: Vec2;
+  expectedFootPoint?: Vec2;
+  expectedFeetY?: [number, number];
   screenRegion?: 'left' | 'center' | 'right';
   expectedCoverage?: [number, number];
   expectedVisibility?: number;
+  completeAssemblyInFrame?: boolean;
 }
 
 export interface ShotCompositionPropConstraint {

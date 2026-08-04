@@ -32,6 +32,7 @@ import type { ExportSettingFieldPath } from '../exportConfiguration';
 import type { PackageExportPhase } from '../packageExport';
 import type { VideoResolutionPresetId } from '../videoPresets';
 import type { SceneContentMode } from '../shotSceneState';
+import type { PoseApplicationReport } from '../poseableCharacter';
 import type { AgentDiagnostic } from './diagnostics';
 import type { SavedRigCompatibilityAnalysis } from '../poseableCharacterImport';
 import type { ImportBudgetEstimate } from '../modelImportBudget';
@@ -1405,6 +1406,7 @@ export interface AgentRenderShotFrameResult {
   appearance?: AgentRenderShotFrameInput['appearance'];
   peopleVariant?: AgentRenderShotFrameInput['peopleVariant'];
   content?: AgentRenderShotFrameInput['content'];
+  poseApplications?: PoseApplicationReport[];
   depth?: {
     encoding: 'linear-camera-depth';
     nearMeters: number;

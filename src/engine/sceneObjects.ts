@@ -15,6 +15,7 @@ import { createHumanMannequinObject } from './humanMannequinModel';
 import './builtinMannequinCharacter';
 import {
   applyHumanPoseToObject3D,
+  registerPoseableCharacterInstance,
   resolvePoseableCharacterForObject,
 } from './poseableCharacter';
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
@@ -472,6 +473,7 @@ export function createObject3D(
   assets?: AssetRegistry,
 ): THREE.Object3D {
   let node: THREE.Object3D;
+  let character: ReturnType<typeof resolvePoseableCharacterForObject>;
   const material = resolveObjectMaterial(object, theme);
   const style = resolveSurfaceStyle(object);
   const [w, h, d] = object.dimensions;
@@ -515,7 +517,7 @@ export function createObject3D(
       break;
     case 'human_dummy': {
       const poseMaterial = style === 'default' ? mannequinMaterialByTheme[theme] : material;
-      const character = resolvePoseableCharacterForObject(object, assets);
+      character = resolvePoseableCharacterForObject(object, assets);
       node = character
         ? character.createInstance(object, poseMaterial)
         : createHumanMannequinObject(object, poseMaterial);
@@ -538,7 +540,10 @@ export function createObject3D(
   applySceneObjectTransform(node, object.transform, {
     applyScale: !sceneObjectUsesProceduralScale(object.type),
   });
-  applyHumanPoseToObject3D(node, object);
+  applyHumanPoseToObject3D(node, object, assets);
+  if (character) {
+    registerPoseableCharacterInstance(object.id, character, node, { object, assets });
+  }
   return node;
 }
 

@@ -14,6 +14,7 @@ import {
   applySemanticPoseToBones,
   captureBoneRests,
   registerImportedRigPoseableCharacter,
+  registerPoseableCharacterHydrator,
   type BoneRestPose,
   type PoseableCharacter,
   type PoseableJoint,
@@ -282,6 +283,8 @@ export function hydrateImportedRiggedCharactersFromAssets(assets: AssetRegistry)
   if (registered > 0) notifyReady();
   return registered;
 }
+
+registerPoseableCharacterHydrator('importedRig', hydrateImportedRiggedCharactersFromAssets);
 
 export async function ensureImportedRiggedCharactersForProject(project: {
   scene: { objects: SceneObject[] };

@@ -697,6 +697,7 @@ async function renderShotCameraMoveMp4Deterministic(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
+                assets: (sourceProject ?? project).assets,
                 contentMode,
                 includeCharacterAttachments,
               }
@@ -935,6 +936,7 @@ async function renderShotCameraMoveMp4QuickPreview(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
+                assets: (sourceProject ?? project).assets,
                 contentMode,
                 includeCharacterAttachments,
               }
@@ -1038,6 +1040,7 @@ export function renderCameraMoveFrame(
     objectAnimation?: {
       shot: Pick<Shot, 'objectOverrides'>;
       baseObjects: LocationProject['scene']['objects'];
+      assets?: LocationProject['assets'];
       contentMode?: SceneContentMode;
       includeCharacterAttachments?: boolean;
       /** @deprecated Prefer contentMode. */
@@ -1072,9 +1075,10 @@ export function renderCameraMoveFrame(
         timeSeconds,
         normalized.objectAnimation.shot.objectOverrides,
         normalized.objectAnimation.baseObjects,
-      ),
-      normalized.objectAnimation.baseObjects,
-      {
+       ),
+       normalized.objectAnimation.baseObjects,
+       normalized.objectAnimation.assets,
+       {
         contentMode: normalized.objectAnimation.contentMode
           ?? (normalized.objectAnimation.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene'),
         includeCharacterAttachments: normalized.objectAnimation.includeCharacterAttachments,
@@ -1105,6 +1109,7 @@ export function renderCameraMoveFrame(
 type CameraMoveObjectAnimationOptions = {
   shot: Pick<Shot, 'objectOverrides'>;
   baseObjects: LocationProject['scene']['objects'];
+  assets?: LocationProject['assets'];
   contentMode?: SceneContentMode;
   includeCharacterAttachments?: boolean;
   peopleVariant?: PeopleRenderVariant;
@@ -1141,6 +1146,7 @@ function applyAnimatedObjectOverridesToScene(
   scene: THREE.Scene,
   overrides: ReturnType<typeof interpolateObjectOverrides>,
   baseObjects: LocationProject['scene']['objects'],
+  assets: LocationProject['assets'] | undefined,
   contentOptions: {
     contentMode?: SceneContentMode;
     includeCharacterAttachments?: boolean;
@@ -1160,11 +1166,12 @@ function applyAnimatedObjectOverridesToScene(
       // reverse clean-plate / characters-only rules after the scene is resolved.
       visible: isObjectVisibleForContentMode(base, requestedVisible, contentOptions),
     });
-    applyHumanPoseToObject3D(node, {
-      type: base.type,
-      poseableCharacter: base.poseableCharacter,
-      humanPose: override.humanPose ?? base.humanPose,
-    });
+      applyHumanPoseToObject3D(node, {
+        id: objectId,
+        type: base.type,
+        poseableCharacter: base.poseableCharacter,
+        humanPose: override.humanPose ?? base.humanPose,
+      }, assets);
   }
 }
 
@@ -1866,6 +1873,7 @@ export async function renderCameraMoveFrames(options: {
             ? {
               shot: options.shot,
               baseObjects: options.project.scene.objects,
+              assets: options.project.assets,
               contentMode,
               includeCharacterAttachments,
             }

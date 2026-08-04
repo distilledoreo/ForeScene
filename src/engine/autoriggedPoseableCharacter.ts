@@ -16,6 +16,7 @@ import {
   applySemanticPoseToBones,
   captureBoneRests,
   registerAutoriggedPoseableCharacter,
+  registerPoseableCharacterHydrator,
   type BoneRestPose,
   type PoseableCharacter,
   type PoseableJoint,
@@ -528,6 +529,8 @@ export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): nu
   return registered;
 }
 
+registerPoseableCharacterHydrator('autorigged', hydrateAutoriggedCharactersFromAssets);
+
 /**
  * True when ensure/hydrate would skip adapter re-registration because the
  * rig inventory key is unchanged from the last successful hydrate.
@@ -535,6 +538,54 @@ export function hydrateAutoriggedCharactersFromAssets(assets: AssetRegistry): nu
 export function isAutorigHydrationCurrent(assets: AssetRegistry): boolean {
   return lastHydrationInventoryKey !== ''
     && lastHydrationInventoryKey === buildAutorigRigInventoryKey(assets);
+}
+
+async function ensureRuntimeSkinBuffersForRig(params: {
+  rig: PoseableRigAsset;
+  sourceAssetId: string;
+  assets: AssetRegistry;
+}): Promise<SkinWeightBuffers | undefined> {
+  let existingError: unknown;
+  try {
+    const existing = await ensureSkinBuffersForRig(params.rig, params.assets);
+    if (existing) return existing;
+  } catch (error) {
+    existingError = error;
+  }
+
+  // Portable working copies can retain a saved rig and source mesh while the
+  // generated skin binary is absent. Recover weights in runtime memory from
+  // the hydrated source/marker data rather than mutating the project asset set.
+  if (!params.rig.bindMatrices) {
+    if (existingError) throw existingError;
+    return undefined;
+  }
+  const generated = await generateSkinWeightsForRigAsset({
+    rig: params.rig,
+    sourceAssetId: params.sourceAssetId,
+    assets: params.assets,
+  });
+  const runtimeAssets: AssetRegistry = {
+    ...params.assets,
+    assets: {
+      ...params.assets.assets,
+      [generated.skinAsset.id]: generated.skinAsset,
+      ...(generated.regionAsset ? { [generated.regionAsset.id]: generated.regionAsset } : {}),
+    },
+  };
+  const recovered = await ensureSkinBuffersForRig(generated.rig, runtimeAssets);
+  if (!recovered) {
+    if (existingError) throw existingError;
+    throw new Error(`Unable to recover runtime skin buffers for rig ${params.rig.id}.`);
+  }
+  // The live character shell retains the persisted rig object and cache key.
+  // Alias the recovered buffers under that key without persisting generated ids.
+  setCachedSkinBuffers(skinBufferCacheKey({
+    skinAssetId: params.rig.skin?.skinAssetId,
+    rigId: params.rig.id,
+    rigGenerationVersion: params.rig.rigGenerationVersion,
+  }), recovered);
+  return recovered;
 }
 
 export async function ensureAutoriggedCharactersForProject(
@@ -562,7 +613,7 @@ export async function ensureAutoriggedCharactersForProject(
       seenSources.add(sourceAssetId);
       jobs.push(ensureTemplateLoaded(sourceAssetId, project.assets).catch(() => undefined));
     }
-    if (rig?.skin) {
+    if (rig?.skin && sourceAssetId) {
       const skinKey = skinBufferCacheKey({
         skinAssetId: rig.skin.skinAssetId,
         rigId: rig.id,
@@ -571,7 +622,11 @@ export async function ensureAutoriggedCharactersForProject(
       if (!seenSkins.has(skinKey)) {
         seenSkins.add(skinKey);
         jobs.push(
-          ensureSkinBuffersForRig(rig, project.assets)
+          ensureRuntimeSkinBuffersForRig({
+            rig,
+            sourceAssetId,
+            assets: project.assets,
+          })
             .then(() => {
               // Warm skinned prototype once buffers are ready.
               if (!templates.has(sourceAssetId ?? '') || !rig.bindMatrices) return;

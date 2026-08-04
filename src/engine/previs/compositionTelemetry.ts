@@ -2,13 +2,23 @@
  * Per-shot composition telemetry for validation, repair, and Grok feedback.
  */
 
-import type { CameraData, LocationProject, SceneObject, Shot, Vec3 } from '../../domain/types';
+import type {
+  Bounds3,
+  CameraData,
+  HumanJointId,
+  LocationProject,
+  SceneObject,
+  Shot,
+  Vec3,
+} from '../../domain/types';
 import { resolveProjectForShot } from '../shotSceneState';
+import { HUMAN_JOINT_IDS } from '../humanPose';
 import type { PrevisShotDefinition } from './manifest';
 import {
   buildCameraMatrices,
   projectAabb,
   projectHumanLandmarks,
+  projectWorldPoint,
   projectUpperBodyRegion,
   sampleSubjectOcclusion,
   type ProjectedBounds,
@@ -16,10 +26,26 @@ import {
 } from './screenProjection';
 import type { HumanLandmark } from './framingProfiles';
 import { HUMAN_LANDMARK_HEIGHT } from './framingProfiles';
+import {
+  resolvePoseableHumanoidTelemetry,
+  type RigTelemetryLandmarkSource,
+  type RigTelemetryPositionKey,
+} from './poseableRigTelemetry';
 
 export interface ShotCompositionSubject {
   /** Full-body projected AABB (visible occupancy is frame-clamped). */
   bounds: ProjectedBounds;
+  /** Primary anatomical body bounds; accessories are excluded when metadata provides them. */
+  bodyBounds?: ProjectedBounds;
+  /** Complete imported assembly bounds, retained for crop-safety checks. */
+  assemblyBounds?: ProjectedBounds;
+  bodyBoundsSource?: AnatomicalBodyBoundsSource;
+  bodyCoverage?: number;
+  assemblyCoverage?: number;
+  /** Projected contact point from the primary body floor, not the environment floor line. */
+  footPoint?: { x: number; y: number; inFrame: boolean };
+  feetY?: number;
+  completeAssemblyInFrame?: boolean;
   /**
    * Head-and-shoulders region — preferred for OTS / close-up occupancy so
    * offscreen legs cannot inflate coverage.
@@ -30,6 +56,10 @@ export interface ShotCompositionSubject {
     y: number;
     inFrame: boolean;
   }>;
+  landmarkSource?: RigTelemetryLandmarkSource;
+  landmarkConfidence?: number;
+  /** Derived joint anchors are references only and never add visible geometry. */
+  attachmentJoints?: HumanJointId[];
   visible: boolean;
   occlusionRatio?: number;
   faceOccluded?: boolean;
@@ -51,6 +81,38 @@ export interface ShotCompositionTelemetry {
   issues?: string[];
   notes?: string[];
 }
+
+export interface HumanoidTelemetryMetadata {
+  /** Local-space primary body bounds, excluding attached accessories. */
+  primaryBodyBounds?: Bounds3;
+  /** Reliable local-space joint positions when an imported rig exposes them. */
+  reliableJointPositions?: Partial<Record<RigTelemetryPositionKey, Vec3>>;
+  jointsReliable?: boolean;
+}
+
+export type AnatomicalBodyBoundsSource =
+  | 'explicit_body_mesh'
+  | 'evaluated_rig'
+  | 'rig_marker'
+  | 'bounds_fallback'
+  | 'assembly_fallback';
+
+export interface AnatomicalBodyBoundsResolution {
+  bounds: Bounds3;
+  source: AnatomicalBodyBoundsSource;
+}
+
+/** Fallback fractions used only when imported humanoid joint positions are unavailable. */
+export const IMPORTED_HUMANOID_LANDMARK_HEIGHT: Record<HumanLandmark, number> = {
+  feet: 0,
+  knees: 0.28,
+  waist: 0.53,
+  chest: 0.68,
+  shoulders: 0.80,
+  chin: 0.85,
+  eyes: 0.89,
+  headTop: 0.96,
+};
 
 const SOLID_TYPES = new Set([
   'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
@@ -119,7 +181,7 @@ export function buildShotCompositionTelemetry(params: {
       continue;
     }
     indexedObjectIds.add(object.id);
-    subjects[key] = describeSubject(object, matrices, width, height, shot.camera.position, solidBlockersAll);
+    subjects[key] = describeSubject(object, matrices, width, height, shot.camera.position, solidBlockersAll, resolved.assets);
   }
 
   // Index every remaining visible human by name (and id if needed), deduped by object id.
@@ -128,7 +190,7 @@ export function buildShotCompositionTelemetry(params: {
     if (indexedObjectIds.has(person.id)) continue;
     indexedObjectIds.add(person.id);
     const key = subjects[person.name] ? person.id : person.name;
-    subjects[key] = describeSubject(person, matrices, width, height, shot.camera.position, solidBlockersAll);
+    subjects[key] = describeSubject(person, matrices, width, height, shot.camera.position, solidBlockersAll, resolved.assets);
   }
 
   const blockers: ShotCompositionBlocker[] = [];
@@ -189,6 +251,7 @@ export function describeSceneObjectComposition(params: {
     height,
     params.shot.camera.position,
     solidBlockersAll,
+    resolved.assets,
   );
 }
 
@@ -210,21 +273,39 @@ function describeSubject(
   height: number,
   cameraPosition: Vec3,
   solidBlockers: Array<{ objectId: string; min: Vec3; max: Vec3 }>,
+  assets: LocationProject['assets'],
 ): ShotCompositionSubject {
-  const aabb = objectWorldAabb(object);
-  const bounds = projectAabb(aabb, matrices);
-  const heightM = object.dimensions[1] * object.transform.scale[1];
-  const floorY = object.transform.position[1] - heightM / 2;
+  const assemblyAabb = objectWorldAabb(object);
   const isHuman = object.type === 'human_dummy';
+  const importedHumanoid = isImportedHumanoid(object);
+  const rigTelemetry = importedHumanoid
+    ? resolvePoseableHumanoidTelemetry({ object, assets })
+    : undefined;
+  const bodyResolution = resolveAnatomicalBodyBounds({ object, assets, rigTelemetry });
+  const bodyAabb = bodyResolution.bounds;
+  const bounds = projectAabb(assemblyAabb, matrices);
+  const bodyBounds = projectAabb(bodyAabb, matrices);
+  const heightM = object.dimensions[1] * object.transform.scale[1];
+  const bodyHeightM = bodyAabb.max[1] - bodyAabb.min[1];
+  const bodyFloorY = bodyAabb.min[1];
+  const landmarkFractions = importedHumanoid
+    ? IMPORTED_HUMANOID_LANDMARK_HEIGHT
+    : HUMAN_LANDMARK_HEIGHT;
+  const footWorldPoint: Vec3 = [
+    (bodyAabb.min[0] + bodyAabb.max[0]) / 2,
+    bodyFloorY,
+    (bodyAabb.min[2] + bodyAabb.max[2]) / 2,
+  ];
+  const projectedFoot = projectWorldPoint(footWorldPoint, matrices);
   let landmarks: Record<string, { x: number; y: number; inFrame: boolean }> | undefined;
   let upperBodyBounds: ProjectedBounds | undefined;
   if (isHuman) {
-    const floorPos: Vec3 = [object.transform.position[0], floorY, object.transform.position[2]];
-    const projected = projectHumanLandmarks({
-      position: floorPos,
-      height: heightM,
-      matrices,
-    });
+    const floorPos: Vec3 = [footWorldPoint[0], bodyFloorY, footWorldPoint[2]];
+    const projected = importedHumanoid
+      ? rigTelemetry
+        ? projectReliableHumanoidLandmarks(rigTelemetry.positions, matrices)
+        : projectBoundsDerivedHumanoidLandmarks(bodyAabb, matrices)
+      : projectHumanLandmarks({ position: floorPos, height: bodyHeightM || heightM, matrices });
     landmarks = {};
     for (const [name, point] of Object.entries(projected) as Array<[HumanLandmark, ProjectedPoint]>) {
       landmarks[name] = {
@@ -235,17 +316,17 @@ function describeSubject(
     }
     upperBodyBounds = projectUpperBodyRegion({
       position: floorPos,
-      height: heightM,
-      width: object.dimensions[0] * object.transform.scale[0],
-      depth: object.dimensions[2] * object.transform.scale[2],
+      height: bodyHeightM || heightM,
+      width: bodyAabb.max[0] - bodyAabb.min[0],
+      depth: bodyAabb.max[2] - bodyAabb.min[2],
       matrices,
-      bottomFraction: HUMAN_LANDMARK_HEIGHT.shoulders,
-      topFraction: HUMAN_LANDMARK_HEIGHT.headTop,
+      bottomFraction: landmarkFractions.shoulders,
+      topFraction: landmarkFractions.headTop,
     });
   }
 
   const samples = isHuman
-    ? humanOcclusionSamples(object, floorY, heightM)
+    ? humanOcclusionSamples(bodyAabb, bodyFloorY, bodyHeightM || heightM, landmarkFractions)
     : [{ id: 'center', point: [...object.transform.position] as Vec3 }];
 
   const occlusion = sampleSubjectOcclusion({
@@ -257,12 +338,182 @@ function describeSubject(
 
   return {
     bounds,
+    bodyBounds,
+    assemblyBounds: bounds,
+    bodyBoundsSource: bodyResolution.source,
+    bodyCoverage: bodyBounds.areaCoverage,
+    assemblyCoverage: bounds.areaCoverage,
+    footPoint: {
+      x: projectedFoot.x / width,
+      y: projectedFoot.y / height,
+      inFrame: projectedFoot.inFrame,
+    },
+    feetY: projectedFoot.y / height,
+    completeAssemblyInFrame: !bounds.behindCamera && !bounds.clipped && bounds.visible.areaCoverage > 0,
     upperBodyBounds,
     landmarks,
+    ...(importedHumanoid ? {
+      landmarkSource: rigTelemetry?.source ?? 'bounds_fallback',
+      landmarkConfidence: rigTelemetry?.confidence ?? 0.35,
+      ...(rigTelemetry?.attachmentJoints ? { attachmentJoints: rigTelemetry.attachmentJoints } : {}),
+    } : {}),
     visible: !bounds.behindCamera && bounds.areaCoverage > 0.0005,
     occlusionRatio: occlusion.occludedSampleRatio,
     faceOccluded: occlusion.faceOccluded,
   };
+}
+
+function isImportedHumanoid(object: SceneObject): boolean {
+  const metadata = object.metadata?.humanoidTelemetry;
+  return object.type === 'human_dummy' && Boolean(
+    object.poseableCharacter
+    || object.metadata?.humanoid === true
+    || (metadata && typeof metadata === 'object'),
+  );
+}
+
+function humanoidMetadata(object: SceneObject): HumanoidTelemetryMetadata | undefined {
+  const metadata = object.metadata?.humanoidTelemetry;
+  return metadata && typeof metadata === 'object'
+    ? metadata as HumanoidTelemetryMetadata
+    : undefined;
+}
+
+export function resolveAnatomicalBodyBounds(params: {
+  object: SceneObject;
+  assets: LocationProject['assets'];
+  rigTelemetry?: ReturnType<typeof resolvePoseableHumanoidTelemetry>;
+}): AnatomicalBodyBoundsResolution {
+  const explicit = explicitPrimaryBodyBounds(params.object);
+  if (explicit) return { bounds: explicit, source: 'explicit_body_mesh' };
+
+  if (
+    params.rigTelemetry
+    && (params.rigTelemetry.source === 'evaluated_joint' || params.rigTelemetry.source === 'rig_marker')
+  ) {
+    const rigBounds = bodyBoundsFromRig(params.rigTelemetry.positions);
+    if (rigBounds) {
+      return {
+        bounds: rigBounds,
+        source: params.rigTelemetry.source === 'evaluated_joint' ? 'evaluated_rig' : 'rig_marker',
+      };
+    }
+  }
+
+  return {
+    bounds: objectWorldAabb(params.object),
+    source: isImportedHumanoid(params.object) ? 'assembly_fallback' : 'bounds_fallback',
+  };
+}
+
+function explicitPrimaryBodyBounds(object: SceneObject): Bounds3 | undefined {
+  const objectMetadata = object.metadata;
+  const humanoid = humanoidMetadata(object);
+  const primaryMesh = objectMetadata?.primaryBodyMesh;
+  const candidates: unknown[] = [
+    humanoid?.primaryBodyBounds,
+    (humanoid as (HumanoidTelemetryMetadata & { primaryBodyMeshBounds?: unknown }) | undefined)?.primaryBodyMeshBounds,
+    objectMetadata?.primaryBodyBounds,
+    objectMetadata?.primaryBodyMeshBounds,
+    primaryMesh && typeof primaryMesh === 'object' ? (primaryMesh as { bounds?: unknown }).bounds : undefined,
+  ];
+  const local = candidates.find(isBounds3);
+  if (!local) return undefined;
+  return localBoundsToWorld(object, local);
+}
+
+function isBounds3(value: unknown): value is Bounds3 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as { min?: unknown; max?: unknown };
+  return isFiniteVec3(candidate.min) && isFiniteVec3(candidate.max);
+}
+
+function isFiniteVec3(value: unknown): value is Vec3 {
+  return Array.isArray(value)
+    && value.length >= 3
+    && value.slice(0, 3).every((entry) => Number.isFinite(Number(entry)));
+}
+
+function localBoundsToWorld(object: SceneObject, local: Bounds3): Bounds3 {
+  const position = object.transform.position;
+  const scale = object.transform.scale;
+  const scaledMin: Vec3 = [local.min[0] * scale[0], local.min[1] * scale[1], local.min[2] * scale[2]];
+  const scaledMax: Vec3 = [local.max[0] * scale[0], local.max[1] * scale[1], local.max[2] * scale[2]];
+  return {
+    min: [
+      position[0] + Math.min(scaledMin[0], scaledMax[0]),
+      position[1] + Math.min(scaledMin[1], scaledMax[1]),
+      position[2] + Math.min(scaledMin[2], scaledMax[2]),
+    ],
+    max: [
+      position[0] + Math.max(scaledMin[0], scaledMax[0]),
+      position[1] + Math.max(scaledMin[1], scaledMax[1]),
+      position[2] + Math.max(scaledMin[2], scaledMax[2]),
+    ],
+  };
+}
+
+function bodyBoundsFromRig(
+  positions: Partial<Record<RigTelemetryPositionKey, Vec3>>,
+): Bounds3 | undefined {
+  const bodyJointIds = HUMAN_JOINT_IDS.filter((jointId) => (
+    !jointId.endsWith('End')
+    && !jointId.endsWith('Twist')
+  ));
+  const points = [
+    ...bodyJointIds.map((jointId) => positions[jointId]),
+    positions.feet,
+    positions.headTop,
+  ].filter((point): point is Vec3 => {
+    if (!point) return false;
+    return point.every(Number.isFinite);
+  });
+  if (points.length < 2) return undefined;
+
+  const min: Vec3 = [
+    Math.min(...points.map((point) => point[0])),
+    Math.min(...points.map((point) => point[1])),
+    Math.min(...points.map((point) => point[2])),
+  ];
+  const max: Vec3 = [
+    Math.max(...points.map((point) => point[0])),
+    Math.max(...points.map((point) => point[1])),
+    Math.max(...points.map((point) => point[2])),
+  ];
+  const height = Math.max(max[1] - min[1], 0.5);
+  const lateralPadding = Math.max(height * 0.025, 0.025);
+  const depthPadding = Math.max(height * 0.02, 0.02);
+  return {
+    min: [min[0] - lateralPadding, min[1], min[2] - depthPadding],
+    max: [max[0] + lateralPadding, max[1], max[2] + depthPadding],
+  };
+}
+
+function projectBoundsDerivedHumanoidLandmarks(
+  bodyBounds: Bounds3,
+  matrices: ReturnType<typeof buildCameraMatrices>,
+): Record<HumanLandmark, ProjectedPoint> {
+  const centerX = (bodyBounds.min[0] + bodyBounds.max[0]) / 2;
+  const centerZ = (bodyBounds.min[2] + bodyBounds.max[2]) / 2;
+  const height = bodyBounds.max[1] - bodyBounds.min[1];
+  const result = {} as Record<HumanLandmark, ProjectedPoint>;
+  for (const landmark of Object.keys(IMPORTED_HUMANOID_LANDMARK_HEIGHT) as HumanLandmark[]) {
+    const y = bodyBounds.min[1] + height * IMPORTED_HUMANOID_LANDMARK_HEIGHT[landmark];
+    result[landmark] = projectWorldPoint([centerX, y, centerZ], matrices);
+  }
+  return result;
+}
+
+function projectReliableHumanoidLandmarks(
+  positions: Partial<Record<RigTelemetryPositionKey, Vec3>>,
+  matrices: ReturnType<typeof buildCameraMatrices>,
+): Record<HumanLandmark, ProjectedPoint> {
+  const result = {} as Record<HumanLandmark, ProjectedPoint>;
+  for (const landmark of Object.keys(IMPORTED_HUMANOID_LANDMARK_HEIGHT) as HumanLandmark[]) {
+    const local = positions[landmark];
+    if (local) result[landmark] = projectWorldPoint(local, matrices);
+  }
+  return result;
 }
 
 function findObjectBySubjectKey(
@@ -286,22 +537,23 @@ function findObjectBySubjectKey(
 }
 
 function humanOcclusionSamples(
-  object: SceneObject,
+  bodyBounds: Bounds3,
   floorY: number,
   height: number,
+  landmarkFractions: Record<HumanLandmark, number>,
 ): Array<{ id: string; point: Vec3 }> {
-  const x = object.transform.position[0];
-  const z = object.transform.position[2];
-  const halfW = (object.dimensions[0] * object.transform.scale[0]) * 0.35;
+  const x = (bodyBounds.min[0] + bodyBounds.max[0]) / 2;
+  const z = (bodyBounds.min[2] + bodyBounds.max[2]) / 2;
+  const halfW = (bodyBounds.max[0] - bodyBounds.min[0]) * 0.35;
   const y = (name: keyof typeof HUMAN_LANDMARK_HEIGHT) => (
-    floorY + height * HUMAN_LANDMARK_HEIGHT[name]
+    floorY + height * landmarkFractions[name]
   );
   return [
     { id: 'head', point: [x, y('headTop'), z] },
     { id: 'eyes', point: [x, y('eyes'), z] },
     { id: 'chest', point: [x, y('chest'), z] },
     { id: 'waist', point: [x, y('waist'), z] },
-    { id: 'center', point: [x, object.transform.position[1], z] },
+    { id: 'center', point: [x, floorY + height / 2, z] },
     { id: 'left', point: [x - halfW, y('chest'), z] },
     { id: 'right', point: [x + halfW, y('chest'), z] },
   ];

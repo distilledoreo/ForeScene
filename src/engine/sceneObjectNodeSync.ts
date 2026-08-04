@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { HumanPose, SceneObject, Transform } from '../domain/types';
+import type { AssetRegistry, HumanPose, SceneObject, Transform } from '../domain/types';
 import { humanPosesEqual } from './humanPose';
 import { transformsEqual } from './shotSceneState';
 import { applySceneObjectTransform, sceneObjectUsesProceduralScale } from './sceneObjects';
@@ -40,6 +40,7 @@ export function diffAndApplySceneObjectUpdates(params: {
   nodes: Map<string, THREE.Object3D>;
   objects: readonly SceneObject[];
   previous: Map<string, ObjectSyncSnapshot>;
+  assets?: AssetRegistry;
 }): {
   appliedIds: string[];
   skippedIds: string[];
@@ -79,7 +80,7 @@ export function diffAndApplySceneObjectUpdates(params: {
     }
     if (poseChanged || transformChanged) {
       // Pose may need re-bind after structural scale changes; cheap when pose equal after first apply.
-      applyHumanPoseToObject3D(node, object);
+      applyHumanPoseToObject3D(node, object, params.assets);
     }
     appliedIds.push(object.id);
   }

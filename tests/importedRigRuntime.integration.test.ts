@@ -13,7 +13,16 @@ import {
   resetImportedRigRuntimeCachesForTests,
 } from '../src/engine/importedRiggedPoseableCharacter';
 import { loadPoseableSource } from '../src/engine/poseableSourceLoader';
-import { resolvePoseableCharacterForObject, updateSkinnedMeshes } from '../src/engine/poseableCharacter';
+import {
+  applyHumanPoseToObject3D,
+  clearPoseApplicationReports,
+  getPoseApplicationReports,
+  registerPoseableCharacterInstance,
+  resetPoseableCharacterInstancesForTests,
+  resolvePoseableCharacterForObject,
+  updateSkinnedMeshes,
+  type PoseableCharacter,
+} from '../src/engine/poseableCharacter';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
 import { putModelAsset, resetModelAssetStoreForTests } from '../src/engine/modelAssetStore';
 import { preservedRigGlb } from './fixtures/preservedRigGlb';
@@ -99,6 +108,7 @@ async function createImportedRigProject() {
 describe('imported rig runtime integration', () => {
   afterEach(() => {
     resetImportedRigRuntimeCachesForTests();
+    resetPoseableCharacterInstancesForTests();
     resetModelAssetStoreForTests();
   });
 
@@ -139,5 +149,85 @@ describe('imported rig runtime integration', () => {
     const reloadedArm = reloadedCharacter.getJoints(reloadedInstance).find((joint) => joint.id === 'leftUpperArm')!.node;
     expect(reloadedArm.quaternion.equals(armA.quaternion)).toBe(true);
     expect(skinnedVertex(reloadedInstance, 3).distanceTo(vertexA)).toBeLessThan(0.001);
+  });
+
+  it('applies persisted saved-rig humanPose through the render wrapper after hydration', async () => {
+    const { project } = await createImportedRigProject();
+    hydrateImportedRiggedCharactersFromAssets(project.assets);
+    await ensureImportedRiggedCharactersForProject(project);
+    const object = project.scene.objects.find((item) => item.id === 'actor-a')!;
+    const character = resolvePoseableCharacterForObject(object, project.assets)!;
+    await character.ensureLoaded();
+    const instance = character.createInstance(object, new THREE.MeshStandardMaterial());
+    const arm = character.getJoints(instance).find((joint) => joint.id === 'leftUpperArm')!.node;
+    const rest = arm.quaternion.clone();
+
+    clearPoseApplicationReports();
+    const report = applyHumanPoseToObject3D(instance, object, project.assets);
+
+    expect(report?.poseApplied).toBe(true);
+    expect(report?.source).toBe('hydrated_asset');
+    expect(arm.quaternion.equals(rest)).toBe(false);
+    expect(getPoseApplicationReports()).toEqual([report]);
+  });
+
+  it('prefers a live poseable-instance registration over persisted asset resolution', async () => {
+    const { project } = await createImportedRigProject();
+    const object = project.scene.objects.find((item) => item.id === 'actor-a')!;
+    const bone = new THREE.Bone();
+    const root = new THREE.Group();
+    root.add(bone);
+    let applied = false;
+    const liveCharacter = {
+      source: object.poseableCharacter,
+      skeleton: { joints: [] },
+      ensureLoaded: async () => undefined,
+      isReady: () => true,
+      createInstance: () => root,
+      bindInstance: () => undefined,
+      getJoints: () => [{ id: 'leftUpperArm', displayName: 'live arm', node: bone }],
+      applyPose: () => { applied = true; },
+    } as unknown as PoseableCharacter;
+    registerPoseableCharacterInstance(object.id, liveCharacter, root, { object, assets: project.assets });
+
+    expect(resolvePoseableCharacterForObject(object, project.assets)).toBe(liveCharacter);
+    const report = applyHumanPoseToObject3D(root, object, project.assets);
+
+    expect(applied).toBe(true);
+    expect(report?.source).toBe('live_registration');
+    expect(report?.poseApplied).toBe(true);
+  });
+
+  it('rehydrates a persisted saved-rig adapter when live registration is absent', async () => {
+    const { project } = await createImportedRigProject();
+    hydrateImportedRiggedCharactersFromAssets(project.assets);
+    await ensureImportedRiggedCharactersForProject(project);
+    resetPoseableCharacterInstancesForTests();
+    const object = project.scene.objects.find((item) => item.id === 'actor-a')!;
+    const character = resolvePoseableCharacterForObject(object, project.assets);
+
+    expect(character).toBeDefined();
+    await character!.ensureLoaded();
+    const instance = character!.createInstance(object, new THREE.MeshStandardMaterial());
+    const report = applyHumanPoseToObject3D(instance, object, project.assets);
+    expect(report?.poseApplied).toBe(true);
+    expect(report?.source).toBe('hydrated_asset');
+  });
+
+  it('returns a structured missing-asset error instead of reporting an unposed success', () => {
+    const object = {
+      id: 'missing-rig-object',
+      type: 'human_dummy',
+      poseableCharacter: { kind: 'importedRig', assetId: 'missing-rig', rigId: 'missing-rig-id' },
+      humanPose: makePose([35, 0, 0]),
+    } as Pick<SceneObject, 'id' | 'type' | 'poseableCharacter' | 'humanPose'>;
+
+    const report = applyHumanPoseToObject3D(new THREE.Group(), object, createDefaultProject().assets);
+
+    expect(report).toMatchObject({
+      poseApplied: false,
+      source: 'none',
+      diagnostic: { code: 'pose_character_unresolved' },
+    });
   });
 });
