@@ -13,7 +13,9 @@ import { compileLocationTemplate, normalizeAnchorKey } from './locationTemplates
 import { locationPrimitiveBlockers } from './locationBlockers';
 import { locationZoneOrigin, sceneExtentWithinLimits } from './spatialLayout';
 import type { PrevisEntityMapping } from './runState';
-import type { ProductionCompileEntityBinding } from './productionCompileBindings';
+import type { LocationProject } from '../../domain/types';
+import { selectionBounds } from '../buildSelection';
+import type { ProductionCompileEntityBinding, ProductionCompileLocationBinding } from './productionCompileBindings';
 import { resolveCompileEntityBinding } from './productionCompileBindings';
 import type { Vec3 } from '../../domain/types';
 import { previsError, type PrevisDiagnostic } from './manifestDiagnostics';
@@ -83,6 +85,8 @@ export function createEmptyCompiledContext(): CompiledProductionContext {
 export interface CompilePhaseOptions {
   assetBindings?: Record<string, string>;
   entityBindings?: Record<string, ProductionCompileEntityBinding>;
+  locationBindings?: Record<string, ProductionCompileLocationBinding>;
+  preparedProject?: LocationProject;
 }
 
 function entityMappingExists(mapping: PrevisEntityMapping | undefined): boolean {
@@ -133,6 +137,25 @@ export function compileLocationsPhase(
     }
 
     const locationBinding = resolveCompileEntityBinding(location.id, options);
+    const richLocationBinding = options.locationBindings?.[location.id];
+    if (richLocationBinding && richLocationBinding.objectIds.length > 0) {
+      const origin = locationZoneOrigin(index);
+      origins.push(origin);
+      next.locationOrigins[location.id] = origin;
+      next.locationAnchors[location.id] = { ...richLocationBinding.anchors };
+      next.locationBlockers[location.id] = blockersFromPreparedLocation(
+        options.preparedProject,
+        richLocationBinding.blockerObjectIds,
+      );
+      next.entities[entityKey] = {
+        objectIds: [...richLocationBinding.objectIds],
+        zoneOrigin: origin,
+        refs: Object.fromEntries(richLocationBinding.objectIds.map((objectId) => [objectId, objectId])),
+      };
+      entityKeys.push(entityKey);
+      return;
+    }
+
     const boundObjectId = locationBinding?.kind === 'object'
       ? locationBinding.objectId
       : options.assetBindings?.[location.id];
@@ -458,6 +481,24 @@ function mapPropPrimitive(prop: PrevisPropDefinition): {
     default:
       return { type: 'box', dimensions, color: '#78716c' };
   }
+}
+
+function blockersFromPreparedLocation(
+  project: LocationProject | undefined,
+  blockerObjectIds: string[],
+): LocationBlockerAabb[] {
+  if (!project || blockerObjectIds.length === 0) return [];
+  return blockerObjectIds.flatMap((objectId) => {
+    const object = project.scene.objects.find((candidate) => candidate.id === objectId);
+    if (!object) return [];
+    const box = selectionBounds([object]);
+    return [{
+      objectId,
+      type: object.type,
+      min: [box.min.x, box.min.y, box.min.z] as Vec3,
+      max: [box.max.x, box.max.y, box.max.z] as Vec3,
+    }];
+  });
 }
 
 function cloneContext(context: CompiledProductionContext): CompiledProductionContext {

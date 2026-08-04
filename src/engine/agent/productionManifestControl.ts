@@ -5,7 +5,7 @@
 import type { LocationProject, Workspace } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from '../previs/manifest';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
-import { buildProductionCompileEntityBindings } from '../previs/productionCompileBindings';
+import { buildProductionCompileEntityBindings, buildProductionCompileLocationBindings } from '../previs/productionCompileBindings';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
@@ -259,9 +259,11 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
 
   const project = useProjectStore.getState().project;
   const entityBindings = buildProductionCompileEntityBindings(project);
+  const locationBindings = buildProductionCompileLocationBindings(project);
   const result = compileProduction(parsed.manifest, {
     assetBindings: readCompileAssetBindings(project),
     entityBindings,
+    locationBindings,
     presenceProject: project,
     existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
   });
@@ -310,9 +312,11 @@ export async function applyAgentProductionCompile(input: {
       .map((shot) => shot.shotNumber))
     : undefined;
   const entityBindings = buildProductionCompileEntityBindings(project);
+  const locationBindings = buildProductionCompileLocationBindings(project);
   const result = compileProduction(parsed.manifest, {
     assetBindings: readCompileAssetBindings(project),
     entityBindings,
+    locationBindings,
     presenceProject: project,
     existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
     ...(skipShotNumbers ? { skipShotNumbers } : {}),

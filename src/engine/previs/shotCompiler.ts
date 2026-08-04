@@ -3,8 +3,8 @@
  */
 
 import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../agent/protocol';
-import type { LocationProject, SceneObject, ShotPresenceContract, Transform, Vec3 } from '../../domain/types';
-import { computeRigidGroupMemberTransforms, groupPivotFromObjects } from '../agent/groupTransform';
+import type { LocationProject, ShotPresenceContract, Transform, Vec3 } from '../../domain/types';
+import { resolveManifestEntityMemberTransforms } from './manifestEntityTransforms';
 import {
   aspectRatioValue,
   type PrevisProductionManifestV1,
@@ -539,25 +539,14 @@ function compileSingleShot(
               const mapping = castMapping ?? propMapping;
               const prefix = manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop';
               const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
-              const targets = manifestEntityStageObjectTargets(
+              return buildKeyframeStagingObjects({
                 mapping,
-                previsRef(prefix, staging.subject),
-              );
-              return targets.map((object) => ({
-                object,
-                ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
-                ...(staging.transform ? {
-                  transform: {
-                    ...(effectiveStaticTransforms[staging.subject] ?? {
-                      position: [0, 0, 0] as Vec3,
-                      rotation: [0, 0, 0] as Vec3,
-                      scale: [1, 1, 1] as Vec3,
-                    }),
-                    ...staging.transform,
-                  },
-                } : {}),
-                ...(resolvedPose ? { posePreset: resolvedPose } : {}),
-              }));
+                project: options.presenceProject,
+                fallbackRef: previsRef(prefix, staging.subject),
+                effectiveStaticTransform: effectiveStaticTransforms[staging.subject],
+                staging,
+                resolvedPose,
+              });
             }) ?? []),
             ...(closedWorldPresence?.dynamicObjectIds.map((objectId) => ({
               object: { id: objectId },
@@ -674,46 +663,98 @@ function appendManifestEntityStageCommands(input: {
   transform?: Transform;
   posePreset?: string;
 }): void {
-  const mapping = input.mapping;
-  if (mapping?.groupId && mapping.objectIds?.length && input.project) {
-    const members = mapping.objectIds
-      .map((objectId) => input.project!.scene.objects.find((object) => object.id === objectId))
-      .filter((member): member is SceneObject => Boolean(member));
-    if (members.length > 0 && input.transform) {
-      const pivot = groupPivotFromObjects(members);
-      const memberTransforms = computeRigidGroupMemberTransforms(members, pivot, input.transform);
-      for (const objectId of mapping.objectIds) {
-        const transform = memberTransforms.get(objectId);
+  if (input.transform) {
+    const members = resolveManifestEntityMemberTransforms({
+      mapping: input.mapping,
+      project: input.project,
+      targetTransform: input.transform,
+    });
+    if (members.length > 0) {
+      for (const member of members) {
         input.commands.push({
           op: 'shot.stageObject',
           shot: input.shotTarget,
-          object: { id: objectId },
+          object: { id: member.objectId },
           visible: input.visible,
-          ...(transform ? { transform } : {}),
+          transform: member.transform,
+          ...(input.posePreset ? { posePreset: input.posePreset } : {}),
         });
       }
       return;
     }
-    for (const objectId of mapping.objectIds) {
+  }
+  if (input.mapping?.groupId && input.mapping.objectIds?.length) {
+    for (const objectId of input.mapping.objectIds) {
       input.commands.push({
         op: 'shot.stageObject',
         shot: input.shotTarget,
         object: { id: objectId },
         visible: input.visible,
-        ...(input.transform ? { transform: input.transform } : {}),
       });
     }
     return;
   }
-  const objectTarget = resolveEntityTarget(mapping?.objectId, input.fallbackRef);
+  const objectTarget = resolveEntityTarget(input.mapping?.objectId, input.fallbackRef);
   input.commands.push({
     op: 'shot.stageObject',
     shot: input.shotTarget,
     object: objectTarget,
     visible: input.visible,
-    ...(input.transform ? { transform: input.transform } : {}),
     ...(input.posePreset ? { posePreset: input.posePreset } : {}),
   });
+}
+
+function buildKeyframeStagingObjects(input: {
+  mapping: PrevisEntityMapping | undefined;
+  project: LocationProject | undefined;
+  fallbackRef: string;
+  effectiveStaticTransform?: Transform;
+  staging: {
+    visible?: boolean;
+    transform?: {
+      position?: Vec3;
+      rotation?: Vec3;
+      scale?: Vec3;
+    };
+  };
+  resolvedPose?: string;
+}): Array<{
+  object: { id: string } | { ref: string };
+  visible?: boolean;
+  transform?: Transform;
+  posePreset?: string;
+}> {
+  const baseTransform = input.effectiveStaticTransform ?? {
+    position: [0, 0, 0] as Vec3,
+    rotation: [0, 0, 0] as Vec3,
+    scale: [1, 1, 1] as Vec3,
+  };
+  if (input.staging.transform) {
+    const targetTransform: Transform = {
+      position: input.staging.transform.position ?? baseTransform.position,
+      rotation: input.staging.transform.rotation ?? baseTransform.rotation,
+      scale: input.staging.transform.scale ?? baseTransform.scale,
+    };
+    const members = resolveManifestEntityMemberTransforms({
+      mapping: input.mapping,
+      project: input.project,
+      targetTransform,
+    });
+    if (members.length > 0) {
+      return members.map((member) => ({
+        object: { id: member.objectId },
+        ...(input.staging.visible !== undefined ? { visible: input.staging.visible } : {}),
+        transform: member.transform,
+        ...(input.resolvedPose ? { posePreset: input.resolvedPose } : {}),
+      }));
+    }
+  }
+  const targets = manifestEntityStageObjectTargets(input.mapping, input.fallbackRef);
+  return targets.map((object) => ({
+    object,
+    ...(input.staging.visible !== undefined ? { visible: input.staging.visible } : {}),
+    ...(input.resolvedPose ? { posePreset: input.resolvedPose } : {}),
+  }));
 }
 
 /**

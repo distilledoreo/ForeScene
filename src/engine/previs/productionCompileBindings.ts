@@ -1,13 +1,20 @@
 /**
- * Resolved production bindings for compile phases (object or multipart group).
+ * Resolved production bindings for compile phases (object, multipart group, or prepared location).
  */
 
-import type { LocationProject } from '../../domain/types';
+import type { LocationProject, Vec3 } from '../../domain/types';
 import { resolveProductionBindingObjectIds } from './productionConfiguration';
 
 export type ProductionCompileEntityBinding =
   | { kind: 'object'; objectId: string }
   | { kind: 'group'; groupId: string; objectIds: string[] };
+
+export interface ProductionCompileLocationBinding {
+  locationId: string;
+  objectIds: string[];
+  anchors: Record<string, Vec3>;
+  blockerObjectIds: string[];
+}
 
 export function buildProductionCompileEntityBindings(
   project: LocationProject,
@@ -35,6 +42,31 @@ export function buildProductionCompileEntityBindings(
         bindings[binding.locationId] = { kind: 'object', objectId: anchorObjectId };
       }
     }
+  }
+  return bindings;
+}
+
+export function buildProductionCompileLocationBindings(
+  project: LocationProject,
+): Record<string, ProductionCompileLocationBinding> {
+  const production = project.workflow.production;
+  if (!production) return {};
+  const bindings: Record<string, ProductionCompileLocationBinding> = {};
+  for (const [locationId, locationDef] of Object.entries(production.locations)) {
+    const objectIds = resolveProductionBindingObjectIds(project, {
+      kind: 'location',
+      locationId: locationDef.id,
+    });
+    const anchors: Record<string, Vec3> = {};
+    for (const [key, anchor] of Object.entries(locationDef.anchors)) {
+      anchors[key] = [...anchor.position] as Vec3;
+    }
+    bindings[locationId] = {
+      locationId,
+      objectIds,
+      anchors,
+      blockerObjectIds: [...locationDef.blockerObjectIds],
+    };
   }
   return bindings;
 }

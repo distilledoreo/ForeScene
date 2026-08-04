@@ -21,7 +21,7 @@ import {
   validateProductionCapabilities,
   type ProductionCapabilityValidationResult,
 } from './entityCapability';
-import type { ProductionCompileEntityBinding } from './productionCompileBindings';
+import type { ProductionCompileEntityBinding, ProductionCompileLocationBinding } from './productionCompileBindings';
 
 export interface ProductionCompileResult {
   ok: boolean;
@@ -43,6 +43,8 @@ export interface ProductionCompileOptions {
   assetBindings?: Record<string, string>;
   /** Manifest entity id → resolved object or multipart group binding. */
   entityBindings?: Record<string, ProductionCompileEntityBinding>;
+  /** Prepared location id → resolved geometry, anchors, and blockers. */
+  locationBindings?: Record<string, ProductionCompileLocationBinding>;
   /** Prepared project used to compile project-wide closed-world visibility. */
   presenceProject?: LocationProject;
 }
@@ -74,6 +76,8 @@ export function compileProduction(
   const phaseOptions = {
     assetBindings: options.assetBindings,
     entityBindings: options.entityBindings,
+    locationBindings: options.locationBindings,
+    preparedProject: options.presenceProject,
   };
 
   const locations = compileLocationsPhase(manifest, context, phaseOptions);

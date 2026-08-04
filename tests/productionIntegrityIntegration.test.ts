@@ -298,6 +298,74 @@ describe('production integrity integration', () => {
     expect(executed.gateState?.gates.RENDER_CANARY.status).not.toBe('pending');
   });
 
+  it('executes canary for group-only prepared locations without template geometry', async () => {
+    const project = createDefaultProject();
+    const wall = project.scene.objects.find((object) => object.type === 'wall');
+    project.scene.objects = wall ? [wall] : [];
+    const lead = createSceneObject('human_dummy', 1);
+    lead.name = 'Lead';
+    project.scene.objects.push(lead);
+    project.scene.objectGroups = {
+      roomAssembly: {
+        id: 'roomAssembly',
+        name: 'Room assembly',
+        objectIds: wall ? [wall.id] : [],
+      },
+    };
+    const shot = project.shots[0]!;
+    const pano = {
+      id: 'pano_fixture',
+      name: 'Room panorama',
+      imageAssetId: 'asset_pano_fixture',
+      type: 'graybox_render' as const,
+      projection: 'equirectangular' as const,
+      origin: [0, 1.65, 0] as [number, number, number],
+      rotation: [0, 0, 0] as [number, number, number],
+      width: 4,
+      height: 2,
+      isCanonical: true,
+      createdAt: new Date().toISOString(),
+    };
+    project.panoRefs.push(pano);
+    shot.linkedPanoId = pano.id;
+    project.workflow.production = {
+      schemaVersion: 1,
+      bindings: {
+        lead: { kind: 'object', objectId: lead.id },
+        room: { kind: 'location', locationId: 'room' },
+      },
+      locations: {
+        room: {
+          id: 'room',
+          objectIds: [],
+          objectGroupIds: ['roomAssembly'],
+          anchors: {},
+          blockerObjectIds: wall ? [wall.id] : [],
+          panoIds: [pano.id],
+          defaultPanoId: pano.id,
+        },
+      },
+      shotContracts: {
+        [shot.id]: {
+          presence: {
+            expectedVisibleObjectIds: [lead.id],
+            expectedVisibleGroupIds: [],
+            allowUnspecifiedDynamicObjects: false,
+          },
+          environment: {
+            locationId: 'room',
+          },
+        },
+      },
+    };
+    useProjectStore.setState({ project });
+    const planned = await planAgentProductionCanary({ manifest, maxShots: 1 });
+    expect(planned.ok).toBe(true);
+    const executed = await runAgentProductionCanary({ runId: planned.runId! });
+    expect(executed.ok).toBe(true);
+    expect(executed.result?.ok).toBe(true);
+  });
+
   it('does not allow fabricated passing results through the public canary API', async () => {
     const planned = await planAgentProductionCanary({ manifest, maxShots: 1 });
     expect(planned.ok).toBe(true);
