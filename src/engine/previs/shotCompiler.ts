@@ -663,25 +663,23 @@ function appendManifestEntityStageCommands(input: {
   transform?: Transform;
   posePreset?: string;
 }): void {
-  if (input.transform) {
+  if (input.mapping?.groupId && input.mapping.objectIds?.length && input.transform) {
     const members = resolveManifestEntityMemberTransforms({
       mapping: input.mapping,
       project: input.project,
       targetTransform: input.transform,
     });
-    if (members.length > 0) {
-      for (const member of members) {
-        input.commands.push({
-          op: 'shot.stageObject',
-          shot: input.shotTarget,
-          object: { id: member.objectId },
-          visible: input.visible,
-          transform: member.transform,
-          ...(input.posePreset ? { posePreset: input.posePreset } : {}),
-        });
-      }
-      return;
+    for (const member of members) {
+      input.commands.push({
+        op: 'shot.stageObject',
+        shot: input.shotTarget,
+        object: { id: member.objectId },
+        visible: input.visible,
+        transform: member.transform,
+        ...(input.posePreset ? { posePreset: input.posePreset } : {}),
+      });
     }
+    return;
   }
   if (input.mapping?.groupId && input.mapping.objectIds?.length) {
     for (const objectId of input.mapping.objectIds) {
@@ -700,6 +698,7 @@ function appendManifestEntityStageCommands(input: {
     shot: input.shotTarget,
     object: objectTarget,
     visible: input.visible,
+    ...(input.transform ? { transform: input.transform } : {}),
     ...(input.posePreset ? { posePreset: input.posePreset } : {}),
   });
 }
@@ -735,12 +734,12 @@ function buildKeyframeStagingObjects(input: {
       rotation: input.staging.transform.rotation ?? baseTransform.rotation,
       scale: input.staging.transform.scale ?? baseTransform.scale,
     };
-    const members = resolveManifestEntityMemberTransforms({
-      mapping: input.mapping,
-      project: input.project,
-      targetTransform,
-    });
-    if (members.length > 0) {
+    if (input.mapping?.groupId && input.mapping.objectIds?.length) {
+      const members = resolveManifestEntityMemberTransforms({
+        mapping: input.mapping,
+        project: input.project,
+        targetTransform,
+      });
       return members.map((member) => ({
         object: { id: member.objectId },
         ...(input.staging.visible !== undefined ? { visible: input.staging.visible } : {}),
@@ -748,6 +747,13 @@ function buildKeyframeStagingObjects(input: {
         ...(input.resolvedPose ? { posePreset: input.resolvedPose } : {}),
       }));
     }
+    const objectTarget = resolveEntityTarget(input.mapping?.objectId, input.fallbackRef);
+    return [{
+      object: objectTarget,
+      ...(input.staging.visible !== undefined ? { visible: input.staging.visible } : {}),
+      transform: targetTransform,
+      ...(input.resolvedPose ? { posePreset: input.resolvedPose } : {}),
+    }];
   }
   const targets = manifestEntityStageObjectTargets(input.mapping, input.fallbackRef);
   return targets.map((object) => ({
