@@ -366,6 +366,18 @@ async function restoreCheckpoint(
   };
 }
 
+/** Restore a verified production checkpoint and prove the live project matches the expected starting state. */
+export async function restoreProductionCheckpoint(input: {
+  revisionId: string;
+  expectedProject: LocationProject;
+}): Promise<VerifiedMutationRollbackResult> {
+  return restoreCheckpoint(
+    input.revisionId,
+    projectFingerprint(input.expectedProject),
+    projectStateFingerprint(input.expectedProject),
+  );
+}
+
 function sameIds<T extends { id: string }>(left: readonly T[], right: readonly T[]): boolean {
   return left.length === right.length && left.every((value, index) => value.id === right[index]?.id);
 }

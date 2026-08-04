@@ -19,6 +19,13 @@ import { RAPID_REVIEW_PROFILE } from '../previs/renderProfiles';
 import { explainAgentRenderCacheHit, recordAgentRenderCacheEntry } from './renderCacheControl';
 import { projectFingerprint } from './planDiff';
 import { verifyCompiledShotIntegrity } from './productionIntegrityVerification';
+import { buildFullStillMutationExpectation } from '../previs/productionMutationScope';
+import {
+  setProductionRunAbortController,
+  clearProductionRunCancellation,
+  markProductionRunCancelled,
+  resetProductionRunAbortControllersForTests,
+} from './productionRunAbort';
 import type {
   AgentProductionRunResult,
   AgentProductionRunState,
@@ -71,9 +78,11 @@ function notify(state: AgentProductionRunState): void {
 function beginRunGeneration(runId: string): number {
   const current = runControllers.get(runId);
   current?.abort.abort();
+  clearProductionRunCancellation(runId);
   const generation = (current?.generation ?? 0) + 1;
   const abort = new AbortController();
   runControllers.set(runId, { generation, abort });
+  setProductionRunAbortController(runId, abort);
   return generation;
 }
 
@@ -232,6 +241,9 @@ async function runFullStillSequence(state: AgentProductionRunState): Promise<Age
     current = save({ ...current, gateState: afterCompile, currentGate: afterCompile.currentGate, recoveryRevisionId: compiled.revisionId ?? current.recoveryRevisionId });
     const parsed = parsePrevisProductionManifest(current.manifest);
     const project = useProjectStore.getState().project;
+    const mutationExpectation = parsed.manifest
+      ? buildFullStillMutationExpectation(beforeProject, parsed.manifest)
+      : undefined;
     if (!parsed.manifest) {
       const diagnostics = [agentError('production_manifest_invalid', 'Production manifest disappeared before still rendering.')];
       const gateState = updateAgentProductionGateState(current.gateRunId, (gate) => completeProductionGate(gate, 'VERIFY_FULL_STILL_SEQUENCE', { ok: false, diagnostics })) ?? current.gateState;
@@ -292,13 +304,14 @@ async function runFullStillSequence(state: AgentProductionRunState): Promise<Age
       const frameBytes = result.artifact?.kind === 'inline' && result.artifact.dataUrl
         ? (await fetch(result.artifact.dataUrl).then((response) => response.blob())).size
         : undefined;
-      const verification = verifyCompiledShotIntegrity({
+      const verification = await verifyCompiledShotIntegrity({
         project,
         shot,
         definition,
         manifest: parsed.manifest,
         integrityMode: 'gated_production',
         beforeProject,
+        mutationExpectation,
         frameExists: Boolean(artifactId || result.artifact),
         frameByteSize: frameBytes,
         fromCanonicalRenderer: true,
@@ -445,10 +458,13 @@ export async function resumeAgentProductionRun(runId: string): Promise<AgentProd
 export function cancelAgentProductionRun(runId: string): AgentProductionRunResult {
   const state = getAgentProductionRun(runId);
   if (!state) return { ok: false, status: 'failed', runId, diagnostics: [agentError('production_run_not_found', `No production run "${runId}" exists.`)] };
+  markProductionRunCancelled(runId);
   const controller = runControllers.get(runId);
-  controller?.abort.abort();
-  beginRunGeneration(runId);
-  return diagnosticsResult(save({ ...state, status: 'cancelled' }), []);
+  const generation = (controller?.generation ?? 0) + 1;
+  if (controller) {
+    runControllers.set(runId, { generation, abort: controller.abort });
+  }
+  return diagnosticsResult(save({ ...state, status: 'cancelled', runGeneration: generation }), []);
 }
 
 export function subscribeAgentProductionRun(runId: string, listener: (state: AgentProductionRunState) => void): () => void {
@@ -467,6 +483,7 @@ export function resetAgentProductionRunsForTests(): void {
   runs.clear();
   listeners.clear();
   runControllers.clear();
+  resetProductionRunAbortControllersForTests();
   if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY);
 }
 

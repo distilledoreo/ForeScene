@@ -34,6 +34,7 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { agentError, agentWarning, type AgentDiagnostic } from './diagnostics';
 import { projectFingerprint } from './planDiff';
 import { executeProductionCanary } from './productionCanaryExecutor';
+import { isProductionRunAborted } from './productionRunAbort';
 import type {
   AgentProductionCanaryApprovalResult,
   AgentProductionCanaryPlanResult,
@@ -286,8 +287,6 @@ export async function planAgentProductionCanary(input: {
 
 export async function runAgentProductionCanary(input: {
   runId: string;
-  results?: ProductionCanaryShotResult[];
-  visualReviewApproved?: boolean;
 }): Promise<AgentProductionCanaryRunResult> {
   const stored = getRun(input.runId);
   if (!stored) {
@@ -306,27 +305,6 @@ export async function runAgentProductionCanary(input: {
     return { ok: false, runId: input.runId, diagnostics: [agentError('production_manifest_invalid', 'Production manifest is invalid.')] };
   }
 
-  if (input.results) {
-    const result = runProductionCanaryEngine(plan, input.results);
-    let gateState = stored.gateState;
-    for (const gate of ['AUTHOR_CANARY', 'VERIFY_CANARY_STATE', 'RENDER_CANARY', 'VERIFY_CANARY_OUTPUT'] as const) {
-      gateState = completeProductionGate(gateState, gate, {
-        ok: result.ok,
-        diagnostics: result.diagnostics,
-      });
-    }
-    gateState = { ...gateState, canaryResult: result };
-    runs.set(input.runId, { ...stored, gateState });
-    persistRuns();
-    return {
-      ok: result.ok,
-      runId: input.runId,
-      result,
-      gateState,
-      diagnostics: result.diagnostics.map((item) => agentError(item.code, item.message)),
-    };
-  }
-
   let gateState = startProductionGate(stored.gateState, 'AUTHOR_CANARY');
   runs.set(input.runId, { ...stored, gateState });
   persistRuns();
@@ -336,6 +314,9 @@ export async function runAgentProductionCanary(input: {
     plan,
     manifest: parsed.manifest,
     assertActive: () => {
+      if (isProductionRunAborted(input.runId)) {
+        throw new Error('Production canary run was cancelled.');
+      }
       const latest = getRun(input.runId);
       if (!latest || latest.runGeneration !== stored.runGeneration) {
         throw new Error('Production canary run is stale.');
@@ -374,12 +355,50 @@ export async function runAgentProductionCanary(input: {
     recoveryRevisionId: executed.recoveryRevisionId ?? stored.recoveryRevisionId,
   });
   persistRuns();
+  const rollbackDiagnostics = executed.rollbackDiagnostics.map((item) => agentError(item.code, item.message));
+  const gateOk = executed.result.ok && (!executed.rolledBack || executed.rollbackOk);
   return {
-    ok: executed.result.ok,
+    ok: gateOk,
     runId: input.runId,
     result: executed.result,
     gateState,
-    diagnostics: executed.result.diagnostics.map((item) => agentError(item.code, item.message)),
+    diagnostics: [
+      ...executed.result.diagnostics.map((item) => agentError(item.code, item.message)),
+      ...rollbackDiagnostics,
+    ],
+  };
+}
+
+/** Test-only attestation path for pure gate-engine scenarios. Not exposed on ForeSceneBrowserApi. */
+export function __testOnlyAttestProductionCanary(input: {
+  runId: string;
+  results: ProductionCanaryShotResult[];
+}): AgentProductionCanaryRunResult {
+  const stored = getRun(input.runId);
+  if (!stored) {
+    return { ok: false, diagnostics: [agentError('production_run_not_found', `No production run "${input.runId}" exists.`)] };
+  }
+  const plan = stored.gateState.canaryPlan;
+  if (!plan) {
+    return { ok: false, runId: input.runId, diagnostics: [agentError('canary_plan_missing', 'Plan the production canary before running it.')] };
+  }
+  const result = runProductionCanaryEngine(plan, input.results);
+  let gateState = stored.gateState;
+  for (const gate of ['AUTHOR_CANARY', 'VERIFY_CANARY_STATE', 'RENDER_CANARY', 'VERIFY_CANARY_OUTPUT'] as const) {
+    gateState = completeProductionGate(gateState, gate, {
+      ok: result.ok,
+      diagnostics: result.diagnostics,
+    });
+  }
+  gateState = { ...gateState, canaryResult: result };
+  runs.set(input.runId, { ...stored, gateState });
+  persistRuns();
+  return {
+    ok: result.ok,
+    runId: input.runId,
+    result,
+    gateState,
+    diagnostics: result.diagnostics.map((item) => agentError(item.code, item.message)),
   };
 }
 

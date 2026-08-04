@@ -354,9 +354,9 @@ const OPERATION_DOCS: Record<string, AgentOperationDescription> = {
   runProductionCanary: {
     name: 'runProductionCanary',
     category: 'mutation',
-    summary: 'Record and gate the observed canary state and review outputs.',
+    summary: 'Compile, verify, render, and gate the production canary shots.',
     writeAccess: true,
-    input: { runId: 'string', results: 'ProductionCanaryShotResult[]' },
+    input: { runId: 'string' },
     returns: 'AgentProductionCanaryRunResult',
   },
   approveProductionCanary: {

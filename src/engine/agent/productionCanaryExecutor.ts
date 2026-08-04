@@ -1,5 +1,5 @@
 /**
- * Browser-owned canary executor — compiles, verifies, and renders canary shots.
+ * Browser-owned canary executor — compiles, verifies, renders, and rolls back on failure.
  */
 
 import type { LocationProject } from '../../domain/types';
@@ -11,6 +11,11 @@ import { getAgentRenderShotFrameImpl } from './renderCallbackRegistry';
 import { registerAgentArtifact } from './artifactRegistry';
 import { projectFingerprint } from './planDiff';
 import { verifyCompiledShotIntegrity } from './productionIntegrityVerification';
+import { restoreProductionCheckpoint } from './verifiedMutation';
+import {
+  buildCanaryMutationExpectation,
+  verifyProductionMutationScope,
+} from '../previs/productionMutationScope';
 import {
   CANARY_OUTPUTS,
   runProductionCanary,
@@ -79,13 +84,44 @@ export interface ExecuteProductionCanaryResult {
   verifyDiagnostics: ProductionGateDiagnostic[];
   renderDiagnostics: ProductionGateDiagnostic[];
   recoveryRevisionId?: string;
+  rolledBack: boolean;
+  rollbackOk: boolean;
+  rollbackDiagnostics: ProductionGateDiagnostic[];
+}
+
+async function rollbackCanaryState(input: {
+  recoveryRevisionId?: string;
+  beforeProject: LocationProject;
+}): Promise<{ ok: boolean; diagnostics: ProductionGateDiagnostic[] }> {
+  if (!input.recoveryRevisionId) {
+    return {
+      ok: false,
+      diagnostics: [{
+        code: 'rollback_checkpoint_missing',
+        message: 'Canary failure could not be rolled back because no recovery revision exists.',
+        severity: 'error',
+      }],
+    };
+  }
+  const rollback = await restoreProductionCheckpoint({
+    revisionId: input.recoveryRevisionId,
+    expectedProject: input.beforeProject,
+  });
+  return {
+    ok: rollback.ok,
+    diagnostics: rollback.diagnostics.map((item) => ({
+      code: item.code,
+      message: item.message,
+      severity: item.severity === 'warning' ? 'warning' : 'error',
+    })),
+  };
 }
 
 export async function executeProductionCanary(
   input: ExecuteProductionCanaryInput,
 ): Promise<ExecuteProductionCanaryResult> {
   const beforeProject = structuredClone(useProjectStore.getState().project);
-  const beforeFingerprint = projectFingerprint(beforeProject);
+  const mutationExpectation = buildCanaryMutationExpectation(beforeProject, input.plan, input.manifest);
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   let recoveryRevisionId: string | undefined;
   if (runDestructive) {
@@ -95,6 +131,22 @@ export async function executeProductionCanary(
     recoveryRevisionId = recovery?.revision.id;
   }
   input.assertActive?.();
+
+  const fail = async (partial: Omit<ExecuteProductionCanaryResult, 'rolledBack' | 'rollbackOk' | 'rollbackDiagnostics'> & {
+    rollback?: boolean;
+  }): Promise<ExecuteProductionCanaryResult> => {
+    const shouldRollback = partial.rollback !== false;
+    const rollback = shouldRollback
+      ? await rollbackCanaryState({ recoveryRevisionId, beforeProject })
+      : { ok: true, diagnostics: [] as ProductionGateDiagnostic[] };
+    return {
+      ...partial,
+      recoveryRevisionId,
+      rolledBack: shouldRollback,
+      rollbackOk: rollback.ok,
+      rollbackDiagnostics: rollback.diagnostics,
+    };
+  };
 
   const compiled = await applyAgentProductionCompile({
     manifest: input.manifest,
@@ -108,18 +160,34 @@ export async function executeProductionCanary(
       severity: 'error' as const,
     }));
     const result = runProductionCanary(input.plan, []);
-    return {
+    return fail({
       ok: false,
       result: { ...result, ok: false, diagnostics: [...result.diagnostics, ...diagnostics] },
       authorDiagnostics: diagnostics,
       verifyDiagnostics: diagnostics,
       renderDiagnostics: diagnostics,
-      recoveryRevisionId,
-    };
+    });
   }
   input.assertActive?.();
 
   const afterProject = useProjectStore.getState().project;
+  const scope = verifyProductionMutationScope(beforeProject, afterProject, mutationExpectation);
+  if (!scope.ok) {
+    const diagnostics = scope.errors.map((message) => ({
+      code: 'mutation_scope_violation',
+      message,
+      severity: 'error' as const,
+    }));
+    const result = runProductionCanary(input.plan, []);
+    return fail({
+      ok: false,
+      result: { ...result, ok: false, diagnostics },
+      authorDiagnostics: diagnostics,
+      verifyDiagnostics: diagnostics,
+      renderDiagnostics: [],
+    });
+  }
+
   const render = getAgentRenderShotFrameImpl();
   const shotResults: ProductionCanaryShotResult[] = [];
   const authorDiagnostics: ProductionGateDiagnostic[] = [];
@@ -130,26 +198,25 @@ export async function executeProductionCanary(
     input.assertActive?.();
     const definition = input.manifest.shots.find((shot) => shot.id === shotId);
     if (!definition) {
-      const diagnostic = { code: 'canary_shot_missing', message: `Canary shot "${shotId}" is missing from the manifest.`, shotId };
+      const diagnostic = { code: 'canary_shot_missing', message: `Canary shot "${shotId}" is missing from the manifest.`, shotId, severity: 'error' as const };
       verifyDiagnostics.push(diagnostic);
       continue;
     }
     const shot = findCompiledShot(afterProject, definition);
     if (!shot) {
-      const diagnostic = { code: 'compiled_shot_missing', message: `Compiled shot "${definition.shotNumber}" is missing.`, shotId };
+      const diagnostic = { code: 'compiled_shot_missing', message: `Compiled shot "${definition.shotNumber}" is missing.`, shotId, severity: 'error' as const };
       authorDiagnostics.push(diagnostic);
       continue;
     }
 
-    const verification = verifyCompiledShotIntegrity({
+    const verification = await verifyCompiledShotIntegrity({
       project: afterProject,
       shot,
       definition,
       manifest: input.manifest,
       integrityMode: 'gated_production',
       beforeProject,
-      allowedShotIds: afterProject.shots.map((item) => item.id),
-      allowStructuralChanges: true,
+      mutationExpectation,
     });
     verifyDiagnostics.push(...verification.diagnostics);
 
@@ -184,22 +251,22 @@ export async function executeProductionCanary(
           const frameBytes = rendered.artifact?.kind === 'inline' && rendered.artifact.dataUrl
             ? (await fetch(rendered.artifact.dataUrl).then((response) => response.blob())).size
             : undefined;
-          const frameVerification = verifyCompiledShotIntegrity({
+          const frameVerification = await verifyCompiledShotIntegrity({
             project: afterProject,
             shot,
             definition,
             manifest: input.manifest,
             integrityMode: 'gated_production',
             beforeProject,
-            allowedShotIds: afterProject.shots.map((item) => item.id),
-            allowStructuralChanges: true,
+            mutationExpectation,
             frameExists: Boolean(artifactId || rendered.artifact),
             frameByteSize: frameBytes,
             fromCanonicalRenderer: true,
+            forceProjectionHealth: params.appearance === 'projected',
           });
-          outputOk = frameVerification.renderHealth.ok && rendered.ok;
+          outputOk = frameVerification.ok && rendered.ok;
           if (!outputOk) {
-            outputDiagnostics.push(...frameVerification.renderHealth.diagnostics);
+            outputDiagnostics.push(...frameVerification.diagnostics);
           }
         }
       } catch (error) {
@@ -227,13 +294,26 @@ export async function executeProductionCanary(
   }
 
   const result = runProductionCanary(input.plan, shotResults);
+  if (!result.ok) {
+    return fail({
+      ok: false,
+      result,
+      authorDiagnostics,
+      verifyDiagnostics,
+      renderDiagnostics,
+    });
+  }
+
   return {
-    ok: result.ok,
+    ok: true,
     result,
     authorDiagnostics,
     verifyDiagnostics,
     renderDiagnostics,
     recoveryRevisionId,
+    rolledBack: false,
+    rollbackOk: true,
+    rollbackDiagnostics: [],
   };
 }
 

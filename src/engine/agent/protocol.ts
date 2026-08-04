@@ -1819,7 +1819,7 @@ export interface ForeSceneBrowserApi {
   solveShotToCompositionConstraints(input: { shotId: string; maxIterations?: number }): Promise<AgentShotCompositionMutationResult>;
   verifyShotCompositionConstraints(input: { shotId: string }): AgentShotCompositionInspection;
   planProductionCanary(input: { manifest: unknown; maxShots?: number }): Promise<AgentProductionCanaryPlanResult>;
-  runProductionCanary(input: { runId: string; results?: ProductionCanaryShotResult[]; visualReviewApproved?: boolean }): Promise<AgentProductionCanaryRunResult>;
+  runProductionCanary(input: { runId: string }): Promise<AgentProductionCanaryRunResult>;
   approveProductionCanary(input: { runId: string; overrideReason?: string }): AgentProductionCanaryApprovalResult;
   runProduction(input: { manifest: unknown; maxCanaryShots?: number }): Promise<AgentProductionRunResult>;
   getProductionRun(runId: string): AgentProductionRunState | undefined;

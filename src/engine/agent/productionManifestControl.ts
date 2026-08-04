@@ -2,7 +2,8 @@
  * Agent API production manifest compiler endpoints.
  */
 
-import type { Workspace } from '../../domain/types';
+import type { LocationProject, Workspace } from '../../domain/types';
+import type { PrevisProductionManifestV1 } from '../previs/manifest';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
@@ -33,6 +34,34 @@ function readLiveSource() {
 function readPersistedManifestBindings(): Record<string, string> {
   const project = useProjectStore.getState().project;
   return { ...(project.workflow.productionManifestAssetBindings ?? {}) };
+}
+
+function readCompileAssetBindings(project: LocationProject): Record<string, string> {
+  const bindings = { ...readPersistedManifestBindings() };
+  const production = project.workflow.production;
+  if (!production) return bindings;
+  for (const [entityId, binding] of Object.entries(production.bindings)) {
+    if (binding.kind === 'object' && !bindings[entityId]) {
+      bindings[entityId] = binding.objectId;
+    }
+  }
+  return bindings;
+}
+
+function existingShotIdsForManifest(
+  project: LocationProject,
+  manifest: PrevisProductionManifestV1,
+): Record<string, string> {
+  const existingShotIds: Record<string, string> = {};
+  for (const definition of manifest.shots) {
+    const match = project.shots.find((shot) => (
+      shot.shotNumber === definition.shotNumber
+      || shot.productionShotId === definition.id
+      || shot.productionShotId === definition.shotNumber
+    ));
+    if (match) existingShotIds[definition.shotNumber] = match.id;
+  }
+  return existingShotIds;
 }
 
 function mapPrevisDiagnostics(items: Array<{ code: string; message: string; severity: string }>) {
@@ -217,10 +246,12 @@ export function previewAgentProductionCompile(input: { manifest: unknown }): Age
     };
   }
 
-  const assetBindings = readPersistedManifestBindings();
+  const project = useProjectStore.getState().project;
+  const assetBindings = readCompileAssetBindings(project);
   const result = compileProduction(parsed.manifest, {
     assetBindings,
-    presenceProject: useProjectStore.getState().project,
+    presenceProject: project,
+    existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
   });
   const setupPlans = plansForProductionCompile(result);
   const mergedPlan = mergeAgentPlans(setupPlans);
@@ -259,7 +290,8 @@ export async function applyAgentProductionCompile(input: {
     return { ok: false, diagnostics: preview.diagnostics };
   }
 
-  const assetBindings = readPersistedManifestBindings();
+  const project = useProjectStore.getState().project;
+  const assetBindings = readCompileAssetBindings(project);
   const onlyShotIds = new Set(input.onlyShotIds ?? []);
   const skipShotNumbers = onlyShotIds.size > 0
     ? new Set(parsed.manifest.shots
@@ -268,7 +300,8 @@ export async function applyAgentProductionCompile(input: {
     : undefined;
   const result = compileProduction(parsed.manifest, {
     assetBindings,
-    presenceProject: useProjectStore.getState().project,
+    presenceProject: project,
+    existingShotIds: existingShotIdsForManifest(project, parsed.manifest),
     ...(skipShotNumbers ? { skipShotNumbers } : {}),
   });
   const setupPlans = plansForProductionCompile(result);

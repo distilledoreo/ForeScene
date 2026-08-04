@@ -10,25 +10,58 @@ import {
   type ProductionCanaryShotResult,
 } from '../src/engine/previs/productionGates';
 import {
+  approveAgentProductionCanary,
   planAgentProductionCanary,
   resetAgentProductionGateRunsForTests,
   runAgentProductionCanary,
-  __testOnlySetGateRun,
+  __testOnlyAttestProductionCanary,
 } from '../src/engine/agent/productionGateControl';
 import {
   cancelAgentProductionRun,
   getAgentProductionRun,
   resetAgentProductionRunsForTests,
+  resumeAgentProductionRun,
   runAgentProduction,
   StaleProductionRunError,
 } from '../src/engine/agent/productionRunControl';
 import { verifyCompiledShotIntegrity } from '../src/engine/agent/productionIntegrityVerification';
-import { inspectShotPresence } from '../src/engine/previs/shotPresence';
+import { restoreAgentProjectRevision } from '../src/engine/agent/projectHealthControl';
+import { projectFingerprint } from '../src/engine/agent/planDiff';
 import { useProjectStore } from '../src/state/useProjectStore';
 import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
 import { setAgentRenderShotFrameImpl } from '../src/engine/agent/renderCallbackRegistry';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
+
+vi.mock('../src/engine/agent/projectHealthControl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/agent/projectHealthControl')>();
+  return {
+    ...actual,
+    restoreAgentProjectRevision: vi.fn(),
+  };
+});
+
+vi.mock('../src/engine/renderers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/renderers')>();
+  return {
+    ...actual,
+    renderShotProjectedFrameWithHealth: vi.fn(async () => ({
+      dataUrl: 'data:image/png;base64,healthy',
+      width: 640,
+      height: 360,
+      projectionHealth: {
+        projectedTextureAvailable: true,
+        occlusionMapAvailable: true,
+        projectedMaterialCount: 4,
+        geometryPixelCount: 1000,
+        coveredPixelCount: 900,
+        fallbackPixelCount: 50,
+        projectionCoverage: 0.9,
+        fallbackRatio: 0.05,
+      },
+    })),
+  };
+});
 
 const manifest: PrevisProductionManifestV1 = {
   version: 1,
@@ -59,6 +92,7 @@ function passingCanaryResult(shotId: string): ProductionCanaryShotResult {
       { output: 'clay_dynamic_subjects', ok: true },
       { output: 'characters_only', ok: true },
       { output: 'clay_clean_plate', ok: true },
+      { output: 'projected_dynamic_subjects', ok: true },
     ],
   };
 }
@@ -71,6 +105,21 @@ function preparedProject() {
   lead.name = 'Lead';
   project.scene.objects.push(lead);
   const shot = project.shots[0]!;
+  const pano = {
+    id: 'pano_fixture',
+    name: 'Room panorama',
+    imageAssetId: 'asset_pano_fixture',
+    type: 'graybox_render' as const,
+    projection: 'equirectangular' as const,
+    origin: [0, 1.65, 0] as [number, number, number],
+    rotation: [0, 0, 0] as [number, number, number],
+    width: 4,
+    height: 2,
+    isCanonical: true,
+    createdAt: new Date().toISOString(),
+  };
+  project.panoRefs.push(pano);
+  shot.linkedPanoId = pano.id;
   project.workflow.production = {
     schemaVersion: 1,
     bindings: {
@@ -84,6 +133,8 @@ function preparedProject() {
         objectGroupIds: [],
         anchors: {},
         blockerObjectIds: [],
+        panoIds: [pano.id],
+        defaultPanoId: pano.id,
       },
     },
     shotContracts: {
@@ -93,34 +144,52 @@ function preparedProject() {
           expectedVisibleGroupIds: [],
           allowUnspecifiedDynamicObjects: false,
         },
+        environment: {
+          locationId: 'room',
+        },
       },
     },
   };
-  return { project, lead, shot };
+  return { project, lead, shot, pano };
 }
 
 describe('production integrity integration', () => {
+  const revisionSnapshots = new Map<string, ReturnType<typeof createDefaultProject>>();
+
   beforeEach(() => {
     resetAgentProductionGateRunsForTests();
     resetAgentProductionRunsForTests();
+    revisionSnapshots.clear();
+    vi.mocked(restoreAgentProjectRevision).mockReset();
     const { project } = preparedProject();
     useProjectStore.setState({ project });
     useAgentControlStore.setState({ controlMode: 'read-write' });
-    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
+    useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (reason, mutation) => {
+      const before = structuredClone(useProjectStore.getState().project);
       await mutation();
       const current = useProjectStore.getState().project;
+      const revisionId = `revision_${reason}_${Date.now()}`;
+      revisionSnapshots.set(revisionId, before);
       return {
         project: structuredClone(current),
         revision: {
-          id: `revision_${Date.now()}`,
+          id: revisionId,
           projectId: current.id,
           kind: 'autosave' as const,
-          reason: _reason,
+          reason,
           createdAt: new Date().toISOString(),
           manifest: '{}',
           resources: { projectAssetKeys: [], modelAssetKeys: [] },
         },
       };
+    });
+    vi.mocked(restoreAgentProjectRevision).mockImplementation(async ({ revisionId }) => {
+      const snapshot = revisionSnapshots.get(revisionId);
+      if (!snapshot) {
+        return { ok: false, diagnostics: [{ code: 'revision_missing', message: 'Revision not found.', severity: 'error' as const }] };
+      }
+      useProjectStore.setState({ project: structuredClone(snapshot) });
+      return { ok: true, diagnostics: [] };
     });
     setAgentRenderShotFrameImpl(async (input) => ({
       ok: true,
@@ -129,7 +198,11 @@ describe('production integrity integration', () => {
       width: input.width ?? 640,
       height: input.height ?? 360,
       revisionId: 'revision_render',
-      artifact: { kind: 'inline', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' },
+      artifact: {
+        kind: 'inline',
+        mimeType: 'image/png',
+        dataUrl: `data:image/png;base64,${'A'.repeat(48)}`,
+      },
       diagnostics: [],
     }));
   });
@@ -174,11 +247,11 @@ describe('production integrity integration', () => {
     expect(canAdvanceFullStillRun(state)).toBe(true);
   });
 
-  it('requires presence contracts in gated production verification', () => {
+  it('requires presence contracts in gated production verification', async () => {
     const { project } = preparedProject();
     const shot = project.shots[0]!;
     project.workflow.production!.shotContracts = {};
-    const verification = verifyCompiledShotIntegrity({
+    const verification = await verifyCompiledShotIntegrity({
       project,
       shot,
       definition: manifest.shots[0]!,
@@ -216,12 +289,56 @@ describe('production integrity integration', () => {
   it('executes canary internally instead of trusting caller attestation', async () => {
     const planned = await planAgentProductionCanary({ manifest, maxShots: 1 });
     expect(planned.ok).toBe(true);
-    expect(planned.runId).toBeTruthy();
     const executed = await runAgentProductionCanary({ runId: planned.runId! });
+    expect(executed.ok).toBe(true);
     expect(executed.result).toBeDefined();
     expect(executed.gateState?.canaryResult).toBeDefined();
     expect(executed.gateState?.gates.AUTHOR_CANARY.status).not.toBe('pending');
     expect(executed.gateState?.gates.RENDER_CANARY.status).not.toBe('pending');
+  });
+
+  it('does not allow fabricated passing results through the public canary API', async () => {
+    const planned = await planAgentProductionCanary({ manifest, maxShots: 1 });
+    expect(planned.ok).toBe(true);
+    setAgentRenderShotFrameImpl(async () => ({
+      ok: false,
+      status: 'failed',
+      shotId: 'shot',
+      width: 640,
+      height: 360,
+      revisionId: 'revision_render',
+      diagnostics: [{ code: 'render_failed', message: 'Render failed.', severity: 'error' }],
+    }));
+    const fingerprintBefore = projectFingerprint(useProjectStore.getState().project);
+    const executed = await runAgentProductionCanary({ runId: planned.runId! });
+    expect(executed.ok).toBe(false);
+    expect(executed.result?.ok).toBe(false);
+    expect(projectFingerprint(useProjectStore.getState().project)).toBe(fingerprintBefore);
+    expect(vi.mocked(restoreAgentProjectRevision)).toHaveBeenCalled();
+  });
+
+  it('keeps test-only attestation behind an explicit helper', async () => {
+    const planned = await planAgentProductionCanary({ manifest, maxShots: 1 });
+    expect(planned.ok).toBe(true);
+    const attested = __testOnlyAttestProductionCanary({
+      runId: planned.runId!,
+      results: [passingCanaryResult('shot.001')],
+    });
+    expect(attested.ok).toBe(true);
+    expect(attested.gateState?.canaryResult?.ok).toBe(true);
+  });
+
+  it('runs the full lifecycle from canary through still verification gate', async () => {
+    const started = await runAgentProduction({ manifest, maxCanaryShots: 1 });
+    expect(started.ok).toBe(true);
+    const canary = await runAgentProductionCanary({ runId: started.runId });
+    expect(canary.ok).toBe(true);
+    const approved = approveAgentProductionCanary({ runId: started.runId });
+    expect(approved.ok).toBe(true);
+    const resumed = await resumeAgentProductionRun(started.runId);
+    expect(resumed.ok).toBe(true);
+    expect(resumed.state?.gateState?.gates.VERIFY_FULL_STILL_SEQUENCE.status).toMatch(/^passed/);
+    expect(resumed.status).toBe('needs_review');
   });
 });
 

@@ -7,10 +7,18 @@ import type { PrevisProductionManifestV1, PrevisShotDefinition } from '../previs
 import { validateProductionCapabilities } from '../previs/entityCapability';
 import { validateShotFrame } from '../previs/frameValidation';
 import { verifyShotCompositionConstraints, getShotCompositionContract } from '../previs/compositionConstraints';
-import { verifyShotPanorama } from '../previs/shotEnvironment';
+import {
+  evaluateProjectionHealth,
+  inspectShotEnvironment,
+  verifyShotPanorama,
+} from '../previs/shotEnvironment';
 import { getShotPresenceContract, verifyShotPresence } from '../previs/shotPresence';
 import { requiresPresenceContract, type ProductionIntegrityMode } from '../previs/productionBindingMode';
-import { verifyProjectMutationScope } from './verifiedMutation';
+import {
+  verifyProductionMutationScope,
+  type ProductionMutationExpectation,
+} from '../previs/productionMutationScope';
+import { renderShotProjectedFrameWithHealth } from '../renderers';
 import type { ProductionGateDiagnostic } from '../previs/productionGates';
 
 export interface CompiledShotVerificationInput {
@@ -20,11 +28,12 @@ export interface CompiledShotVerificationInput {
   manifest?: PrevisProductionManifestV1;
   integrityMode?: ProductionIntegrityMode;
   beforeProject?: LocationProject;
-  allowedShotIds?: readonly string[];
-  allowStructuralChanges?: boolean;
+  mutationExpectation?: ProductionMutationExpectation;
   frameExists?: boolean;
   frameByteSize?: number;
   fromCanonicalRenderer?: boolean;
+  /** When true, run projected coverage health even if the contract omits requireProjection. */
+  forceProjectionHealth?: boolean;
 }
 
 export interface CompiledShotVerification {
@@ -52,19 +61,20 @@ function toGateDiagnostics(
     }));
 }
 
-export function verifyCompiledShotIntegrity(
+export async function verifyCompiledShotIntegrity(
   input: CompiledShotVerificationInput,
-): CompiledShotVerification {
+): Promise<CompiledShotVerification> {
   const {
     project,
     shot,
     definition,
     integrityMode = 'gated_production',
     beforeProject,
-    allowedShotIds,
+    mutationExpectation,
     frameExists = false,
     frameByteSize,
     fromCanonicalRenderer = false,
+    forceProjectionHealth = false,
   } = input;
   const shotId = shot.productionShotId ?? definition.id;
   const presenceContract = getShotPresenceContract(project, shot);
@@ -93,9 +103,34 @@ export function verifyCompiledShotIntegrity(
   const capabilitiesOk = capabilityResult.ok;
   const capabilityDiagnostics = toGateDiagnostics(capabilityResult.diagnostics, shotId);
 
+  const environmentInspection = inspectShotEnvironment(project, shot);
   const panorama = verifyShotPanorama(project, shot);
-  const environmentOk = panorama.ok;
-  const environmentDiagnostics = toGateDiagnostics(panorama.diagnostics, shotId);
+  const environmentDiagnostics = toGateDiagnostics([
+    ...panorama.diagnostics,
+    ...environmentInspection.diagnostics.filter((item) => item.code !== 'environment_contract_missing'),
+  ], shotId);
+  let environmentOk = environmentDiagnostics.length === 0;
+
+  if (environmentInspection.requireProjection || forceProjectionHealth) {
+    try {
+      const rendered = await renderShotProjectedFrameWithHealth(project, shot);
+      const projectionDiagnostics = evaluateProjectionHealth(rendered.projectionHealth, {
+        shotId: shot.id,
+        requireProjection: true,
+        minimumProjectionCoverage: environmentInspection.minimumProjectionCoverage,
+      });
+      environmentDiagnostics.push(...toGateDiagnostics(projectionDiagnostics, shotId));
+      environmentOk = environmentDiagnostics.length === 0;
+    } catch (error) {
+      environmentOk = false;
+      environmentDiagnostics.push({
+        code: 'projection_render_failed',
+        message: error instanceof Error ? error.message : 'Projected health render failed.',
+        shotId,
+        severity: 'error',
+      });
+    }
+  }
 
   const compositionContract = getShotCompositionContract(project, shot);
   let compositionOk = true;
@@ -111,14 +146,17 @@ export function verifyCompiledShotIntegrity(
     })));
   }
 
-  const frame = validateShotFrame({
-    project,
-    shot,
-    definition,
-    frameExists,
-    frameByteSize,
-    fromCanonicalRenderer,
-  });
+  const shouldValidateFrame = frameExists || frameByteSize !== undefined;
+  const frame = shouldValidateFrame
+    ? validateShotFrame({
+      project,
+      shot,
+      definition,
+      frameExists,
+      frameByteSize,
+      fromCanonicalRenderer,
+    })
+    : { status: 'passed' as const, issues: [] };
   const renderHealthOk = frame.status !== 'failed';
   const renderHealthDiagnostics = frame.issues.map((issue) => ({
     code: issue.code,
@@ -129,13 +167,8 @@ export function verifyCompiledShotIntegrity(
 
   let mutationScopeOk = true;
   const mutationScopeDiagnostics: ProductionGateDiagnostic[] = [];
-  if (beforeProject) {
-    const scope = verifyProjectMutationScope(beforeProject, project, {
-      allowedShotIds,
-      allowStructuralChanges: input.allowStructuralChanges,
-      requireCamerasUnchanged: false,
-      requireTimelinesUnchanged: false,
-    });
+  if (beforeProject && mutationExpectation) {
+    const scope = verifyProductionMutationScope(beforeProject, project, mutationExpectation);
     mutationScopeOk = scope.ok;
     mutationScopeDiagnostics.push(...scope.errors.map((message) => ({
       code: 'mutation_scope_violation',
