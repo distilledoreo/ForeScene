@@ -40,6 +40,7 @@ export function ExportWorkspace() {
     resetShotExportOverrides,
     copyShotExportOverrides,
     promoteShotExportToSceneDefaults,
+    setProjectPackageFormat,
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
@@ -54,6 +55,7 @@ export function ExportWorkspace() {
     resetShotExportOverrides: state.resetShotExportOverrides,
     copyShotExportOverrides: state.copyShotExportOverrides,
     promoteShotExportToSceneDefaults: state.promoteShotExportToSceneDefaults,
+    setProjectPackageFormat: state.setProjectPackageFormat,
     isExportingPackage: state.isExportingPackage,
     setExportingPackage: state.setExportingPackage,
     markFinalPackageExported: state.markFinalPackageExported,
@@ -636,6 +638,7 @@ export function ExportWorkspace() {
           resetShotExportOverrides={resetShotExportOverrides}
           copyShotExportOverrides={copyShotExportOverrides}
           promoteShotExportToSceneDefaults={promoteShotExportToSceneDefaults}
+          setProjectPackageFormat={setProjectPackageFormat}
         />
       </PrecisionDrawer>
     </FullBleedLayout>

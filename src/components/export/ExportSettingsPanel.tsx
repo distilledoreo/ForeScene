@@ -3,6 +3,7 @@ import { FileJson } from 'lucide-react';
 import type {
   CharacterMotionExportFormat,
   CharacterPassExportSettings,
+  ExportPackageFormat,
   LocationProject,
   PeopleExportMode,
   Shot,
@@ -163,6 +164,7 @@ export function ExportSettingsPanel({
   resetShotExportOverrides,
   copyShotExportOverrides,
   promoteShotExportToSceneDefaults,
+  setProjectPackageFormat,
 }: {
   project: LocationProject;
   selectedShot?: Shot;
@@ -176,6 +178,7 @@ export function ExportSettingsPanel({
   resetShotExportOverrides: (shotId: string) => void;
   copyShotExportOverrides: (fromShotId: string, toShotIds: string[]) => void;
   promoteShotExportToSceneDefaults: (shotId: string) => void;
+  setProjectPackageFormat: (packageFormat: ExportPackageFormat) => void;
 }) {
   const [context, setContext] = useState<ExportSettingsContext>('scene');
   /** Local drafts so Custom width/height can be edited before differing from scene defaults. */
@@ -776,6 +779,24 @@ export function ExportSettingsPanel({
             : undefined,
         ))}
       </Section>
+
+      {context === 'scene' && (
+        <Section title="Package layout" defaultOpen={false}>
+          <Field
+            label="ZIP layout"
+            hint="ForeScene v2 is a pilot layout: shared panoramas/cubemaps live once under shared_references/, shots get generation/prompts/technical folders, plus a START_HERE.html landing page. Legacy v1 keeps the current per-shot inputs/ layout."
+          >
+            <Select
+              value={project.exportConfiguration?.packageFormat ?? 'legacy-v1'}
+              onChange={(event) => setProjectPackageFormat(event.target.value as ExportPackageFormat)}
+              data-export-package-format
+            >
+              <option value="legacy-v1">Legacy v1 (current)</option>
+              <option value="forescene-v2">ForeScene v2 (pilot)</option>
+            </Select>
+          </Field>
+        </Section>
+      )}
 
       <Section title="Technical handoff" defaultOpen={false}>
         {TECHNICAL_TOGGLES.map(({ key, label }) => booleanControl(key, label))}

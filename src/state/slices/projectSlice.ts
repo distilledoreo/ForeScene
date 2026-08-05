@@ -30,6 +30,7 @@ import {
   promoteShotExportToSceneDefaults as promoteShotExportToSceneDefaultsOp,
   resetShotExportField as resetShotExportFieldOp,
   resetShotExportOverrides as resetShotExportOverridesOp,
+  setProjectPackageFormat as setProjectPackageFormatOp,
   setSceneExportDefaults as setSceneExportDefaultsOp,
   setShotExportOverride as setShotExportOverrideOp,
   syncShotExportFromResolved,
@@ -1014,6 +1015,13 @@ export const createProjectSlice: StateCreator<
     project: touchProject(promoteShotExportToSceneDefaultsOp(
       ensureProjectExportConfiguration(state.project),
       shotId,
+    )),
+  })),
+
+  setProjectPackageFormat: (packageFormat) => set((state) => ({
+    project: touchProject(setProjectPackageFormatOp(
+      ensureProjectExportConfiguration(state.project),
+      packageFormat,
     )),
   })),
 

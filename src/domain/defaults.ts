@@ -311,7 +311,7 @@ export function createDefaultExportConfiguration(
     schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
     activeProfileId: 'custom',
     defaults: normalizeShotExportSettings(defaults),
-    // Preserve current package layout until the v2 writer ships.
+    // forescene-v2 is opt-in; existing/new projects keep the legacy layout by default.
     packageFormat: 'legacy-v1' satisfies ExportPackageFormat,
   };
 }

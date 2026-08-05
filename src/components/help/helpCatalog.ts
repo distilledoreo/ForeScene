@@ -630,6 +630,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: 'Depth reference (linear camera depth)', description: 'Enables depth deliverables. Depth is a grayscale metric reference, not a look to copy into AI generation.' },
           { label: 'Metadata JSON', description: 'Includes camera transforms, lens/clipping data, staging, keyframes, shot identity, and other machine-readable metadata.' },
           { label: 'Prompts', description: 'Includes image/video prompt material and notes. A note appears when no continuity landmarks are pinned.' },
+          { label: 'ZIP layout', description: 'Scene-wide choice between Legacy v1 (current per-shot inputs/ layout) and ForeScene v2 (pilot: shared_references/ + shots/ layout with a START_HERE.html landing page). Existing projects keep Legacy v1 until you opt in.' },
           { label: 'Export Final ZIP (current shot)', description: 'Builds a package for only the active shot.' },
           { label: 'Add Camera', description: 'Creates another camera/shot without navigating to Shots, useful when configuring exports from an empty or incomplete sequence.' },
         ],

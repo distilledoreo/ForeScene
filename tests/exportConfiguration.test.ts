@@ -24,6 +24,7 @@ import {
   resetShotExportOverrides,
   resolveExportSettings,
   resolveShotExportSettings,
+  setProjectPackageFormat,
   setSceneExportDefaults,
   setShotExportOverride,
   syncShotExportFromResolved,
@@ -261,6 +262,19 @@ describe('export settings operations', () => {
       characterPass: { enabled: true, motionFormat: 'both' },
     });
     expect(resolveShotExportSettings(project, project.shots[0]!)).toEqual(nextResolved);
+  });
+
+  it('sets the package format and defaults new/existing projects to legacy-v1 until opted in', () => {
+    let project = cloneProject();
+    expect(project.exportConfiguration!.packageFormat).toBe('legacy-v1');
+
+    project = setProjectPackageFormat(project, 'forescene-v2');
+    expect(project.exportConfiguration!.packageFormat).toBe('forescene-v2');
+    // Shot-resolved settings are untouched by a layout change.
+    expect(project.shots[0]!.exportSettings).toEqual(project.exportConfiguration!.defaults);
+
+    project = setProjectPackageFormat(project, 'legacy-v1');
+    expect(project.exportConfiguration!.packageFormat).toBe('legacy-v1');
   });
 
   it('replacing scene defaults rematerializes every shot', () => {
