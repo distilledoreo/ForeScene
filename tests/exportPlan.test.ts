@@ -174,16 +174,26 @@ describe('export plan', () => {
     expect(countShotPackageUnits(project, shot)).toBe(plan.shots[0]!.workUnits);
   });
 
-  it('notes when forescene-v2 is requested but not yet implemented', () => {
+  it('emits a matching forescene-v2 plan when requested, with shared artifacts kept out of shot artifacts', () => {
     const project = cloneProject();
     project.exportConfiguration = {
       ...project.exportConfiguration!,
       packageFormat: 'forescene-v2',
     };
     const plan = createExportPlan(project, project.shots);
-    expect(plan.packageFormat).toBe('legacy-v1');
+    expect(plan.packageFormat).toBe('forescene-v2');
     expect(plan.requestedPackageFormat).toBe('forescene-v2');
-    expect(plan.issues.some((issue) => issue.code === 'package-format-v2-unsupported')).toBe(true);
+    expect(plan.issues.some((issue) => issue.code === 'package-format-v2-unsupported')).toBe(false);
+    expect(plan.shots[0]!.artifacts.every((artifact) => (
+      artifact.kind !== 'global-reference' && artifact.kind !== 'global-graybox' && artifact.kind !== 'cubemap'
+    ))).toBe(true);
+    expect(plan.sharedArtifacts.some((artifact) => artifact.kind === 'package-root-manifest')).toBe(true);
+    expect(plan.sharedArtifacts.some((artifact) => artifact.kind === 'start-here')).toBe(true);
+    for (const file of listPlannedFiles(plan)) {
+      const isShotFile = file.path.startsWith('shots/');
+      const isSharedOrRoot = file.path.startsWith('shared_references/') || file.path === 'manifest.json' || file.path === 'START_HERE.html';
+      expect(isShotFile || isSharedOrRoot).toBe(true);
+    }
   });
 
   it('omits panorama and AI artifacts when the registry asset is missing', () => {
@@ -217,6 +227,7 @@ describe('export plan', () => {
       includeViewport: false,
       includePanoCrop: true,
       includeFullPano: true,
+      includeCubemap: true,
       includeGrayboxPano: false,
       includeAiResultFrame: true,
       includeCameraMoveVideo: false,

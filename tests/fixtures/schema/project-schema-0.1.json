@@ -52,6 +52,7 @@
         "includeAiResultFrame": false,
         "includePanoCrop": true,
         "includeFullPano": true,
+        "includeCubemap": false,
         "includeGrayboxPano": true
       },
       "assets": {},

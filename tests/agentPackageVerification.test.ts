@@ -33,6 +33,7 @@ function plan(): Pick<ExportPlan, 'shots' | 'sharedArtifacts'> {
       artifacts,
       workUnits: artifacts.length,
       estimatedFileCount: artifacts.length,
+      sharedReferenceIds: [],
     }],
     sharedArtifacts: [],
   };

@@ -21,6 +21,7 @@ import type {
   CharacterPassExportSettings,
   CharacterPassExportSettingsOverride,
   ExportConfigurationSchemaVersion,
+  ExportPackageFormat,
   ExportProfileId,
   ExportSettingsOverride,
   LocationProject,
@@ -52,6 +53,7 @@ export const EXPORT_SETTING_TOP_LEVEL_KEYS = [
   'includeAiResultFrame',
   'includePanoCrop',
   'includeFullPano',
+  'includeCubemap',
   'includeGrayboxPano',
   'includeCameraMoveVideo',
   'includeCameraMoveReferenceFrames',
@@ -509,6 +511,18 @@ export function patchSceneExportDefaults(
       : config.defaults.depth,
   });
   return setSceneExportDefaults(project, nextDefaults);
+}
+
+/**
+ * Set the package layout the writer will emit. Existing projects keep their saved
+ * format (default `legacy-v1`); this is the only way to opt into `forescene-v2`.
+ */
+export function setProjectPackageFormat(
+  project: LocationProject,
+  packageFormat: ExportPackageFormat,
+): LocationProject {
+  const config = requireExportConfiguration(project);
+  return withUpdatedProject(project, { ...config, packageFormat }, project.shots);
 }
 
 function mergeOverrides(

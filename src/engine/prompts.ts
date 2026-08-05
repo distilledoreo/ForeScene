@@ -143,7 +143,7 @@ export function generateVideoPrompt(shot: Shot): string {
     && shot.exportSettings.depth.includeCameraMoveVideo !== false
     && shot.cameraKeyframes.length >= 2,
   );
-  const hasCubemap = shot.exportSettings.includeFullPano;
+  const hasCubemap = Boolean(shot.exportSettings.includeCubemap);
   return [
     'Animate from the provided base frame while preserving the same environment, camera direction, landmarks, materials, lighting, and layout.',
     hasCameraMove

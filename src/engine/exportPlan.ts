@@ -17,7 +17,15 @@ import type {
   WarningItem,
 } from '../domain/types';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
-import { CAMERA_MOVE_CUBEMAP_FACES } from './cameraMoveCubemap';
+import { CAMERA_MOVE_CUBEMAP_FACES, DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE } from './cameraMoveCubemap';
+import {
+  assignSharedPanoramaFolders,
+  remapLegacyShotPathToV2,
+  v2SharedCubemapFace,
+  v2SharedCubemapStitched,
+  v2SharedGrayboxPng,
+  v2SharedPanoramaPng,
+} from './exportPaths';
 import type { ProjectOpenWarning } from './projectAssetRecovery';
 import {
   characterMotionMp4Path,
@@ -91,7 +99,9 @@ export type PlannedArtifactKind =
   | 'character-metadata'
   | 'shot-metadata'
   | 'prompts'
-  | 'shot-manifest';
+  | 'shot-manifest'
+  | 'package-root-manifest'
+  | 'start-here';
 
 export type PlannedArtifactDisposition = 'produce' | 'omit';
 
@@ -131,6 +141,8 @@ export interface PlannedShotExport {
   artifacts: PlannedArtifact[];
   workUnits: number;
   estimatedFileCount: number;
+  /** forescene-v2 only: shared-reference artifact ids this shot's manifest should link to. */
+  sharedReferenceIds: string[];
 }
 
 export interface ExportPlanSummary {
@@ -148,13 +160,17 @@ export interface ExportPlan {
   projectId: string;
   projectName: string;
   packageType: ExportPackageType;
-  /** Layout the writer will actually emit. */
-  packageFormat: 'legacy-v1';
+  /** Layout the writer will actually emit — matches `requestedPackageFormat` now that v2 is implemented. */
+  packageFormat: ExportPackageFormat;
   requestedPackageFormat: ExportPackageFormat;
   profileId: ExportProfileId;
   archiveFileName: string;
   shots: PlannedShotExport[];
-  /** Shared artifacts (empty for legacy-v1; reserved for forescene-v2). */
+  /**
+   * Unique shared reference preparations for this export (canonical / graybox / cubemap).
+   * Under legacy-v1 the writer still copies outputs into each shot folder, but work units
+   * and this list reflect one preparation per unique source configuration.
+   */
   sharedArtifacts: PlannedArtifact[];
   issues: ExportPlanIssue[];
   estimatedFileCount: number;
@@ -260,7 +276,7 @@ function planShotArtifacts(
     : [];
   // Writer requires a real registry asset — a pano record alone is not enough to produce.
   const hasCubemapSource = Boolean(
-    settings.includeFullPano
+    settings.includeCubemap
     && ((canonical && canonicalAsset) || (linkedPano && linkedPanoAsset)),
   );
   const aiResultAsset = aiResultAssetId
@@ -362,8 +378,12 @@ function planShotArtifacts(
         message: 'Canonical panorama export is enabled, but its image asset is missing.',
         shotId: shot.id,
       });
+    } else {
+      artifacts.push(omitArtifact(shot.id, 'global-reference', 'missing-canonical-pano'));
     }
+  }
 
+  if (settings.includeCubemap) {
     if (hasCubemapSource) {
       const files: PlannedFile[] = [];
       for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
@@ -381,9 +401,6 @@ function planShotArtifacts(
         ? 'missing-full-pano-asset'
         : 'missing-full-pano-source';
       artifacts.push(omitArtifact(shot.id, 'cubemap', cubemapOmission));
-      if (!canonical) {
-        artifacts.push(omitArtifact(shot.id, 'global-reference', 'missing-canonical-pano'));
-      }
     }
   }
 
@@ -771,6 +788,7 @@ function buildArchiveFileName(
 
 function summarizePlan(
   shots: PlannedShotExport[],
+  sharedArtifacts: PlannedArtifact[],
   issues: ExportPlanIssue[],
 ): ExportPlanSummary {
   const producedArtifactCounts: Partial<Record<PlannedArtifactKind, number>> = {};
@@ -788,6 +806,12 @@ function summarizePlan(
     }
   }
 
+  for (const artifact of sharedArtifacts) {
+    if (artifact.disposition !== 'produce') continue;
+    estimatedWorkUnits += artifact.workUnits;
+    estimatedFileCount += artifact.files.length;
+  }
+
   return {
     shotCount: shots.length,
     estimatedFileCount,
@@ -797,6 +821,273 @@ function summarizePlan(
     warningCount: issues.filter((issue) => issue.severity === 'warning').length,
     errorCount: issues.filter((issue) => issue.severity === 'error').length,
   };
+}
+
+export const SHARED_REFERENCE_KINDS = new Set<PlannedArtifactKind>([
+  'global-reference',
+  'global-graybox',
+  'cubemap',
+]);
+
+export function sharedReferenceCacheKey(
+  project: LocationProject,
+  shot: Shot,
+  settings: ShotExportSettings,
+  kind: PlannedArtifactKind,
+): string | null {
+  const canonical = project.panoRefs.find((pano) => pano.isCanonical);
+  const graybox = project.panoRefs.find((pano) => pano.type === 'graybox_render');
+  const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+
+  if (kind === 'global-reference') {
+    if (!settings.includeFullPano || !canonical) return null;
+    const asset = project.assets.assets[canonical.imageAssetId];
+    if (!asset) return null;
+    return [
+      'global-reference',
+      canonical.imageAssetId,
+      canonical.width,
+      canonical.height,
+      project.settings.panoLetterboxExports169 ? 1 : 0,
+      project.settings.defaultShotWidth,
+      project.settings.defaultShotHeight,
+    ].join('|');
+  }
+
+  if (kind === 'global-graybox') {
+    if (!settings.includeGrayboxPano || !graybox) return null;
+    const asset = project.assets.assets[graybox.imageAssetId];
+    if (!asset) return null;
+    return [
+      'global-graybox',
+      graybox.imageAssetId,
+      graybox.width,
+      graybox.height,
+      project.settings.panoLetterboxExports169 ? 1 : 0,
+      project.settings.defaultShotWidth,
+      project.settings.defaultShotHeight,
+    ].join('|');
+  }
+
+  if (kind === 'cubemap') {
+    if (!settings.includeCubemap) return null;
+    const source = (canonical && project.assets.assets[canonical.imageAssetId])
+      ? canonical
+      : (linkedPano && project.assets.assets[linkedPano.imageAssetId])
+        ? linkedPano
+        : undefined;
+    if (!source) return null;
+    return [
+      'cubemap',
+      source.imageAssetId,
+      JSON.stringify(source.rotation),
+      DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE,
+    ].join('|');
+  }
+
+  return null;
+}
+
+/**
+ * Collapse duplicate shared-reference prep into `sharedArtifacts` and zero per-shot
+ * work units for those kinds so multi-shot progress matches the cached writer.
+ */
+function attachSharedReferenceArtifacts(
+  project: LocationProject,
+  shots: readonly Shot[],
+  plannedShots: PlannedShotExport[],
+): PlannedArtifact[] {
+  const shotById = new Map(shots.map((shot) => [shot.id, shot]));
+  const sharedByKey = new Map<string, PlannedArtifact>();
+
+  for (const shotPlan of plannedShots) {
+    const shot = shotById.get(shotPlan.shotId);
+    if (!shot) continue;
+
+    for (const artifact of shotPlan.artifacts) {
+      if (artifact.disposition !== 'produce' || !SHARED_REFERENCE_KINDS.has(artifact.kind)) continue;
+      const key = sharedReferenceCacheKey(
+        project,
+        shot,
+        shotPlan.resolvedSettings,
+        artifact.kind,
+      );
+      if (!key) continue;
+
+      if (!sharedByKey.has(key)) {
+        sharedByKey.set(key, {
+          id: `shared:${key}`,
+          shotId: '__shared__',
+          kind: artifact.kind,
+          disposition: 'produce',
+          // Empty files: legacy-v1 still writes per-shot copies; forescene-v2 will own shared paths.
+          files: [],
+          workUnits: artifact.workUnits,
+        });
+      }
+      // Per-shot copies are packaging only; unique prep work lives on sharedArtifacts.
+      artifact.workUnits = 0;
+    }
+
+    const produced = shotPlan.artifacts.filter((artifact) => artifact.disposition === 'produce');
+    let workUnits = produced.reduce((sum, artifact) => sum + artifact.workUnits, 0);
+    const characterMeta = produced.find((artifact) => artifact.kind === 'character-metadata');
+    if (characterMeta && shotPlan.resolvedSettings.includeMetadata) {
+      workUnits += 1;
+    }
+    shotPlan.workUnits = workUnits;
+  }
+
+  return [...sharedByKey.values()];
+}
+
+interface SharedPanoSourceInfo {
+  panoId: string;
+  label: string;
+}
+
+/** Identify the underlying pano record behind a shared-reference kind (for v2 folder grouping). */
+function resolveSharedPanoSource(
+  project: LocationProject,
+  shot: Shot,
+  kind: PlannedArtifactKind,
+): SharedPanoSourceInfo | null {
+  const canonical = project.panoRefs.find((pano) => pano.isCanonical);
+  const graybox = project.panoRefs.find((pano) => pano.type === 'graybox_render');
+  const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+
+  if (kind === 'global-reference') {
+    return canonical ? { panoId: canonical.id, label: canonical.name || 'panorama' } : null;
+  }
+  if (kind === 'global-graybox') {
+    return graybox ? { panoId: graybox.id, label: graybox.name || 'graybox' } : null;
+  }
+  if (kind === 'cubemap') {
+    const canonicalAsset = canonical ? project.assets.assets[canonical.imageAssetId] : undefined;
+    if (canonical && canonicalAsset) {
+      return { panoId: canonical.id, label: canonical.name || 'panorama' };
+    }
+    const linkedAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
+    if (linkedPano && linkedAsset) {
+      return { panoId: linkedPano.id, label: linkedPano.name || 'panorama' };
+    }
+  }
+  return null;
+}
+
+/**
+ * forescene-v2 equivalent of `attachSharedReferenceArtifacts`: shared panos/cubemaps
+ * get real archive paths under `shared_references/panoramas/<folder>/` and are removed
+ * entirely from per-shot artifacts (produced or omitted) since the writer never copies
+ * them into shot folders under v2.
+ */
+function finalizeShotArtifactsForV2(
+  project: LocationProject,
+  shots: readonly Shot[],
+  plannedShots: PlannedShotExport[],
+): PlannedArtifact[] {
+  const shotById = new Map(shots.map((shot) => [shot.id, shot]));
+  const sharedByCacheKey = new Map<string, {
+    kind: PlannedArtifactKind;
+    panoSource: SharedPanoSourceInfo;
+    workUnits: number;
+  }>();
+
+  for (const shotPlan of plannedShots) {
+    const shot = shotById.get(shotPlan.shotId);
+    if (!shot) continue;
+
+    const sharedIdsForShot: string[] = [];
+    const keptArtifacts: PlannedArtifact[] = [];
+    for (const artifact of shotPlan.artifacts) {
+      if (SHARED_REFERENCE_KINDS.has(artifact.kind)) {
+        if (artifact.disposition === 'produce') {
+          const cacheKey = sharedReferenceCacheKey(project, shot, shotPlan.resolvedSettings, artifact.kind);
+          if (cacheKey) {
+            const panoSource = resolveSharedPanoSource(project, shot, artifact.kind);
+            if (panoSource) {
+              if (!sharedByCacheKey.has(cacheKey)) {
+                sharedByCacheKey.set(cacheKey, { kind: artifact.kind, panoSource, workUnits: artifact.workUnits });
+              }
+              sharedIdsForShot.push(`shared:${cacheKey}`);
+            }
+          }
+        }
+        continue;
+      }
+      keptArtifacts.push({
+        ...artifact,
+        files: artifact.files.map((file) => ({
+          ...file,
+          path: remapLegacyShotPathToV2(shotPlan.rootFolder, file.path),
+        })),
+      });
+    }
+
+    shotPlan.artifacts = keptArtifacts;
+    shotPlan.sharedReferenceIds = sharedIdsForShot;
+
+    const produced = keptArtifacts.filter((artifact) => artifact.disposition === 'produce');
+    let workUnits = produced.reduce((sum, artifact) => sum + artifact.workUnits, 0);
+    const characterMeta = produced.find((artifact) => artifact.kind === 'character-metadata');
+    if (characterMeta && shotPlan.resolvedSettings.includeMetadata) {
+      workUnits += 1;
+    }
+    shotPlan.workUnits = workUnits;
+    shotPlan.estimatedFileCount = produced.reduce((sum, artifact) => sum + artifact.files.length, 0);
+  }
+
+  const panoSourceByPanoId = new Map<string, SharedPanoSourceInfo>();
+  for (const entry of sharedByCacheKey.values()) {
+    panoSourceByPanoId.set(entry.panoSource.panoId, entry.panoSource);
+  }
+  const folderByPanoId = assignSharedPanoramaFolders(
+    [...panoSourceByPanoId.values()].map((info) => ({ id: info.panoId, label: info.label })),
+  );
+
+  const sharedArtifacts: PlannedArtifact[] = [];
+  for (const [cacheKey, entry] of sharedByCacheKey) {
+    const folder = folderByPanoId.get(entry.panoSource.panoId);
+    if (!folder) continue;
+    const files: PlannedFile[] = [];
+    if (entry.kind === 'global-reference') {
+      pushFile(files, v2SharedPanoramaPng(folder), 'image', true);
+    } else if (entry.kind === 'global-graybox') {
+      pushFile(files, v2SharedGrayboxPng(folder), 'image', false);
+    } else if (entry.kind === 'cubemap') {
+      for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+        pushFile(files, v2SharedCubemapFace(folder, face), 'image', false);
+      }
+      pushFile(files, v2SharedCubemapStitched(folder), 'image', false);
+    }
+    sharedArtifacts.push({
+      id: `shared:${cacheKey}`,
+      shotId: '__shared__',
+      kind: entry.kind,
+      disposition: 'produce',
+      files,
+      workUnits: entry.workUnits,
+    });
+  }
+
+  sharedArtifacts.push({
+    id: 'shared:package-root-manifest',
+    shotId: '__shared__',
+    kind: 'package-root-manifest',
+    disposition: 'produce',
+    files: [{ path: 'manifest.json', kind: 'json', required: true, manifestEntry: false }],
+    workUnits: 1,
+  });
+  sharedArtifacts.push({
+    id: 'shared:start-here',
+    shotId: '__shared__',
+    kind: 'start-here',
+    disposition: 'produce',
+    files: [{ path: 'START_HERE.html', kind: 'text', required: true, manifestEntry: false }],
+    workUnits: 1,
+  });
+
+  return sharedArtifacts;
 }
 
 /**
@@ -810,6 +1101,7 @@ export function createExportPlan(
 ): ExportPlan {
   const config = project.exportConfiguration;
   const requestedPackageFormat = config?.packageFormat ?? 'legacy-v1';
+  const packageFormat = requestedPackageFormat;
   const profileId = config?.activeProfileId ?? 'custom';
   const packageType = options.packageType
     ?? inferPackageType(shots.length, project.shots.length);
@@ -845,15 +1137,6 @@ export function createExportPlan(
         message: `Two selected shots use the production ID "${productionId}". Rename one before export.`,
       });
     }
-  }
-
-  if (requestedPackageFormat === 'forescene-v2') {
-    issues.push({
-      id: 'package-format-v2-unsupported',
-      code: 'package-format-v2-unsupported',
-      severity: 'info',
-      message: 'ForeScene package v2 is configured but not implemented yet. This export will use the legacy v1 layout.',
-    });
   }
 
   for (const shot of shots) {
@@ -907,23 +1190,27 @@ export function createExportPlan(
       artifacts,
       workUnits: adjustedWorkUnits,
       estimatedFileCount,
+      sharedReferenceIds: [],
     });
   }
 
   const rootFolders = plannedShots.map((shot) => shot.rootFolder);
-  const summary = summarizePlan(plannedShots, issues);
+  const sharedArtifacts = packageFormat === 'forescene-v2'
+    ? finalizeShotArtifactsForV2(project, shots, plannedShots)
+    : attachSharedReferenceArtifacts(project, shots, plannedShots);
+  const summary = summarizePlan(plannedShots, sharedArtifacts, issues);
 
   return {
     schemaVersion: EXPORT_PLAN_SCHEMA_VERSION,
     projectId: project.id,
     projectName: project.name,
     packageType,
-    packageFormat: 'legacy-v1',
+    packageFormat,
     requestedPackageFormat,
     profileId,
     archiveFileName: buildArchiveFileName(project, shots, rootFolders),
     shots: plannedShots,
-    sharedArtifacts: [],
+    sharedArtifacts,
     issues,
     estimatedFileCount: summary.estimatedFileCount,
     estimatedWorkUnits: summary.estimatedWorkUnits,

@@ -78,6 +78,7 @@ export interface ProjectSliceState {
   resetShotExportOverrides: (shotId: string) => void;
   copyShotExportOverrides: (fromShotId: string, toShotIds: string[]) => void;
   promoteShotExportToSceneDefaults: (shotId: string) => void;
+  setProjectPackageFormat: (packageFormat: import('../../domain/types').ExportPackageFormat) => void;
   removeShot: (id: string) => void;
   reorderShots: (shotId: string, targetIndex: number) => void;
   copyStagingToNextShot: (sourceShotId: string) => void;

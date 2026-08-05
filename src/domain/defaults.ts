@@ -261,6 +261,7 @@ export const defaultShotExportSettings: ShotExportSettings = {
   includeAiResultFrame: true,
   includePanoCrop: true,
   includeFullPano: true,
+  includeCubemap: false,
   includeGrayboxPano: true,
   includeCameraMoveVideo: true,
   includeCameraMoveReferenceFrames: true,
@@ -293,6 +294,7 @@ export function normalizeShotExportSettings(
     includeAiResultFrame: settings?.includeAiResultFrame !== false,
     includePanoCrop: settings?.includePanoCrop !== false,
     includeFullPano: settings?.includeFullPano !== false,
+    includeCubemap: settings?.includeCubemap === true,
     includeGrayboxPano: settings?.includeGrayboxPano !== false,
     includeCameraMoveVideo: settings?.includeCameraMoveVideo !== false,
     includeCameraMoveReferenceFrames: settings?.includeCameraMoveReferenceFrames !== false,
@@ -309,7 +311,7 @@ export function createDefaultExportConfiguration(
     schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
     activeProfileId: 'custom',
     defaults: normalizeShotExportSettings(defaults),
-    // Preserve current package layout until the v2 writer ships.
+    // forescene-v2 is opt-in; existing/new projects keep the legacy layout by default.
     packageFormat: 'legacy-v1' satisfies ExportPackageFormat,
   };
 }

@@ -687,6 +687,8 @@ export interface ShotExportSettings {
   includeAiResultFrame: boolean;
   includePanoCrop: boolean;
   includeFullPano: boolean;
+  /** Six-face + stitched cubemap from the styled/linked panorama. Off by default — advanced compatibility reference. */
+  includeCubemap: boolean;
   includeGrayboxPano: boolean;
   includeCameraMoveVideo: boolean;
   includeCameraMoveReferenceFrames: boolean;
@@ -735,6 +737,7 @@ export interface ExportSettingsOverride {
   includeAiResultFrame?: boolean;
   includePanoCrop?: boolean;
   includeFullPano?: boolean;
+  includeCubemap?: boolean;
   includeGrayboxPano?: boolean;
   includeCameraMoveVideo?: boolean;
   includeCameraMoveReferenceFrames?: boolean;

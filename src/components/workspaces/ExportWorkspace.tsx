@@ -40,6 +40,7 @@ export function ExportWorkspace() {
     resetShotExportOverrides,
     copyShotExportOverrides,
     promoteShotExportToSceneDefaults,
+    setProjectPackageFormat,
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
@@ -54,6 +55,7 @@ export function ExportWorkspace() {
     resetShotExportOverrides: state.resetShotExportOverrides,
     copyShotExportOverrides: state.copyShotExportOverrides,
     promoteShotExportToSceneDefaults: state.promoteShotExportToSceneDefaults,
+    setProjectPackageFormat: state.setProjectPackageFormat,
     isExportingPackage: state.isExportingPackage,
     setExportingPackage: state.setExportingPackage,
     markFinalPackageExported: state.markFinalPackageExported,
@@ -411,6 +413,17 @@ export function ExportWorkspace() {
                         ? ` · ${exportPlan.summary.overrideShotCount} with shot overrides`
                         : ''}
                     </li>
+                    {exportPlan.sharedArtifacts.length > 0 && (
+                      <li data-export-plan-shared-artifacts>
+                        Shared references prepared once ·{' '}
+                        {[
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'global-reference') && 'canonical',
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'cubemap') && 'cubemap',
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'global-graybox') && 'graybox',
+                        ].filter(Boolean).join(' · ')}
+                        {' '}({exportPlan.sharedArtifacts.length} unique)
+                      </li>
+                    )}
                     {exportPlan.summary.warningCount > 0 && (
                       <li className="text-amber-700 dark:text-amber-300">
                         {exportPlan.summary.warningCount} preflight warning
@@ -625,6 +638,7 @@ export function ExportWorkspace() {
           resetShotExportOverrides={resetShotExportOverrides}
           copyShotExportOverrides={copyShotExportOverrides}
           promoteShotExportToSceneDefaults={promoteShotExportToSceneDefaults}
+          setProjectPackageFormat={setProjectPackageFormat}
         />
       </PrecisionDrawer>
     </FullBleedLayout>
