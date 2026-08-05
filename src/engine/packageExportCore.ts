@@ -62,6 +62,7 @@ export interface PackageExportOptions {
 export interface ShotPackageResult {
   blob: Blob;
   fileName: string;
+  /** Archive inventory paths (full planned file list for v2; per-shot manifest entries for legacy v1). */
   manifestPaths: string[];
 }
 

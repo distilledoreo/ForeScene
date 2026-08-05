@@ -25,6 +25,7 @@ import {
   createExportPlan,
   formatPlanBlockingErrors,
   getPlannedShot,
+  listPlannedFiles,
   planHasBlockingErrors,
   sharedReferenceCacheKey,
   SHARED_REFERENCE_KINDS,
@@ -900,6 +901,11 @@ export async function buildForeSceneV2Package(
   if (planHasBlockingErrors(plan)) {
     throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
   }
+  if (plan.packageFormat !== 'forescene-v2') {
+    throw new ShotPackageError(
+      `ForeScene v2 writer received a ${plan.packageFormat} export plan.`,
+    );
+  }
 
   const totalUnits = plan.estimatedWorkUnits + 1; // + compress
   const tracker = createProgressTracker({ shots, totalUnits, onProgress: options.onProgress });
@@ -918,18 +924,16 @@ export async function buildForeSceneV2Package(
 
   await writeSharedArtifactsV2(zip, project, shots, plan, sharedMedia, { tracker, signal: options.signal });
 
-  const manifestPaths: string[] = [];
   for (let shotIndex = 0; shotIndex < shots.length; shotIndex += 1) {
     const shot = shots[shotIndex];
     throwIfAborted(options.signal);
     const shotPlan = getPlannedShot(plan, shot.id);
     if (!shotPlan) continue;
-    const paths = await appendShotPackageToZipV2(zip, project, shot, shotPlan, {
+    await appendShotPackageToZipV2(zip, project, shot, shotPlan, {
       shotIndex,
       tracker,
       signal: options.signal,
     });
-    manifestPaths.push(...paths);
   }
 
   throwIfAborted(options.signal);
@@ -953,6 +957,6 @@ export async function buildForeSceneV2Package(
   return {
     blob,
     fileName: plan.archiveFileName,
-    manifestPaths,
+    manifestPaths: listPlannedFiles(plan).map((file) => file.path),
   };
 }
