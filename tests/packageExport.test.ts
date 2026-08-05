@@ -413,6 +413,7 @@ describe('package export', () => {
     shot.exportSettings = {
       ...shot.exportSettings,
       includeFullPano: true,
+      includeCubemap: true,
     };
     project.settings.panoLetterboxExports169 = false;
     const faces = Object.fromEntries(
@@ -597,6 +598,7 @@ describe('package export', () => {
       ...shot.exportSettings,
       includeGrayboxPano: true,
       includeFullPano: true,
+      includeCubemap: true,
       includeAiResultFrame: true,
     };
     shot.assets.aiResultFrameAssetId = 'missing-ai-asset';
@@ -634,5 +636,63 @@ describe('package export', () => {
       name: 'ShotPackageError',
       message: expect.stringContaining('Forced blocking error'),
     });
+  });
+
+  it('renders a shared cubemap once across a 31-shot export with one canonical pano', async () => {
+    const project = withGrayboxAndShot('Cubemap Cache');
+    project.settings.panoLetterboxExports169 = false;
+    const template = project.shots[0]!;
+    template.exportSettings = {
+      ...template.exportSettings,
+      includeFullPano: false,
+      includeCubemap: true,
+      includeGrayboxPano: false,
+      includeMetadata: false,
+      includePrompt: false,
+    };
+    project.shots = Array.from({ length: 31 }, (_, index) => ({
+      ...template,
+      id: `shot-cache-${index + 1}`,
+      shotNumber: String(index + 1).padStart(3, '0'),
+      name: `Camera ${String(index + 1).padStart(3, '0')}`,
+      exportSettings: { ...template.exportSettings },
+    }));
+
+    const faces = Object.fromEntries(
+      CAMERA_MOVE_CUBEMAP_FACES.map((face) => [
+        face,
+        { blob: new Blob([`face-${face}`], { type: 'image/png' }), width: 2, height: 2 },
+      ]),
+    ) as Record<CameraMoveCubemapFaceId, BlobImageRenderResult>;
+    vi.mocked(renderPanoCubemapFacesAsBlobs).mockImplementation(async (_uri, options) => {
+      for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+        await options!.onFaceRendered?.(face, faces[face]);
+      }
+      return { faceSize: 2, faces };
+    });
+    vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockResolvedValue({
+      blob: new Blob(['stitched-cubemap'], { type: 'image/png' }),
+      width: 8,
+      height: 6,
+    });
+
+    const plan = createExportPlan(project, project.shots, { packageType: 'selected-shots' });
+    expect(plan.sharedArtifacts.filter((artifact) => artifact.kind === 'cubemap')).toHaveLength(1);
+    expect(plan.sharedArtifacts.find((artifact) => artifact.kind === 'cubemap')?.workUnits).toBe(
+      CAMERA_MOVE_CUBEMAP_FACES.length + 1,
+    );
+    expect(
+      plan.shots.every((shotPlan) => (
+        shotPlan.artifacts.find((artifact) => artifact.kind === 'cubemap')?.workUnits === 0
+      )),
+    ).toBe(true);
+
+    const result = await buildMultiShotPackage(project, project.shots, { plan });
+    expect(renderPanoCubemapFacesAsBlobs).toHaveBeenCalledTimes(1);
+    expect(stitchCubemapFaceBlobsCrossAsync).toHaveBeenCalledTimes(1);
+
+    const paths = await zipPaths(result.blob);
+    const cubemapFaceCopies = paths.filter((path) => path.endsWith('/inputs/cubemap/px.png'));
+    expect(cubemapFaceCopies).toHaveLength(31);
   });
 });

@@ -217,6 +217,7 @@ describe('export plan', () => {
       includeViewport: false,
       includePanoCrop: true,
       includeFullPano: true,
+      includeCubemap: true,
       includeGrayboxPano: false,
       includeAiResultFrame: true,
       includeCameraMoveVideo: false,

@@ -284,7 +284,7 @@ shot_001/
 
 `inputs/viewport_clay_motion.mp4` is included only after a shot camera move has been exported. It records the graybox scene through all authored camera keyframes as a 16:9 MP4, using browser MP4 recording support when available. `metadata/camera_keyframes.json` stores the captured keyframes, timing, and segment easing when keyframes exist. Projected and depth motion clips follow the same rules.
 
-`inputs/cubemap/` is included whenever a full styled/linked pano is exported (`includeFullPano`). Face PNGs (`px`…`nz`) and `cubemap_stitched.png` provide an undistorted environment reference alongside the equirectangular `global_reference.png`.
+`inputs/cubemap/` is included when cubemap export is enabled (`includeCubemap`, off by default). Face PNGs (`px`…`nz`) and `cubemap_stitched.png` provide an undistorted environment reference alongside the equirectangular `global_reference.png` (`includeFullPano`).
 
 `inputs/camera_move/` is included when camera keyframes exist and camera-move reference frames are enabled. Start/mid/end frames are sampled from the shot move in whichever appearances are enabled (`clay_`, `projected_`, `depth_`). `metadata/camera_move_reference_frames.json` records the sampled frame times and cameras; `metadata/depth.json` records the depth range.
 

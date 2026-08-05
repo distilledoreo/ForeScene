@@ -411,6 +411,17 @@ export function ExportWorkspace() {
                         ? ` · ${exportPlan.summary.overrideShotCount} with shot overrides`
                         : ''}
                     </li>
+                    {exportPlan.sharedArtifacts.length > 0 && (
+                      <li data-export-plan-shared-artifacts>
+                        Shared references prepared once ·{' '}
+                        {[
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'global-reference') && 'canonical',
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'cubemap') && 'cubemap',
+                          exportPlan.sharedArtifacts.some((a) => a.kind === 'global-graybox') && 'graybox',
+                        ].filter(Boolean).join(' · ')}
+                        {' '}({exportPlan.sharedArtifacts.length} unique)
+                      </li>
+                    )}
                     {exportPlan.summary.warningCount > 0 && (
                       <li className="text-amber-700 dark:text-amber-300">
                         {exportPlan.summary.warningCount} preflight warning

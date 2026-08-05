@@ -506,6 +506,7 @@ describe('project workflow logic', () => {
     project.panoRefs.push(pano);
     const shot = project.shots[0];
     shot.linkedPanoId = pano.id;
+    shot.exportSettings.includeCubemap = true;
     shot.cameraKeyframes = setTwoPointCameraKeyframe({
       keyframes: setTwoPointCameraKeyframe({
         keyframes: [],
@@ -534,7 +535,7 @@ describe('project workflow logic', () => {
     expect(paths).not.toContain('shot_001/inputs/camera_move/pano_reference_start.png');
   });
 
-  it('includes cubemap with full pano even without camera keyframes', () => {
+  it('includes cubemap when enabled even without camera keyframes', () => {
     const project = createDefaultProject();
     const asset = createPanoAsset({
       name: 'global_reference.png',
@@ -557,11 +558,41 @@ describe('project workflow logic', () => {
     shot.linkedPanoId = pano.id;
     shot.cameraKeyframes = [];
     shot.exportSettings.includeFullPano = true;
+    shot.exportSettings.includeCubemap = true;
 
     const paths = createShotPackageManifest(project, shot).files.map((file) => file.path);
     expect(paths).toContain('shot_001/inputs/cubemap/pz.png');
     expect(paths).toContain('shot_001/inputs/cubemap/cubemap_stitched.png');
     expect(paths).not.toContain('shot_001/inputs/camera_move/clay_start.png');
+  });
+
+  it('omits cubemap from the manifest when includeCubemap is off', () => {
+    const project = createDefaultProject();
+    const asset = createPanoAsset({
+      name: 'global_reference.png',
+      uri: 'data:image/png;base64,AAAA',
+      width: 2048,
+      height: 1024,
+    });
+    const pano = createPanoReference({
+      name: 'Canonical',
+      assetId: asset.id,
+      type: 'ai_global_reference',
+      origin: project.scene.panoOrigin,
+      width: asset.width ?? 2048,
+      height: asset.height ?? 1024,
+      isCanonical: true,
+    });
+    project.assets.assets[asset.id] = asset;
+    project.panoRefs.push(pano);
+    const shot = project.shots[0];
+    shot.linkedPanoId = pano.id;
+    shot.exportSettings.includeFullPano = true;
+    shot.exportSettings.includeCubemap = false;
+
+    const paths = createShotPackageManifest(project, shot).files.map((file) => file.path);
+    expect(paths).toContain('shot_001/inputs/global_reference.png');
+    expect(paths.every((path) => !path.includes('/cubemap/'))).toBe(true);
   });
 
   it('never lists cubemap_visible paths in the package manifest', () => {

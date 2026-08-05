@@ -70,6 +70,11 @@ export function getExportSelectionWarnings(
     const linked = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
     return !linked && !canonicalPano;
   });
+  const wantsCubemapWithoutSource = shots.some((shot) => {
+    if (!shot.exportSettings.includeCubemap) return false;
+    const linked = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+    return !linked && !canonicalPano;
+  });
 
   if (wantsGraybox && !grayboxPano) {
     warnings.push({
@@ -91,7 +96,15 @@ export function getExportSelectionWarnings(
     warnings.push({
       id: 'selection-missing-full-pano',
       severity: 'warning',
-      message: 'Full pano / cubemap export is enabled for a selected shot, but no canonical or linked panorama is available.',
+      message: 'Canonical panorama export is enabled for a selected shot, but no canonical or linked panorama is available.',
+    });
+  }
+
+  if (wantsCubemapWithoutSource) {
+    warnings.push({
+      id: 'selection-missing-cubemap-source',
+      severity: 'warning',
+      message: 'Cubemap export is enabled for a selected shot, but no canonical or linked panorama is available.',
     });
   }
 
@@ -169,6 +182,7 @@ export function getShotWarnings(project: LocationProject, shot: Shot): WarningIt
   );
   const wantsPanoCrop = Boolean(settings.includePanoCrop);
   const wantsFullPano = Boolean(settings.includeFullPano);
+  const wantsCubemap = Boolean(settings.includeCubemap);
 
   if (settings.includeGrayboxPano && !grayboxPano) {
     warnings.push({
@@ -196,9 +210,17 @@ export function getShotWarnings(project: LocationProject, shot: Shot): WarningIt
 
   if (wantsFullPano && !linkedPano && !canonicalPano) {
     warnings.push({
-      id: `${shot.id}-missing-full-pano-for-cubemap`,
+      id: `${shot.id}-missing-full-pano`,
       severity: 'warning',
-      message: 'Full pano / cubemap export is enabled, but no canonical or linked panorama is available.',
+      message: 'Canonical panorama export is enabled, but no canonical or linked panorama is available.',
+    });
+  }
+
+  if (wantsCubemap && !linkedPano && !canonicalPano) {
+    warnings.push({
+      id: `${shot.id}-missing-cubemap-source`,
+      severity: 'warning',
+      message: 'Cubemap export is enabled, but no canonical or linked panorama is available.',
     });
   }
 

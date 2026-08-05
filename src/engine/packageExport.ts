@@ -97,6 +97,51 @@ export interface ShotPackageResult {
   manifestPaths: string[];
 }
 
+/** Per-export cache so shared panoramas / cubemaps are prepared once across shots. */
+type SharedCubemapCacheEntry = {
+  faceSize: number;
+  faces: Record<(typeof CAMERA_MOVE_CUBEMAP_FACES)[number], { blob: Blob; width: number; height: number }>;
+  stitched: Blob;
+};
+
+type SharedExportMediaCache = {
+  preparedPanos: Map<string, string>;
+  cubemaps: Map<string, SharedCubemapCacheEntry>;
+};
+
+function createSharedExportMediaCache(): SharedExportMediaCache {
+  return {
+    preparedPanos: new Map(),
+    cubemaps: new Map(),
+  };
+}
+
+function cubemapCacheKey(
+  assetId: string,
+  rotation: unknown,
+  faceSize: number,
+): string {
+  return `${assetId}|${JSON.stringify(rotation)}|${faceSize}`;
+}
+
+function preparedPanoCacheKey(
+  assetId: string,
+  width: number,
+  height: number,
+  letterboxEnabled: boolean,
+  targetWidth: number,
+  targetHeight: number,
+): string {
+  return [
+    assetId,
+    width,
+    height,
+    letterboxEnabled ? 1 : 0,
+    targetWidth,
+    targetHeight,
+  ].join('|');
+}
+
 export class ShotPackageError extends Error {
   constructor(message: string) {
     super(message);
@@ -187,8 +232,7 @@ function createProgressTracker(args: {
 /** Discrete work units for one shot — used to weight multi-shot progress. */
 export function countShotPackageUnits(project: LocationProject, shot: Shot): number {
   const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
-  const shotPlan = getPlannedShot(plan, shot.id);
-  return Math.max(1, shotPlan?.workUnits ?? 1);
+  return Math.max(1, plan.estimatedWorkUnits);
 }
 
 export async function buildShotPackage(
@@ -206,7 +250,7 @@ export async function buildShotPackage(
     throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
   }
   const shotPlan = getPlannedShot(plan, shot.id);
-  const totalUnits = (shotPlan?.workUnits ?? countShotPackageUnits(project, shot)) + 1; // + compress
+  const totalUnits = plan.estimatedWorkUnits + 1; // + compress
   const tracker = createProgressTracker({
     shots: [shot],
     totalUnits,
@@ -223,12 +267,14 @@ export async function buildShotPackage(
   });
 
   const zip = new JSZip();
+  const sharedMedia = createSharedExportMediaCache();
   const rootFolder = shotPlan?.rootFolder ?? getShotPackageBaseName(shot);
   const manifestPaths = await appendShotPackageToZip(zip, project, shot, {
     shotIndex: 0,
     tracker,
     signal: options.signal,
     rootFolder,
+    sharedMedia,
   });
   const blob = await compressZip(zip, {
     tracker,
@@ -290,6 +336,7 @@ export async function buildMultiShotPackage(
   });
 
   const zip = new JSZip();
+  const sharedMedia = createSharedExportMediaCache();
   const manifestPaths: string[] = [];
   const folderByShotId = new Map(
     plan.shots.map((shotPlan) => [shotPlan.shotId, shotPlan.rootFolder]),
@@ -302,6 +349,7 @@ export async function buildMultiShotPackage(
       tracker,
       signal: options.signal,
       rootFolder: folderByShotId.get(shot.id),
+      sharedMedia,
     });
     manifestPaths.push(...paths);
   }
@@ -381,9 +429,10 @@ async function appendShotPackageToZip(
     tracker: ProgressTracker;
     signal?: AbortSignal;
     rootFolder?: string;
+    sharedMedia: SharedExportMediaCache;
   },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal, rootFolder } = args;
+  const { shotIndex, tracker, signal, rootFolder, sharedMedia } = args;
   const shotProject = resolveProjectForShot(project, shot);
   const peopleMode = shot.exportSettings.peopleExportMode;
   const peopleVariants = getPeopleRenderVariants(peopleMode);
@@ -772,32 +821,54 @@ async function appendShotPackageToZip(
     }
   }
 
-  // Full cubemap ships with full-pano exports (canonical preferred, else linked).
-  const cubemapSourcePano = (shot.exportSettings.includeFullPano && canonicalPano && canonicalAsset)
+  // Cubemap is independently gated (includeCubemap); canonical preferred, else linked.
+  const cubemapSourcePano = (shot.exportSettings.includeCubemap && canonicalPano && canonicalAsset)
     ? { pano: canonicalPano, asset: canonicalAsset }
-    : (shot.exportSettings.includeFullPano && linkedPano && linkedPanoAsset)
+    : (shot.exportSettings.includeCubemap && linkedPano && linkedPanoAsset)
       ? { pano: linkedPano, asset: linkedPanoAsset }
       : undefined;
   if (cubemapSourcePano) {
     throwIfAborted(signal);
-    emit('rendering', 'Rendering cubemap faces…', { indeterminate: true });
-    const cubemap = await renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri, {
-      faceSize: DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE,
-      panoRotation: cubemapSourcePano.pano.rotation,
-      onFaceRendered: async (face, rendered) => {
+    const faceSize = DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE;
+    const cacheKey = cubemapCacheKey(
+      cubemapSourcePano.asset.id,
+      cubemapSourcePano.pano.rotation,
+      faceSize,
+    );
+    let cached = sharedMedia.cubemaps.get(cacheKey);
+    if (!cached) {
+      emit('rendering', 'Rendering cubemap faces…', { indeterminate: true });
+      const cubemap = await renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri, {
+        faceSize,
+        panoRotation: cubemapSourcePano.pano.rotation,
+        onFaceRendered: async (face, rendered) => {
+          throwIfAborted(signal);
+          await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, rendered.blob);
+          const faceIndex = CAMERA_MOVE_CUBEMAP_FACES.indexOf(face);
+          finishUnit(
+            'rendering',
+            `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`,
+          );
+        },
+      });
+      emit('packaging', 'Stitching cubemap…', { indeterminate: true });
+      const stitchedCubemap = await stitchCubemapFaceBlobsCrossAsync(cubemap.faces, cubemap.faceSize);
+      await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, stitchedCubemap.blob);
+      finishUnit('packaging', 'Cubemap stitch ready');
+      cached = {
+        faceSize: cubemap.faceSize,
+        faces: cubemap.faces,
+        stitched: stitchedCubemap.blob,
+      };
+      sharedMedia.cubemaps.set(cacheKey, cached);
+    } else {
+      emit('packaging', 'Reusing shared cubemap…', { indeterminate: true });
+      for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
         throwIfAborted(signal);
-        await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, rendered.blob);
-        const faceIndex = CAMERA_MOVE_CUBEMAP_FACES.indexOf(face);
-        finishUnit(
-          'rendering',
-          `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`,
-        );
-      },
-    });
-    emit('packaging', 'Stitching cubemap…', { indeterminate: true });
-    const stitchedCubemap = await stitchCubemapFaceBlobsCrossAsync(cubemap.faces, cubemap.faceSize);
-    await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, stitchedCubemap.blob);
-    finishUnit('packaging', 'Cubemap stitch ready');
+        await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, cached.faces[face].blob);
+      }
+      await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, cached.stitched);
+    }
   }
 
   if (shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop) {
@@ -813,43 +884,79 @@ async function appendShotPackageToZip(
   if (shot.exportSettings.includeFullPano && canonicalAsset && canonicalPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing styled reference panorama…', { indeterminate: true });
-    const exportUrl = await preparePanoExportDataUrl(
-      canonicalAsset.uri,
+    const panoKey = preparedPanoCacheKey(
+      canonicalAsset.id,
       canonicalPano.width,
       canonicalPano.height,
-      {
-        letterboxEnabled: project.settings.panoLetterboxExports169,
-        targetWidth: project.settings.defaultShotWidth,
-        targetHeight: project.settings.defaultShotHeight,
-      },
+      project.settings.panoLetterboxExports169,
+      project.settings.defaultShotWidth,
+      project.settings.defaultShotHeight,
     );
-    if (exportUrl === canonicalAsset.uri) {
-      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
+    let exportUrl = sharedMedia.preparedPanos.get(panoKey);
+    if (exportUrl === undefined) {
+      exportUrl = await preparePanoExportDataUrl(
+        canonicalAsset.uri,
+        canonicalPano.width,
+        canonicalPano.height,
+        {
+          letterboxEnabled: project.settings.panoLetterboxExports169,
+          targetWidth: project.settings.defaultShotWidth,
+          targetHeight: project.settings.defaultShotHeight,
+        },
+      );
+      sharedMedia.preparedPanos.set(panoKey, exportUrl);
+      if (exportUrl === canonicalAsset.uri) {
+        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
+      } else {
+        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+      }
+      finishUnit('packaging', 'Styled reference panorama added');
     } else {
-      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+      if (exportUrl === canonicalAsset.uri) {
+        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
+      } else {
+        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+      }
     }
-    finishUnit('packaging', 'Styled reference panorama added');
   }
 
   if (shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing graybox panorama…', { indeterminate: true });
-    const exportUrl = await preparePanoExportDataUrl(
-      grayboxAsset.uri,
+    const panoKey = preparedPanoCacheKey(
+      grayboxAsset.id,
       grayboxPano.width,
       grayboxPano.height,
-      {
-        letterboxEnabled: project.settings.panoLetterboxExports169,
-        targetWidth: project.settings.defaultShotWidth,
-        targetHeight: project.settings.defaultShotHeight,
-      },
+      project.settings.panoLetterboxExports169,
+      project.settings.defaultShotWidth,
+      project.settings.defaultShotHeight,
     );
-    if (exportUrl === grayboxAsset.uri) {
-      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
+    let exportUrl = sharedMedia.preparedPanos.get(panoKey);
+    if (exportUrl === undefined) {
+      exportUrl = await preparePanoExportDataUrl(
+        grayboxAsset.uri,
+        grayboxPano.width,
+        grayboxPano.height,
+        {
+          letterboxEnabled: project.settings.panoLetterboxExports169,
+          targetWidth: project.settings.defaultShotWidth,
+          targetHeight: project.settings.defaultShotHeight,
+        },
+      );
+      sharedMedia.preparedPanos.set(panoKey, exportUrl);
+      if (exportUrl === grayboxAsset.uri) {
+        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
+      } else {
+        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+      }
+      finishUnit('packaging', 'Graybox panorama added');
     } else {
-      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+      if (exportUrl === grayboxAsset.uri) {
+        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
+      } else {
+        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+      }
     }
-    finishUnit('packaging', 'Graybox panorama added');
   }
 
   const characterPass = normalizeCharacterPassExportSettings(shot.exportSettings.characterPass);

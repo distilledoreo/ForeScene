@@ -63,6 +63,7 @@ function makeShot(partial: {
       includeAiResultFrame: false,
       includePanoCrop: false,
       includeFullPano: false,
+      includeCubemap: false,
       includeGrayboxPano: false,
       includeCameraMoveVideo: false,
       includeCameraMoveReferenceFrames: false,

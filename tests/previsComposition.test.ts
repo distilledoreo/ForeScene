@@ -91,6 +91,7 @@ function makeShot(camera: CameraData, shotNumber = '010'): Shot {
       includeAiResultFrame: false,
       includePanoCrop: false,
       includeFullPano: false,
+      includeCubemap: false,
       includeGrayboxPano: false,
       includeCameraMoveVideo: false,
       includeCameraMoveReferenceFrames: false,

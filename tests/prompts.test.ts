@@ -48,6 +48,27 @@ describe('graybox reference prompt', () => {
 
     const prompt = generateVideoPrompt(shot);
     expect(prompt).toContain('Use viewport_clay_motion.mp4 as the camera-motion');
+    expect(prompt).not.toContain('inputs/cubemap/');
+  });
+
+  it('mentions cubemap faces when cubemap export is enabled', () => {
+    const shot = createDefaultProject().shots[0];
+    shot.exportSettings.includeCubemap = true;
+    shot.cameraKeyframes = setTwoPointCameraKeyframe({
+      keyframes: setTwoPointCameraKeyframe({
+        keyframes: [],
+        slot: 'start',
+        camera: shot.camera,
+      }),
+      slot: 'end',
+      camera: {
+        ...shot.camera,
+        position: [1, 1.8, -3],
+      },
+    });
+    shot.assets.cameraMoveVideoAssetId = 'asset_camera_move';
+
+    const prompt = generateVideoPrompt(shot);
     expect(prompt).toContain('inputs/cubemap/');
     expect(prompt).not.toContain('cubemap_visible');
     expect(prompt).toContain('cubemap is not the camera lens');

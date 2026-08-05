@@ -46,6 +46,7 @@ type BooleanTopLevelKey =
   | 'includeAiResultFrame'
   | 'includePanoCrop'
   | 'includeFullPano'
+  | 'includeCubemap'
   | 'includeGrayboxPano'
   | 'includeCameraMoveVideo'
   | 'includeCameraMoveReferenceFrames'
@@ -65,6 +66,7 @@ const GENERATION_TOGGLES: Array<{ key: BooleanTopLevelKey; label: string }> = [
 const SHARED_REF_TOGGLES: Array<{ key: BooleanTopLevelKey; label: string }> = [
   { key: 'includePanoCrop', label: 'Pano crop' },
   { key: 'includeFullPano', label: 'Canonical / styled panorama' },
+  { key: 'includeCubemap', label: 'Cubemap faces' },
   { key: 'includeGrayboxPano', label: 'Graybox panorama' },
 ];
 

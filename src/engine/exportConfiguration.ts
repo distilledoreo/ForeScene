@@ -52,6 +52,7 @@ export const EXPORT_SETTING_TOP_LEVEL_KEYS = [
   'includeAiResultFrame',
   'includePanoCrop',
   'includeFullPano',
+  'includeCubemap',
   'includeGrayboxPano',
   'includeCameraMoveVideo',
   'includeCameraMoveReferenceFrames',
