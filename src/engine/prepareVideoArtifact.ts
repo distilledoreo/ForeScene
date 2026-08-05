@@ -79,7 +79,30 @@ export interface PreparedVideoArtifact {
   dataUrl?: string;
 }
 
-const inflightJobs = new Map<string, Promise<PreparedVideoArtifact>>();
+type VideoProgressCallback = NonNullable<CameraMoveVideoOptions['onProgress']>;
+type VideoProgressEvent = Parameters<VideoProgressCallback>[0];
+
+interface InflightVideoSubscriber {
+  onProgress?: VideoProgressCallback;
+}
+
+interface InflightVideoJob {
+  key: string;
+  controller: AbortController;
+  subscribers: Map<symbol, InflightVideoSubscriber>;
+  promise: Promise<PreparedVideoArtifact>;
+  settled: boolean;
+}
+
+const inflightJobs = new Map<string, InflightVideoJob>();
+
+function cancellationError(): Error {
+  return new Error('MP4 export was cancelled.');
+}
+
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw cancellationError();
+}
 
 function resolveShot(project: LocationProject, shotId: string) {
   const shot = project.shots.find((item) => item.id === shotId);
@@ -225,12 +248,141 @@ async function renderAndStore(
   return prepared;
 }
 
+function emitInflightProgress(job: InflightVideoJob, progress: VideoProgressEvent): void {
+  for (const subscriber of job.subscribers.values()) {
+    try {
+      subscriber.onProgress?.(progress);
+    } catch {
+      // One observer must not break a shared render for the other subscribers.
+    }
+  }
+}
+
+function createInflightJob(
+  params: PrepareVideoArtifactParams,
+  fingerprint: VideoArtifactFingerprint,
+  resolved: ReturnType<typeof resolveSpecificationDimensions>,
+): InflightVideoJob {
+  const controller = new AbortController();
+  const job: InflightVideoJob = {
+    key: fingerprint.key,
+    controller,
+    subscribers: new Map(),
+    promise: Promise.resolve(undefined as unknown as PreparedVideoArtifact),
+    settled: false,
+  };
+
+  const sharedParams: PrepareVideoArtifactParams = {
+    ...params,
+    signal: controller.signal,
+    includeDataUrl: false,
+    onFrameRendered: undefined,
+    onProgress: (progress) => emitInflightProgress(job, progress),
+    stats: undefined,
+    bypassCache: false,
+  };
+
+  // Start in a microtask so the originating caller is subscribed before the
+  // renderer can emit progress or observe cancellation.
+  job.promise = Promise.resolve()
+    .then(() => renderAndStore(sharedParams, fingerprint, resolved))
+    .finally(() => {
+      job.settled = true;
+      if (inflightJobs.get(job.key) === job) inflightJobs.delete(job.key);
+    });
+  inflightJobs.set(job.key, job);
+  return job;
+}
+
+function releaseInflightSubscriber(job: InflightVideoJob, token: symbol): void {
+  if (!job.subscribers.delete(token)) return;
+  if (job.settled || job.subscribers.size > 0) return;
+
+  // Remove the abandoned job immediately so a new caller does not join a
+  // render that is already being aborted.
+  if (inflightJobs.get(job.key) === job) inflightJobs.delete(job.key);
+  job.controller.abort();
+}
+
+async function prepareResultForCaller(
+  result: PreparedVideoArtifact,
+  params: PrepareVideoArtifactParams,
+  cacheStatus: 'miss' | 'joined',
+): Promise<PreparedVideoArtifact> {
+  throwIfCancelled(params.signal);
+  const dataUrl = params.includeDataUrl
+    ? (result.dataUrl ?? await blobToDataUrl(result.blob))
+    : undefined;
+  throwIfCancelled(params.signal);
+  return {
+    ...result,
+    cacheStatus,
+    dataUrl,
+  };
+}
+
+function awaitInflightJob(
+  job: InflightVideoJob,
+  params: PrepareVideoArtifactParams,
+  cacheStatus: 'miss' | 'joined',
+): Promise<PreparedVideoArtifact> {
+  const token = Symbol('video-artifact-subscriber');
+  job.subscribers.set(token, { onProgress: params.onProgress });
+
+  return new Promise((resolve, reject) => {
+    let active = true;
+    const signal = params.signal;
+
+    const cleanup = () => {
+      if (!active) return;
+      active = false;
+      signal?.removeEventListener('abort', onAbort);
+      releaseInflightSubscriber(job, token);
+    };
+
+    const onAbort = () => {
+      cleanup();
+      reject(cancellationError());
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    job.promise.then(
+      (result) => {
+        if (!active) return;
+        void prepareResultForCaller(result, params, cacheStatus).then(
+          (prepared) => {
+            if (!active) return;
+            cleanup();
+            resolve(prepared);
+          },
+          (error) => {
+            if (!active) return;
+            cleanup();
+            reject(error);
+          },
+        );
+      },
+      (error) => {
+        if (!active) return;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Prepare a deterministic video artifact, reusing cache and in-progress jobs.
  */
 export async function prepareVideoArtifact(
   params: PrepareVideoArtifactParams,
 ): Promise<PreparedVideoArtifact> {
+  throwIfCancelled(params.signal);
   const shot = resolveShot(params.project, params.shotId);
   const resolved = resolveSpecificationDimensions(
     params.project,
@@ -250,10 +402,12 @@ export async function prepareVideoArtifact(
 
   if (allowCache) {
     const cached = await getVideoArtifactFromCache(fingerprint);
+    throwIfCancelled(params.signal);
     if (cached) {
       let dataUrl: string | undefined;
       if (params.includeDataUrl) {
         dataUrl = await blobToDataUrl(cached.blob);
+        throwIfCancelled(params.signal);
       }
       const timing = createCacheHitTiming({
         frameCount: cached.frameCount,
@@ -282,42 +436,22 @@ export async function prepareVideoArtifact(
       return prepared;
     }
 
-    const existing = inflightJobs.get(fingerprint.key);
-    if (existing) {
-      const joined = await existing;
-      if (params.signal?.aborted) {
-        throw new Error('MP4 export was cancelled.');
-      }
-      const prepared: PreparedVideoArtifact = {
-        ...joined,
-        cacheStatus: 'joined',
-        dataUrl: params.includeDataUrl
-          ? (joined.dataUrl ?? await blobToDataUrl(joined.blob))
-          : undefined,
-      };
-      recordStats(params.stats, prepared);
-      return prepared;
-    }
+    let job = inflightJobs.get(fingerprint.key);
+    const cacheStatus: 'miss' | 'joined' = job ? 'joined' : 'miss';
+    if (!job) job = createInflightJob(params, fingerprint, resolved);
+
+    const prepared = await awaitInflightJob(job, params, cacheStatus);
+    recordStats(params.stats, prepared);
+    return prepared;
   }
 
-  const job = renderAndStore(
+  const prepared = await renderAndStore(
     { ...params, bypassCache: params.bypassCache || Boolean(params.onFrameRendered) },
     fingerprint,
     resolved,
   );
-  if (allowCache) {
-    inflightJobs.set(fingerprint.key, job);
-  }
-
-  try {
-    const prepared = await job;
-    recordStats(params.stats, prepared);
-    return prepared;
-  } finally {
-    if (inflightJobs.get(fingerprint.key) === job) {
-      inflightJobs.delete(fingerprint.key);
-    }
-  }
+  recordStats(params.stats, prepared);
+  return prepared;
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -342,7 +476,22 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 /** Test helper. */
+export function inspectPrepareVideoArtifactInflightForTests(): {
+  jobs: number;
+  subscribers: number;
+  abortedJobs: number;
+} {
+  const jobs = [...inflightJobs.values()];
+  return {
+    jobs: jobs.length,
+    subscribers: jobs.reduce((sum, job) => sum + job.subscribers.size, 0),
+    abortedJobs: jobs.filter((job) => job.controller.signal.aborted).length,
+  };
+}
+
+/** Test helper. */
 export function resetPrepareVideoArtifactInflightForTests(): void {
+  for (const job of inflightJobs.values()) job.controller.abort();
   inflightJobs.clear();
 }
 
