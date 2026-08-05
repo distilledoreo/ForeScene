@@ -1,0 +1,54 @@
+name: Fix PR112 documentation once
+
+on:
+  push:
+    branches:
+      - feature/video-performance-pr1
+    paths:
+      - .github/workflows/fix-pr112-docs-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix-documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/video-performance-pr1
+          fetch-depth: 0
+
+      - name: Correct video profile documentation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          replacements = {
+              Path("src/components/export/ExportSettingsPanel.tsx"): (
+                  "Standard and High Quality keep 1080p30.",
+                  "Standard uses 1080p30 and High Quality uses 4K30.",
+              ),
+              Path("src/components/help/helpCatalog.ts"): (
+                  "Fast Control 720p24, Standard/High Quality 1080p30",
+                  "Fast Control 720p24, Standard 1080p30, High Quality 4K30",
+              ),
+          }
+
+          for path, (old, new) in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one occurrence of {old!r} in {path}, found {count}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          workflow = Path(".github/workflows/fix-pr112-docs-once.yml")
+          workflow.unlink()
+
+      - name: Commit documentation corrections
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/export/ExportSettingsPanel.tsx src/components/help/helpCatalog.ts .github/workflows/fix-pr112-docs-once.yml
+          git commit -m "docs: correct High Quality video resolution"
+          git push origin HEAD:feature/video-performance-pr1
