@@ -32,8 +32,8 @@ export interface DeterministicEncodeOptions {
    * to quality when unsupported.
    */
   encoderMode?: VideoEncoderMode;
-  /** Optional per-stage timing hooks (render vs encode). */
-  onStageTiming?: (stage: 'render' | 'encode', ms: number) => void;
+  /** Optional per-stage timing hooks (render / encode / mux finalize). */
+  onStageTiming?: (stage: 'render' | 'encode' | 'finalize', ms: number) => void;
 }
 
 export interface DeterministicEncodeResult {
@@ -246,7 +246,9 @@ export async function encodeCanvasFramesToMp4(
     }
 
     videoSource.close();
+    const finalizeStarted = performance.now();
     await output.finalize();
+    onStageTiming?.('finalize', performance.now() - finalizeStarted);
   } catch (error) {
     try {
       videoSource.close();

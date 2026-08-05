@@ -11,7 +11,10 @@ import type {
   ShotExportSettings,
   VideoPerformanceProfileId,
 } from '../../domain/types';
-import { resolveProjectVideoPerformance } from '../../engine/videoPerformance';
+import {
+  preferredShotExportMotionDefaultsForProject,
+  resolveProjectVideoPerformance,
+} from '../../engine/videoPerformance';
 import {
   DEFAULT_CHARACTER_PASS_BACKGROUND,
   defaultCharacterPassExportSettings,
@@ -801,23 +804,15 @@ export function ExportSettingsPanel({
                     onChange={(event) => {
                       const profileId = event.target.value as VideoPerformanceProfileId;
                       setProjectVideoPerformance({ profileId });
-                      if (profileId === 'fast-control') {
-                        patchResolved({
-                          includeCameraMoveVideo: false,
-                          includeProjectedCameraMoveVideo: true,
-                        });
-                      } else if (profileId === 'standard' || profileId === 'high-quality') {
-                        patchResolved({
-                          includeCameraMoveVideo: true,
-                          includeProjectedCameraMoveVideo: true,
-                        });
-                      }
+                      // Match setProjectExportProfile motion defaults, including clay
+                      // fallback when no projected appearance is available.
+                      patchResolved(preferredShotExportMotionDefaultsForProject(project, profileId));
                     }}
                     data-export-video-performance-profile
                   >
                     <option value="fast-control">Fast Control (720p24)</option>
                     <option value="standard">Standard (1080p30)</option>
-                    <option value="high-quality">High Quality (1080p30)</option>
+                    <option value="high-quality">High Quality (4K30)</option>
                   </Select>
                 </Field>
                 <Field

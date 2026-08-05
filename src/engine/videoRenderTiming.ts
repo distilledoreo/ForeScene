@@ -23,8 +23,8 @@ export interface VideoRenderTimingBuilder {
   markSetupEnd(): void;
   addRenderMs(ms: number): void;
   addEncodeMs(ms: number): void;
-  markFinalizeStart(): void;
-  markFinalizeEnd(): void;
+  /** Accumulate muxer finalize wall time (measured around output.finalize()). */
+  addFinalizeMs(ms: number): void;
   finish(options?: { cacheHit?: boolean; frameCount?: number; width?: number; height?: number }): VideoRenderTiming;
 }
 
@@ -34,7 +34,6 @@ export function createVideoRenderTimingBuilder(): VideoRenderTimingBuilder {
   let setupMs = 0;
   let renderMs = 0;
   let encodeMs = 0;
-  let finalizeStart = 0;
   let finalizeMs = 0;
   let frameCount = 0;
   let width = 0;
@@ -53,13 +52,8 @@ export function createVideoRenderTimingBuilder(): VideoRenderTimingBuilder {
     addEncodeMs(ms: number) {
       if (Number.isFinite(ms) && ms > 0) encodeMs += ms;
     },
-    markFinalizeStart() {
-      finalizeStart = performance.now();
-    },
-    markFinalizeEnd() {
-      if (finalizeStart > 0) {
-        finalizeMs += Math.max(0, performance.now() - finalizeStart);
-      }
+    addFinalizeMs(ms: number) {
+      if (Number.isFinite(ms) && ms > 0) finalizeMs += ms;
     },
     finish(options = {}) {
       frameCount = options.frameCount ?? frameCount;

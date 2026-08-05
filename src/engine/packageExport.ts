@@ -86,7 +86,11 @@ import {
   shouldExportViewportDepth,
 } from './depthRender';
 import { prepareVideoArtifact } from './prepareVideoArtifact';
-import { resolveProjectVideoPerformance } from './videoPerformance';
+import {
+  createEmptyPackageVideoPerformanceStats,
+  resolveProjectVideoPerformance,
+  type PackageVideoPerformanceStats,
+} from './videoPerformance';
 
 export { downloadBlob };
 export {
@@ -131,6 +135,12 @@ export async function preparePackageCameraMoveVideo(params: {
   depthInvert?: boolean;
   signal?: AbortSignal;
   onProgress?: Parameters<typeof prepareVideoArtifact>[0]['onProgress'];
+  stats?: PackageVideoPerformanceStats;
+  contentMode?: Parameters<typeof prepareVideoArtifact>[0]['specification']['contentMode'];
+  backgroundColor?: string;
+  includeCharacterAttachments?: boolean;
+  transparent?: boolean;
+  onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
 }) {
   return prepareVideoArtifact({
     project: params.project,
@@ -138,6 +148,7 @@ export async function preparePackageCameraMoveVideo(params: {
     specification: {
       appearance: params.appearance,
       peopleVariant: params.peopleVariant,
+      contentMode: params.contentMode,
       mode: 'render',
       resolutionPreset: params.performance.resolutionPreset,
       frameRate: params.performance.frameRate,
@@ -145,11 +156,16 @@ export async function preparePackageCameraMoveVideo(params: {
       occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
       depthRange: params.depthRange,
       depthInvert: params.depthInvert,
+      backgroundColor: params.backgroundColor,
+      includeCharacterAttachments: params.includeCharacterAttachments,
+      transparent: params.transparent,
     },
     performance: params.performance,
     priority: 'foreground',
     signal: params.signal,
     onProgress: params.onProgress,
+    onFrameRendered: params.onFrameRendered,
+    stats: params.stats,
   });
 }
 
@@ -214,6 +230,8 @@ export async function buildLegacyShotPackage(
 
   const zip = new JSZip();
   const sharedMedia = createSharedExportMediaCache();
+  const videoPerformanceStats = options.videoPerformanceStats
+    ?? createEmptyPackageVideoPerformanceStats();
   const rootFolder = shotPlan?.rootFolder ?? getShotPackageBaseName(shot);
   const manifestPaths = await appendShotPackageToZip(zip, project, shot, {
     shotIndex: 0,
@@ -221,6 +239,7 @@ export async function buildLegacyShotPackage(
     signal: options.signal,
     rootFolder,
     sharedMedia,
+    videoPerformanceStats,
   });
   const blob = await compressZip(zip, {
     tracker,
@@ -241,6 +260,7 @@ export async function buildLegacyShotPackage(
     blob,
     fileName: plan.archiveFileName || `${rootFolder}_package.zip`,
     manifestPaths,
+    videoPerformance: { ...videoPerformanceStats },
   };
 }
 
@@ -305,6 +325,8 @@ export async function buildLegacyMultiShotPackage(
 
   const zip = new JSZip();
   const sharedMedia = createSharedExportMediaCache();
+  const videoPerformanceStats = options.videoPerformanceStats
+    ?? createEmptyPackageVideoPerformanceStats();
   const manifestPaths: string[] = [];
   const folderByShotId = new Map(
     plan.shots.map((shotPlan) => [shotPlan.shotId, shotPlan.rootFolder]),
@@ -318,6 +340,7 @@ export async function buildLegacyMultiShotPackage(
       signal: options.signal,
       rootFolder: folderByShotId.get(shot.id),
       sharedMedia,
+      videoPerformanceStats,
     });
     manifestPaths.push(...paths);
   }
@@ -341,6 +364,7 @@ export async function buildLegacyMultiShotPackage(
     blob,
     fileName: plan.archiveFileName,
     manifestPaths,
+    videoPerformance: { ...videoPerformanceStats },
   };
 }
 
@@ -354,9 +378,10 @@ async function appendShotPackageToZip(
     signal?: AbortSignal;
     rootFolder?: string;
     sharedMedia: SharedExportMediaCache;
+    videoPerformanceStats?: PackageVideoPerformanceStats;
   },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal, rootFolder, sharedMedia } = args;
+  const { shotIndex, tracker, signal, rootFolder, sharedMedia, videoPerformanceStats } = args;
   const shotProject = resolveProjectForShot(project, shot);
   const peopleMode = shot.exportSettings.peopleExportMode;
   const peopleVariants = getPeopleRenderVariants(peopleMode);
@@ -498,6 +523,7 @@ async function appendShotPackageToZip(
             appearance: 'clay',
             peopleVariant: variant,
             performance: videoPerformance,
+            stats: videoPerformanceStats,
             signal,
             onProgress: (progress) => {
               const info = normalizeCameraMoveProgress(progress);
@@ -557,6 +583,7 @@ async function appendShotPackageToZip(
           appearance: 'projected',
           peopleVariant: variant,
           performance: videoPerformance,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -604,6 +631,7 @@ async function appendShotPackageToZip(
           performance: videoPerformance,
           depthRange: sharedRange,
           depthInvert: depthSettings.invert === true,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -957,31 +985,92 @@ async function appendShotPackageToZip(
         );
 
         try {
-          const motion = await renderShotCharacterMotion(project, shot, {
-            appearance,
-            motionFormat: characterPass.motionFormat,
-            backgroundColor: characterPass.backgroundColor,
-            includeAttachedProps: characterPass.includeAttachedProps,
-            frameRate: videoPerformance.frameRate,
-            resolutionPreset: videoPerformance.resolutionPreset,
-            encoderMode: videoPerformance.encoderMode,
-            signal,
-            onProgress: (progress) => {
-              const info = normalizeCameraMoveProgress(progress);
-              const label = wantsPng && !wantsMp4
-                ? `Rendering transparent character frame ${info.completedFrames ?? 0} of ${info.totalFrames ?? '?'}`
-                : info.message || `Encoding character motion (${appearance})…`;
-              emit('encoding', label, { unitFraction: info.progress });
-            },
-            onPngFrame: wantsPng
-              ? async (frameIndex, blob) => {
+          // Prefer prepareVideoArtifact so green character MP4s share the fingerprinted cache.
+          // PNG-only still uses the dedicated path (no MP4 identity).
+          if (wantsMp4) {
+            const artifact = await preparePackageCameraMoveVideo({
+              project,
+              shotId: shot.id,
+              appearance,
+              peopleVariant: 'with_people',
+              performance: videoPerformance,
+              contentMode: 'characters_only',
+              backgroundColor: characterPass.backgroundColor,
+              includeCharacterAttachments: characterPass.includeAttachedProps,
+              transparent: wantsPng,
+              stats: videoPerformanceStats,
+              signal,
+              onProgress: (progress) => {
+                const info = normalizeCameraMoveProgress(progress);
+                emit('encoding', info.message || `Encoding character motion (${appearance})…`, {
+                  unitFraction: info.progress,
+                });
+              },
+              onFrameRendered: wantsPng
+                ? async (canvas, frameIndex, timeSeconds) => {
+                  const blob = await new Promise<Blob>((resolve, reject) => {
+                    canvas.toBlob(
+                      (value) => (value ? resolve(value) : reject(new Error('PNG frame failed.'))),
+                      'image/png',
+                    );
+                  });
+                  const framePath = `${sequenceDir}/${characterSequenceFrameFileName(frameIndex + 1)}`;
+                  await addBlobToZipStore(zip, framePath, blob);
+                  void timeSeconds;
+                }
+                : undefined,
+            });
+
+            if (wantsPng) {
+              zip.file(
+                `${sequenceDir}/sequence.json`,
+                JSON.stringify(
+                  buildCharacterSequenceMeta({
+                    width: artifact.width,
+                    height: artifact.height,
+                    frameRate: artifact.frameRate,
+                    frameCount: artifact.frameCount,
+                    durationSeconds: artifact.durationSeconds,
+                  }),
+                  null,
+                  2,
+                ),
+              );
+              finishUnit('encoding', `Character PNG sequence (${appearance}) ready`);
+            }
+
+            await addBlobToZipStore(
+              zip,
+              characterMotionMp4Path(resolvedRootFolder, appearance),
+              artifact.blob,
+            );
+            finishUnit(
+              'encoding',
+              artifact.cacheStatus === 'hit' || artifact.cacheStatus === 'joined'
+                ? `Character green-screen MP4 (${appearance}) from cache`
+                : `Character green-screen MP4 (${appearance}) ready`,
+            );
+          } else {
+            const motion = await renderShotCharacterMotion(project, shot, {
+              appearance,
+              motionFormat: characterPass.motionFormat,
+              backgroundColor: characterPass.backgroundColor,
+              includeAttachedProps: characterPass.includeAttachedProps,
+              frameRate: videoPerformance.frameRate,
+              resolutionPreset: videoPerformance.resolutionPreset,
+              encoderMode: videoPerformance.encoderMode,
+              signal,
+              onProgress: (progress) => {
+                const info = normalizeCameraMoveProgress(progress);
+                emit('encoding', info.message || `Rendering transparent character sequence (${appearance})…`, {
+                  unitFraction: info.progress,
+                });
+              },
+              onPngFrame: async (frameIndex, blob) => {
                 const framePath = `${sequenceDir}/${characterSequenceFrameFileName(frameIndex + 1)}`;
                 await addBlobToZipStore(zip, framePath, blob);
-              }
-              : undefined,
-          });
-
-          if (wantsPng) {
+              },
+            });
             zip.file(
               `${sequenceDir}/sequence.json`,
               JSON.stringify(
@@ -997,17 +1086,6 @@ async function appendShotPackageToZip(
               ),
             );
             finishUnit('encoding', `Character PNG sequence (${appearance}) ready`);
-          }
-
-          if (wantsMp4 && motion.mp4) {
-            await addBlobToZipStore(
-              zip,
-              characterMotionMp4Path(resolvedRootFolder, appearance),
-              motion.mp4.blob,
-            );
-            finishUnit('encoding', `Character green-screen MP4 (${appearance}) ready`);
-          } else if (wantsMp4) {
-            finishUnit('encoding', `Character MP4 (${appearance}) skipped`);
           }
         } catch (error) {
           if (isPackageExportCancelled(error)) throw error;

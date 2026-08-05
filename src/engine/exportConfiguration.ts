@@ -36,7 +36,7 @@ import type {
 import { EXPORT_CONFIGURATION_SCHEMA_VERSION } from '../domain/types';
 import {
   normalizeVideoPerformanceSettings,
-  preferredShotExportMotionDefaults,
+  preferredShotExportMotionDefaultsForProject,
   resolveVideoPerformance,
 } from './videoPerformance';
 
@@ -552,8 +552,9 @@ export function setProjectVideoPerformance(
 
 /**
  * Apply a built-in export profile id, including video performance defaults.
- * When `applyMotionPassDefaults` is true, Fast Control turns clay motion off
- * and projected motion on at the scene-default level.
+ * When `applyMotionPassDefaults` is true, Fast Control prefers projected-only
+ * motion when a projector is available, otherwise clay-only so packages still
+ * emit motion video.
  */
 export function setProjectExportProfile(
   project: LocationProject,
@@ -567,7 +568,7 @@ export function setProjectExportProfile(
   );
   let defaults = config.defaults;
   if (options.applyMotionPassDefaults !== false) {
-    const motion = preferredShotExportMotionDefaults(videoPerformance.profileId);
+    const motion = preferredShotExportMotionDefaultsForProject(project, videoPerformance.profileId);
     defaults = normalizeShotExportSettings({
       ...defaults,
       ...motion,

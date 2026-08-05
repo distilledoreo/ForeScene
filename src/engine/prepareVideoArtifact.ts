@@ -23,7 +23,10 @@ import {
   putVideoArtifactInCache,
 } from './videoArtifactCache';
 import {
+  accumulatePackageVideoPerformanceStats,
+  createEmptyPackageVideoPerformanceStats,
   resolveProjectVideoPerformance,
+  type PackageVideoPerformanceStats,
   type ResolvedVideoPerformance,
 } from './videoPerformance';
 import {
@@ -45,6 +48,8 @@ export interface PrepareVideoArtifactParams {
   signal?: AbortSignal;
   includeDataUrl?: boolean;
   onProgress?: CameraMoveVideoOptions['onProgress'];
+  /** Fork transparent PNG frames during the WebGL pass (character "both" format). */
+  onFrameRendered?: CameraMoveVideoOptions['onFrameRendered'];
   /** Skip cache read/write (tests / force re-render). */
   bypassCache?: boolean;
   /**
@@ -52,6 +57,8 @@ export interface PrepareVideoArtifactParams {
    * configuration is used for resolution / fps / encoder defaults.
    */
   performance?: ResolvedVideoPerformance;
+  /** Optional package-level stats accumulator. */
+  stats?: PackageVideoPerformanceStats;
 }
 
 export interface PreparedVideoArtifact {
@@ -136,6 +143,14 @@ function toPreparedFromRender(
   };
 }
 
+function recordStats(
+  stats: PackageVideoPerformanceStats | undefined,
+  result: PreparedVideoArtifact,
+): void {
+  if (!stats) return;
+  accumulatePackageVideoPerformanceStats(stats, result);
+}
+
 async function renderAndStore(
   params: PrepareVideoArtifactParams,
   fingerprint: VideoArtifactFingerprint,
@@ -165,12 +180,12 @@ async function renderAndStore(
     includeDataUrl: params.includeDataUrl === true,
     signal: params.signal,
     onProgress: params.onProgress,
+    onFrameRendered: params.onFrameRendered,
     onTiming: (event) => {
       if (event.stage === 'setup-end') timingBuilder.markSetupEnd();
       else if (event.stage === 'render') timingBuilder.addRenderMs(event.ms);
       else if (event.stage === 'encode') timingBuilder.addEncodeMs(event.ms);
-      else if (event.stage === 'finalize-start') timingBuilder.markFinalizeStart();
-      else if (event.stage === 'finalize-end') timingBuilder.markFinalizeEnd();
+      else if (event.stage === 'finalize') timingBuilder.addFinalizeMs(event.ms);
     },
   });
 
@@ -202,6 +217,7 @@ async function renderAndStore(
       codecString: video.codecString,
       encodeMode: video.encodeMode ?? 'render',
       actualEncoderMode,
+      encoderModeFallback,
       timing,
     });
   }
@@ -228,7 +244,11 @@ export async function prepareVideoArtifact(
     resolved,
   );
 
-  if (!params.bypassCache) {
+  // Frame-fork callbacks (e.g. character PNG sequences) need a live render pass;
+  // cached MP4 blobs cannot reconstruct those side-products.
+  const allowCache = !params.bypassCache && !params.onFrameRendered;
+
+  if (allowCache) {
     const cached = await getVideoArtifactFromCache(fingerprint);
     if (cached) {
       let dataUrl: string | undefined;
@@ -241,7 +261,7 @@ export async function prepareVideoArtifact(
         height: cached.height,
         totalMs: 0,
       });
-      return {
+      const prepared: PreparedVideoArtifact = {
         fingerprint,
         blob: cached.blob,
         mimeType: cached.mimeType,
@@ -253,11 +273,13 @@ export async function prepareVideoArtifact(
         codecString: cached.codecString,
         encodeMode: cached.encodeMode,
         actualEncoderMode: cached.actualEncoderMode,
-        encoderModeFallback: false,
+        encoderModeFallback: cached.encoderModeFallback === true,
         cacheStatus: 'hit',
         timing,
         dataUrl,
       };
+      recordStats(params.stats, prepared);
+      return prepared;
     }
 
     const existing = inflightJobs.get(fingerprint.key);
@@ -266,23 +288,31 @@ export async function prepareVideoArtifact(
       if (params.signal?.aborted) {
         throw new Error('MP4 export was cancelled.');
       }
-      return {
+      const prepared: PreparedVideoArtifact = {
         ...joined,
         cacheStatus: 'joined',
         dataUrl: params.includeDataUrl
           ? (joined.dataUrl ?? await blobToDataUrl(joined.blob))
           : undefined,
       };
+      recordStats(params.stats, prepared);
+      return prepared;
     }
   }
 
-  const job = renderAndStore(params, fingerprint, resolved);
-  if (!params.bypassCache) {
+  const job = renderAndStore(
+    { ...params, bypassCache: params.bypassCache || Boolean(params.onFrameRendered) },
+    fingerprint,
+    resolved,
+  );
+  if (allowCache) {
     inflightJobs.set(fingerprint.key, job);
   }
 
   try {
-    return await job;
+    const prepared = await job;
+    recordStats(params.stats, prepared);
+    return prepared;
   } finally {
     if (inflightJobs.get(fingerprint.key) === job) {
       inflightJobs.delete(fingerprint.key);
@@ -315,3 +345,5 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 export function resetPrepareVideoArtifactInflightForTests(): void {
   inflightJobs.clear();
 }
+
+export { createEmptyPackageVideoPerformanceStats };

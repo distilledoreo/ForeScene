@@ -99,7 +99,9 @@ import {
 } from './depthRender';
 import { prepareVideoArtifact } from './prepareVideoArtifact';
 import {
+  createEmptyPackageVideoPerformanceStats,
   resolveProjectVideoPerformance,
+  type PackageVideoPerformanceStats,
   type ResolvedVideoPerformance,
 } from './videoPerformance';
 
@@ -127,6 +129,12 @@ async function prepareV2CameraMoveVideo(params: {
   depthInvert?: boolean;
   signal?: AbortSignal;
   onProgress?: Parameters<typeof prepareVideoArtifact>[0]['onProgress'];
+  stats?: PackageVideoPerformanceStats;
+  contentMode?: Parameters<typeof prepareVideoArtifact>[0]['specification']['contentMode'];
+  backgroundColor?: string;
+  includeCharacterAttachments?: boolean;
+  transparent?: boolean;
+  onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
 }) {
   return prepareVideoArtifact({
     project: params.project,
@@ -134,6 +142,7 @@ async function prepareV2CameraMoveVideo(params: {
     specification: {
       appearance: params.appearance,
       peopleVariant: params.peopleVariant,
+      contentMode: params.contentMode,
       mode: 'render',
       resolutionPreset: params.performance.resolutionPreset,
       frameRate: params.performance.frameRate,
@@ -141,11 +150,16 @@ async function prepareV2CameraMoveVideo(params: {
       occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
       depthRange: params.depthRange,
       depthInvert: params.depthInvert,
+      backgroundColor: params.backgroundColor,
+      includeCharacterAttachments: params.includeCharacterAttachments,
+      transparent: params.transparent,
     },
     performance: params.performance,
     priority: 'foreground',
     signal: params.signal,
     onProgress: params.onProgress,
+    onFrameRendered: params.onFrameRendered,
+    stats: params.stats,
   });
 }
 
@@ -346,9 +360,14 @@ async function appendShotPackageToZipV2(
   project: LocationProject,
   shot: Shot,
   shotPlan: PlannedShotExport,
-  args: { shotIndex: number; tracker: ProgressTracker; signal?: AbortSignal },
+  args: {
+    shotIndex: number;
+    tracker: ProgressTracker;
+    signal?: AbortSignal;
+    videoPerformanceStats?: PackageVideoPerformanceStats;
+  },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal } = args;
+  const { shotIndex, tracker, signal, videoPerformanceStats } = args;
   const rootFolder = shotPlan.rootFolder;
   /** Remap a legacy-style `${rootFolder}/...` path (same strings the legacy writer uses) to its v2 archive path. */
   const v2 = (legacyPath: string) => remapLegacyShotPathToV2(rootFolder, legacyPath);
@@ -478,6 +497,7 @@ async function appendShotPackageToZipV2(
             appearance: 'clay',
             peopleVariant: variant,
             performance: videoPerformance,
+            stats: videoPerformanceStats,
             signal,
             onProgress: (progress) => {
               const info = normalizeCameraMoveProgress(progress);
@@ -536,6 +556,7 @@ async function appendShotPackageToZipV2(
           appearance: 'projected',
           peopleVariant: variant,
           performance: videoPerformance,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -580,6 +601,7 @@ async function appendShotPackageToZipV2(
           performance: videoPerformance,
           depthRange: sharedRange,
           depthInvert: depthSettings.invert === true,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -971,6 +993,8 @@ export async function buildForeSceneV2Package(
 
   const zip = new JSZip();
   const sharedMedia = createSharedExportMediaCache();
+  const videoPerformanceStats = options.videoPerformanceStats
+    ?? createEmptyPackageVideoPerformanceStats();
 
   await writeSharedArtifactsV2(zip, project, shots, plan, sharedMedia, { tracker, signal: options.signal });
 
@@ -983,6 +1007,7 @@ export async function buildForeSceneV2Package(
       shotIndex,
       tracker,
       signal: options.signal,
+      videoPerformanceStats,
     });
   }
 
@@ -1008,5 +1033,6 @@ export async function buildForeSceneV2Package(
     blob,
     fileName: plan.archiveFileName,
     manifestPaths: listPlannedFiles(plan).map((file) => file.path),
+    videoPerformance: { ...videoPerformanceStats },
   };
 }

@@ -72,8 +72,8 @@ import {
   type SceneRenderPass,
 } from './depthRender';
 import {
-  canUseDeterministicMp4Export,
   encodeCanvasFramesToMp4,
+  resolveDeterministicEncoderMode,
 } from './videoEncode';
 import {
   cameraMoveFrameTimeSeconds,
@@ -120,7 +120,7 @@ export interface BlobImageRenderResult {
 }
 
 export interface VideoRenderTimingEvent {
-  stage: 'setup-end' | 'render' | 'encode' | 'finalize-start' | 'finalize-end';
+  stage: 'setup-end' | 'render' | 'encode' | 'finalize';
   ms: number;
 }
 
@@ -275,8 +275,13 @@ export function getSupportedCameraMoveMp4MimeType(): string | undefined {
 /** True when deterministic WebCodecs H.264 export can run for the given preset. */
 export async function canUseRenderMp4Export(
   resolutionPreset: VideoResolutionPresetId = '1080p',
+  encoderMode: VideoEncoderMode = 'quality',
 ): Promise<boolean> {
-  return canUseDeterministicMp4Export(resolveVideoPreset(resolutionPreset));
+  const negotiated = await resolveDeterministicEncoderMode(
+    resolveVideoPreset(resolutionPreset),
+    encoderMode,
+  );
+  return Boolean(negotiated);
 }
 
 function emitProgress(
@@ -472,8 +477,11 @@ export async function renderShotCameraMoveMp4(
   const encodePreset = { ...preset, width, height, frameRate };
 
   if (requestedMode === 'render') {
-    const canRender = await canUseDeterministicMp4Export(encodePreset);
-    if (!canRender) {
+    const requestedEncoderMode = options.encoderMode ?? 'quality';
+    // Negotiate fast/quality so devices that only advertise hardware/realtime
+    // are not rejected by a quality-only capability probe.
+    const negotiated = await resolveDeterministicEncoderMode(encodePreset, requestedEncoderMode);
+    if (!negotiated) {
       throw new Error(
         `Render MP4 requires WebCodecs H.264 for ${encodePreset.label} (${encodePreset.avcCodecString}). `
         + 'This browser or preset is unsupported. Choose Quick Preview explicitly, or try Chrome/Edge with a supported resolution.',
@@ -500,7 +508,7 @@ export async function renderShotCameraMoveMp4(
       transparent: options.transparent === true,
       depthRange: options.depthRange,
       depthInvert: options.depthInvert === true,
-      encoderMode: options.encoderMode ?? 'quality',
+      encoderMode: requestedEncoderMode,
       onTiming: options.onTiming,
     });
   }
@@ -703,7 +711,9 @@ async function renderShotCameraMoveMp4Deterministic(
       signal,
       encoderMode,
       onStageTiming: (stage, ms) => {
-        onTiming?.({ stage, ms });
+        if (stage === 'render' || stage === 'encode' || stage === 'finalize') {
+          onTiming?.({ stage, ms });
+        }
       },
       renderFrame: async (frameIndex) => {
         if (signal?.aborted) {
@@ -761,7 +771,6 @@ async function renderShotCameraMoveMp4Deterministic(
       },
     });
 
-    onTiming?.({ stage: 'finalize-start', ms: 0 });
     emitProgress(onProgress, {
       phase: 'finalizing',
       progress: 0.95,
@@ -786,7 +795,6 @@ async function renderShotCameraMoveMp4Deterministic(
       encoderModeFallback: encoded.encoderModeFallback,
     };
 
-    onTiming?.({ stage: 'finalize-end', ms: 0 });
     emitProgress(onProgress, {
       phase: 'complete',
       progress: 1,

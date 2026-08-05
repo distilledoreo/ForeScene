@@ -3,17 +3,19 @@
  *
  * Fast Control prioritizes AI-control turnaround (720p24, fast encoder).
  * Standard matches the historical 1080p30 quality path.
- * High Quality keeps 1080p30 with the quality encoder path.
+ * High Quality is opt-in 4K30.
  */
 
 import type {
   ExportProfileId,
+  LocationProject,
   ProjectExportConfiguration,
   ShotExportSettings,
   VideoEncoderMode,
   VideoPerformanceProfileId,
   VideoPerformanceSettings,
 } from '../domain/types';
+import { canUseProjectedAppearance } from './projectedStyle';
 import type { VideoResolutionPresetId } from './videoPresets';
 import {
   DEFAULT_VIDEO_FRAME_RATE,
@@ -21,7 +23,8 @@ import {
 } from './videoPresets';
 
 export const FAST_CONTROL_FRAME_RATE = 24;
-export const VIDEO_PERFORMANCE_CACHE_VERSION = 1;
+/** Bump when fingerprint dependency schema changes (invalidates cache). */
+export const VIDEO_PERFORMANCE_CACHE_VERSION = 2;
 
 export interface ResolvedVideoPerformance {
   profileId: VideoPerformanceProfileId;
@@ -50,6 +53,7 @@ const PROFILE_DEFS: Record<VideoPerformanceProfileId, {
     resolutionPreset: '720p',
     frameRate: FAST_CONTROL_FRAME_RATE,
     encoderMode: 'fast',
+    // Conditional clay fallback is applied via preferredShotExportMotionDefaults.
     preferredMotionPasses: { clay: false, projected: true },
   },
   standard: {
@@ -60,8 +64,8 @@ const PROFILE_DEFS: Record<VideoPerformanceProfileId, {
     preferredMotionPasses: { clay: true, projected: true },
   },
   'high-quality': {
-    label: 'High Quality (1080p30)',
-    resolutionPreset: '1080p',
+    label: 'High Quality (4K30)',
+    resolutionPreset: '4k',
     frameRate: DEFAULT_VIDEO_FRAME_RATE,
     encoderMode: 'quality',
     preferredMotionPasses: { clay: true, projected: true },
@@ -156,16 +160,41 @@ export function resolveProjectVideoPerformance(
 
 /**
  * Shot-export toggles that a performance profile would prefer when first applied.
- * Does not rewrite existing project settings unless callers apply the patch.
+ *
+ * Fast Control prefers projected-only when a projector is available; otherwise
+ * it falls back to clay-only so packages still emit motion video.
  */
 export function preferredShotExportMotionDefaults(
   profileId: VideoPerformanceProfileId,
+  options: { canUseProjected?: boolean } = {},
 ): Pick<ShotExportSettings, 'includeCameraMoveVideo' | 'includeProjectedCameraMoveVideo'> {
+  if (profileId === 'fast-control') {
+    if (options.canUseProjected === false) {
+      return {
+        includeCameraMoveVideo: true,
+        includeProjectedCameraMoveVideo: false,
+      };
+    }
+    return {
+      includeCameraMoveVideo: false,
+      includeProjectedCameraMoveVideo: true,
+    };
+  }
   const def = PROFILE_DEFS[profileId] ?? PROFILE_DEFS.standard;
   return {
     includeCameraMoveVideo: def.preferredMotionPasses.clay,
     includeProjectedCameraMoveVideo: def.preferredMotionPasses.projected,
   };
+}
+
+/** Convenience for applying Fast Control / profile motion defaults to a project. */
+export function preferredShotExportMotionDefaultsForProject(
+  project: LocationProject,
+  profileId: VideoPerformanceProfileId,
+): Pick<ShotExportSettings, 'includeCameraMoveVideo' | 'includeProjectedCameraMoveVideo'> {
+  return preferredShotExportMotionDefaults(profileId, {
+    canUseProjected: canUseProjectedAppearance(project),
+  });
 }
 
 /** Pixel-frame product used for workload preflight (frames × width × height). */
@@ -185,4 +214,55 @@ export function formatPixelFrameWorkload(pixelFrames: number): string {
   if (pixelFrames >= 1_000_000) return `${(pixelFrames / 1_000_000).toFixed(1)}M`;
   if (pixelFrames >= 1_000) return `${(pixelFrames / 1_000).toFixed(1)}K`;
   return String(pixelFrames);
+}
+
+/** Package / CLI aggregate for prepareVideoArtifact outcomes. */
+export interface PackageVideoPerformanceStats {
+  cacheHits: number;
+  cacheMisses: number;
+  joinedJobs: number;
+  bypasses: number;
+  setupMs: number;
+  renderMs: number;
+  encodeMs: number;
+  finalizeMs: number;
+  totalMs: number;
+}
+
+export function createEmptyPackageVideoPerformanceStats(): PackageVideoPerformanceStats {
+  return {
+    cacheHits: 0,
+    cacheMisses: 0,
+    joinedJobs: 0,
+    bypasses: 0,
+    setupMs: 0,
+    renderMs: 0,
+    encodeMs: 0,
+    finalizeMs: 0,
+    totalMs: 0,
+  };
+}
+
+export function accumulatePackageVideoPerformanceStats(
+  stats: PackageVideoPerformanceStats,
+  result: {
+    cacheStatus: 'hit' | 'miss' | 'joined' | 'bypass';
+    timing: {
+      setupMs: number;
+      renderMs: number;
+      encodeMs: number;
+      finalizeMs: number;
+      totalMs: number;
+    };
+  },
+): void {
+  if (result.cacheStatus === 'hit') stats.cacheHits += 1;
+  else if (result.cacheStatus === 'miss') stats.cacheMisses += 1;
+  else if (result.cacheStatus === 'joined') stats.joinedJobs += 1;
+  else stats.bypasses += 1;
+  stats.setupMs += result.timing.setupMs;
+  stats.renderMs += result.timing.renderMs;
+  stats.encodeMs += result.timing.encodeMs;
+  stats.finalizeMs += result.timing.finalizeMs;
+  stats.totalMs += result.timing.totalMs;
 }

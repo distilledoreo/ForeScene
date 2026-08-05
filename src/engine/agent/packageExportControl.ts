@@ -300,6 +300,7 @@ export async function exportAgentPackage(
       diagnostics: [],
       warnings: listMissingProjectAssetWarnings(exportProject).map((warning) => warning.message),
       progress: latestProgress,
+      ...(result.videoPerformance ? { videoPerformance: result.videoPerformance } : {}),
     };
   } catch (error) {
     if (isPackageExportCancelled(error) || controller.signal.aborted) {

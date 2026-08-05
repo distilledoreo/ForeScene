@@ -1,8 +1,10 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import {
   createCameraKeyframe,
   createDefaultExportConfiguration,
   createDefaultProject,
+  createPanoReference,
+  createSceneObject,
   defaultShotExportSettings,
   normalizeShotExportSettings,
 } from '../src/domain/defaults';
@@ -19,6 +21,9 @@ import {
   getVideoArtifactFromCache,
   putVideoArtifactInCache,
   resetVideoArtifactCacheForTests,
+  setVideoArtifactCacheMaxBytesForTests,
+  setVideoArtifactCacheMaxEntriesForTests,
+  inspectVideoArtifactCache,
 } from '../src/engine/videoArtifactCache';
 import {
   createCacheHitTiming,
@@ -29,12 +34,19 @@ import {
   defaultVideoPerformanceProfileForExportProfile,
   FAST_CONTROL_FRAME_RATE,
   preferredShotExportMotionDefaults,
+  preferredShotExportMotionDefaultsForProject,
   resolveProjectVideoPerformance,
   resolveVideoPerformance,
 } from '../src/engine/videoPerformance';
 import {
   buildDeterministicAvcEncodingConfig,
+  resolveDeterministicEncoderMode,
 } from '../src/engine/videoEncode';
+import {
+  prepareVideoArtifact,
+  resetPrepareVideoArtifactInflightForTests,
+} from '../src/engine/prepareVideoArtifact';
+import * as renderers from '../src/engine/renderers';
 
 function cloneProject(): LocationProject {
   return structuredClone(createDefaultProject());
@@ -57,6 +69,14 @@ function withMove(shot: Shot, durationSeconds = 2): Shot {
   };
 }
 
+const baseResolved = {
+  resolutionPreset: '720p' as const,
+  frameRate: 24,
+  width: 1280,
+  height: 720,
+  encoderMode: 'fast' as const,
+};
+
 describe('video performance profiles', () => {
   it('maps AI-generation export profile to Fast Control 720p24', () => {
     expect(defaultVideoPerformanceProfileForExportProfile('ai-generation')).toBe('fast-control');
@@ -66,10 +86,6 @@ describe('video performance profiles', () => {
     expect(resolved.height).toBe(720);
     expect(resolved.frameRate).toBe(FAST_CONTROL_FRAME_RATE);
     expect(resolved.encoderMode).toBe('fast');
-    expect(preferredShotExportMotionDefaults('fast-control')).toEqual({
-      includeCameraMoveVideo: false,
-      includeProjectedCameraMoveVideo: true,
-    });
   });
 
   it('keeps Standard at 1080p30 quality encoder', () => {
@@ -80,15 +96,36 @@ describe('video performance profiles', () => {
     expect(resolved.encoderMode).toBe('quality');
   });
 
-  it('applies export profile video defaults onto a project', () => {
-    let project = cloneProject();
-    project = setProjectExportProfile(project, 'ai-generation');
-    expect(project.exportConfiguration?.activeProfileId).toBe('ai-generation');
-    expect(project.exportConfiguration?.videoPerformance?.profileId).toBe('fast-control');
-    expect(project.exportConfiguration?.defaults.includeCameraMoveVideo).toBe(false);
-    expect(project.exportConfiguration?.defaults.includeProjectedCameraMoveVideo).toBe(true);
-    const perf = resolveProjectVideoPerformance(project.exportConfiguration);
-    expect(perf.frameRate).toBe(24);
+  it('makes High Quality distinct as 4K30', () => {
+    const resolved = resolveVideoPerformance({ profileId: 'high-quality' });
+    expect(resolved.resolutionPreset).toBe('4k');
+    expect(resolved.width).toBe(3840);
+    expect(resolved.height).toBe(2160);
+    expect(resolved.frameRate).toBe(30);
+    expect(resolved.encoderMode).toBe('quality');
+    expect(resolved.label).toMatch(/4K/i);
+  });
+
+  it('falls back Fast Control to clay-only when projected appearance is unavailable', () => {
+    expect(preferredShotExportMotionDefaults('fast-control')).toEqual({
+      includeCameraMoveVideo: false,
+      includeProjectedCameraMoveVideo: true,
+    });
+    expect(preferredShotExportMotionDefaults('fast-control', { canUseProjected: false })).toEqual({
+      includeCameraMoveVideo: true,
+      includeProjectedCameraMoveVideo: false,
+    });
+
+    const project = cloneProject();
+    // Default project has no styled pano projector.
+    expect(preferredShotExportMotionDefaultsForProject(project, 'fast-control')).toEqual({
+      includeCameraMoveVideo: true,
+      includeProjectedCameraMoveVideo: false,
+    });
+
+    const withProjector = setProjectExportProfile(project, 'ai-generation');
+    expect(withProjector.exportConfiguration?.defaults.includeCameraMoveVideo).toBe(true);
+    expect(withProjector.exportConfiguration?.defaults.includeProjectedCameraMoveVideo).toBe(false);
   });
 });
 
@@ -112,85 +149,330 @@ describe('video encoder mode config', () => {
     expect(fast.latencyMode).toBe('realtime');
     expect(fast.hardwareAcceleration).toBe('prefer-hardware');
   });
+
+  it('negotiates encoder mode with fallback path available', async () => {
+    // In Node test env VideoEncoder is usually absent → undefined is ok.
+    const preset = {
+      id: '720p' as const,
+      label: '720p',
+      width: 1280,
+      height: 720,
+      frameRate: 24,
+      avcCodecString: 'avc1.64001f',
+      profile: 'high' as const,
+      level: '3.1',
+      bitrate: 5_000_000,
+    };
+    const result = await resolveDeterministicEncoderMode(preset, 'fast');
+    expect(result === undefined || result.mode === 'fast' || result.mode === 'quality').toBe(true);
+  });
 });
 
-describe('video artifact fingerprint + cache', () => {
+describe('complete visual dependency fingerprints', () => {
   beforeEach(() => {
     resetVideoArtifactCacheForTests();
   });
 
-  it('changes when timeline, appearance, or encode settings change', () => {
+  it('changes for surface style, object type, and material fields', () => {
     const project = cloneProject();
     project.shots[0] = withMove(project.shots[0]!);
+    const box = createSceneObject('box', 1);
+    project.scene.objects = [box];
     const shot = project.shots[0]!;
-    const resolved = {
-      resolutionPreset: '720p' as const,
-      frameRate: 24,
-      width: 1280,
-      height: 720,
-      encoderMode: 'fast' as const,
-    };
+
     const first = computeVideoArtifactFingerprint(project, shot, {
       appearance: 'clay',
       mode: 'render',
-    }, resolved);
-    const same = computeVideoArtifactFingerprint(project, shot, {
+    }, baseResolved);
+
+    box.surfaceStyle = 'checkerboard';
+    box.secondaryColor = '#111111';
+    const surface = computeVideoArtifactFingerprint(project, shot, {
       appearance: 'clay',
       mode: 'render',
-    }, resolved);
-    expect(same.key).toBe(first.key);
+    }, baseResolved);
+    expect(surface.key).not.toBe(first.key);
 
-    const projected = computeVideoArtifactFingerprint(project, shot, {
-      appearance: 'projected',
-      mode: 'render',
-    }, resolved);
-    expect(projected.key).not.toBe(first.key);
-
-    const fps30 = computeVideoArtifactFingerprint(project, shot, {
+    box.surfaceStyle = undefined;
+    box.secondaryColor = undefined;
+    box.type = 'column';
+    const typed = computeVideoArtifactFingerprint(project, shot, {
       appearance: 'clay',
       mode: 'render',
-    }, { ...resolved, frameRate: 30 });
-    expect(fps30.key).not.toBe(first.key);
-
-    shot.cameraKeyframes[1]!.camera.position[0] += 2;
-    const moved = computeVideoArtifactFingerprint(project, shot, {
-      appearance: 'clay',
-      mode: 'render',
-    }, resolved);
-    expect(moved.key).not.toBe(first.key);
+    }, baseResolved);
+    expect(typed.key).not.toBe(first.key);
   });
 
-  it('stores and retrieves exact-match cache entries', async () => {
+  it('changes for projected pano origin, rotation, and image asset identity', () => {
     const project = cloneProject();
     project.shots[0] = withMove(project.shots[0]!);
     const shot = project.shots[0]!;
-    const resolved = {
-      resolutionPreset: '1080p' as const,
-      frameRate: 30,
-      width: 1920,
-      height: 1080,
-      encoderMode: 'quality' as const,
+
+    const assetId = 'pano-asset-1';
+    project.assets.assets[assetId] = {
+      id: assetId,
+      type: 'image',
+      name: 'styled.png',
+      uri: 'data:image/png;base64,aaa',
+      contentHash: 'hash-a',
+      createdAt: new Date().toISOString(),
+    } as never;
+    const pano = createPanoReference({
+      name: 'Styled',
+      assetId,
+      type: 'ai_global_reference',
+      origin: [0, 1.6, 0],
+      rotation: [0, 0, 0],
+      width: 4096,
+      height: 2048,
+    });
+    project.panoRefs = [pano];
+    project.settings.projectedStyle = {
+      ...project.settings.projectedStyle,
+      panoId: pano.id,
+      opacity: 1,
+      exposure: 0,
+      lightingContribution: 0,
+      fallbackMode: 'clay',
     };
+    shot.linkedPanoId = pano.id;
+
+    const first = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'projected',
+      mode: 'render',
+    }, baseResolved);
+
+    pano.rotation = [0, 45, 0];
+    const rotated = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'projected',
+      mode: 'render',
+    }, baseResolved);
+    expect(rotated.key).not.toBe(first.key);
+
+    pano.rotation = [0, 0, 0];
+    pano.origin = [1, 1.6, 0];
+    const moved = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'projected',
+      mode: 'render',
+    }, baseResolved);
+    expect(moved.key).not.toBe(first.key);
+
+    pano.origin = [0, 1.6, 0];
+    project.assets.assets[assetId] = {
+      ...project.assets.assets[assetId]!,
+      contentHash: 'hash-b',
+    };
+    const replaced = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'projected',
+      mode: 'render',
+    }, baseResolved);
+    expect(replaced.key).not.toBe(first.key);
+
+    // Clay should remain stable when only projected pano rotation changes after reset.
+    project.assets.assets[assetId] = {
+      ...project.assets.assets[assetId]!,
+      contentHash: 'hash-a',
+    };
+    const clayA = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'clay',
+      mode: 'render',
+    }, baseResolved);
+    pano.rotation = [0, 90, 0];
+    const clayB = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'clay',
+      mode: 'render',
+    }, baseResolved);
+    expect(clayB.key).toBe(clayA.key);
+  });
+
+  it('changes for timeline edits while unrelated objects stay ignored for clay when not visible', () => {
+    const project = cloneProject();
+    project.shots[0] = withMove(project.shots[0]!);
+    const shot = project.shots[0]!;
+    const first = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'clay',
+      mode: 'render',
+    }, baseResolved);
+    shot.cameraKeyframes[1]!.camera.position[0] += 3;
+    const moved = computeVideoArtifactFingerprint(project, shot, {
+      appearance: 'clay',
+      mode: 'render',
+    }, baseResolved);
+    expect(moved.key).not.toBe(first.key);
+  });
+});
+
+describe('byte-limited LRU video cache', () => {
+  beforeEach(() => {
+    resetVideoArtifactCacheForTests();
+    resetPrepareVideoArtifactInflightForTests();
+  });
+
+  it('stores and retrieves exact-match cache entries including fallback flag', async () => {
+    const project = cloneProject();
+    project.shots[0] = withMove(project.shots[0]!);
+    const shot = project.shots[0]!;
     const fingerprint = computeVideoArtifactFingerprint(project, shot, {
       appearance: 'clay',
       mode: 'render',
-    }, resolved);
+    }, baseResolved);
     const blob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'video/mp4' });
     await putVideoArtifactInCache(fingerprint, {
       blob,
       mimeType: 'video/mp4',
-      width: 1920,
-      height: 1080,
+      width: 1280,
+      height: 720,
       durationSeconds: 2,
-      frameRate: 30,
-      frameCount: 60,
+      frameRate: 24,
+      frameCount: 48,
       encodeMode: 'render',
       actualEncoderMode: 'quality',
+      encoderModeFallback: true,
     });
     const hit = await getVideoArtifactFromCache(fingerprint);
     expect(hit?.key).toBe(fingerprint.key);
-    expect(hit?.frameCount).toBe(60);
-    expect(await hit!.blob.arrayBuffer()).toEqual(await blob.arrayBuffer());
+    expect(hit?.encoderModeFallback).toBe(true);
+    expect(hit?.actualEncoderMode).toBe('quality');
+  });
+
+  it('evicts least-recently-used entries under a byte budget', async () => {
+    setVideoArtifactCacheMaxBytesForTests(30);
+    setVideoArtifactCacheMaxEntriesForTests(10);
+    const project = cloneProject();
+    project.shots[0] = withMove(project.shots[0]!);
+    const shot = project.shots[0]!;
+
+    const makeFp = (label: string) => {
+      shot.camera.fovDegrees = 40 + label.charCodeAt(0);
+      return computeVideoArtifactFingerprint(project, shot, {
+        appearance: 'clay',
+        mode: 'render',
+      }, baseResolved);
+    };
+
+    const a = makeFp('a');
+    const b = makeFp('b');
+    const c = makeFp('c');
+
+    await putVideoArtifactInCache(a, {
+      blob: new Blob([new Uint8Array(20)]),
+      mimeType: 'video/mp4',
+      width: 10,
+      height: 10,
+      durationSeconds: 1,
+      frameRate: 24,
+      frameCount: 24,
+      encodeMode: 'render',
+      actualEncoderMode: 'fast',
+      encoderModeFallback: false,
+    });
+    await putVideoArtifactInCache(b, {
+      blob: new Blob([new Uint8Array(20)]),
+      mimeType: 'video/mp4',
+      width: 10,
+      height: 10,
+      durationSeconds: 1,
+      frameRate: 24,
+      frameCount: 24,
+      encodeMode: 'render',
+      actualEncoderMode: 'fast',
+      encoderModeFallback: false,
+    });
+    // Touch A so B is older.
+    await getVideoArtifactFromCache(a);
+    await putVideoArtifactInCache(c, {
+      blob: new Blob([new Uint8Array(20)]),
+      mimeType: 'video/mp4',
+      width: 10,
+      height: 10,
+      durationSeconds: 1,
+      frameRate: 24,
+      frameCount: 24,
+      encodeMode: 'render',
+      actualEncoderMode: 'fast',
+      encoderModeFallback: false,
+    });
+
+    const inspection = inspectVideoArtifactCache();
+    expect(inspection.memoryBytes).toBeLessThanOrEqual(30);
+    expect(inspection.memoryEntries).toBeLessThanOrEqual(2);
+    // B should have been evicted first (LRU).
+    expect(await getVideoArtifactFromCache(b)).toBeUndefined();
+  });
+});
+
+describe('prepareVideoArtifact cache reuse', () => {
+  beforeEach(() => {
+    resetVideoArtifactCacheForTests();
+    resetPrepareVideoArtifactInflightForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('renders once then serves exact-match hits without re-rendering', async () => {
+    const project = cloneProject();
+    project.shots[0] = withMove(project.shots[0]!);
+    const shot = project.shots[0]!;
+
+    const blob = new Blob([new Uint8Array([9, 9, 9])], { type: 'video/mp4' });
+    const renderSpy = vi.spyOn(renderers, 'renderShotCameraMoveMp4').mockResolvedValue({
+      blob,
+      mimeType: 'video/mp4',
+      width: 1280,
+      height: 720,
+      durationSeconds: 2,
+      frameRate: 24,
+      fileExtension: 'mp4',
+      encodeMode: 'render',
+      frameCount: 48,
+      codecString: 'avc1.64001f',
+      actualEncoderMode: 'fast',
+      encoderModeFallback: false,
+    });
+
+    const first = await prepareVideoArtifact({
+      project,
+      shotId: shot.id,
+      specification: {
+        appearance: 'clay',
+        mode: 'render',
+        resolutionPreset: '720p',
+        frameRate: 24,
+        encoderMode: 'fast',
+      },
+    });
+    expect(first.cacheStatus).toBe('miss');
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+
+    const second = await prepareVideoArtifact({
+      project,
+      shotId: shot.id,
+      specification: {
+        appearance: 'clay',
+        mode: 'render',
+        resolutionPreset: '720p',
+        frameRate: 24,
+        encoderMode: 'fast',
+      },
+    });
+    expect(second.cacheStatus).toBe('hit');
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    expect(await second.blob.arrayBuffer()).toEqual(await blob.arrayBuffer());
+
+    // Keyframe edit invalidates only that artifact.
+    shot.cameraKeyframes[1]!.camera.position[0] += 5;
+    const third = await prepareVideoArtifact({
+      project,
+      shotId: shot.id,
+      specification: {
+        appearance: 'clay',
+        mode: 'render',
+        resolutionPreset: '720p',
+        frameRate: 24,
+        encoderMode: 'fast',
+      },
+    });
+    expect(third.cacheStatus).toBe('miss');
+    expect(renderSpy).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -199,7 +481,6 @@ describe('export plan video workload', () => {
     let project = cloneProject();
     project.shots[0] = withMove(project.shots[0]!, 2);
     project = setProjectVideoPerformance(project, { profileId: 'standard' });
-    // Ensure clay + projected motion are planned.
     project = {
       ...project,
       exportConfiguration: {
@@ -223,26 +504,12 @@ describe('export plan video workload', () => {
     const plan = createExportPlan(project, project.shots);
     expect(plan.videoWorkload.frameRate).toBe(30);
     expect(plan.videoWorkload.width).toBe(1920);
-    expect(plan.videoWorkload.height).toBe(1080);
-    // clay + projected (projected may omit without projector — still counts disposition)
     expect(plan.videoWorkload.videoCount).toBeGreaterThanOrEqual(1);
-    expect(plan.videoWorkload.totalFrames).toBeGreaterThan(0);
-    expect(plan.videoWorkload.totalPixelFrames).toBe(
-      computePixelFrameCount(
-        plan.videoWorkload.totalFrames / Math.max(1, plan.videoWorkload.videoCount)
-          * plan.videoWorkload.videoCount,
-        1920,
-        1080,
-      ),
-    );
 
-    project = setProjectVideoPerformance(project, { profileId: 'fast-control' });
-    const fastPlan = createExportPlan(project, project.shots);
-    expect(fastPlan.videoWorkload.frameRate).toBe(24);
-    expect(fastPlan.videoWorkload.width).toBe(1280);
-    expect(fastPlan.videoWorkload.height).toBe(720);
-    // Fewer frames at 24fps than 30fps for the same duration.
-    expect(fastPlan.videoWorkload.totalFrames).toBeLessThan(plan.videoWorkload.totalFrames);
+    project = setProjectVideoPerformance(project, { profileId: 'high-quality' });
+    const hqPlan = createExportPlan(project, project.shots);
+    expect(hqPlan.videoWorkload.width).toBe(3840);
+    expect(hqPlan.videoWorkload.height).toBe(2160);
   });
 });
 

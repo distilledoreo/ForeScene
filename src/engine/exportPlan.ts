@@ -1201,6 +1201,31 @@ export function createExportPlan(
     }
     issues.push(...shotIssues);
 
+    // Preflight: motion toggles enabled but no pass can be produced (e.g. Fast Control
+    // projected-only without a styled projector, and no clay fallback applied yet).
+    const wantsMotion = settingsForPlan.includeCameraMoveVideo
+      || settingsForPlan.includeProjectedCameraMoveVideo
+      || Boolean(settingsForPlan.depth?.enabled && settingsForPlan.depth.includeCameraMoveVideo !== false);
+    if (wantsMotion && hasRenderableCameraMove(planningShot.cameraKeyframes)) {
+      const motionProduced = artifacts.some((artifact) => (
+        artifact.disposition === 'produce'
+        && (
+          artifact.kind === 'clay-camera-move'
+          || artifact.kind === 'projected-camera-move'
+          || artifact.kind === 'depth-camera-move'
+        )
+      ));
+      if (!motionProduced) {
+        issues.push({
+          id: `${shot.id}-no-motion-video-pass`,
+          code: 'no-motion-video-pass',
+          severity: 'warning',
+          message: 'Camera-move video is requested, but no clay/projected/depth motion pass can be produced for this shot. Enable clay motion or attach a styled panorama for projected motion.',
+          shotId: shot.id,
+        });
+      }
+    }
+
     const produced = artifacts.filter((artifact) => artifact.disposition === 'produce');
     const workUnits = produced.reduce((sum, artifact) => sum + artifact.workUnits, 0);
     const characterMeta = produced.find((artifact) => artifact.kind === 'character-metadata');

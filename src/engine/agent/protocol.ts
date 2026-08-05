@@ -585,6 +585,18 @@ export interface AgentPackageExportResult {
   diagnostics: AgentDiagnostic[];
   progress?: AgentPackageExportProgressSnapshot;
   warnings?: string[];
+  /** Motion-video cache hits/misses and stage timings when available. */
+  videoPerformance?: {
+    cacheHits: number;
+    cacheMisses: number;
+    joinedJobs: number;
+    bypasses: number;
+    setupMs: number;
+    renderMs: number;
+    encodeMs: number;
+    finalizeMs: number;
+    totalMs: number;
+  };
 }
 
 export interface AgentPlanHistoryEntry {
