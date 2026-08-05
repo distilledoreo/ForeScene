@@ -25,7 +25,7 @@ import { VIDEO_PERFORMANCE_CACHE_VERSION } from './videoPerformance';
 import type { VideoResolutionPresetId } from './videoPresets';
 
 /** Bump when the fingerprint dependency schema changes. */
-export const VIDEO_ARTIFACT_RENDERER_VERSION = 'forescene-video-v2';
+export const VIDEO_ARTIFACT_RENDERER_VERSION = 'forescene-video-v3';
 
 export type VideoArtifactAppearance = 'clay' | 'projected' | 'depth';
 
@@ -122,10 +122,14 @@ function resolveContentMode(spec: VideoArtifactSpecification): SceneContentMode 
 
 function relevantObjects(project: LocationProject, shot: Shot): SceneObject[] {
   const overrideIds = new Set(Object.keys(shot.objectOverrides ?? {}));
+  const keyframeOverrideIds = new Set(
+    shot.cameraKeyframes.flatMap((keyframe) => Object.keys(keyframe.objectOverrides ?? {})),
+  );
   const animate = cameraKeyframesHaveObjectAnimation(shot.cameraKeyframes);
   return project.scene.objects.filter((object) => {
-    if (!object.visible && !overrideIds.has(object.id)) return false;
-    if (animate || overrideIds.has(object.id)) return true;
+    const explicitlyReferenced = overrideIds.has(object.id) || keyframeOverrideIds.has(object.id);
+    if (!object.visible && !explicitlyReferenced) return false;
+    if (animate || explicitlyReferenced) return true;
     // Static scene geometry always contributes to clay/projected frames.
     return object.stagingRole !== 'person' || object.visible;
   });
