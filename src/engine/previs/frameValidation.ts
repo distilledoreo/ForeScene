@@ -337,8 +337,69 @@ export const FAILURE_CODES = new Set<string>([
   'composition_constraint_out_of_tolerance',
 ]);
 
-function isPlausibleScreenLandmarkY(y: number): boolean {
-  return y > 0 && y < 1.12;
+function isFiniteScreenLandmarkY(y: number): boolean {
+  return Number.isFinite(y);
+}
+
+type CropLandmarkKey = 'shoulderY' | 'chestY' | 'waistY';
+
+function validateCropLandmark(params: {
+  id: string;
+  landmarkKey: CropLandmarkKey;
+  y: number | undefined;
+  band: [number, number] | undefined;
+  headY?: number;
+  templateLabel: string;
+}): FrameValidationIssue | undefined {
+  const { id, landmarkKey, y, band, headY, templateLabel } = params;
+  if (y === undefined || !band || !isFiniteScreenLandmarkY(y)) return undefined;
+
+  const measured: Record<string, number | boolean | undefined> = {
+    [landmarkKey]: y,
+    headTopY: headY,
+  };
+
+  if (y < 0) {
+    return {
+      code: 'crop_landmark_clipped',
+      message: `Subject "${id}" ${templateLabel} crop landmark is clipped above the frame.`,
+      subject: id,
+      expected: { [landmarkKey]: band },
+      measured,
+    };
+  }
+
+  if (y > 1.0) {
+    return {
+      code: 'framing_too_tight',
+      message: `Subject "${id}" ${templateLabel} crop is below the frame (shot too tight).`,
+      subject: id,
+      expected: { [landmarkKey]: band },
+      measured,
+    };
+  }
+
+  if (y < band[0]) {
+    return {
+      code: 'framing_too_loose',
+      message: `Subject "${id}" ${templateLabel} crop is outside band (too loose).`,
+      subject: id,
+      expected: { [landmarkKey]: band },
+      measured,
+    };
+  }
+
+  if (y > band[1]) {
+    return {
+      code: 'framing_too_tight',
+      message: `Subject "${id}" ${templateLabel} crop is outside band (too tight).`,
+      subject: id,
+      expected: { [landmarkKey]: band },
+      measured,
+    };
+  }
+
+  return undefined;
 }
 
 function validateTemplateComposition(params: {
@@ -389,40 +450,40 @@ function validateTemplateComposition(params: {
       }
     }
 
-    if (bands.shoulderY && shoulderY !== undefined && isPlausibleScreenLandmarkY(shoulderY)) {
-      if (shoulderY < bands.shoulderY[0] || shoulderY > bands.shoulderY[1]) {
-        issues.push({
-          code: shoulderY < bands.shoulderY[0] ? 'framing_too_loose' : 'framing_too_tight',
-          message: `Subject "${id}" shoulder crop is outside close-up band.`,
-          subject: id,
-          expected: { shoulderY: bands.shoulderY },
-          measured: { shoulderY, headTopY: headY, feetVisible: isLandmarkInFrame(data, 'feet') },
-        });
-      }
+    if (bands.shoulderY) {
+      const issue = validateCropLandmark({
+        id,
+        landmarkKey: 'shoulderY',
+        y: shoulderY,
+        band: bands.shoulderY,
+        headY,
+        templateLabel: 'shoulder',
+      });
+      if (issue) issues.push(issue);
     }
 
-    if (bands.chestY && chestY !== undefined && isPlausibleScreenLandmarkY(chestY)) {
-      if (chestY < bands.chestY[0] || chestY > bands.chestY[1]) {
-        issues.push({
-          code: chestY < bands.chestY[0] ? 'framing_too_loose' : 'framing_too_tight',
-          message: `Subject "${id}" chest crop is outside MCU band.`,
-          subject: id,
-          expected: { chestY: bands.chestY },
-          measured: { chestY, headTopY: headY },
-        });
-      }
+    if (bands.chestY) {
+      const issue = validateCropLandmark({
+        id,
+        landmarkKey: 'chestY',
+        y: chestY,
+        band: bands.chestY,
+        headY,
+        templateLabel: 'chest',
+      });
+      if (issue) issues.push(issue);
     }
 
-    if (bands.waistY && waistY !== undefined && isPlausibleScreenLandmarkY(waistY)) {
-      if (waistY < bands.waistY[0] || waistY > bands.waistY[1]) {
-        issues.push({
-          code: waistY < bands.waistY[0] ? 'framing_too_loose' : 'framing_too_tight',
-          message: `Subject "${id}" waist crop is outside medium band.`,
-          subject: id,
-          expected: { waistY: bands.waistY },
-          measured: { waistY, headTopY: headY, feetVisible: isLandmarkInFrame(data, 'feet') },
-        });
-      }
+    if (bands.waistY) {
+      const issue = validateCropLandmark({
+        id,
+        landmarkKey: 'waistY',
+        y: waistY,
+        band: bands.waistY,
+        headY,
+        templateLabel: 'waist',
+      });
+      if (issue) issues.push(issue);
     }
 
     if (bands.feetOutside && feetY !== undefined && feetY < 0.92 && isLandmarkInFrame(data, 'feet')) {
@@ -806,6 +867,7 @@ export function isRepairableIssue(code: string): boolean {
     'framing_too_tight',
     'headroom_excessive',
     'head_clipped',
+    'crop_landmark_clipped',
     'primary_off_center',
     'unwanted_subject_dominant',
     'subject_occluded',
@@ -826,11 +888,35 @@ function bandViolation(value: number, band: [number, number]): number {
   return 0;
 }
 
-/** Normalized composition error for monotonic repair scoring (lower is better). */
-export function scoreFrameValidation(result: FrameValidationResult): number {
+const HARD_REGRESSION_CODES = new Set([
+  'camera_inside_geometry',
+  'frame_blank',
+  'subject_out_of_frame',
+  'required_subject_hidden',
+  'subject_face_occluded',
+  'subject_occluded',
+]);
+
+const HIDDEN_OR_OCCLUDED_CODES = new Set([
+  'subject_occluded',
+  'subject_face_occluded',
+  'subject_out_of_frame',
+  'required_subject_hidden',
+]);
+
+export interface ValidationRank {
+  hardFailureCount: number;
+  hiddenOrOccludedCount: number;
+  framingError: number;
+}
+
+function computeFramingError(result: FrameValidationResult): number {
   let score = 0;
-  for (const issue of result.issues) {
+  for (const issue of result.issues ?? []) {
     if (issue.code === 'repair_exhausted') continue;
+    if (HARD_REGRESSION_CODES.has(issue.code) || HIDDEN_OR_OCCLUDED_CODES.has(issue.code)) {
+      continue;
+    }
 
     const measured = issue.measured ?? {};
     const expected = issue.expected ?? {};
@@ -857,18 +943,60 @@ export function scoreFrameValidation(result: FrameValidationResult): number {
       if (typeof max === 'number' && coverage > max) score += coverage - max;
     }
 
-    if (
-      issue.code === 'subject_occluded'
-      || issue.code === 'subject_face_occluded'
-      || issue.code === 'subject_out_of_frame'
-      || issue.code === 'required_subject_hidden'
-    ) {
-      score += 0.25;
-    } else if (score === 0 && !issue.measuredCoverage && Object.keys(measured).length === 0) {
-      score += 0.15;
+    if (issue.code === 'crop_landmark_clipped') {
+      const clipY = typeof measured.waistY === 'number'
+        ? measured.waistY
+        : typeof measured.shoulderY === 'number'
+          ? measured.shoulderY
+          : typeof measured.chestY === 'number'
+            ? measured.chestY
+            : undefined;
+      if (typeof clipY === 'number' && clipY < 0) score += Math.abs(clipY);
     }
   }
   return score;
+}
+
+/** Lexicographic repair ranking (lower is better). */
+export function rankFrameValidation(result: FrameValidationResult): ValidationRank {
+  let hardFailureCount = 0;
+  let hiddenOrOccludedCount = 0;
+  for (const issue of result.issues ?? []) {
+    if (issue.code === 'repair_exhausted') continue;
+    if (HARD_REGRESSION_CODES.has(issue.code)) hardFailureCount += 1;
+    if (HIDDEN_OR_OCCLUDED_CODES.has(issue.code)) hiddenOrOccludedCount += 1;
+  }
+  return {
+    hardFailureCount,
+    hiddenOrOccludedCount,
+    framingError: computeFramingError(result),
+  };
+}
+
+/** Negative when `after` is strictly better than `before`. */
+export function compareValidationRank(before: ValidationRank, after: ValidationRank): number {
+  if (after.hardFailureCount !== before.hardFailureCount) {
+    return after.hardFailureCount - before.hardFailureCount;
+  }
+  if (after.hiddenOrOccludedCount !== before.hiddenOrOccludedCount) {
+    return after.hiddenOrOccludedCount - before.hiddenOrOccludedCount;
+  }
+  return after.framingError - before.framingError;
+}
+
+export function isValidationRankImproved(
+  before: ValidationRank,
+  after: ValidationRank,
+): boolean {
+  return compareValidationRank(before, after) < 0;
+}
+
+/** Normalized composition error for monotonic repair scoring (lower is better). */
+export function scoreFrameValidation(result: FrameValidationResult): number {
+  const rank = rankFrameValidation(result);
+  return rank.hardFailureCount * 10
+    + rank.hiddenOrOccludedCount * 2
+    + rank.framingError;
 }
 
 export function extractFramingMetrics(

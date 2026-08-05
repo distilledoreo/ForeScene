@@ -48,7 +48,8 @@ import {
   buildSubjectBoundsForRepair,
   solidBlockersForRepair,
   validateShotFrame,
-  scoreFrameValidation,
+  rankFrameValidation,
+  isValidationRankImproved,
   extractFramingMetrics,
   type FrameValidationResult,
   type PrevisEntityMapping,
@@ -1626,7 +1627,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
         repairAttempts += 1;
         const repairStartedAt = Date.now();
-        const scoreBefore = scoreFrameValidation(finalResult);
+        const rankBefore = rankFrameValidation(finalResult);
         const metricsBefore = extractFramingMetrics(
           finalResult,
           definition.camera.subjects[0],
@@ -1665,7 +1666,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           };
           break;
         }
-        repairMs += Date.now() - repairStartedAt;
 
         project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
         shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
@@ -1699,12 +1699,14 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           fromCanonicalRenderer: true,
           pixelStats: reframe.pixelStats,
         });
-        const scoreAfter = scoreFrameValidation(candidateResult);
+        const rankAfter = rankFrameValidation(candidateResult);
         const metricsAfter = extractFramingMetrics(
           candidateResult,
           definition.camera.subjects[0],
         );
-        let keptRepair = scoreAfter < scoreBefore;
+        let keptRepair = isValidationRankImproved(rankBefore, rankAfter);
+        let finalPixelStats = reframe.pixelStats;
+        let finalByteSize = byteSize;
 
         if (!keptRepair && repair.commands.length > 0) {
           await applyPlanOnPage(session.page, {
@@ -1731,6 +1733,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           if (rollbackFrame.ok && rollbackFrame.fromCanonicalRenderer) {
             project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
             shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
+            exists = await pathExists(framePath);
+            finalByteSize = exists ? (await stat(framePath)).size : byteSize;
+            finalPixelStats = rollbackFrame.pixelStats;
             try {
               telemetry = buildShotCompositionTelemetry({
                 project,
@@ -1745,8 +1750,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
               project,
               shot: shot as Shot,
               definition,
-              frameExists: true,
-              frameByteSize: rollbackFrame.pixelStats ? byteSize : byteSize,
+              frameExists: exists,
+              frameByteSize: finalByteSize,
               previousCamera,
               subjectNames: names,
               telemetry,
@@ -1758,7 +1763,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           }
         }
 
-        finalResult = candidateResult;
+        repairMs += Date.now() - repairStartedAt;
+
+        finalResult = keptRepair ? candidateResult : finalResult;
         repairHistory.push({
           attempt: repairAttempts,
           kept: keptRepair,
@@ -1772,7 +1779,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           render: 'complete',
           framePath,
           renderSource: 'canonical_clay_renderer',
-          pixelStats: reframe.pixelStats,
+          pixelStats: finalPixelStats,
           repairAttempts,
           renderFingerprint: computeRenderFingerprint({
             project,

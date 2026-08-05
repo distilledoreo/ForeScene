@@ -18,11 +18,19 @@ import {
   type SubjectBounds,
 } from './cameraSolver';
 
+export type CropAnchorKey = 'shoulderY' | 'chestY' | 'waistY';
+
+export type CropAnchor = {
+  key: CropAnchorKey;
+  y: number;
+};
+
 export interface RepairAttemptAction {
   type: string;
   scale?: number;
   targetHeadY?: number;
   targetCropY?: number;
+  cropAnchor?: CropAnchorKey;
 }
 
 export interface RepairPlan {
@@ -45,7 +53,7 @@ export const REPAIR_PRIORITY: string[][] = [
   ['camera_inside_geometry', 'wall_dominant', 'subject_occluded', 'subject_face_occluded', 'ots_primary_obstructed'],
   ['subject_out_of_frame', 'required_subject_hidden', 'ots_foreground_missing'],
   ['framing_too_loose', 'framing_too_tight', 'subject_too_small', 'subject_too_large', 'ots_foreground_too_small', 'ots_foreground_too_large'],
-  ['headroom_excessive', 'head_clipped'],
+  ['headroom_excessive', 'head_clipped', 'crop_landmark_clipped'],
   ['unwanted_subject_dominant', 'primary_off_center', 'subjects_overlapping', 'character_underground'],
 ];
 
@@ -222,7 +230,8 @@ export function buildRepairPlan(params: {
       notes.push('reduce headroom');
       break;
     }
-    case 'head_clipped': {
+    case 'head_clipped':
+    case 'crop_landmark_clipped': {
       const headY = typeof primaryIssue.measured?.headTopY === 'number'
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y
@@ -601,13 +610,13 @@ export function buildOtsRepairProfile(params: {
   return profile;
 }
 
-function resolveCropLandmarkY(
+function resolveCropAnchor(
   issue: FrameValidationIssue,
   template?: PrevisCameraTemplate,
-): number | undefined {
+): CropAnchor | undefined {
   const measured = issue.measured;
   if (!measured) return undefined;
-  const order: Array<'shoulderY' | 'chestY' | 'waistY'> = (
+  const order: CropAnchorKey[] = (
     template === 'close_up' || template === 'extreme_close_up'
   ) ? ['shoulderY', 'chestY', 'waistY']
     : template === 'medium_close_up'
@@ -615,7 +624,9 @@ function resolveCropLandmarkY(
       : ['waistY', 'chestY', 'shoulderY'];
   for (const key of order) {
     const value = measured[key];
-    if (typeof value === 'number' && isPlausibleScreenLandmarkY(value)) return value;
+    if (typeof value === 'number' && isPlausibleScreenLandmarkY(value)) {
+      return { key, y: value };
+    }
   }
   return undefined;
 }
@@ -638,17 +649,17 @@ export function applyAnchorSpanCameraRepair(
   template: PrevisCameraTemplate | undefined,
 ): { camera: CameraData; action: RepairAttemptAction } | undefined {
   const headY = typeof issue.measured?.headTopY === 'number' ? issue.measured.headTopY : undefined;
-  const cropY = resolveCropLandmarkY(issue, template);
-  if (!template || headY === undefined || cropY === undefined || !isPlausibleScreenLandmarkY(cropY)) return undefined;
+  const cropAnchor = resolveCropAnchor(issue, template);
+  if (!template || headY === undefined || !cropAnchor) return undefined;
 
   const bands = templateFramingBands(template);
   const targetHeadY = bands.headTopY
     ? (bands.headTopY[0] + bands.headTopY[1]) / 2
     : 0.14;
-  const cropBand = bands.waistY ?? bands.shoulderY ?? bands.chestY;
-  const targetCropY = cropBand
-    ? (cropBand[0] + cropBand[1]) / 2
-    : 0.90;
+  const cropBand = bands[cropAnchor.key];
+  if (!cropBand) return undefined;
+  const cropY = cropAnchor.y;
+  const targetCropY = (cropBand[0] + cropBand[1]) / 2;
 
   const currentSpan = Math.max(0.08, cropY - headY);
   const targetSpan = Math.max(0.08, targetCropY - targetHeadY);
@@ -662,7 +673,7 @@ export function applyAnchorSpanCameraRepair(
   let actionType: string;
 
   if (issue.code === 'framing_too_loose' || issue.code === 'subject_too_small') {
-    const step = clamp(desiredScale, 0.75, 1.35);
+    const step = clamp(desiredScale, 1.01, 1.35);
     updated.position = moveToward(updated.position, updated.target, 1 / step);
     actionType = 'zoom_in_preserve_head';
   } else if (issue.code === 'headroom_excessive') {
@@ -671,7 +682,7 @@ export function applyAnchorSpanCameraRepair(
     updated.position = moveToward(updated.position, updated.target, 1 / step);
     actionType = 'zoom_in_preserve_head';
   } else if (issue.code === 'framing_too_tight' || issue.code === 'subject_too_large') {
-    const step = clamp(currentSpan / targetSpan, 0.75, 1.35);
+    const step = clamp(currentSpan / targetSpan, 1.01, 1.35);
     updated.position = moveAway(updated.position, updated.target, step);
     actionType = 'zoom_out_preserve_head';
   } else {
@@ -692,6 +703,7 @@ export function applyAnchorSpanCameraRepair(
       scale: desiredScale,
       targetHeadY,
       targetCropY,
+      cropAnchor: cropAnchor.key,
     },
   };
 }
