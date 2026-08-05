@@ -797,7 +797,7 @@ export function ExportSettingsPanel({
               <>
                 <Field
                   label="Motion video profile"
-                  hint="Fast Control uses 720p24 with a hardware-preferring encoder for AI-generation turnaround. Standard and High Quality keep 1080p30. Toggle clay/projected motion below to control which passes export generates."
+                  hint="Fast Control uses 720p24 with a hardware-preferring encoder for AI-generation turnaround. Standard uses 1080p30 and High Quality uses 4K30. Toggle clay/projected motion below to control which passes export generates."
                 >
                   <Select
                     value={videoPerf.profileId}
