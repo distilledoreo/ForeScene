@@ -152,6 +152,11 @@ export async function buildLegacyShotPackage(
   if (planHasBlockingErrors(plan)) {
     throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
   }
+  if (plan.packageFormat !== 'legacy-v1') {
+    throw new ShotPackageError(
+      `Legacy v1 writer received a ${plan.packageFormat} export plan.`,
+    );
+  }
   const shotPlan = getPlannedShot(plan, shot.id);
   const totalUnits = plan.estimatedWorkUnits + 1; // + compress
   const tracker = createProgressTracker({
@@ -238,6 +243,11 @@ export async function buildLegacyMultiShotPackage(
   const plan = options.plan ?? createExportPlan(project, shots, { packageType: 'selected-shots' });
   if (planHasBlockingErrors(plan)) {
     throw new ShotPackageError(formatPlanBlockingErrors(plan) || 'Export blocked by preflight errors.');
+  }
+  if (plan.packageFormat !== 'legacy-v1') {
+    throw new ShotPackageError(
+      `Legacy v1 writer received a ${plan.packageFormat} export plan.`,
+    );
   }
   const shotUnits = plan.estimatedWorkUnits;
   const tracker = createProgressTracker({

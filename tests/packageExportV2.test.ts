@@ -7,11 +7,15 @@ import {
 } from '../src/domain/defaults';
 import { CAMERA_MOVE_CUBEMAP_FACES, type CameraMoveCubemapFaceId } from '../src/engine/cameraMoveCubemap';
 import { stitchCubemapFaceBlobsCrossAsync } from '../src/engine/cubemapStitch';
-import { buildMultiShotPackage, buildShotPackage } from '../src/engine/packageExport';
+import { buildMultiShotPackage, buildShotPackage, buildLegacyShotPackage } from '../src/engine/packageExport';
+import { buildForeSceneV2Package } from '../src/engine/packageExportV2';
+import { ShotPackageError } from '../src/engine/packageExportCore';
 import { createExportPlan, listPlannedFiles } from '../src/engine/exportPlan';
+import { buildStartHereHtml } from '../src/engine/exportManifestV2';
 import {
   type BlobImageRenderResult,
   renderPanoCubemapFacesAsBlobs,
+  renderShotFrame,
 } from '../src/engine/renderers';
 import type { LocationProject } from '../src/domain/types';
 
@@ -20,6 +24,7 @@ vi.mock('../src/engine/renderers', async (importOriginal) => {
   return {
     ...actual,
     renderPanoCubemapFacesAsBlobs: vi.fn(actual.renderPanoCubemapFacesAsBlobs),
+    renderShotFrame: vi.fn(actual.renderShotFrame),
   };
 });
 
@@ -128,6 +133,7 @@ describe('forescene-v2 package export', () => {
   beforeEach(() => {
     vi.mocked(renderPanoCubemapFacesAsBlobs).mockReset();
     vi.mocked(stitchCubemapFaceBlobsCrossAsync).mockReset();
+    vi.mocked(renderShotFrame).mockReset();
   });
 
   it('keeps ZIP paths aligned with the v2 plan for a single shot', async () => {
@@ -172,6 +178,34 @@ describe('forescene-v2 package export', () => {
     for (const shotEntry of rootManifest.shots as Array<{ manifestPath: string }>) {
       expect(startHere).toContain(shotEntry.manifestPath);
     }
+    expect(startHere).toContain('generation/');
+    expect(startHere).toContain('technical/');
+    expect(startHere).toContain('shared_references/');
+  });
+
+  it('returns the full planned inventory in manifestPaths', async () => {
+    const project = withV2Project();
+    const shot = project.shots[0]!;
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    const result = await buildShotPackage(project, shot, { plan });
+    expect(result.manifestPaths.sort()).toEqual(listPlannedFiles(plan).map((file) => file.path).sort());
+    expect(result.manifestPaths).toContain('manifest.json');
+    expect(result.manifestPaths).toContain('START_HERE.html');
+  });
+
+  it('rejects a legacy plan passed to the v2 writer', async () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    expect(plan.packageFormat).toBe('legacy-v1');
+    await expect(buildForeSceneV2Package(project, [shot], { plan })).rejects.toThrow(ShotPackageError);
+  });
+
+  it('rejects a v2 plan passed to the legacy writer', async () => {
+    const project = withV2Project();
+    const shot = project.shots[0]!;
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    await expect(buildLegacyShotPackage(project, shot, { plan })).rejects.toThrow(ShotPackageError);
   });
 
   it('links the shot manifest to shared-reference ids from the root manifest', async () => {
@@ -453,5 +487,103 @@ describe('forescene-v2 package export', () => {
     await expect(
       buildMultiShotPackage(project, project.shots, { signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('honours abort during shared cubemap face rendering', async () => {
+    const project = withV2Project('Cancel Cubemap V2');
+    const shot = project.shots[0]!;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeFullPano: true,
+      includeCubemap: true,
+      includeGrayboxPano: false,
+      includeMetadata: false,
+      includePrompt: false,
+    };
+
+    const controller = new AbortController();
+    const faces = Object.fromEntries(
+      CAMERA_MOVE_CUBEMAP_FACES.map((face) => [
+        face,
+        { blob: new Blob([`face-${face}`], { type: 'image/png' }), width: 2, height: 2 },
+      ]),
+    ) as Record<CameraMoveCubemapFaceId, BlobImageRenderResult>;
+    vi.mocked(renderPanoCubemapFacesAsBlobs).mockImplementation(async (_uri, options) => {
+      const [firstFace, ...remainingFaces] = CAMERA_MOVE_CUBEMAP_FACES;
+      await options!.onFaceRendered?.(firstFace, faces[firstFace]);
+      controller.abort();
+      for (const face of remainingFaces) {
+        await options!.onFaceRendered?.(face, faces[face]);
+      }
+      return { faceSize: 2, faces };
+    });
+
+    await expect(
+      buildShotPackage(project, shot, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('honours abort while rendering shots in a v2 multi-shot export', async () => {
+    const project = withV2Project('Cancel Mid Render V2');
+    const shot1 = project.shots[0]!;
+    shot1.exportSettings = {
+      ...shot1.exportSettings,
+      includeViewport: true,
+      includeProjectedViewport: false,
+      includeAiResultFrame: false,
+      includePanoCrop: false,
+      includeFullPano: false,
+      includeGrayboxPano: false,
+      includeCubemap: false,
+      includeCameraMoveVideo: false,
+      includeProjectedCameraMoveVideo: false,
+      includeCameraMoveReferenceFrames: false,
+      includeProjectedCameraMoveReferenceFrames: false,
+      includeMetadata: false,
+      includePrompt: false,
+    };
+    const shot2 = {
+      ...shot1,
+      id: 'shot-v2-cancel-mid-2',
+      shotNumber: '002',
+      name: 'Camera 002',
+      exportSettings: { ...shot1.exportSettings },
+    };
+    project.shots.push(shot2);
+
+    const controller = new AbortController();
+    let renderCount = 0;
+    vi.mocked(renderShotFrame).mockImplementation(async () => {
+      renderCount += 1;
+      if (renderCount >= 2) controller.abort();
+      return {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        width: 1,
+        height: 1,
+      };
+    });
+
+    await expect(
+      buildMultiShotPackage(project, project.shots, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('lists omitted artifacts and preflight warnings in START_HERE.html', () => {
+    const project = withV2Project();
+    const shot = project.shots[0]!;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeAiResultFrame: true,
+      includeFullPano: true,
+    };
+    delete project.assets.assets[project.panoRefs.find((pano) => pano.isCanonical)!.imageAssetId];
+
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    const html = buildStartHereHtml(plan, project, [shot]);
+
+    expect(html).toContain('Omitted requested artifacts');
+    expect(html).toContain('AI result frame');
+    expect(plan.issues.some((issue) => issue.severity === 'warning')).toBe(true);
+    expect(html).toContain('Preflight warnings');
   });
 });
