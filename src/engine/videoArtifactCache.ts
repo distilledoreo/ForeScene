@@ -86,7 +86,7 @@ let memoryLimits: VideoArtifactCacheLimits = {
 };
 let databasePromise: Promise<IDBDatabase | undefined> | undefined;
 let operationQueue: Promise<void> = Promise.resolve();
-let estimatedBudgetStarted = false;
+let estimatedBudgetPromise: Promise<VideoArtifactCacheLimits> | undefined;
 
 function enqueue<T>(operation: () => Promise<T>): Promise<T> {
   const run = operationQueue.then(operation, operation);
@@ -94,15 +94,16 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
   return run;
 }
 
-function startEstimatedBudgetOnce(): void {
-  if (estimatedBudgetStarted) return;
-  estimatedBudgetStarted = true;
-  void applyEstimatedVideoCacheBudget();
+function startEstimatedBudgetOnce(): Promise<VideoArtifactCacheLimits> {
+  if (!estimatedBudgetPromise) {
+    estimatedBudgetPromise = applyEstimatedVideoCacheBudget();
+  }
+  return estimatedBudgetPromise;
 }
 
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
-  startEstimatedBudgetOnce();
+  void startEstimatedBudgetOnce();
   if (databasePromise) return databasePromise;
 
   let connectionPromise: Promise<IDBDatabase | undefined>;
@@ -277,6 +278,15 @@ async function writeStored(record: VideoArtifactCacheRecord): Promise<void> {
   const db = await openDatabase();
   if (!db) return;
 
+  // Storage estimation starts asynchronously when the DB opens. Wait for it and
+  // recheck here so an entry accepted under the initial 2 GiB default cannot
+  // escape a smaller quota-derived budget.
+  await startEstimatedBudgetOnce();
+  if (record.byteSize > limits.maxBytes) {
+    await deleteStored([record.key]);
+    return;
+  }
+
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     transaction.objectStore(STORE_NAME).put(toStored(record));
@@ -385,7 +395,8 @@ export async function putVideoArtifactInCache(
 
   rememberInMemory(full);
 
-  // Never persist a single entry larger than the persistent budget.
+  // Early check avoids unnecessary DB work. writeStored repeats the check after
+  // the asynchronous quota estimate settles to close the initialization race.
   if (full.byteSize <= limits.maxBytes) {
     void enqueue(async () => {
       try {
@@ -492,11 +503,21 @@ export async function clearVideoArtifactCache(): Promise<void> {
   });
 }
 
+/** Test helper — clear only the in-memory working set, preserving IndexedDB. */
+export function clearVideoArtifactMemoryCacheForTests(): void {
+  memoryCache.clear();
+}
+
+/** Test helper — wait for all queued writes/touches scheduled before this call. */
+export async function flushVideoArtifactCacheOperationsForTests(): Promise<void> {
+  await operationQueue;
+}
+
 /** Test helper — clears memory cache and resets limits / DB handle. */
 export function resetVideoArtifactCacheForTests(): void {
   memoryCache.clear();
   databasePromise = undefined;
-  estimatedBudgetStarted = false;
+  estimatedBudgetPromise = undefined;
   limits = {
     maxBytes: DEFAULT_VIDEO_CACHE_MAX_BYTES,
     maxEntries: DEFAULT_VIDEO_CACHE_MAX_ENTRIES,
