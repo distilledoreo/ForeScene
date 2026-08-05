@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
 
-test('@smoke video artifact cache persists blobs and enforces late quota changes', async ({ page }) => {
+test('@smoke video artifact cache persists blobs and enforces late quota changes', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    browserName !== 'chromium',
+    'Chromium is the supported persistent MP4-cache gate; WebKit does not preserve Blob rows in this runner.',
+  );
+
   await page.goto('/?__foresceneVideoCacheTest=1');
   await page.waitForFunction(() => Boolean(
     (window as typeof window & { __foreSceneVideoCacheTest?: unknown }).__foreSceneVideoCacheTest,
