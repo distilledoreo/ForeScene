@@ -337,6 +337,10 @@ export const FAILURE_CODES = new Set<string>([
   'composition_constraint_out_of_tolerance',
 ]);
 
+function isPlausibleScreenLandmarkY(y: number): boolean {
+  return y > 0 && y < 1.12;
+}
+
 function validateTemplateComposition(params: {
   template: PrevisShotDefinition['camera']['template'];
   definition: PrevisShotDefinition;
@@ -385,7 +389,7 @@ function validateTemplateComposition(params: {
       }
     }
 
-    if (bands.shoulderY && shoulderY !== undefined) {
+    if (bands.shoulderY && shoulderY !== undefined && isPlausibleScreenLandmarkY(shoulderY)) {
       if (shoulderY < bands.shoulderY[0] || shoulderY > bands.shoulderY[1]) {
         issues.push({
           code: shoulderY < bands.shoulderY[0] ? 'framing_too_loose' : 'framing_too_tight',
@@ -397,7 +401,7 @@ function validateTemplateComposition(params: {
       }
     }
 
-    if (bands.chestY && chestY !== undefined) {
+    if (bands.chestY && chestY !== undefined && isPlausibleScreenLandmarkY(chestY)) {
       if (chestY < bands.chestY[0] || chestY > bands.chestY[1]) {
         issues.push({
           code: chestY < bands.chestY[0] ? 'framing_too_loose' : 'framing_too_tight',
@@ -409,7 +413,7 @@ function validateTemplateComposition(params: {
       }
     }
 
-    if (bands.waistY && waistY !== undefined) {
+    if (bands.waistY && waistY !== undefined && isPlausibleScreenLandmarkY(waistY)) {
       if (waistY < bands.waistY[0] || waistY > bands.waistY[1]) {
         issues.push({
           code: waistY < bands.waistY[0] ? 'framing_too_loose' : 'framing_too_tight',
@@ -451,8 +455,9 @@ function validateTemplateComposition(params: {
       });
     }
 
-    // Full-body AABB coverage — not used for OTS (upper-body / landmark span instead).
-    if (params.template !== 'over_the_shoulder') {
+    // Full-body AABB coverage — not used for OTS or landmark-crop templates (medium / MCU / close-up).
+    const usesLandmarkCrop = Boolean(bands.waistY || bands.shoulderY || bands.chestY);
+    if (params.template !== 'over_the_shoulder' && !usesLandmarkCrop) {
       if (bands.minHeightCoverage !== undefined && data.bounds.heightCoverage < bands.minHeightCoverage) {
         issues.push({
           code: 'framing_too_loose',
@@ -475,7 +480,8 @@ function validateTemplateComposition(params: {
           measured: { heightCoverage: data.bounds.heightCoverage },
         });
       }
-    } else {
+    }
+    if (params.template === 'over_the_shoulder') {
       // OTS primary size: head→waist landmark span (or upper-body height).
       const crop = otsPrimaryCropCoverage({
         landmarks: data.landmarks,

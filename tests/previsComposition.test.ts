@@ -783,14 +783,60 @@ describe('telemetry-driven repairs', () => {
       headTopY,
       0.10,
     );
-    // Looking down: target Y decreases when reducing headroom.
-    expect(repaired.target[1]).toBeLessThan(camera.target[1]);
+    expect(
+      repaired.position[0] !== camera.position[0]
+      || repaired.position[1] !== camera.position[1]
+      || repaired.position[2] !== camera.position[2],
+    ).toBe(true);
 
     const plan = buildRepairPlan({
       shotTarget: { id: 'shot-1' },
       camera,
       template: 'close_up',
       primarySubjectId: 'alex',
+      telemetry: {
+        shotId: 'shot-1',
+        shotNumber: '040',
+        frameWidth: 1920,
+        frameHeight: 1080,
+        subjects: {
+          alex: {
+            bounds: {
+              ndc: { minX: -0.2, maxX: 0.2, minY: -0.5, maxY: 0.5 },
+              pixels: { left: 768, top: 270, right: 1152, bottom: 810 },
+              widthCoverage: 0.2,
+              heightCoverage: 0.25,
+              areaCoverage: 0.05,
+              centerX: 0.5,
+              centerY: 0.5,
+              clipped: false,
+              behindCamera: false,
+              unclipped: {
+                widthCoverage: 0.2,
+                heightCoverage: 0.25,
+                areaCoverage: 0.05,
+                centerX: 0.5,
+                centerY: 0.5,
+                pixels: { left: 768, top: 270, right: 1152, bottom: 810 },
+              },
+              visible: {
+                widthCoverage: 0.2,
+                heightCoverage: 0.25,
+                areaCoverage: 0.05,
+                centerX: 0.5,
+                centerY: 0.5,
+                pixels: { left: 768, top: 270, right: 1152, bottom: 810 },
+              },
+            },
+            visible: true,
+            landmarks: {
+              headTop: { x: 0.5, y: headTopY, inFrame: true },
+              shoulders: { x: 0.5, y: 0.55, inFrame: true },
+            },
+          },
+        },
+        blockers: [],
+      },
       issues: [{
         code: 'headroom_excessive',
         message: 'too much headroom',
@@ -802,10 +848,10 @@ describe('telemetry-driven repairs', () => {
       }],
     });
     expect(plan?.primaryIssueCode).toBe('headroom_excessive');
-    expect(plan?.description).toContain('reduce headroom');
+    expect(plan?.description).toMatch(/reduce headroom|zoom_in_preserve_head/);
     expect(plan?.description).not.toContain('secondary');
     const cmd = plan!.commands.find((c) => c.op === 'shot.updateCamera');
-    expect(cmd && cmd.op === 'shot.updateCamera' && cmd.camera.target![1]! < camera.target[1]).toBe(true);
+    expect(cmd && cmd.op === 'shot.updateCamera').toBe(true);
   });
 
   it('picks a single root-cause issue by priority', () => {
@@ -984,6 +1030,57 @@ describe('telemetry-driven repairs', () => {
     });
 
     expect(result.issues.some((issue) => issue.code === 'headroom_excessive')).toBe(false);
+  });
+
+  it('does not flag framing_too_tight from full-body height alone on medium when landmark crop is valid', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    project.scene.objects = [alex];
+    const shot = makeShot(makeCamera({ position: [0, 1.5, 4], target: [0, 0.9, 0] }), '020');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '020',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      subjectNames: { alex: 'Alex' },
+    });
+    const alexData = telemetry.subjects.alex ?? telemetry.subjects.Alex!;
+    alexData.bounds.heightCoverage = 0.95;
+    alexData.landmarks = {
+      headTop: { x: 0.5, y: 0.15, inFrame: true },
+      waist: { x: 0.5, y: 0.82, inFrame: true },
+      feet: { x: 0.5, y: 1.2, inFrame: false },
+    };
+    alexData.visible = true;
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '020',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex' },
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    expect(result.issues.some((issue) => (
+      issue.code === 'framing_too_tight'
+      && issue.measured
+      && typeof issue.measured === 'object'
+      && 'heightCoverage' in issue.measured
+    ))).toBe(false);
   });
 
   it('scores lower when framing moves toward the target band', () => {

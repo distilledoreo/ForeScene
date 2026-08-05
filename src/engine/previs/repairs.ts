@@ -109,7 +109,19 @@ export function buildRepairPlan(params: {
   switch (primaryIssue.code) {
     case 'subject_too_small':
     case 'framing_too_loose': {
-      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template);
+      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template)
+        ?? (primaryTelemetry && template
+          ? applyAnchorSpanCameraRepair(camera, {
+            code: 'framing_too_loose',
+            message: 'landmark loose',
+            measured: {
+              headTopY: primaryTelemetry.landmarks?.headTop?.y,
+              waistY: primaryTelemetry.landmarks?.waist?.y,
+              shoulderY: primaryTelemetry.landmarks?.shoulders?.y,
+              chestY: primaryTelemetry.landmarks?.chest?.y,
+            },
+          }, template)
+          : undefined);
       if (anchor) {
         camera = anchor.camera;
         cameraChanged = true;
@@ -140,7 +152,19 @@ export function buildRepairPlan(params: {
     }
     case 'subject_too_large':
     case 'framing_too_tight': {
-      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template);
+      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template)
+        ?? (primaryTelemetry && template
+          ? applyAnchorSpanCameraRepair(camera, {
+            code: 'framing_too_tight',
+            message: 'landmark tight',
+            measured: {
+              headTopY: primaryTelemetry.landmarks?.headTop?.y,
+              waistY: primaryTelemetry.landmarks?.waist?.y,
+              shoulderY: primaryTelemetry.landmarks?.shoulders?.y,
+              chestY: primaryTelemetry.landmarks?.chest?.y,
+            },
+          }, template)
+          : undefined);
       if (anchor) {
         camera = anchor.camera;
         cameraChanged = true;
@@ -168,15 +192,49 @@ export function buildRepairPlan(params: {
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y
           ?? 0.25;
-      camera = { ...camera, ...applyHeadroomCorrection(camera, headY, 0.10) };
+      const headBand = template ? templateFramingBands(template).headTopY : undefined;
+      const desiredHead = headBand
+        ? (headBand[0] + headBand[1]) / 2
+        : 0.10;
+      const anchor = primaryTelemetry && template
+        ? applyAnchorSpanCameraRepair(camera, {
+          code: 'headroom_excessive',
+          message: 'headroom with loose crop span',
+          measured: {
+            headTopY: headY,
+            waistY: primaryTelemetry.landmarks?.waist?.y,
+            shoulderY: primaryTelemetry.landmarks?.shoulders?.y,
+            chestY: primaryTelemetry.landmarks?.chest?.y,
+          },
+        }, template)
+        : undefined;
+      if (anchor) {
+        camera = anchor.camera;
+        cameraChanged = true;
+        repairAction = anchor.action;
+        notes.push(anchor.action.type);
+        break;
+      }
+      const headroom = applyHeadroomCorrection(camera, headY, desiredHead);
+      camera = { ...camera, ...headroom };
       cameraChanged = true;
+      repairAction = { type: 'tilt_down_reduce_headroom', targetHeadY: desiredHead };
       notes.push('reduce headroom');
       break;
     }
     case 'head_clipped': {
-      camera.target = [camera.target[0], camera.target[1] + 0.12, camera.target[2]];
-      camera.position = moveAway(camera.position, camera.target, 1.08);
+      const headY = typeof primaryIssue.measured?.headTopY === 'number'
+        ? primaryIssue.measured.headTopY
+        : primaryTelemetry?.landmarks?.headTop?.y
+          ?? 0.05;
+      const headBand = template ? templateFramingBands(template).headTopY : undefined;
+      const desiredHead = headBand
+        ? (headBand[0] + headBand[1]) / 2
+        : 0.12;
+      const headroom = applyHeadroomCorrection(camera, headY, desiredHead);
+      camera = { ...camera, ...headroom };
       cameraChanged = true;
+      repairAction = { type: 'tilt_up_uncrop_head', targetHeadY: desiredHead };
       notes.push('uncrop head');
       break;
     }
@@ -543,17 +601,31 @@ export function buildOtsRepairProfile(params: {
   return profile;
 }
 
-function resolveCropLandmarkY(issue: FrameValidationIssue): number | undefined {
+function resolveCropLandmarkY(
+  issue: FrameValidationIssue,
+  template?: PrevisCameraTemplate,
+): number | undefined {
   const measured = issue.measured;
   if (!measured) return undefined;
-  if (typeof measured.waistY === 'number') return measured.waistY;
-  if (typeof measured.shoulderY === 'number') return measured.shoulderY;
-  if (typeof measured.chestY === 'number') return measured.chestY;
+  const order: Array<'shoulderY' | 'chestY' | 'waistY'> = (
+    template === 'close_up' || template === 'extreme_close_up'
+  ) ? ['shoulderY', 'chestY', 'waistY']
+    : template === 'medium_close_up'
+      ? ['chestY', 'shoulderY', 'waistY']
+      : ['waistY', 'chestY', 'shoulderY'];
+  for (const key of order) {
+    const value = measured[key];
+    if (typeof value === 'number' && isPlausibleScreenLandmarkY(value)) return value;
+  }
   return undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function isPlausibleScreenLandmarkY(y: number): boolean {
+  return y > 0 && y < 1.12;
 }
 
 /**
@@ -566,8 +638,8 @@ export function applyAnchorSpanCameraRepair(
   template: PrevisCameraTemplate | undefined,
 ): { camera: CameraData; action: RepairAttemptAction } | undefined {
   const headY = typeof issue.measured?.headTopY === 'number' ? issue.measured.headTopY : undefined;
-  const cropY = resolveCropLandmarkY(issue);
-  if (!template || headY === undefined || cropY === undefined) return undefined;
+  const cropY = resolveCropLandmarkY(issue, template);
+  if (!template || headY === undefined || cropY === undefined || !isPlausibleScreenLandmarkY(cropY)) return undefined;
 
   const bands = templateFramingBands(template);
   const targetHeadY = bands.headTopY
@@ -593,6 +665,11 @@ export function applyAnchorSpanCameraRepair(
     const step = clamp(desiredScale, 0.75, 1.35);
     updated.position = moveToward(updated.position, updated.target, 1 / step);
     actionType = 'zoom_in_preserve_head';
+  } else if (issue.code === 'headroom_excessive') {
+    const partial = 1 + (desiredScale - 1) * 0.55;
+    const step = clamp(partial, 1.03, 1.12);
+    updated.position = moveToward(updated.position, updated.target, 1 / step);
+    actionType = 'zoom_in_preserve_head';
   } else if (issue.code === 'framing_too_tight' || issue.code === 'subject_too_large') {
     const step = clamp(currentSpan / targetSpan, 0.75, 1.35);
     updated.position = moveAway(updated.position, updated.target, step);
@@ -601,7 +678,12 @@ export function applyAnchorSpanCameraRepair(
     return undefined;
   }
 
-  updated = applyHeadroomCorrection(updated, headY, targetHeadY);
+  if (issue.code === 'headroom_excessive') {
+    const softTarget = targetHeadY + (headY - targetHeadY) * 0.30;
+    updated = applyHeadroomCorrection(updated, headY, softTarget);
+  } else {
+    updated = applyHeadroomCorrection(updated, headY, targetHeadY);
+  }
 
   return {
     camera: { ...camera, ...updated },
@@ -624,10 +706,31 @@ export function selectPrimaryIssue(
   return undefined;
 }
 
+function vecSubtract(a: Vec3, b: Vec3): Vec3 {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function vecNormalize(v: Vec3): Vec3 {
+  const len = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+function vecCross(a: Vec3, b: Vec3): Vec3 {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function vecScale(v: Vec3, s: number): Vec3 {
+  return [v[0] * s, v[1] * s, v[2] * s];
+}
+
 /**
  * Screen Y: 0 = top, 1 = bottom.
  * When headTopY is larger than desired (subject too low / excess headroom),
- * look down so the subject rises in frame and headTopY decreases.
+ * pitch down around the camera right axis so the subject rises in frame.
  */
 export function applyHeadroomCorrection(
   camera: { position: Vec3; target: Vec3; fovDegrees: number },
@@ -635,18 +738,34 @@ export function applyHeadroomCorrection(
   desiredHeadTopY: number,
 ): { position: Vec3; target: Vec3; fovDegrees: number } {
   const excess = headTopY - desiredHeadTopY;
-  const lookDown = excess * 0.85;
+  if (Math.abs(excess) < 0.002) {
+    return {
+      position: [...camera.position] as Vec3,
+      target: [...camera.target] as Vec3,
+      fovDegrees: camera.fovDegrees,
+    };
+  }
+
+  const target: Vec3 = [...camera.target] as Vec3;
+  const offset = vecSubtract(camera.position, target);
+  const distance = Math.hypot(offset[0], offset[1], offset[2]) || 1;
+  const lookDown = excess * Math.max(distance * 0.35, 0.35);
+
+  const forward = vecNormalize(vecSubtract(target, camera.position));
+  let worldUp: Vec3 = [0, 1, 0];
+  let right = vecCross(forward, worldUp);
+  let rightLen = Math.hypot(right[0], right[1], right[2]);
+  if (rightLen < 1e-4) {
+    worldUp = [0, 0, 1];
+    right = vecCross(forward, worldUp);
+    rightLen = Math.hypot(right[0], right[1], right[2]) || 1;
+  }
+  right = [right[0] / rightLen, right[1] / rightLen, right[2] / rightLen];
+  const up = vecNormalize(vecCross(right, forward));
+
   return {
-    position: [
-      camera.position[0],
-      camera.position[1] - lookDown * 0.25,
-      camera.position[2],
-    ],
-    target: [
-      camera.target[0],
-      camera.target[1] - lookDown,
-      camera.target[2],
-    ],
+    position: vecSubtract(camera.position, vecScale(up, lookDown * 0.25)),
+    target: vecSubtract(target, vecScale(up, lookDown)),
     fovDegrees: camera.fovDegrees,
   };
 }
