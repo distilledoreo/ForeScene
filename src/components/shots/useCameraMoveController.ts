@@ -39,6 +39,8 @@ import {
   type CameraMoveExportProgress,
 } from '../../engine/renderers';
 import type { VideoResolutionPresetId } from '../../engine/videoPresets';
+import { resolveProjectVideoPerformance } from '../../engine/videoPerformance';
+import { prepareVideoArtifact } from '../../engine/prepareVideoArtifact';
 import {
   createCameraMoveExportPasses,
   getCameraMoveExportCompletionMessage,
@@ -411,29 +413,68 @@ export function useCameraMoveController(options: CameraMoveControllerOptions) {
         includeDepth,
       );
       const totalPasses = passes.length;
+      const videoPerformance = resolveProjectVideoPerformance(renderProject.exportConfiguration);
       const results = await runCameraMoveExportPasses(
         passes,
         async (pass, passIndex) => {
-          const video = await renderShotCameraMoveMp4(renderProject, renderShot, {
-            mode: videoExportMode,
-            resolutionPreset: videoResolutionPreset,
-            frameRate: 30,
-            appearance: pass.appearance,
-            peopleVariant: pass.peopleVariant,
-            occlusionFilter: pass.appearance === 'projected' && videoExportMode === 'render' ? 'fast' : undefined,
-            includeDataUrl: pass.appearance === 'clay',
-            depthRange: pass.appearance === 'depth' ? depthRange : undefined,
-            depthInvert: pass.appearance === 'depth' ? depthSettings.invert === true : undefined,
-            signal: abortController.signal,
-            onProgress: (progress) => {
-              const value = typeof progress === 'number' ? progress : progress.progress;
-              const message = typeof progress === 'number'
-                ? `Rendering ${pass.appearance} motion`
-                : progress.message;
-              setCameraMoveProgress((passIndex + value) / totalPasses);
-              setCameraMoveProgressMessage(message);
-            },
-          });
+          const onProgress = (progress: number | CameraMoveExportProgress) => {
+            const value = typeof progress === 'number' ? progress : progress.progress;
+            const message = typeof progress === 'number'
+              ? `Rendering ${pass.appearance} motion`
+              : progress.message;
+            setCameraMoveProgress((passIndex + value) / totalPasses);
+            setCameraMoveProgressMessage(message);
+          };
+          // Deterministic Render mode goes through prepareVideoArtifact so package
+          // export can reuse the same fingerprinted cache entries.
+          const video = videoExportMode === 'render'
+            ? await prepareVideoArtifact({
+              project: renderProject,
+              shotId: renderShot.id,
+              specification: {
+                appearance: pass.appearance,
+                peopleVariant: pass.peopleVariant,
+                mode: 'render',
+                // Shot UI may pick a different resolution preset; frame rate / encoder
+                // still follow the project video performance profile.
+                resolutionPreset: videoResolutionPreset,
+                frameRate: videoPerformance.frameRate,
+                encoderMode: videoPerformance.encoderMode,
+                occlusionFilter: pass.appearance === 'projected' ? 'fast' : undefined,
+                depthRange: pass.appearance === 'depth' ? depthRange : undefined,
+                depthInvert: pass.appearance === 'depth' ? depthSettings.invert === true : undefined,
+              },
+              performance: videoPerformance,
+              includeDataUrl: pass.appearance === 'clay',
+              signal: abortController.signal,
+              onProgress,
+            }).then((artifact) => ({
+              blob: artifact.blob,
+              dataUrl: artifact.dataUrl,
+              width: artifact.width,
+              height: artifact.height,
+              durationSeconds: artifact.durationSeconds,
+              frameRate: artifact.frameRate,
+              mimeType: artifact.mimeType,
+              fileExtension: 'mp4' as const,
+              encodeMode: artifact.encodeMode,
+              frameCount: artifact.frameCount,
+              codecString: artifact.codecString,
+              actualEncoderMode: artifact.actualEncoderMode,
+              encoderModeFallback: artifact.encoderModeFallback,
+            }))
+            : await renderShotCameraMoveMp4(renderProject, renderShot, {
+              mode: 'quickPreview',
+              resolutionPreset: videoResolutionPreset,
+              frameRate: videoPerformance.frameRate,
+              appearance: pass.appearance,
+              peopleVariant: pass.peopleVariant,
+              includeDataUrl: pass.appearance === 'clay',
+              depthRange: pass.appearance === 'depth' ? depthRange : undefined,
+              depthInvert: pass.appearance === 'depth' ? depthSettings.invert === true : undefined,
+              signal: abortController.signal,
+              onProgress,
+            });
           if (cameraMoveAbortRef.current.cancelled) return video;
 
           if (pass.appearance === 'clay') {

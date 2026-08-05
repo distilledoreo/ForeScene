@@ -106,7 +106,11 @@ async function zipPaths(blob: Blob): Promise<string[]> {
 }
 
 describe('package export', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { resetVideoArtifactCacheForTests } = await import('../src/engine/videoArtifactCache');
+    const { resetPrepareVideoArtifactInflightForTests } = await import('../src/engine/prepareVideoArtifact');
+    resetVideoArtifactCacheForTests();
+    resetPrepareVideoArtifactInflightForTests();
     vi.mocked(renderShotCameraMoveMp4).mockReset();
     vi.mocked(renderShotCameraMoveMp4).mockImplementation(async () => {
       throw new Error('renderShotCameraMoveMp4 should be mocked in camera-move package tests');
@@ -147,9 +151,9 @@ describe('package export', () => {
     const source = readFileSync(new URL('../src/engine/packageExport.ts', import.meta.url), 'utf8');
     expect(source).toContain('resolveClayCameraMovePackageSource');
     expect(source).toContain('hasRenderableCameraMove(shot.cameraKeyframes)');
-    expect(source).toContain('renderShotCameraMoveMp4');
+    expect(source).toContain('prepareVideoArtifact');
+    expect(source).toContain('preparePackageCameraMoveVideo');
     expect(source).toContain('viewport_clay_motion.mp4');
-    expect(source).toContain("resolutionPreset: '1080p'");
     expect(source).toContain("mode: 'render'");
     expect(source).toContain('Legacy fallback only when rerendering is impossible');
     expect(source).not.toContain('getSupportedCameraMoveMp4MimeType');

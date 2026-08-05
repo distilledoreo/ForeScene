@@ -7,6 +7,7 @@
  */
 
 import type { VideoEncodingConfig } from 'mediabunny';
+import type { VideoEncoderMode } from '../domain/types';
 import type { VideoResolutionPreset } from './videoPresets';
 
 type MediabunnyModule = typeof import('mediabunny');
@@ -26,6 +27,13 @@ export interface DeterministicEncodeOptions {
   renderFrame: (frameIndex: number) => void | Promise<void>;
   signal?: AbortSignal;
   onFrameEncoded?: (completedFrames: number, totalFrames: number) => void;
+  /**
+   * Requested encoder mode. `fast` prefers hardware + realtime and falls back
+   * to quality when unsupported.
+   */
+  encoderMode?: VideoEncoderMode;
+  /** Optional per-stage timing hooks (render vs encode). */
+  onStageTiming?: (stage: 'render' | 'encode', ms: number) => void;
 }
 
 export interface DeterministicEncodeResult {
@@ -36,6 +44,31 @@ export interface DeterministicEncodeResult {
   frameRate: number;
   frameCount: number;
   codecString: string;
+  /** Encoder mode actually used after capability negotiation. */
+  actualEncoderMode: VideoEncoderMode;
+  /** True when fast mode was requested but quality was used instead. */
+  encoderModeFallback: boolean;
+}
+
+type HardwareAcceleration = NonNullable<VideoEncodingConfig['hardwareAcceleration']>;
+type LatencyMode = NonNullable<VideoEncodingConfig['latencyMode']>;
+
+interface EncoderModeParams {
+  hardwareAcceleration: HardwareAcceleration;
+  latencyMode: LatencyMode;
+}
+
+function encoderModeParams(mode: VideoEncoderMode): EncoderModeParams {
+  if (mode === 'fast') {
+    return {
+      hardwareAcceleration: 'prefer-hardware',
+      latencyMode: 'realtime',
+    };
+  }
+  return {
+    hardwareAcceleration: 'no-preference',
+    latencyMode: 'quality',
+  };
 }
 
 /**
@@ -44,13 +77,15 @@ export interface DeterministicEncodeResult {
  */
 export function buildDeterministicAvcEncodingConfig(
   preset: VideoResolutionPreset,
+  encoderMode: VideoEncoderMode = 'quality',
 ): VideoEncodingConfig {
+  const mode = encoderModeParams(encoderMode);
   return {
     codec: 'avc',
     bitrate: preset.bitrate,
     fullCodecString: preset.avcCodecString,
-    hardwareAcceleration: 'no-preference',
-    latencyMode: 'quality',
+    hardwareAcceleration: mode.hardwareAcceleration,
+    latencyMode: mode.latencyMode,
     bitrateMode: 'variable',
     keyFrameInterval: 2,
   };
@@ -59,8 +94,9 @@ export function buildDeterministicAvcEncodingConfig(
 /** VideoEncoder.isConfigSupported payload mirroring {@link buildDeterministicAvcEncodingConfig}. */
 export function buildDeterministicVideoEncoderSupportConfig(
   preset: VideoResolutionPreset,
+  encoderMode: VideoEncoderMode = 'quality',
 ): VideoEncoderConfig {
-  const encoding = buildDeterministicAvcEncodingConfig(preset);
+  const encoding = buildDeterministicAvcEncodingConfig(preset, encoderMode);
   return {
     codec: preset.avcCodecString,
     width: preset.width,
@@ -76,9 +112,10 @@ export function buildDeterministicVideoEncoderSupportConfig(
 
 export async function canUseDeterministicMp4Export(
   preset: VideoResolutionPreset,
+  encoderMode: VideoEncoderMode = 'quality',
 ): Promise<boolean> {
   if (typeof VideoEncoder === 'undefined') return false;
-  const encoding = buildDeterministicAvcEncodingConfig(preset);
+  const encoding = buildDeterministicAvcEncodingConfig(preset, encoderMode);
   try {
     const { canEncodeVideo } = await loadMediabunny();
     const mediabunnyOk = await canEncodeVideo('avc', {
@@ -97,12 +134,39 @@ export async function canUseDeterministicMp4Export(
 
   try {
     const support = await VideoEncoder.isConfigSupported(
-      buildDeterministicVideoEncoderSupportConfig(preset),
+      buildDeterministicVideoEncoderSupportConfig(preset, encoderMode),
     );
     return Boolean(support.supported);
   } catch {
     return false;
   }
+}
+
+/**
+ * Negotiate the encoder mode: try fast when requested, fall back to quality.
+ * Returns undefined when neither mode is supported.
+ */
+export async function resolveDeterministicEncoderMode(
+  preset: VideoResolutionPreset,
+  requested: VideoEncoderMode = 'quality',
+): Promise<{ mode: VideoEncoderMode; fallback: boolean } | undefined> {
+  if (requested === 'fast') {
+    if (await canUseDeterministicMp4Export(preset, 'fast')) {
+      return { mode: 'fast', fallback: false };
+    }
+    if (await canUseDeterministicMp4Export(preset, 'quality')) {
+      return { mode: 'quality', fallback: true };
+    }
+    return undefined;
+  }
+  if (await canUseDeterministicMp4Export(preset, 'quality')) {
+    return { mode: 'quality', fallback: false };
+  }
+  // Last resort: some devices only advertise prefer-hardware configs.
+  if (await canUseDeterministicMp4Export(preset, 'fast')) {
+    return { mode: 'fast', fallback: false };
+  }
+  return undefined;
 }
 
 /**
@@ -112,7 +176,16 @@ export async function canUseDeterministicMp4Export(
 export async function encodeCanvasFramesToMp4(
   options: DeterministicEncodeOptions,
 ): Promise<DeterministicEncodeResult> {
-  const { canvas, preset, totalFrames, renderFrame, signal, onFrameEncoded } = options;
+  const {
+    canvas,
+    preset,
+    totalFrames,
+    renderFrame,
+    signal,
+    onFrameEncoded,
+    encoderMode = 'quality',
+    onStageTiming,
+  } = options;
   if (totalFrames < 1) {
     throw new Error('Camera move export requires at least one frame.');
   }
@@ -120,8 +193,8 @@ export async function encodeCanvasFramesToMp4(
     throw new Error('MP4 export was cancelled.');
   }
 
-  const supported = await canUseDeterministicMp4Export(preset);
-  if (!supported) {
+  const negotiated = await resolveDeterministicEncoderMode(preset, encoderMode);
+  if (!negotiated) {
     throw new Error(
       `H.264 ${preset.label} (${preset.avcCodecString}) is not supported in this browser.`,
     );
@@ -141,7 +214,7 @@ export async function encodeCanvasFramesToMp4(
   });
 
   const frameDuration = 1 / preset.frameRate;
-  const encodingConfig = buildDeterministicAvcEncodingConfig(preset);
+  const encodingConfig = buildDeterministicAvcEncodingConfig(preset, negotiated.mode);
   const videoSource = new CanvasSource(canvas, encodingConfig);
 
   output.addVideoTrack(videoSource, { frameRate: preset.frameRate });
@@ -159,11 +232,16 @@ export async function encodeCanvasFramesToMp4(
         throw new Error('MP4 export was cancelled.');
       }
 
+      const renderStarted = performance.now();
       await renderFrame(frameIndex);
+      onStageTiming?.('render', performance.now() - renderStarted);
+
       const timestamp = frameIndex * frameDuration;
       // Await add() so muxer/encoder backpressure stalls the render loop
       // instead of buffering unbounded VideoFrames in memory.
+      const encodeStarted = performance.now();
       await videoSource.add(timestamp, frameDuration);
+      onStageTiming?.('encode', performance.now() - encodeStarted);
       onFrameEncoded?.(frameIndex + 1, totalFrames);
     }
 
@@ -199,5 +277,7 @@ export async function encodeCanvasFramesToMp4(
     frameRate: preset.frameRate,
     frameCount: totalFrames,
     codecString: preset.avcCodecString,
+    actualEncoderMode: negotiated.mode,
+    encoderModeFallback: negotiated.fallback,
   };
 }

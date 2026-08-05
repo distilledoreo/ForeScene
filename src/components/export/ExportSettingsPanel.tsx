@@ -9,7 +9,9 @@ import type {
   Shot,
   ShotDepthSettings,
   ShotExportSettings,
+  VideoPerformanceProfileId,
 } from '../../domain/types';
+import { resolveProjectVideoPerformance } from '../../engine/videoPerformance';
 import {
   DEFAULT_CHARACTER_PASS_BACKGROUND,
   defaultCharacterPassExportSettings,
@@ -165,6 +167,7 @@ export function ExportSettingsPanel({
   copyShotExportOverrides,
   promoteShotExportToSceneDefaults,
   setProjectPackageFormat,
+  setProjectVideoPerformance,
 }: {
   project: LocationProject;
   selectedShot?: Shot;
@@ -179,6 +182,9 @@ export function ExportSettingsPanel({
   copyShotExportOverrides: (fromShotId: string, toShotIds: string[]) => void;
   promoteShotExportToSceneDefaults: (shotId: string) => void;
   setProjectPackageFormat: (packageFormat: ExportPackageFormat) => void;
+  setProjectVideoPerformance: (
+    settings: Partial<import('../../domain/types').VideoPerformanceSettings>,
+  ) => void;
 }) {
   const [context, setContext] = useState<ExportSettingsContext>('scene');
   /** Local drafts so Custom width/height can be edited before differing from scene defaults. */
@@ -779,6 +785,65 @@ export function ExportSettingsPanel({
             : undefined,
         ))}
       </Section>
+
+      {context === 'scene' && (
+        <Section title="Video performance" defaultOpen>
+          {(() => {
+            const videoPerf = resolveProjectVideoPerformance(project.exportConfiguration);
+            return (
+              <>
+                <Field
+                  label="Motion video profile"
+                  hint="Fast Control uses 720p24 with a hardware-preferring encoder for AI-generation turnaround. Standard and High Quality keep 1080p30. Toggle clay/projected motion below to control which passes export generates."
+                >
+                  <Select
+                    value={videoPerf.profileId}
+                    onChange={(event) => {
+                      const profileId = event.target.value as VideoPerformanceProfileId;
+                      setProjectVideoPerformance({ profileId });
+                      if (profileId === 'fast-control') {
+                        patchResolved({
+                          includeCameraMoveVideo: false,
+                          includeProjectedCameraMoveVideo: true,
+                        });
+                      } else if (profileId === 'standard' || profileId === 'high-quality') {
+                        patchResolved({
+                          includeCameraMoveVideo: true,
+                          includeProjectedCameraMoveVideo: true,
+                        });
+                      }
+                    }}
+                    data-export-video-performance-profile
+                  >
+                    <option value="fast-control">Fast Control (720p24)</option>
+                    <option value="standard">Standard (1080p30)</option>
+                    <option value="high-quality">High Quality (1080p30)</option>
+                  </Select>
+                </Field>
+                <Field
+                  label="Encoder mode"
+                  hint="Fast prefers hardware H.264 + realtime latency and falls back to quality when unsupported."
+                >
+                  <Select
+                    value={videoPerf.encoderMode}
+                    onChange={(event) => setProjectVideoPerformance({
+                      profileId: videoPerf.profileId,
+                      encoderMode: event.target.value as 'quality' | 'fast',
+                    })}
+                    data-export-video-encoder-mode
+                  >
+                    <option value="fast">Fast (prefer hardware)</option>
+                    <option value="quality">Quality</option>
+                  </Select>
+                </Field>
+                <p className="text-[11px] text-muted" data-export-video-performance-summary>
+                  {videoPerf.width}×{videoPerf.height} · {videoPerf.frameRate} fps · {videoPerf.encoderMode} encoder
+                </p>
+              </>
+            );
+          })()}
+        </Section>
+      )}
 
       {context === 'scene' && (
         <Section title="Package layout" defaultOpen={false}>

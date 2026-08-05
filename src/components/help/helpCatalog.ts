@@ -578,7 +578,7 @@ export const helpSections: readonly HelpSection[] = [
         controls: [
           { label: 'Duration Seconds', description: 'Exact total move duration. Quick duration picks are also available while recording.' },
           { label: 'Export mode', description: 'Render MP4 uses fixed-step H.264 intended for Resolve. Quick Preview records in real time and may drop frames.' },
-          { label: 'Video resolution', description: 'Sets direct video dimensions; video commonly defaults to 1080p30 while stills retain shot resolution.' },
+          { label: 'Video resolution', description: 'Sets direct video dimensions. Package export uses the project Video performance profile (Fast Control 720p24, Standard/High Quality 1080p30); stills retain shot resolution.' },
           { label: 'Export MP4', description: 'Encodes and downloads the active camera move. Render MP4 requires a current Chromium browser with WebCodecs.' },
           { label: 'Cancel MP4', description: 'Stops the export at a supported cancellation point.' },
         ],

@@ -705,6 +705,32 @@ export type ExportProfileId =
   | 'character-compositing'
   | 'custom';
 
+/**
+ * Camera-move video performance profiles.
+ * Fast Control targets AI-generation turnaround; Standard/High Quality keep 1080p30.
+ */
+export type VideoPerformanceProfileId =
+  | 'fast-control'
+  | 'standard'
+  | 'high-quality';
+
+/**
+ * H.264 encoder preference for deterministic WebCodecs export.
+ * `fast` prefers hardware + realtime with safe fallback to `quality`.
+ */
+export type VideoEncoderMode = 'quality' | 'fast';
+
+/** Project-level video export performance settings (resolution/fps/encoder). */
+export interface VideoPerformanceSettings {
+  profileId: VideoPerformanceProfileId;
+  /** Optional override of the profile's resolution preset. */
+  resolutionPreset?: '720p' | '1080p' | '4k';
+  /** Optional override of the profile's frame rate. */
+  frameRate?: number;
+  /** Optional override of the profile's encoder mode. */
+  encoderMode?: VideoEncoderMode;
+}
+
 /** Package folder layout written by the exporter. */
 export type ExportPackageFormat = 'forescene-v2' | 'legacy-v1';
 
@@ -755,6 +781,11 @@ export interface ProjectExportConfiguration {
   activeProfileId: ExportProfileId;
   defaults: ShotExportSettings;
   packageFormat: ExportPackageFormat;
+  /**
+   * Camera-move video performance (profile, resolution, fps, encoder).
+   * When absent, resolved from `activeProfileId` (AI-generation → Fast Control).
+   */
+  videoPerformance?: VideoPerformanceSettings;
 }
 
 /** Multi-origin selection after per-projector occlusion and quality scoring. */
