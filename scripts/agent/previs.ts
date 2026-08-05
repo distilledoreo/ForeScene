@@ -17,7 +17,7 @@ import {
 import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { chromium } from '@playwright/test';
-import type { CameraData, LocationProject, Shot } from '../../src/domain/types';
+import type { CameraData, LocationProject, Shot, Vec3 } from '../../src/domain/types';
 import {
   assertManifestHashCompatible,
   applyManifestUpdateToRunState,
@@ -48,6 +48,9 @@ import {
   buildSubjectBoundsForRepair,
   solidBlockersForRepair,
   validateShotFrame,
+  rankFrameValidation,
+  isValidationRankImproved,
+  extractFramingMetrics,
   type FrameValidationResult,
   type PrevisEntityMapping,
   type PrevisProductionManifestV1,
@@ -142,6 +145,32 @@ async function pathExists(filePath: string): Promise<boolean> {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function snapshotCamera(camera: CameraData): CameraData {
+  return {
+    ...camera,
+    position: [...camera.position] as Vec3,
+    target: [...camera.target] as Vec3,
+  };
+}
+
+interface RepairAttemptLogEntry {
+  attempt: number;
+  kept: boolean;
+  before: Record<string, number>;
+  action: { type: string; scale?: number; targetHeadY?: number; targetCropY?: number };
+  after: Record<string, number>;
+}
+
+async function readRepairHistory(filePath: string): Promise<RepairAttemptLogEntry[]> {
+  try {
+    const raw = await readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as RepairAttemptLogEntry[] : [];
+  } catch {
+    return [];
+  }
 }
 
 async function writeDataUrlPng(dataUrl: string, filePath: string): Promise<void> {
@@ -1598,6 +1627,15 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
 
         repairAttempts += 1;
         const repairStartedAt = Date.now();
+        const rankBefore = rankFrameValidation(finalResult);
+        const metricsBefore = extractFramingMetrics(
+          finalResult,
+          definition.camera.subjects[0],
+        );
+        const cameraBefore = snapshotCamera(shot.camera);
+        const repairLogPath = path.join(outputDir, 'logs', `repairs-${definition.shotNumber}.json`);
+        const repairHistory = await readRepairHistory(repairLogPath);
+
         await applyPlanOnPage(session.page, {
           version: 1,
           planId: `repair-${definition.shotNumber}-${repairAttempts}`,
@@ -1628,28 +1666,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           };
           break;
         }
-        repairMs += Date.now() - repairStartedAt;
-
-        state = upsertShotState(state, definition.shotNumber, {
-          render: 'complete',
-          framePath,
-          renderSource: 'canonical_clay_renderer',
-          pixelStats: reframe.pixelStats,
-          repairAttempts,
-        });
 
         project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
         shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
-        state = upsertShotState(state, definition.shotNumber, {
-          renderFingerprint: computeRenderFingerprint({
-            project,
-            shot: shot as Shot,
-            profile: renderProfile,
-            rendererVersion: `forescene-renderer-${state.renderPipelineVersion ?? 1}`,
-            locationId: definition.locationId,
-          }).key,
-          renderCacheHit: false,
-        });
         exists = await pathExists(framePath);
         byteSize = exists ? (await stat(framePath)).size : undefined;
 
@@ -1668,7 +1687,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           telemetry = undefined;
         }
 
-        finalResult = validateShotFrame({
+        let candidateResult = validateShotFrame({
           project,
           shot: shot as Shot,
           definition,
@@ -1679,6 +1698,97 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           telemetry,
           fromCanonicalRenderer: true,
           pixelStats: reframe.pixelStats,
+        });
+        const rankAfter = rankFrameValidation(candidateResult);
+        const metricsAfter = extractFramingMetrics(
+          candidateResult,
+          definition.camera.subjects[0],
+        );
+        let keptRepair = isValidationRankImproved(rankBefore, rankAfter);
+        let finalPixelStats = reframe.pixelStats;
+        let finalByteSize = byteSize;
+
+        if (!keptRepair && repair.commands.length > 0) {
+          await applyPlanOnPage(session.page, {
+            version: 1,
+            planId: `repair-rollback-${definition.shotNumber}-${repairAttempts}`,
+            description: 'Rollback repair — no score improvement',
+            commands: [{
+              op: 'shot.updateCamera',
+              shot: { id: shotState.shotId },
+              camera: cameraBefore,
+            }],
+          });
+          await waitForAgentIdle(session.page);
+          const rollbackFrame = await renderCleanShotFrame(
+            session.page,
+            shotState.shotId,
+            framePath,
+            {
+              debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
+              renderSession,
+              shotNumber: definition.shotNumber,
+            },
+          );
+          if (rollbackFrame.ok && rollbackFrame.fromCanonicalRenderer) {
+            project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
+            shot = project.shots.find((item) => item.shotNumber === definition.shotNumber) ?? shot;
+            exists = await pathExists(framePath);
+            finalByteSize = exists ? (await stat(framePath)).size : byteSize;
+            finalPixelStats = rollbackFrame.pixelStats;
+            try {
+              telemetry = buildShotCompositionTelemetry({
+                project,
+                shot: shot as Shot,
+                definition,
+                subjectNames: names,
+              });
+            } catch {
+              telemetry = finalResult.telemetry ?? telemetry;
+            }
+            candidateResult = validateShotFrame({
+              project,
+              shot: shot as Shot,
+              definition,
+              frameExists: exists,
+              frameByteSize: finalByteSize,
+              previousCamera,
+              subjectNames: names,
+              telemetry,
+              fromCanonicalRenderer: true,
+              pixelStats: rollbackFrame.pixelStats,
+            });
+          } else {
+            candidateResult = finalResult;
+          }
+        }
+
+        repairMs += Date.now() - repairStartedAt;
+
+        finalResult = keptRepair ? candidateResult : finalResult;
+        repairHistory.push({
+          attempt: repairAttempts,
+          kept: keptRepair,
+          before: metricsBefore,
+          action: repair.action ?? { type: repair.description },
+          after: keptRepair ? metricsAfter : extractFramingMetrics(finalResult, definition.camera.subjects[0]),
+        });
+        await writeJson(repairLogPath, repairHistory);
+
+        state = upsertShotState(state, definition.shotNumber, {
+          render: 'complete',
+          framePath,
+          renderSource: 'canonical_clay_renderer',
+          pixelStats: finalPixelStats,
+          repairAttempts,
+          renderFingerprint: computeRenderFingerprint({
+            project,
+            shot: shot as Shot,
+            profile: renderProfile,
+            rendererVersion: `forescene-renderer-${state.renderPipelineVersion ?? 1}`,
+            locationId: definition.locationId,
+          }).key,
+          renderCacheHit: false,
         });
         if (finalResult.status !== 'passed' && repairAttempts >= maxRepairPasses) {
           finalResult = {
