@@ -362,6 +362,8 @@ function validateTemplateComposition(params: {
     const waistY = landmarkScreenY(data, 'waist');
     const feetY = landmarkScreenY(data, 'feet');
     const kneesY = landmarkScreenY(data, 'knees');
+    const landmarkConfidence = data.landmarkConfidence ?? 1;
+    const lowConfidenceTolerance = landmarkConfidence < 0.5 ? 0.02 : 0;
 
     if (bands.headTopY && headY !== undefined) {
       if (headY < bands.headTopY[0] - 0.02) {
@@ -370,15 +372,15 @@ function validateTemplateComposition(params: {
           message: `Subject "${id}" head is clipped at top of frame.`,
           subject: id,
           expected: { headTopY: bands.headTopY },
-          measured: { headTopY: headY },
+          measured: { headTopY: headY, landmarkConfidence },
         });
-      } else if (headY > bands.headTopY[1]) {
+      } else if (headY > bands.headTopY[1] + lowConfidenceTolerance) {
         issues.push({
           code: 'headroom_excessive',
           message: `Subject "${id}" has excessive headroom.`,
           subject: id,
           expected: { headTopY: bands.headTopY },
-          measured: { headTopY: headY },
+          measured: { headTopY: headY, landmarkConfidence },
         });
       }
     }
@@ -386,7 +388,7 @@ function validateTemplateComposition(params: {
     if (bands.shoulderY && shoulderY !== undefined) {
       if (shoulderY < bands.shoulderY[0] || shoulderY > bands.shoulderY[1]) {
         issues.push({
-          code: shoulderY < bands.shoulderY[0] ? 'framing_too_tight' : 'framing_too_loose',
+          code: shoulderY < bands.shoulderY[0] ? 'framing_too_loose' : 'framing_too_tight',
           message: `Subject "${id}" shoulder crop is outside close-up band.`,
           subject: id,
           expected: { shoulderY: bands.shoulderY },
@@ -398,7 +400,7 @@ function validateTemplateComposition(params: {
     if (bands.chestY && chestY !== undefined) {
       if (chestY < bands.chestY[0] || chestY > bands.chestY[1]) {
         issues.push({
-          code: chestY < bands.chestY[0] ? 'framing_too_tight' : 'framing_too_loose',
+          code: chestY < bands.chestY[0] ? 'framing_too_loose' : 'framing_too_tight',
           message: `Subject "${id}" chest crop is outside MCU band.`,
           subject: id,
           expected: { chestY: bands.chestY },
@@ -410,7 +412,7 @@ function validateTemplateComposition(params: {
     if (bands.waistY && waistY !== undefined) {
       if (waistY < bands.waistY[0] || waistY > bands.waistY[1]) {
         issues.push({
-          code: waistY < bands.waistY[0] ? 'framing_too_tight' : 'framing_too_loose',
+          code: waistY < bands.waistY[0] ? 'framing_too_loose' : 'framing_too_tight',
           message: `Subject "${id}" waist crop is outside medium band.`,
           subject: id,
           expected: { waistY: bands.waistY },
@@ -810,4 +812,77 @@ export function isRepairableIssue(code: string): boolean {
     'render_not_ready',
     'frame_blank',
   ].includes(code);
+}
+
+function bandViolation(value: number, band: [number, number]): number {
+  if (value < band[0]) return band[0] - value;
+  if (value > band[1]) return value - band[1];
+  return 0;
+}
+
+/** Normalized composition error for monotonic repair scoring (lower is better). */
+export function scoreFrameValidation(result: FrameValidationResult): number {
+  let score = 0;
+  for (const issue of result.issues) {
+    if (issue.code === 'repair_exhausted') continue;
+
+    const measured = issue.measured ?? {};
+    const expected = issue.expected ?? {};
+
+    if (typeof measured.headTopY === 'number' && Array.isArray(expected.headTopY)) {
+      score += bandViolation(measured.headTopY, expected.headTopY as [number, number]);
+    }
+    if (typeof measured.waistY === 'number' && Array.isArray(expected.waistY)) {
+      score += bandViolation(measured.waistY, expected.waistY as [number, number]);
+    }
+    if (typeof measured.shoulderY === 'number' && Array.isArray(expected.shoulderY)) {
+      score += bandViolation(measured.shoulderY, expected.shoulderY as [number, number]);
+    }
+    if (typeof measured.chestY === 'number' && Array.isArray(expected.chestY)) {
+      score += bandViolation(measured.chestY, expected.chestY as [number, number]);
+    }
+
+    const coverage = issue.measuredCoverage
+      ?? (typeof measured.heightCoverage === 'number' ? measured.heightCoverage : undefined);
+    if (typeof coverage === 'number') {
+      const min = expected.minHeightCoverage as number | undefined;
+      const max = expected.maxHeightCoverage as number | undefined;
+      if (typeof min === 'number' && coverage < min) score += min - coverage;
+      if (typeof max === 'number' && coverage > max) score += coverage - max;
+    }
+
+    if (
+      issue.code === 'subject_occluded'
+      || issue.code === 'subject_face_occluded'
+      || issue.code === 'subject_out_of_frame'
+      || issue.code === 'required_subject_hidden'
+    ) {
+      score += 0.25;
+    } else if (score === 0 && !issue.measuredCoverage && Object.keys(measured).length === 0) {
+      score += 0.15;
+    }
+  }
+  return score;
+}
+
+export function extractFramingMetrics(
+  result: FrameValidationResult,
+  subjectId?: string,
+): Record<string, number> {
+  const metrics: Record<string, number> = { score: scoreFrameValidation(result) };
+  const telemetry = result.telemetry;
+  if (!telemetry) return metrics;
+
+  const subject = subjectId
+    ? telemetry.subjects[subjectId]
+      ?? Object.entries(telemetry.subjects).find(([key]) => (
+        key.toLowerCase().includes(subjectId.toLowerCase())
+      ))?.[1]
+    : Object.values(telemetry.subjects)[0];
+  if (!subject?.landmarks) return metrics;
+
+  for (const [name, landmark] of Object.entries(subject.landmarks)) {
+    metrics[`${name}Y`] = landmark.y;
+  }
+  return metrics;
 }

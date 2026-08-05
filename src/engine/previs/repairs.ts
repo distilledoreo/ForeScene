@@ -10,6 +10,7 @@ import type { FrameValidationIssue } from './frameValidation';
 import type { ForeSceneAgentCommand } from '../agent/protocol';
 import type { ShotCompositionTelemetry } from './compositionTelemetry';
 import { FRAMING_COVERAGE } from './framing';
+import { templateFramingBands } from './framingProfiles';
 import type { PrevisCameraTemplate, PrevisShotDefinition } from './manifest';
 import {
   reSolveTemplateCamera,
@@ -17,11 +18,22 @@ import {
   type SubjectBounds,
 } from './cameraSolver';
 
+export interface RepairAttemptAction {
+  type: string;
+  scale?: number;
+  targetHeadY?: number;
+  targetCropY?: number;
+}
+
 export interface RepairPlan {
   commands: ForeSceneAgentCommand[];
   description: string;
   /** Issue code that drove this repair. */
   primaryIssueCode?: string;
+  /** Structured action metadata for repair attempt logs. */
+  action?: RepairAttemptAction;
+  /** Measured framing metrics before the repair is applied. */
+  before?: Record<string, number>;
 }
 
 /**
@@ -81,13 +93,14 @@ export function buildRepairPlan(params: {
 
   const commands: ForeSceneAgentCommand[] = [];
   const notes: string[] = [];
-  let camera = {
+  let camera: CameraData = {
+    ...params.camera,
     position: [...params.camera.position] as Vec3,
     target: [...params.camera.target] as Vec3,
-    fovDegrees: params.camera.fovDegrees,
   };
 
   let cameraChanged = false;
+  let repairAction: RepairAttemptAction | undefined;
   const template = params.template;
   const range = template ? FRAMING_COVERAGE[template] : undefined;
   const primaryId = params.primarySubjectId;
@@ -96,6 +109,14 @@ export function buildRepairPlan(params: {
   switch (primaryIssue.code) {
     case 'subject_too_small':
     case 'framing_too_loose': {
+      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template);
+      if (anchor) {
+        camera = anchor.camera;
+        cameraChanged = true;
+        repairAction = anchor.action;
+        notes.push(anchor.action.type);
+        break;
+      }
       const measured = primaryIssue.measuredCoverage
         ?? (typeof primaryIssue.measured?.heightCoverage === 'number'
           ? primaryIssue.measured.heightCoverage
@@ -111,7 +132,7 @@ export function buildRepairPlan(params: {
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y;
       if (typeof headY === 'number') {
-        camera = applyHeadroomCorrection(camera, headY, 0.10);
+        camera = { ...camera, ...applyHeadroomCorrection(camera, headY, 0.10) };
       }
       cameraChanged = true;
       notes.push('tighten framing from telemetry');
@@ -119,6 +140,14 @@ export function buildRepairPlan(params: {
     }
     case 'subject_too_large':
     case 'framing_too_tight': {
+      const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template);
+      if (anchor) {
+        camera = anchor.camera;
+        cameraChanged = true;
+        repairAction = anchor.action;
+        notes.push(anchor.action.type);
+        break;
+      }
       const measured = primaryIssue.measuredCoverage
         ?? (typeof primaryIssue.measured?.heightCoverage === 'number'
           ? primaryIssue.measured.heightCoverage
@@ -139,7 +168,7 @@ export function buildRepairPlan(params: {
         ? primaryIssue.measured.headTopY
         : primaryTelemetry?.landmarks?.headTop?.y
           ?? 0.25;
-      camera = applyHeadroomCorrection(camera, headY, 0.10);
+      camera = { ...camera, ...applyHeadroomCorrection(camera, headY, 0.10) };
       cameraChanged = true;
       notes.push('reduce headroom');
       break;
@@ -287,6 +316,7 @@ export function buildRepairPlan(params: {
     commands,
     description: `Repair: ${notes.join(', ') || 'adjust'}`,
     primaryIssueCode: primaryIssue.code,
+    ...(repairAction ? { action: repairAction } : {}),
   };
 }
 
@@ -511,6 +541,77 @@ export function buildOtsRepairProfile(params: {
   }
 
   return profile;
+}
+
+function resolveCropLandmarkY(issue: FrameValidationIssue): number | undefined {
+  const measured = issue.measured;
+  if (!measured) return undefined;
+  if (typeof measured.waistY === 'number') return measured.waistY;
+  if (typeof measured.shoulderY === 'number') return measured.shoulderY;
+  if (typeof measured.chestY === 'number') return measured.chestY;
+  return undefined;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Two-anchor scale solve: adjust camera distance for head-to-crop span, then
+ * re-aim to preserve head position.
+ */
+export function applyAnchorSpanCameraRepair(
+  camera: CameraData,
+  issue: FrameValidationIssue,
+  template: PrevisCameraTemplate | undefined,
+): { camera: CameraData; action: RepairAttemptAction } | undefined {
+  const headY = typeof issue.measured?.headTopY === 'number' ? issue.measured.headTopY : undefined;
+  const cropY = resolveCropLandmarkY(issue);
+  if (!template || headY === undefined || cropY === undefined) return undefined;
+
+  const bands = templateFramingBands(template);
+  const targetHeadY = bands.headTopY
+    ? (bands.headTopY[0] + bands.headTopY[1]) / 2
+    : 0.14;
+  const cropBand = bands.waistY ?? bands.shoulderY ?? bands.chestY;
+  const targetCropY = cropBand
+    ? (cropBand[0] + cropBand[1]) / 2
+    : 0.90;
+
+  const currentSpan = Math.max(0.08, cropY - headY);
+  const targetSpan = Math.max(0.08, targetCropY - targetHeadY);
+  const desiredScale = targetSpan / currentSpan;
+
+  let updated = {
+    position: [...camera.position] as Vec3,
+    target: [...camera.target] as Vec3,
+    fovDegrees: camera.fovDegrees,
+  };
+  let actionType: string;
+
+  if (issue.code === 'framing_too_loose' || issue.code === 'subject_too_small') {
+    const step = clamp(desiredScale, 0.75, 1.35);
+    updated.position = moveToward(updated.position, updated.target, 1 / step);
+    actionType = 'zoom_in_preserve_head';
+  } else if (issue.code === 'framing_too_tight' || issue.code === 'subject_too_large') {
+    const step = clamp(currentSpan / targetSpan, 0.75, 1.35);
+    updated.position = moveAway(updated.position, updated.target, step);
+    actionType = 'zoom_out_preserve_head';
+  } else {
+    return undefined;
+  }
+
+  updated = applyHeadroomCorrection(updated, headY, targetHeadY);
+
+  return {
+    camera: { ...camera, ...updated },
+    action: {
+      type: actionType,
+      scale: desiredScale,
+      targetHeadY,
+      targetCropY,
+    },
+  };
 }
 
 export function selectPrimaryIssue(

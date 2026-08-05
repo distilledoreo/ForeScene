@@ -8,6 +8,7 @@ import { createDefaultProject } from '../src/domain/defaults';
 import type { CameraData, LocationProject, SceneObject, Shot, Vec3 } from '../src/domain/types';
 import {
   applyHeadroomCorrection,
+  applyAnchorSpanCameraRepair,
   buildCameraMatrices,
   buildOtsRepairProfile,
   buildRepairPlan,
@@ -34,6 +35,7 @@ import {
   templateFramingBands,
   upsertShotState,
   validateShotFrame,
+  scoreFrameValidation,
   type PrevisShotDefinition,
 } from '../src/engine/previs';
 
@@ -813,6 +815,200 @@ describe('telemetry-driven repairs', () => {
       { code: 'camera_inside_geometry', message: 'z' },
     ]);
     expect(primary?.code).toBe('camera_inside_geometry');
+  });
+
+  it('labels crop landmarks below the band minimum as framing_too_loose', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    project.scene.objects = [alex];
+    const shot = makeShot(makeCamera({ position: [0, 1.5, 6], target: [0, 0.9, 0] }), '020');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '020',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      subjectNames: { alex: 'Alex' },
+    });
+    const alexData = telemetry.subjects.alex ?? telemetry.subjects.Alex!;
+    alexData.landmarks = {
+      headTop: { x: 0.5, y: 0.29, inFrame: true },
+      waist: { x: 0.5, y: 0.616, inFrame: true },
+      shoulders: { x: 0.5, y: 0.45, inFrame: true },
+      feet: { x: 0.5, y: 1.2, inFrame: false },
+    };
+    alexData.visible = true;
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '020',
+        subjects: ['alex'],
+        camera: { template: 'medium', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex' },
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    expect(result.issues.some((issue) => (
+      issue.code === 'framing_too_loose'
+      && issue.measured?.waistY === 0.616
+    ))).toBe(true);
+  });
+
+  it('labels crop landmarks above the band maximum as framing_too_tight', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    project.scene.objects = [alex];
+    const shot = makeShot(makeCamera({ position: [0, 1.5, 2], target: [0, 0.9, 0] }), '040');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '040',
+        subjects: ['alex'],
+        camera: { template: 'close_up', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      subjectNames: { alex: 'Alex' },
+    });
+    const alexData = telemetry.subjects.alex ?? telemetry.subjects.Alex!;
+    alexData.landmarks = {
+      headTop: { x: 0.5, y: 0.12, inFrame: true },
+      shoulders: { x: 0.5, y: 1.08, inFrame: true },
+      waist: { x: 0.5, y: 1.2, inFrame: false },
+      feet: { x: 0.5, y: 1.2, inFrame: false },
+    };
+    alexData.visible = true;
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '040',
+        subjects: ['alex'],
+        camera: { template: 'close_up', subjects: ['alex'] },
+        requirements: { visibleSubjects: ['alex'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex' },
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    expect(result.issues.some((issue) => (
+      issue.code === 'framing_too_tight'
+      && issue.measured?.shoulderY === 1.08
+    ))).toBe(true);
+  });
+
+  it('zooms in when anchor span repair sees a loose medium crop', () => {
+    const camera = makeCamera({
+      position: [0, 1.6, 4],
+      target: [0, 1.2, 0],
+      fovDegrees: 35,
+    });
+    const repaired = applyAnchorSpanCameraRepair(camera, {
+      code: 'framing_too_loose',
+      message: 'waist too high',
+      measured: { headTopY: 0.29, waistY: 0.616 },
+    }, 'medium');
+    expect(repaired?.action.type).toBe('zoom_in_preserve_head');
+    const distBefore = Math.hypot(
+      camera.position[0] - camera.target[0],
+      camera.position[2] - camera.target[2],
+    );
+    const distAfter = Math.hypot(
+      repaired!.camera.position[0] - repaired!.camera.target[0],
+      repaired!.camera.position[2] - repaired!.camera.target[2],
+    );
+    expect(distAfter).toBeLessThan(distBefore);
+  });
+
+  it('applies a low-confidence deadband to borderline headroom warnings', () => {
+    const project = createDefaultProject() as LocationProject;
+    const alex = makeHuman('alex-id', 'Alex', [-0.9, 0, 0]);
+    const blair = makeHuman('blair-id', 'Blair', [0.9, 0, 0], 1.68);
+    project.scene.objects = [alex, blair];
+    const shot = makeShot(makeCamera({ position: [0, 1.55, 4.2], target: [0, 1.0, 0] }), '010');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '010',
+        subjects: ['alex', 'blair'],
+        camera: { template: 'two_shot', subjects: ['alex', 'blair'], angle: 'front' },
+        requirements: { visibleSubjects: ['alex', 'blair'] },
+      }),
+      subjectNames: { alex: 'Alex', blair: 'Blair' },
+    });
+    for (const subject of Object.values(telemetry.subjects)) {
+      subject.landmarkConfidence = 0.35;
+      subject.landmarkSource = 'bounds_fallback';
+      subject.landmarks = {
+        ...(subject.landmarks ?? {}),
+        headTop: { x: 0.5, y: 0.292, inFrame: true },
+      };
+      subject.visible = true;
+    }
+
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '010',
+        subjects: ['alex', 'blair'],
+        camera: { template: 'two_shot', subjects: ['alex', 'blair'], angle: 'front' },
+        requirements: { visibleSubjects: ['alex', 'blair'] },
+      }),
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames: { alex: 'Alex', blair: 'Blair' },
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    expect(result.issues.some((issue) => issue.code === 'headroom_excessive')).toBe(false);
+  });
+
+  it('scores lower when framing moves toward the target band', () => {
+    const bands = templateFramingBands('medium');
+    const worse: import('../src/engine/previs/frameValidation').FrameValidationResult = {
+      shotNumber: '020',
+      status: 'warning',
+      template: 'medium',
+      issues: [{
+        code: 'framing_too_loose',
+        message: 'waist too high',
+        expected: { waistY: bands.waistY },
+        measured: { waistY: 0.616, headTopY: 0.29 },
+      }],
+    };
+    const better: import('../src/engine/previs/frameValidation').FrameValidationResult = {
+      ...worse,
+      issues: [{
+        code: 'framing_too_loose',
+        message: 'still loose but closer',
+        expected: { waistY: bands.waistY },
+        measured: { waistY: 0.74, headTopY: 0.15 },
+      }],
+    };
+    expect(scoreFrameValidation(better)).toBeLessThan(scoreFrameValidation(worse));
   });
 });
 
