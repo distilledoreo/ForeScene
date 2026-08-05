@@ -1,9 +1,9 @@
 /**
  * Persistent fingerprinted MP4 cache (memory + IndexedDB).
  *
- * Exact-match only. Eviction is true LRU by lastAccessedAt, with a primary
- * byte budget and a secondary entry ceiling so a full multi-shot package
- * (31× clay + projected, optionally with people variants) can stay warm.
+ * Exact-match only. Persistent and in-memory caches use separate LRU budgets:
+ * IndexedDB can retain a large warm package, while the browser tab keeps only
+ * a conservative working set of Blob references.
  */
 
 import type { VideoArtifactFingerprint } from './videoArtifactFingerprint';
@@ -15,10 +15,14 @@ const STORE_NAME = 'mp4-blobs';
 /** Schema v2 stores Blob directly + lastAccessedAt for LRU. */
 const DATABASE_VERSION = 2;
 
-/** Default: enough for a large package of 720p/1080p motion clips. */
+/** Persistent cache default: enough for a large package of motion clips. */
 export const DEFAULT_VIDEO_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
-/** Secondary guard so metadata rows cannot grow without bound. */
+/** Persistent metadata-row guard. */
 export const DEFAULT_VIDEO_CACHE_MAX_ENTRIES = 256;
+/** In-memory Blob budget: deliberately much smaller than persistent storage. */
+export const DEFAULT_VIDEO_MEMORY_CACHE_MAX_BYTES = 128 * 1024 * 1024; // 128 MiB
+/** Secondary in-memory guard for many tiny clips. */
+export const DEFAULT_VIDEO_MEMORY_CACHE_MAX_ENTRIES = 24;
 
 export interface VideoArtifactCacheLimits {
   maxBytes: number;
@@ -76,8 +80,13 @@ let limits: VideoArtifactCacheLimits = {
   maxBytes: DEFAULT_VIDEO_CACHE_MAX_BYTES,
   maxEntries: DEFAULT_VIDEO_CACHE_MAX_ENTRIES,
 };
+let memoryLimits: VideoArtifactCacheLimits = {
+  maxBytes: DEFAULT_VIDEO_MEMORY_CACHE_MAX_BYTES,
+  maxEntries: DEFAULT_VIDEO_MEMORY_CACHE_MAX_ENTRIES,
+};
 let databasePromise: Promise<IDBDatabase | undefined> | undefined;
 let operationQueue: Promise<void> = Promise.resolve();
+let estimatedBudgetStarted = false;
 
 function enqueue<T>(operation: () => Promise<T>): Promise<T> {
   const run = operationQueue.then(operation, operation);
@@ -85,8 +94,15 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
   return run;
 }
 
+function startEstimatedBudgetOnce(): void {
+  if (estimatedBudgetStarted) return;
+  estimatedBudgetStarted = true;
+  void applyEstimatedVideoCacheBudget();
+}
+
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
+  startEstimatedBudgetOnce();
   if (databasePromise) return databasePromise;
 
   let connectionPromise: Promise<IDBDatabase | undefined>;
@@ -143,14 +159,20 @@ function lruMemoryKey(): string | undefined {
 
 function evictMemoryIfNeeded(): void {
   while (
-    memoryCache.size > limits.maxEntries
-    || memoryByteSize() > limits.maxBytes
+    memoryCache.size > memoryLimits.maxEntries
+    || memoryByteSize() > memoryLimits.maxBytes
   ) {
     if (memoryCache.size === 0) break;
     const oldest = lruMemoryKey();
     if (!oldest) break;
     memoryCache.delete(oldest);
   }
+}
+
+function rememberInMemory(record: VideoArtifactCacheRecord): void {
+  if (record.byteSize > memoryLimits.maxBytes) return;
+  memoryCache.set(record.key, record);
+  evictMemoryIfNeeded();
 }
 
 function normalizeStored(raw: StoredVideoArtifactRecord): VideoArtifactCacheRecord | undefined {
@@ -263,7 +285,7 @@ async function writeStored(record: VideoArtifactCacheRecord): Promise<void> {
     transaction.onabort = () => reject(transaction.error ?? new Error('Video cache write aborted.'));
   });
 
-  // LRU eviction by lastAccessedAt under byte + entry budgets.
+  // Persistent LRU eviction by lastAccessedAt under byte + entry budgets.
   const all = await listStored();
   all.sort((a, b) => (Date.parse(a.lastAccessedAt) || 0) - (Date.parse(b.lastAccessedAt) || 0));
   let totalBytes = all.reduce((sum, row) => sum + row.byteSize, 0);
@@ -315,14 +337,15 @@ export async function getVideoArtifactFromCache(
   if (memory) {
     memory.lastAccessedAt = accessedAt;
     memoryCache.set(fingerprint.key, memory);
+    // A memory hit is still a persistent LRU access. Best effort only.
+    void enqueue(() => touchStored(memory.key, accessedAt));
     return memory;
   }
   return enqueue(async () => {
     const stored = await readStored(fingerprint.key);
     if (!stored) return undefined;
     stored.lastAccessedAt = accessedAt;
-    memoryCache.set(stored.key, stored);
-    evictMemoryIfNeeded();
+    rememberInMemory(stored);
     void touchStored(stored.key, accessedAt);
     return stored;
   });
@@ -360,20 +383,17 @@ export async function putVideoArtifactInCache(
     timing: record.timing,
   };
 
-  // Never keep a single entry larger than the budget (still return it this session).
+  rememberInMemory(full);
+
+  // Never persist a single entry larger than the persistent budget.
   if (full.byteSize <= limits.maxBytes) {
-    memoryCache.set(full.key, full);
-    evictMemoryIfNeeded();
     void enqueue(async () => {
       try {
         await writeStored(full);
       } catch {
-        // Memory entry remains for the session.
+        // Memory entry remains available for the current session.
       }
     });
-  } else {
-    memoryCache.set(full.key, full);
-    evictMemoryIfNeeded();
   }
 
   return full;
@@ -383,6 +403,11 @@ export function getVideoArtifactCacheLimits(): VideoArtifactCacheLimits {
   return { ...limits };
 }
 
+export function getVideoArtifactMemoryCacheLimits(): VideoArtifactCacheLimits {
+  return { ...memoryLimits };
+}
+
+/** Update persistent IndexedDB limits. */
 export function setVideoArtifactCacheLimits(next: Partial<VideoArtifactCacheLimits>): VideoArtifactCacheLimits {
   if (typeof next.maxBytes === 'number' && Number.isFinite(next.maxBytes) && next.maxBytes > 0) {
     limits.maxBytes = Math.floor(next.maxBytes);
@@ -390,28 +415,40 @@ export function setVideoArtifactCacheLimits(next: Partial<VideoArtifactCacheLimi
   if (typeof next.maxEntries === 'number' && Number.isFinite(next.maxEntries) && next.maxEntries >= 1) {
     limits.maxEntries = Math.floor(next.maxEntries);
   }
-  evictMemoryIfNeeded();
   return getVideoArtifactCacheLimits();
 }
 
+/** Update the conservative browser-memory working-set limits. */
+export function setVideoArtifactMemoryCacheLimits(
+  next: Partial<VideoArtifactCacheLimits>,
+): VideoArtifactCacheLimits {
+  if (typeof next.maxBytes === 'number' && Number.isFinite(next.maxBytes) && next.maxBytes > 0) {
+    memoryLimits.maxBytes = Math.floor(next.maxBytes);
+  }
+  if (typeof next.maxEntries === 'number' && Number.isFinite(next.maxEntries) && next.maxEntries >= 1) {
+    memoryLimits.maxEntries = Math.floor(next.maxEntries);
+  }
+  evictMemoryIfNeeded();
+  return getVideoArtifactMemoryCacheLimits();
+}
+
 /**
- * Prefer an estimated free-quota-based budget when the Storage API is available,
- * without shrinking below a floor that can hold a modest package.
+ * Prefer a free-quota-based persistent budget when the Storage API is available.
+ * The memory cache remains fixed and conservative.
  */
 export async function applyEstimatedVideoCacheBudget(): Promise<VideoArtifactCacheLimits> {
-  const floor = 512 * 1024 * 1024; // 512 MiB
+  const minimumTarget = 64 * 1024 * 1024; // 64 MiB
   try {
     if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
       const estimate = await navigator.storage.estimate();
       const quota = estimate.quota ?? 0;
       const usage = estimate.usage ?? 0;
       const free = Math.max(0, quota - usage);
-      // Use up to 25% of free space, clamped to [floor, DEFAULT].
-      const budget = Math.min(
-        DEFAULT_VIDEO_CACHE_MAX_BYTES,
-        Math.max(floor, Math.floor(free * 0.25)),
-      );
-      if (budget > 0) setVideoArtifactCacheLimits({ maxBytes: budget });
+      if (free > 0) {
+        const target = Math.max(minimumTarget, Math.floor(free * 0.25));
+        const budget = Math.min(DEFAULT_VIDEO_CACHE_MAX_BYTES, target, free);
+        if (budget > 0) setVideoArtifactCacheLimits({ maxBytes: budget });
+      }
     }
   } catch {
     // Keep defaults.
@@ -424,6 +461,8 @@ export function inspectVideoArtifactCache(): {
   memoryBytes: number;
   maxBytes: number;
   maxEntries: number;
+  memoryMaxBytes: number;
+  memoryMaxEntries: number;
   keys: string[];
 } {
   return {
@@ -431,6 +470,8 @@ export function inspectVideoArtifactCache(): {
     memoryBytes: memoryByteSize(),
     maxBytes: limits.maxBytes,
     maxEntries: limits.maxEntries,
+    memoryMaxBytes: memoryLimits.maxBytes,
+    memoryMaxEntries: memoryLimits.maxEntries,
     keys: [...memoryCache.keys()],
   };
 }
@@ -455,16 +496,23 @@ export async function clearVideoArtifactCache(): Promise<void> {
 export function resetVideoArtifactCacheForTests(): void {
   memoryCache.clear();
   databasePromise = undefined;
+  estimatedBudgetStarted = false;
   limits = {
     maxBytes: DEFAULT_VIDEO_CACHE_MAX_BYTES,
     maxEntries: DEFAULT_VIDEO_CACHE_MAX_ENTRIES,
+  };
+  memoryLimits = {
+    maxBytes: DEFAULT_VIDEO_MEMORY_CACHE_MAX_BYTES,
+    maxEntries: DEFAULT_VIDEO_MEMORY_CACHE_MAX_ENTRIES,
   };
 }
 
 export function setVideoArtifactCacheMaxEntriesForTests(value: number): void {
   setVideoArtifactCacheLimits({ maxEntries: value });
+  setVideoArtifactMemoryCacheLimits({ maxEntries: value });
 }
 
 export function setVideoArtifactCacheMaxBytesForTests(value: number): void {
   setVideoArtifactCacheLimits({ maxBytes: value });
+  setVideoArtifactMemoryCacheLimits({ maxBytes: value });
 }
