@@ -79,9 +79,10 @@ describe('shared video artifact cancellation', () => {
 
     const renderSpy = vi.spyOn(renderers, 'renderShotCameraMoveMp4').mockImplementation(
       async (_project, _shot, options) => new Promise((resolve, reject) => {
-        sharedSignal = options.signal;
+        const signal = options?.signal;
+        sharedSignal = signal;
         resolveRender = resolve;
-        options.signal?.addEventListener(
+        signal?.addEventListener(
           'abort',
           () => reject(new Error('MP4 export was cancelled.')),
           { once: true },
@@ -117,8 +118,9 @@ describe('shared video artifact cancellation', () => {
 
     const renderSpy = vi.spyOn(renderers, 'renderShotCameraMoveMp4').mockImplementation(
       async (_project, _shot, options) => new Promise((_resolve, reject) => {
-        sharedSignal = options.signal;
-        options.signal?.addEventListener(
+        const signal = options?.signal;
+        sharedSignal = signal;
+        signal?.addEventListener(
           'abort',
           () => reject(new Error('MP4 export was cancelled.')),
           { once: true },
