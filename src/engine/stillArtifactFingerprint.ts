@@ -2,7 +2,6 @@ import type { LocationProject, Shot } from '../domain/types';
 import { normalizeShotDepthSettings } from '../domain/defaults';
 import { getSortedCameraKeyframes } from './cameraKeyframes';
 import { resolveProjectedProjectorAssets } from './multiOriginProjection';
-import { cameraKeyframesHaveObjectAnimation } from './objectKeyframes';
 import {
   assetContentIdentity,
   assetDependency,
@@ -40,9 +39,6 @@ function relevantObjectsForStill(
   const keyframeOverrideIds = new Set(
     shot.cameraKeyframes.flatMap((keyframe) => Object.keys(keyframe.objectOverrides ?? {})),
   );
-  // Keep parity with video fingerprint object selection: keyframed animation
-  // means all referenced objects remain in the dependency set.
-  void cameraKeyframesHaveObjectAnimation(shot.cameraKeyframes);
 
   return project.scene.objects.filter((object) => {
     const explicitlyReferenced = overrideIds.has(object.id) || keyframeOverrideIds.has(object.id);
