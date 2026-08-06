@@ -191,6 +191,103 @@ describe('computeStillArtifactFingerprint', () => {
     expect(clean.dependencyIds).toContain(`object:${prop.id}`);
     expect(full.key).not.toBe(clean.key);
   });
+
+  it('classifies human_dummy as person via staging-role resolver even without explicit role', () => {
+    const project = createDefaultProject();
+    const prop = createSceneObject('box', 1, [0, 1, 0]);
+    const human = createSceneObject('human_dummy', 1, [1, 1, 0]);
+    delete human.stagingRole;
+    project.scene.objects = [prop, human];
+    const shot = project.shots[0]!;
+
+    const clean = computeStillArtifactFingerprint(
+      project,
+      shot,
+      stillSpec('clay-viewport', 'clay', { peopleVariant: 'clean_plate' }),
+    );
+    expect(clean.dependencyIds).not.toContain(`object:${human.id}`);
+    expect(clean.dependencyIds).toContain(`object:${prop.id}`);
+  });
+
+  it('pano identity/content changes invalidate projected but not clay', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const panoId = 'pano-1';
+    const imageAssetId = 'pano-image-1';
+    project.assets.assets[imageAssetId] = {
+      id: imageAssetId,
+      type: 'image',
+      name: 'pano.png',
+      uri: 'data:image/png;base64,aaa',
+      contentHash: 'hash-a',
+      createdAt: new Date().toISOString(),
+    };
+    project.panoRefs = [{
+      id: panoId,
+      name: 'Main',
+      imageAssetId,
+      type: 'ai_global_reference',
+      projection: 'equirectangular',
+      origin: [0, 1.6, 0],
+      rotation: [0, 0, 0],
+      width: 4096,
+      height: 2048,
+      isCanonical: true,
+      createdAt: new Date().toISOString(),
+    }];
+    project.scene.panoOrigin = [0, 1.6, 0];
+    project.scene.panoRotation = [0, 0, 0];
+    shot.linkedPanoId = panoId;
+
+    const claySpec = stillSpec('clay-viewport', 'clay', { peopleVariant: 'with_people' });
+    const projectedSpec = stillSpec('projected-viewport', 'projected', { peopleVariant: 'with_people' });
+    const clayBefore = computeStillArtifactFingerprint(project, shot, claySpec).key;
+    const projectedBefore = computeStillArtifactFingerprint(project, shot, projectedSpec).key;
+
+    project.assets.assets[imageAssetId] = {
+      ...project.assets.assets[imageAssetId]!,
+      contentHash: 'hash-b',
+    };
+    project.panoRefs[0] = {
+      ...project.panoRefs[0]!,
+      origin: [1, 1.6, 0],
+      rotation: [0, 15, 0],
+    };
+    project.scene.panoOrigin = [1, 1.6, 0];
+    project.scene.panoRotation = [0, 15, 0];
+
+    expect(computeStillArtifactFingerprint(project, shot, claySpec).key).toBe(clayBefore);
+    expect(computeStillArtifactFingerprint(project, shot, projectedSpec).key).not.toBe(projectedBefore);
+  });
+
+  it('depth settings invalidate depth stills but not clay', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    shot.exportSettings.depth = {
+      enabled: true,
+      includeViewportStill: true,
+      includeReferenceFrames: false,
+      includeCameraMoveVideo: false,
+      rangeMode: 'manual',
+      nearMeters: 0.5,
+      farMeters: 12,
+      invert: false,
+    };
+
+    const claySpec = stillSpec('clay-viewport', 'clay', { peopleVariant: 'with_people' });
+    const depthSpec = stillSpec('depth-viewport', 'depth', { peopleVariant: 'with_people' });
+    const clayBefore = computeStillArtifactFingerprint(project, shot, claySpec).key;
+    const depthBefore = computeStillArtifactFingerprint(project, shot, depthSpec).key;
+
+    shot.exportSettings.depth = {
+      ...shot.exportSettings.depth,
+      invert: true,
+      farMeters: 30,
+    };
+
+    expect(computeStillArtifactFingerprint(project, shot, claySpec).key).toBe(clayBefore);
+    expect(computeStillArtifactFingerprint(project, shot, depthSpec).key).not.toBe(depthBefore);
+  });
 });
 
 describe('materialized still asset GC references', () => {
