@@ -10,6 +10,7 @@ import type { ProjectAsset, Shot } from '../domain/types';
 import { getShotExportProgressLabel } from './exportNaming';
 import type { ExportPlan } from './exportPlan';
 import { getProjectAssetBlob } from './projectAssetStore';
+import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import type { CameraMoveExportProgress } from './renderers';
 
 export type PackageExportPhase =
@@ -162,6 +163,7 @@ export async function compressZip(
     indeterminate: true,
   });
 
+  const startedAt = performance.now();
   const blob = await zip.generateAsync(
     { type: 'blob' },
     (metadata) => {
@@ -181,6 +183,7 @@ export async function compressZip(
       });
     },
   );
+  recordPreparedMediaMetric('zipAssemblyMs', Math.round(performance.now() - startedAt));
 
   throwIfAborted(args.signal);
   args.tracker.advance(1);

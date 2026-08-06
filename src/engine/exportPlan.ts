@@ -59,6 +59,9 @@ import {
 } from './depthRender';
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
 import { canUseProjectedAppearance } from './projectedStyle';
+import {
+  buildStillArtifactSpecificationsForShot,
+} from './stillArtifactPlanning';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
 import { stillArtifactKey, type StillArtifactSpecification } from './stillArtifactTypes';
 import {
@@ -339,6 +342,65 @@ export function annotateStillArtifactReadiness(
     sourceAssetId: existing.assetId,
     readiness: 'ready',
     source: 'materialized-asset',
+  };
+}
+
+/**
+ * Reference-frame groups span every start/middle/end frame × people variant.
+ * A group is only `ready` when every expected spec is materialized, fresh, and
+ * backed by a registry asset — never inferred from a single unrelated still.
+ */
+export function annotateReferenceFrameGroupReadiness(
+  project: LocationProject,
+  shot: Shot,
+  artifact: PlannedArtifact,
+): PlannedArtifact {
+  if (
+    artifact.disposition !== 'produce'
+    || artifact.kind !== 'clay-reference-frames'
+    && artifact.kind !== 'projected-reference-frames'
+    && artifact.kind !== 'depth-reference-frames'
+  ) {
+    return artifact;
+  }
+  const specKind: StillArtifactSpecification['kind'] = artifact.kind === 'clay-reference-frames'
+    ? 'clay-reference-frame'
+    : artifact.kind === 'projected-reference-frames'
+      ? 'projected-reference-frame'
+      : 'depth-reference-frame';
+  const expectedSpecs = buildStillArtifactSpecificationsForShot({
+    project,
+    shot,
+    purpose: 'export',
+  }).filter((spec) => spec.kind === specKind);
+  if (expectedSpecs.length === 0) {
+    return { ...artifact, readiness: 'missing', source: 'render-recovery' };
+  }
+
+  let fresh = 0;
+  let present = 0;
+  let expectedPrimary: string | undefined;
+  for (const spec of expectedSpecs) {
+    const key = stillArtifactKey(spec);
+    const expected = computeStillArtifactFingerprint(project, shot, spec).key;
+    expectedPrimary ??= expected;
+    const existing = shot.materializedMedia?.stills[key];
+    if (!existing) continue;
+    present += 1;
+    if (existing.fingerprint === expected && project.assets.assets[existing.assetId]) {
+      fresh += 1;
+    }
+  }
+
+  const ready = fresh === expectedSpecs.length;
+  return {
+    ...artifact,
+    expectedFingerprint: expectedPrimary,
+    sourceAssetId: ready
+      ? shot.materializedMedia?.stills[stillArtifactKey(expectedSpecs[0]!)]?.assetId
+      : undefined,
+    readiness: ready ? 'ready' : present > 0 ? 'stale' : 'missing',
+    source: ready ? 'materialized-asset' : 'render-recovery',
   };
 }
 
@@ -1333,7 +1395,15 @@ export function createExportPlan(
           height: settingsForPlan.height,
         });
       }
-      // Reference-frame groups: mark ready only when all expected frames exist.
+      // Reference-frame groups: ready only when every start/middle/end frame and
+      // people variant is materialized and fresh (never inferred from one still).
+      if (
+        artifact.kind === 'clay-reference-frames'
+        || artifact.kind === 'projected-reference-frames'
+        || artifact.kind === 'depth-reference-frames'
+      ) {
+        return annotateReferenceFrameGroupReadiness(project, planningShot, artifact);
+      }
       return annotateStillArtifactReadiness(project, planningShot, artifact);
     });
 

@@ -1,0 +1,185 @@
+Critical blockers
+1. It can overwrite newer live project state
+
+This is the largest correctness problem.
+
+materializeShotStills renders from a captured project value. Before committing, it does not retrieve the newest live project. There is even a comment saying it should re-read live state, followed by no implementation. It then passes its local snapshot to commitPreparedStillArtifact.
+
+The interactive callback subsequently replaces the project in Zustand with nextProject. Despite its comment about preserving concurrent mutations, it preserves only the selected shot ID—not newer project changes.
+
+The agent path has the same whole-project replacement pattern.
+
+So this sequence is possible:
+
+Still render begins from project A.
+User edits another object, shot, or setting, producing project B.
+Render completes.
+Materializer validates against project A.
+Project A plus the new still replaces project B.
+
+The unit test for concurrent edits does not catch this because it manually passes an edited project directly to the commit function. It does not simulate the coordinator and live store.
+
+Required fix: materialization must accept something like getLiveProject() and a transactional commit action. The current project must be read immediately before fingerprint validation and attachment. Only the artifact-specific asset and shot fields should be applied—not an entire stale project snapshot.
+
+2. Persistence is not actually atomic or durable
+
+commitPreparedStillArtifact calls storeProjectAssetBlob() and immediately attaches the resulting asset to the project. Its try/catch creates the appearance that storage failure is handled synchronously.
+
+But storeProjectAssetBlob() only registers the Blob in memory and fires IndexedDB persistence asynchronously. Persistence failures are reported later through listeners; they cannot be caught by the commit function’s synchronous try/catch.
+
+The project can therefore reference an asset that works during the current session but was never durably stored.
+
+Required fix: add an awaited asset-persistence operation. The materialized record must not be committed to the project until the IndexedDB write succeeds. On failure, retain the prior artifact and clean up the new memory/Object URL state.
+
+There is a smaller related bug in lookupCurrentArtifact: the dimension-mismatch condition contains only a comment. It does not actually reject the mismatched asset.
+
+3. Interactive capture renders companion stills twice
+
+The new capture path materializes the primary and queues the remaining configured stills. After that, it still runs the old buildStillCompanionJobs() pipeline.
+
+Those legacy jobs directly render:
+
+Clay clean plate
+Projected with people
+Projected clean plate
+
+again.
+
+So the new prepared-media system can render and persist these outputs, then the legacy system immediately renders them again for the camera-roll slots.
+
+Required fix: populate legacy view references from the already-materialized asset IDs. Remove the companion WebGL renders from normal capture.
+
+4. Cancelling one shot can cancel other shots
+
+cancelShotStillPreparation(shotId) correctly aborts the controller for one shot—but then cancels queued work based only on priority. That cancels every queued interactive still across all shots.
+
+The render coordinator has no shot ID or job metadata in its queue entries, so it cannot cancel narrowly.
+
+The current test exercises only one shot and therefore misses the cross-shot effect.
+
+Required fix: add owner/job metadata to coordinator work entries and cancel by shot or job ID.
+
+5. Export recovery is not fully integrated with live state
+
+The export assurance helper supports an optional live project and can safely commit recovery when the live fingerprint still matches.
+
+But the package writers call it without a live-project accessor. Recovery therefore generally remains temporary rather than becoming reusable prepared media.
+
+Temporary asset cleanup also happens at the successful end of package assembly, not in an enclosing finally. A cancellation or error before the final cleanup loop can leave temporary stored Blobs behind.
+
+The export plan also does not genuinely validate grouped reference-frame readiness. For those artifacts it may infer readiness from the presence of any materialized still rather than confirm every start/middle/end and people variant.
+
+Finally, the new preparedMediaExport.test.ts does not invoke either complete package writer. It tests the assurance helper and planner, so the promise that both writers perform zero warm still renders is not yet proven.
+
+6. Background video preparation is only half integrated
+
+The video candidate builder and scheduler appropriately reuse prepareVideoArtifact and the existing cache.
+
+However, each capture creates a brand-new scheduler instance, queues work, and then discards the scheduler reference.
+
+Consequences:
+
+Edits cannot centrally call discardForShot().
+App shutdown cannot dispose the scheduler.
+Hidden-tab pause/resume is absent.
+Video status cannot reliably inspect one global queue.
+Obsolete running or queued work is not coordinated across captures.
+There are no dedicated background-video scheduler tests in the PR.
+
+This needs to be an application-level singleton or store-owned service.
+
+7. The actual UI phase is largely missing
+
+Grok implemented the runtime status model and thumbnail fallback. That is useful.
+
+But I do not see UI component changes exposing:
+
+“References ready”
+“Updating”
+Failure state
+Ready count
+Regenerate
+Retry
+Cancel
+Reference inspection
+
+The supporting engine APIs exist, but the requested user-facing controls do not.
+
+The runtime status also marks an artifact ready when its registry asset exists without awaiting Blob retrieval. hasRetrievableStillBlob() exists separately but is not used in the synchronous readiness result.
+
+8. Migration, backup/import, and cleanup remain mostly undone
+
+No backup/import pipeline files were changed.
+
+There are no convincing tests for:
+
+Backup and import round-trip of prepared PNGs
+Missing Blob after true reload
+Legacy-project lazy migration
+Project deletion cleanup
+Shot deletion cleanup
+Storage quota failure
+Interrupted writes
+Revision-aware Blob cleanup
+
+pruneObsoleteMaterializedStills() prunes the project asset registry, but unlike replacement cleanup, it does not delete the now-unreferenced IndexedDB Blob.
+
+9. Metrics are declared more than integrated
+
+The requested metric shape is present.
+
+But there is no final benchmark or report proving:
+
+Second export uses zero still renders through full package writers
+Warm videos are cache hits
+Export is dominated by ZIP assembly
+Single-shot edits only regenerate affected artifacts
+exportVideoWaitMs and zipAssemblyMs are meaningfully recorded
+
+The PR also has no description, manual acceptance report, performance results, or documented limitations.
+
+10. Some tests prove source text, not behavior
+
+The agent capture suite reads source files and checks that strings exist. It does not execute agent capture against a real store and persistence layer.
+
+The reconciliation hook test similarly verifies that function names appear in source rather than proving that a real mutation triggers exactly one safe reconciliation.
+
+Those are useful smoke guards but cannot replace behavioral integration tests.
+
+Branch and CI problems
+
+The branch diverged from main because it appears to have been created before PR #113 was merged, then reintroduced much of the same foundation. The PR therefore contains already-merged types and fingerprint files and is currently non-mergeable.
+
+The latest commit raises an unrelated projection-optimizer test timeout from 60 seconds to 180 seconds.
+
+That may be justified, but the autonomous goal explicitly prohibited increasing arbitrary timeouts instead of root-causing failures. At minimum, it should be isolated and supported with repeatable timing evidence rather than slipped into this feature PR.
+
+There are currently no visible GitHub Actions runs for the PR head—only the Netlify preview.
+
+Revised grading of Grok’s run
+Category	Grade
+Architectural coverage	A−
+Initiative/productivity	A
+Goal comprehension	A−
+Core module design	B+
+Live-state correctness	D+
+Persistence safety	D+
+Integration completeness	C
+Testing quantity	B+
+Testing realism	C
+Completion discipline	C−
+Merge readiness	3/10
+
+Grok did better than Muse at covering the intended architecture, but it repeated Muse’s underlying pattern in a different form: it implemented enormous breadth without completing the final-mile correctness and verification.
+
+Required repair order
+Rebase onto current main or create a clean branch and cherry-pick only the post-PR113 work. Resolve the duplicate foundation and make the PR mergeable.
+Replace snapshot commits with live transactional commits. Never write an entire rendered project snapshot back to Zustand.
+Await durable Blob persistence before attaching a materialized record.
+Remove duplicate legacy companion renders. Map prepared assets into legacy view slots without rerendering.
+Make cancellation shot-scoped.
+Harden export recovery: live project access, try/finally cleanup, complete reference-frame readiness, and real writer-level zero-render tests.
+Create one persistent background-video scheduler integrated with edit invalidation and app lifecycle.
+Finish the actual status/action UI.
+Implement migration, backup/import, deletion, and storage-failure coverage.
+Run full CI and produce the required benchmark/manual acceptance report.

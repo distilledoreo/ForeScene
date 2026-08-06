@@ -53,6 +53,7 @@ import {
   cleanupTemporaryExportStill,
   ensureStillArtifactForExport,
 } from './ensureStillArtifactForExport';
+import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import type { StillArtifactSpecification } from './stillArtifactTypes';
 import {
   getPeopleRenderVariants,
@@ -139,7 +140,8 @@ export async function preparePackageCameraMoveVideo(params: {
   transparent?: boolean;
   onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
 }) {
-  return prepareVideoArtifact({
+  const startedAt = performance.now();
+  const result = await prepareVideoArtifact({
     project: params.project,
     shotId: params.shotId,
     specification: {
@@ -164,6 +166,10 @@ export async function preparePackageCameraMoveVideo(params: {
     onFrameRendered: params.onFrameRendered,
     stats: params.stats,
   });
+  recordPreparedMediaMetric('exportVideoWaitMs', Math.round(performance.now() - startedAt));
+  if (result.cacheStatus === 'hit') recordPreparedMediaMetric('videoCacheHits');
+  else if (result.cacheStatus === 'joined') recordPreparedMediaMetric('videoJobsJoined');
+  return result;
 }
 
 /** Discrete work units for one shot — used to weight multi-shot progress. */

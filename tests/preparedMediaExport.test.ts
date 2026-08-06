@@ -326,4 +326,67 @@ describe('prepared media export path', () => {
     expect(annotated.readiness).toBe('missing');
     expect(annotated.source).toBe('render-recovery');
   });
+
+  it('legacy package writer performs zero still renders on warm media and records zip time', async () => {
+    const project = createDefaultProject();
+    const shot = minimalShot(project);
+    const counter = { n: 0 };
+    const render = mockRender(counter);
+    const materialized = await materializeShotStills({
+      project,
+      shotId: shot.id,
+      reason: 'capture',
+      scope: 'all-configured',
+      render,
+    });
+    expect(counter.n).toBeGreaterThan(0);
+    resetPreparedMediaMetrics();
+
+    const { buildLegacyShotPackage } = await import('../src/engine/packageExport');
+    const plan = createExportPlan(materialized.project, [materialized.project.shots[0]!]);
+    const result = await buildLegacyShotPackage(
+      materialized.project,
+      materialized.project.shots[0]!,
+      { plan },
+    );
+
+    expect(result.blob.size).toBeGreaterThan(0);
+    const metrics = getPreparedMediaMetrics();
+    // Warm export through the real writer: no recovery still renders, all hits.
+    expect(metrics.exportStillRecoveryRenders).toBe(0);
+    expect(metrics.exportStillAssetHits).toBeGreaterThan(0);
+    expect(metrics.zipAssemblyMs).toBeGreaterThan(0);
+  });
+
+  it('forescene-v2 writer performs zero still renders on warm media', async () => {
+    const project = createDefaultProject();
+    const shot = minimalShot(project);
+    const counter = { n: 0 };
+    const render = mockRender(counter);
+    const materialized = await materializeShotStills({
+      project,
+      shotId: shot.id,
+      reason: 'capture',
+      scope: 'all-configured',
+      render,
+    });
+    expect(counter.n).toBeGreaterThan(0);
+    resetPreparedMediaMetrics();
+
+    const v2Project: LocationProject = {
+      ...materialized.project,
+      exportConfiguration: {
+        ...materialized.project.exportConfiguration!,
+        packageFormat: 'forescene-v2',
+      },
+    };
+    const { buildShotPackage } = await import('../src/engine/packageExport');
+    const plan = createExportPlan(v2Project, [v2Project.shots[0]!]);
+    const result = await buildShotPackage(v2Project, v2Project.shots[0]!, { plan });
+
+    expect(result.blob.size).toBeGreaterThan(0);
+    const metrics = getPreparedMediaMetrics();
+    expect(metrics.exportStillRecoveryRenders).toBe(0);
+    expect(metrics.exportStillAssetHits).toBeGreaterThan(0);
+  });
 });

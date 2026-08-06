@@ -173,17 +173,20 @@ interface QueuedVideo {
  */
 export function createBackgroundVideoScheduler(options: BackgroundVideoSchedulerOptions) {
   const pending = new Map<string, QueuedVideo>();
+  const runningJobs = new Map<string, QueuedVideo>();
   let running = false;
   let disposed = false;
+  let paused = false;
 
   async function processQueue(): Promise<void> {
-    if (running || disposed) return;
+    if (running || disposed || paused) return;
     running = true;
     try {
-      while (pending.size > 0 && !disposed) {
+      while (pending.size > 0 && !disposed && !paused) {
         const [key, job] = pending.entries().next().value as [string, QueuedVideo];
         pending.delete(key);
         if (job.controller.signal.aborted) continue;
+        runningJobs.set(key, job);
 
         try {
           const project = options.getProject();
@@ -223,15 +226,18 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
         } catch (error) {
           if (error instanceof Error && error.name === 'AbortError') continue;
           options.onError?.(job.candidate.shotId, error);
+        } finally {
+          runningJobs.delete(key);
         }
       }
     } finally {
       running = false;
+      if (pending.size > 0 && !disposed && !paused) void processQueue();
     }
   }
 
   async function queueMissingForShot(shotId: string): Promise<void> {
-    if (disposed) return;
+    if (disposed || paused) return;
     const project = options.getProject();
     const shot = project.shots.find((item) => item.id === shotId);
     if (!shot) return;
@@ -264,7 +270,7 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       }
 
       const key = fingerprint.key;
-      if (pending.has(key)) continue;
+      if (pending.has(key) || runningJobs.has(key)) continue;
 
       // Cancel obsolete queued jobs for same shot with different fingerprints later via discardForShot.
       pending.set(key, {
@@ -284,23 +290,36 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
         pending.delete(key);
       }
     }
+    // Also cancel in-flight work for that shot (abort propagates to the render).
+    for (const job of runningJobs.values()) {
+      if (job.candidate.shotId === shotId) job.controller.abort();
+    }
   }
 
   function discardAll(): void {
     for (const job of pending.values()) job.controller.abort();
+    for (const job of runningJobs.values()) job.controller.abort();
     pending.clear();
   }
 
   function dispose(): void {
     disposed = true;
+    paused = false;
     discardAll();
+  }
+
+  function setPaused(next: boolean): void {
+    paused = next;
+    if (!next) void processQueue();
   }
 
   function inspectForTests() {
     return {
       pending: pending.size,
-      running,
+      running: running || runningJobs.size > 0,
+      paused,
       keys: [...pending.keys()],
+      runningKeys: [...runningJobs.keys()],
     };
   }
 
@@ -309,6 +328,7 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
     discardForShot,
     discardAll,
     dispose,
+    setPaused,
     inspectForTests,
   };
 }

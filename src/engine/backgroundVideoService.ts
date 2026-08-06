@@ -13,6 +13,8 @@ type Scheduler = ReturnType<typeof createBackgroundVideoScheduler>;
 
 let scheduler: Scheduler | undefined;
 let boundGetProject: (() => LocationProject) | undefined;
+let visibilityHandler: (() => void) | undefined;
+let visibilityBound = false;
 
 export function bindBackgroundVideoService(options: {
   getProject: () => LocationProject;
@@ -29,10 +31,37 @@ export function bindBackgroundVideoService(options: {
     onPrepared: options.onPrepared,
     onError: options.onError,
   });
+  bindVisibilityLifecycle();
+}
+
+/** Pause background MP4 work while the tab is hidden; resume when visible again. */
+function bindVisibilityLifecycle(): void {
+  if (visibilityBound || typeof document === 'undefined') return;
+  visibilityBound = true;
+  visibilityHandler = () => {
+    if (document.hidden) scheduler?.setPaused(true);
+    else scheduler?.setPaused(false);
+  };
+  document.addEventListener('visibilitychange', visibilityHandler);
 }
 
 export function getBackgroundVideoScheduler(): Scheduler | undefined {
   return scheduler;
+}
+
+export function getBackgroundVideoServiceStatus(): {
+  bound: boolean;
+  paused: boolean;
+  pending: number;
+  running: boolean;
+} {
+  const inspected = scheduler?.inspectForTests();
+  return {
+    bound: Boolean(scheduler),
+    paused: inspected?.paused ?? false,
+    pending: inspected?.pending ?? 0,
+    running: inspected?.running ?? false,
+  };
 }
 
 export function ensureBackgroundVideoService(
@@ -58,6 +87,11 @@ export function disposeBackgroundVideoService(): void {
   scheduler?.dispose();
   scheduler = undefined;
   boundGetProject = undefined;
+  if (visibilityHandler && typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+  }
+  visibilityHandler = undefined;
+  visibilityBound = false;
 }
 
 export function resetBackgroundVideoServiceForTests(): void {

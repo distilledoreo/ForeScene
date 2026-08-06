@@ -261,6 +261,11 @@ export async function exportAgentPackage(
       onProgress: (progress) => {
         latestProgress = toSnapshot(progress);
       },
+      getLiveProject: () => useProjectStore.getState().project,
+      commitLiveProject: (updater) => {
+        useProjectStore.setState((current) => ({ project: updater(current.project) }));
+        return useProjectStore.getState().project;
+      },
     });
 
     if (shouldDownload) {
