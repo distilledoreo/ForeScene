@@ -57,6 +57,21 @@ export interface PackageExportOptions {
   signal?: AbortSignal;
   /** Optional precomputed plan; when omitted, packaging builds one. */
   plan?: ExportPlan;
+  /** Optional stats accumulator shared across shots in a multi-shot package. */
+  videoPerformanceStats?: import('./videoPerformance').PackageVideoPerformanceStats;
+}
+
+/** Aggregated prepareVideoArtifact cache / stage timings for package export. */
+export interface PackageVideoPerformanceResult {
+  cacheHits: number;
+  cacheMisses: number;
+  joinedJobs: number;
+  bypasses: number;
+  setupMs: number;
+  renderMs: number;
+  encodeMs: number;
+  finalizeMs: number;
+  totalMs: number;
 }
 
 export interface ShotPackageResult {
@@ -64,6 +79,8 @@ export interface ShotPackageResult {
   fileName: string;
   /** Archive inventory paths (full planned file list for v2; per-shot manifest entries for legacy v1). */
   manifestPaths: string[];
+  /** Motion-video cache and stage timings when camera/character motion was prepared. */
+  videoPerformance?: PackageVideoPerformanceResult;
 }
 
 export interface ProgressTracker {

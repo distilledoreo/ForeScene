@@ -41,6 +41,7 @@ export function ExportWorkspace() {
     copyShotExportOverrides,
     promoteShotExportToSceneDefaults,
     setProjectPackageFormat,
+    setProjectVideoPerformance,
     isExportingPackage,
     setExportingPackage,
     markFinalPackageExported,
@@ -56,6 +57,7 @@ export function ExportWorkspace() {
     copyShotExportOverrides: state.copyShotExportOverrides,
     promoteShotExportToSceneDefaults: state.promoteShotExportToSceneDefaults,
     setProjectPackageFormat: state.setProjectPackageFormat,
+    setProjectVideoPerformance: state.setProjectVideoPerformance,
     isExportingPackage: state.isExportingPackage,
     setExportingPackage: state.setExportingPackage,
     markFinalPackageExported: state.markFinalPackageExported,
@@ -413,6 +415,18 @@ export function ExportWorkspace() {
                         ? ` · ${exportPlan.summary.overrideShotCount} with shot overrides`
                         : ''}
                     </li>
+                    {exportPlan.videoWorkload.videoCount > 0 && (
+                      <li data-export-video-workload>
+                        Motion video · {exportPlan.videoWorkload.videoCount} clip
+                        {exportPlan.videoWorkload.videoCount === 1 ? '' : 's'} ·{' '}
+                        {exportPlan.videoWorkload.totalFrames} frames ·{' '}
+                        {exportPlan.videoWorkload.width}×{exportPlan.videoWorkload.height} @{' '}
+                        {exportPlan.videoWorkload.frameRate}fps ·{' '}
+                        {exportPlan.videoWorkload.totalPixelFramesLabel} pixel-frames ·{' '}
+                        {exportPlan.videoWorkload.performanceProfileId} /{' '}
+                        {exportPlan.videoWorkload.encoderMode}
+                      </li>
+                    )}
                     {exportPlan.sharedArtifacts.length > 0 && (
                       <li data-export-plan-shared-artifacts>
                         Shared references prepared once ·{' '}
@@ -639,6 +653,7 @@ export function ExportWorkspace() {
           copyShotExportOverrides={copyShotExportOverrides}
           promoteShotExportToSceneDefaults={promoteShotExportToSceneDefaults}
           setProjectPackageFormat={setProjectPackageFormat}
+          setProjectVideoPerformance={setProjectVideoPerformance}
         />
       </PrecisionDrawer>
     </FullBleedLayout>

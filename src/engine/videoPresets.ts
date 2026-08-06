@@ -26,7 +26,8 @@ export interface VideoResolutionPreset {
 export const VIDEO_RESOLUTION_PRESETS: Record<VideoResolutionPresetId, VideoResolutionPreset> = {
   '720p': {
     id: '720p',
-    label: '720p30 (Preview)',
+    // Frame rate is often overridden (Fast Control uses 24 fps).
+    label: '720p (Fast Control / Preview)',
     width: 1280,
     height: 720,
     frameRate: DEFAULT_VIDEO_FRAME_RATE,

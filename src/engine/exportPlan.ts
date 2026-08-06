@@ -16,7 +16,11 @@ import type {
   ShotExportSettings,
   WarningItem,
 } from '../domain/types';
-import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
+import {
+  getCameraMoveDurationSeconds,
+  getCameraMoveReferenceFrames,
+  hasRenderableCameraMove,
+} from './cameraKeyframes';
 import { CAMERA_MOVE_CUBEMAP_FACES, DEFAULT_CAMERA_MOVE_CUBEMAP_FACE_SIZE } from './cameraMoveCubemap';
 import {
   assignSharedPanoramaFolders,
@@ -55,7 +59,12 @@ import {
 } from './depthRender';
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
 import { canUseProjectedAppearance } from './projectedStyle';
-import { DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
+import {
+  computePixelFrameCount,
+  formatPixelFrameWorkload,
+  resolveProjectVideoPerformance,
+} from './videoPerformance';
+import { computeCameraMoveFrameCount, DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
 import { getExportSelectionWarnings, getShotWarnings } from './warnings';
 
 export const EXPORT_PLAN_SCHEMA_VERSION = 1 as const;
@@ -155,6 +164,28 @@ export interface ExportPlanSummary {
   errorCount: number;
 }
 
+/** Preflight estimate of motion-video work for the planned package. */
+export interface ExportVideoWorkload {
+  videoCount: number;
+  totalFrames: number;
+  totalPixelFrames: number;
+  /** Human-readable pixel-frame product (e.g. `124.4M`). */
+  totalPixelFramesLabel: string;
+  resolutionPreset: string;
+  frameRate: number;
+  width: number;
+  height: number;
+  performanceProfileId: string;
+  encoderMode: string;
+  videos: Array<{
+    shotId: string;
+    kind: PlannedArtifactKind;
+    appearance: 'clay' | 'projected' | 'depth';
+    frameCount: number;
+    pixelFrames: number;
+  }>;
+}
+
 export interface ExportPlan {
   schemaVersion: typeof EXPORT_PLAN_SCHEMA_VERSION;
   projectId: string;
@@ -176,6 +207,8 @@ export interface ExportPlan {
   estimatedFileCount: number;
   estimatedWorkUnits: number;
   summary: ExportPlanSummary;
+  /** Motion video count / pixel-frame preflight for the selected shots. */
+  videoWorkload: ExportVideoWorkload;
 }
 
 export interface CreateExportPlanOptions {
@@ -1168,6 +1201,31 @@ export function createExportPlan(
     }
     issues.push(...shotIssues);
 
+    // Preflight: motion toggles enabled but no pass can be produced (e.g. Fast Control
+    // projected-only without a styled projector, and no clay fallback applied yet).
+    const wantsMotion = settingsForPlan.includeCameraMoveVideo
+      || settingsForPlan.includeProjectedCameraMoveVideo
+      || Boolean(settingsForPlan.depth?.enabled && settingsForPlan.depth.includeCameraMoveVideo !== false);
+    if (wantsMotion && hasRenderableCameraMove(planningShot.cameraKeyframes)) {
+      const motionProduced = artifacts.some((artifact) => (
+        artifact.disposition === 'produce'
+        && (
+          artifact.kind === 'clay-camera-move'
+          || artifact.kind === 'projected-camera-move'
+          || artifact.kind === 'depth-camera-move'
+        )
+      ));
+      if (!motionProduced) {
+        issues.push({
+          id: `${shot.id}-no-motion-video-pass`,
+          code: 'no-motion-video-pass',
+          severity: 'warning',
+          message: 'Camera-move video is requested, but no clay/projected/depth motion pass can be produced for this shot. Enable clay motion or attach a styled panorama for projected motion.',
+          shotId: shot.id,
+        });
+      }
+    }
+
     const produced = artifacts.filter((artifact) => artifact.disposition === 'produce');
     const workUnits = produced.reduce((sum, artifact) => sum + artifact.workUnits, 0);
     const characterMeta = produced.find((artifact) => artifact.kind === 'character-metadata');
@@ -1199,6 +1257,7 @@ export function createExportPlan(
     ? finalizeShotArtifactsForV2(project, shots, plannedShots)
     : attachSharedReferenceArtifacts(project, shots, plannedShots);
   const summary = summarizePlan(plannedShots, sharedArtifacts, issues);
+  const videoWorkload = estimateExportVideoWorkload(project, plannedShots);
 
   return {
     schemaVersion: EXPORT_PLAN_SCHEMA_VERSION,
@@ -1215,6 +1274,74 @@ export function createExportPlan(
     estimatedFileCount: summary.estimatedFileCount,
     estimatedWorkUnits: summary.estimatedWorkUnits,
     summary,
+    videoWorkload,
+  };
+}
+
+function estimateExportVideoWorkload(
+  project: LocationProject,
+  plannedShots: readonly PlannedShotExport[],
+): ExportVideoWorkload {
+  const performance = resolveProjectVideoPerformance(project.exportConfiguration);
+  const videos: ExportVideoWorkload['videos'] = [];
+  const motionKinds = new Set<PlannedArtifactKind>([
+    'clay-camera-move',
+    'projected-camera-move',
+    'depth-camera-move',
+    'character-motion',
+  ]);
+
+  for (const planned of plannedShots) {
+    const shot = project.shots.find((item) => item.id === planned.shotId);
+    if (!shot) continue;
+    const hasMove = hasRenderableCameraMove(shot.cameraKeyframes);
+    if (!hasMove) continue;
+    const durationSeconds = getCameraMoveDurationSeconds(shot.cameraKeyframes);
+    const frameCount = computeCameraMoveFrameCount(durationSeconds, performance.frameRate);
+    const pixelFrames = computePixelFrameCount(
+      frameCount,
+      performance.width,
+      performance.height,
+    );
+
+    for (const artifact of planned.artifacts) {
+      if (artifact.disposition !== 'produce') continue;
+      if (!motionKinds.has(artifact.kind)) continue;
+      // One planned video per produced motion artifact (people variants expand files).
+      const fileVideos = artifact.files.filter((file) => file.kind === 'video').length;
+      const count = Math.max(1, fileVideos);
+      for (let index = 0; index < count; index += 1) {
+        videos.push({
+          shotId: planned.shotId,
+          kind: artifact.kind,
+          appearance: artifact.appearance
+            ?? (artifact.kind === 'projected-camera-move'
+              ? 'projected'
+              : artifact.kind === 'depth-camera-move'
+                ? 'depth'
+                : 'clay'),
+          frameCount,
+          pixelFrames,
+        });
+      }
+    }
+  }
+
+  const totalFrames = videos.reduce((sum, video) => sum + video.frameCount, 0);
+  const totalPixelFrames = videos.reduce((sum, video) => sum + video.pixelFrames, 0);
+
+  return {
+    videoCount: videos.length,
+    totalFrames,
+    totalPixelFrames,
+    totalPixelFramesLabel: formatPixelFrameWorkload(totalPixelFrames),
+    resolutionPreset: performance.resolutionPreset,
+    frameRate: performance.frameRate,
+    width: performance.width,
+    height: performance.height,
+    performanceProfileId: performance.profileId,
+    encoderMode: performance.encoderMode,
+    videos,
   };
 }
 

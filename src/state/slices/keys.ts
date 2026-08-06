@@ -14,6 +14,7 @@ export const PROJECT_SLICE_KEYS = [
   'copyShotExportOverrides',
   'promoteShotExportToSceneDefaults',
   'setProjectPackageFormat',
+  'setProjectVideoPerformance',
   'removeShot',
   'reorderShots',
   'copyStagingToNextShot',

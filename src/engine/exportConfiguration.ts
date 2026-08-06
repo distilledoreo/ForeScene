@@ -31,8 +31,14 @@ import type {
   ShotDepthSettings,
   ShotDepthSettingsOverride,
   ShotExportSettings,
+  VideoPerformanceSettings,
 } from '../domain/types';
 import { EXPORT_CONFIGURATION_SCHEMA_VERSION } from '../domain/types';
+import {
+  normalizeVideoPerformanceSettings,
+  preferredShotExportMotionDefaultsForProject,
+  resolveVideoPerformance,
+} from './videoPerformance';
 
 export {
   EXPORT_CONFIGURATION_SCHEMA_VERSION,
@@ -523,6 +529,58 @@ export function setProjectPackageFormat(
 ): LocationProject {
   const config = requireExportConfiguration(project);
   return withUpdatedProject(project, { ...config, packageFormat }, project.shots);
+}
+
+/** Update project-level camera-move video performance settings. */
+export function setProjectVideoPerformance(
+  project: LocationProject,
+  settings: Partial<VideoPerformanceSettings> | VideoPerformanceSettings,
+): LocationProject {
+  const config = requireExportConfiguration(project);
+  const next = normalizeVideoPerformanceSettings(
+    {
+      ...config.videoPerformance,
+      ...settings,
+      profileId: settings.profileId
+        ?? config.videoPerformance?.profileId
+        ?? resolveVideoPerformance(undefined, config.activeProfileId).profileId,
+    },
+    config.activeProfileId,
+  );
+  return withUpdatedProject(project, { ...config, videoPerformance: next }, project.shots);
+}
+
+/**
+ * Apply a built-in export profile id, including video performance defaults.
+ * When `applyMotionPassDefaults` is true, Fast Control prefers projected-only
+ * motion when a projector is available, otherwise clay-only so packages still
+ * emit motion video.
+ */
+export function setProjectExportProfile(
+  project: LocationProject,
+  profileId: ExportProfileId,
+  options: { applyMotionPassDefaults?: boolean } = {},
+): LocationProject {
+  const config = requireExportConfiguration(project);
+  const videoPerformance = normalizeVideoPerformanceSettings(
+    { profileId: resolveVideoPerformance(undefined, profileId).profileId },
+    profileId,
+  );
+  let defaults = config.defaults;
+  if (options.applyMotionPassDefaults !== false) {
+    const motion = preferredShotExportMotionDefaultsForProject(project, videoPerformance.profileId);
+    defaults = normalizeShotExportSettings({
+      ...defaults,
+      ...motion,
+    });
+  }
+  const nextConfig: ProjectExportConfiguration = {
+    ...config,
+    activeProfileId: profileId,
+    defaults,
+    videoPerformance,
+  };
+  return withUpdatedProject(project, nextConfig, rematerializeAllShots(nextConfig.defaults, project.shots));
 }
 
 function mergeOverrides(

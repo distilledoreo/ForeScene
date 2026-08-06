@@ -64,7 +64,6 @@ import { canUseProjectedAppearance } from './projectedStyle';
 import {
   renderPanoCubemapFacesAsBlobs,
   renderPanoPerspectiveCrop,
-  renderShotCameraMoveMp4,
   renderShotCharacterFrame,
   renderShotCharacterMotion,
   renderShotDepthFrame,
@@ -74,6 +73,7 @@ import {
   renderViewportProjected,
 } from './renderers';
 import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
+import type { PeopleRenderVariant } from './peopleExport';
 import {
   buildCharacterPassMetadata,
   buildCharacterSequenceMeta,
@@ -97,7 +97,13 @@ import {
   shouldExportDepthReferenceFrames,
   shouldExportViewportDepth,
 } from './depthRender';
-import { DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
+import { prepareVideoArtifact } from './prepareVideoArtifact';
+import {
+  createEmptyPackageVideoPerformanceStats,
+  resolveProjectVideoPerformance,
+  type PackageVideoPerformanceStats,
+  type ResolvedVideoPerformance,
+} from './videoPerformance';
 
 /**
  * Local mirror of `resolveClayCameraMovePackageSource` (packageExport.ts) — duplicated
@@ -111,6 +117,50 @@ function resolveClayCameraMoveSourceV2(
   if (hasRenderableCameraMove(shot.cameraKeyframes)) return 'encode';
   if (asset?.uri) return 'copy';
   return 'skip';
+}
+
+async function prepareV2CameraMoveVideo(params: {
+  project: LocationProject;
+  shotId: string;
+  appearance: 'clay' | 'projected' | 'depth';
+  peopleVariant: PeopleRenderVariant;
+  performance: ResolvedVideoPerformance;
+  depthRange?: { nearMeters: number; farMeters: number };
+  depthInvert?: boolean;
+  signal?: AbortSignal;
+  onProgress?: Parameters<typeof prepareVideoArtifact>[0]['onProgress'];
+  stats?: PackageVideoPerformanceStats;
+  contentMode?: Parameters<typeof prepareVideoArtifact>[0]['specification']['contentMode'];
+  backgroundColor?: string;
+  includeCharacterAttachments?: boolean;
+  transparent?: boolean;
+  onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
+}) {
+  return prepareVideoArtifact({
+    project: params.project,
+    shotId: params.shotId,
+    specification: {
+      appearance: params.appearance,
+      peopleVariant: params.peopleVariant,
+      contentMode: params.contentMode,
+      mode: 'render',
+      resolutionPreset: params.performance.resolutionPreset,
+      frameRate: params.performance.frameRate,
+      encoderMode: params.performance.encoderMode,
+      occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
+      depthRange: params.depthRange,
+      depthInvert: params.depthInvert,
+      backgroundColor: params.backgroundColor,
+      includeCharacterAttachments: params.includeCharacterAttachments,
+      transparent: params.transparent,
+    },
+    performance: params.performance,
+    priority: 'foreground',
+    signal: params.signal,
+    onProgress: params.onProgress,
+    onFrameRendered: params.onFrameRendered,
+    stats: params.stats,
+  });
 }
 
 interface SharedPanoSource {
@@ -310,9 +360,14 @@ async function appendShotPackageToZipV2(
   project: LocationProject,
   shot: Shot,
   shotPlan: PlannedShotExport,
-  args: { shotIndex: number; tracker: ProgressTracker; signal?: AbortSignal },
+  args: {
+    shotIndex: number;
+    tracker: ProgressTracker;
+    signal?: AbortSignal;
+    videoPerformanceStats?: PackageVideoPerformanceStats;
+  },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal } = args;
+  const { shotIndex, tracker, signal, videoPerformanceStats } = args;
   const rootFolder = shotPlan.rootFolder;
   /** Remap a legacy-style `${rootFolder}/...` path (same strings the legacy writer uses) to its v2 archive path. */
   const v2 = (legacyPath: string) => remapLegacyShotPathToV2(rootFolder, legacyPath);
@@ -427,6 +482,8 @@ async function appendShotPackageToZipV2(
     }
   }
 
+  const videoPerformance = resolveProjectVideoPerformance(project.exportConfiguration);
+
   if (shot.exportSettings.includeCameraMoveVideo) {
     const clayMotionSource = resolveClayCameraMoveSourceV2(shot, cameraMoveVideoAsset);
     if (clayMotionSource === 'encode') {
@@ -434,13 +491,13 @@ async function appendShotPackageToZipV2(
         throwIfAborted(signal);
         emit('encoding', `Encoding clay camera move (${peopleVariantLabel(variant)})…`, { indeterminate: true });
         try {
-          const video = await renderShotCameraMoveMp4(project, shot, {
-            mode: 'render',
-            resolutionPreset: '1080p',
-            frameRate: 30,
+          const video = await prepareV2CameraMoveVideo({
+            project,
+            shotId: shot.id,
             appearance: 'clay',
             peopleVariant: variant,
-            includeDataUrl: false,
+            performance: videoPerformance,
+            stats: videoPerformanceStats,
             signal,
             onProgress: (progress) => {
               const info = normalizeCameraMoveProgress(progress);
@@ -453,7 +510,12 @@ async function appendShotPackageToZipV2(
             v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_clay_motion.mp4`, variant, peopleMode)),
             await video.blob.arrayBuffer(),
           );
-          finishUnit('encoding', `Clay camera move (${peopleVariantLabel(variant)}) ready`);
+          finishUnit(
+            'encoding',
+            video.cacheStatus === 'hit' || video.cacheStatus === 'joined'
+              ? `Clay camera move (${peopleVariantLabel(variant)}) from cache`
+              : `Clay camera move (${peopleVariantLabel(variant)}) ready`,
+          );
         } catch (error) {
           if (isPackageExportCancelled(error)) throw error;
           throw new ShotPackageError(
@@ -488,14 +550,13 @@ async function appendShotPackageToZipV2(
       throwIfAborted(signal);
       emit('encoding', `Encoding projected camera move (${peopleVariantLabel(variant)})…`, { indeterminate: true });
       try {
-        const video = await renderShotCameraMoveMp4(project, shot, {
-          mode: 'render',
-          resolutionPreset: '1080p',
-          frameRate: 30,
+        const video = await prepareV2CameraMoveVideo({
+          project,
+          shotId: shot.id,
           appearance: 'projected',
           peopleVariant: variant,
-          occlusionFilter: 'fast',
-          includeDataUrl: false,
+          performance: videoPerformance,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -508,7 +569,12 @@ async function appendShotPackageToZipV2(
           v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_projected_motion.mp4`, variant, peopleMode)),
           await video.blob.arrayBuffer(),
         );
-        finishUnit('encoding', `Projected camera move (${peopleVariantLabel(variant)}) ready`);
+        finishUnit(
+          'encoding',
+          video.cacheStatus === 'hit' || video.cacheStatus === 'joined'
+            ? `Projected camera move (${peopleVariantLabel(variant)}) from cache`
+            : `Projected camera move (${peopleVariantLabel(variant)}) ready`,
+        );
       } catch (error) {
         if (isPackageExportCancelled(error)) throw error;
         throw new ShotPackageError(
@@ -527,15 +593,15 @@ async function appendShotPackageToZipV2(
       throwIfAborted(signal);
       emit('encoding', `Encoding depth camera move (${peopleVariantLabel(variant)})…`, { indeterminate: true });
       try {
-        const video = await renderShotCameraMoveMp4(project, shot, {
-          mode: 'render',
-          resolutionPreset: '1080p',
-          frameRate: 30,
+        const video = await prepareV2CameraMoveVideo({
+          project,
+          shotId: shot.id,
           appearance: 'depth',
           peopleVariant: variant,
+          performance: videoPerformance,
           depthRange: sharedRange,
           depthInvert: depthSettings.invert === true,
-          includeDataUrl: false,
+          stats: videoPerformanceStats,
           signal,
           onProgress: (progress) => {
             const info = normalizeCameraMoveProgress(progress);
@@ -548,7 +614,12 @@ async function appendShotPackageToZipV2(
           v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth_motion.mp4`, variant, peopleMode)),
           await video.blob.arrayBuffer(),
         );
-        finishUnit('encoding', `Depth camera move (${peopleVariantLabel(variant)}) ready`);
+        finishUnit(
+          'encoding',
+          video.cacheStatus === 'hit' || video.cacheStatus === 'joined'
+            ? `Depth camera move (${peopleVariantLabel(variant)}) from cache`
+            : `Depth camera move (${peopleVariantLabel(variant)}) ready`,
+        );
       } catch (error) {
         if (isPackageExportCancelled(error)) throw error;
         throw new ShotPackageError(
@@ -747,8 +818,9 @@ async function appendShotPackageToZipV2(
             motionFormat: characterPass.motionFormat,
             backgroundColor: characterPass.backgroundColor,
             includeAttachedProps: characterPass.includeAttachedProps,
-            frameRate: DEFAULT_VIDEO_FRAME_RATE,
-            resolutionPreset: '1080p',
+            frameRate: videoPerformance.frameRate,
+            resolutionPreset: videoPerformance.resolutionPreset,
+            encoderMode: videoPerformance.encoderMode,
             signal,
             onProgress: (progress) => {
               const info = normalizeCameraMoveProgress(progress);
@@ -921,6 +993,8 @@ export async function buildForeSceneV2Package(
 
   const zip = new JSZip();
   const sharedMedia = createSharedExportMediaCache();
+  const videoPerformanceStats = options.videoPerformanceStats
+    ?? createEmptyPackageVideoPerformanceStats();
 
   await writeSharedArtifactsV2(zip, project, shots, plan, sharedMedia, { tracker, signal: options.signal });
 
@@ -933,6 +1007,7 @@ export async function buildForeSceneV2Package(
       shotIndex,
       tracker,
       signal: options.signal,
+      videoPerformanceStats,
     });
   }
 
@@ -958,5 +1033,6 @@ export async function buildForeSceneV2Package(
     blob,
     fileName: plan.archiveFileName,
     manifestPaths: listPlannedFiles(plan).map((file) => file.path),
+    videoPerformance: { ...videoPerformanceStats },
   };
 }

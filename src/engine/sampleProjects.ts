@@ -95,9 +95,15 @@ export function createDialogueDemoSample(): LocationProject {
   const now = new Date().toISOString();
   const settings = { ...defaultProjectSettings };
   const exportConfiguration = createDefaultExportConfiguration(
-    normalizeShotExportSettings({ ...defaultShotExportSettings }),
+    normalizeShotExportSettings({
+      ...defaultShotExportSettings,
+      // Fast Control for AI-generation: projected motion only.
+      includeCameraMoveVideo: false,
+      includeProjectedCameraMoveVideo: true,
+    }),
+    'ai-generation',
   );
-  exportConfiguration.activeProfileId = 'ai-generation';
+  exportConfiguration.videoPerformance = { profileId: 'fast-control' };
 
   const floor = objectAt('floor', 1, 'Room Floor', [0, -0.04, 0], {
     locked: true,

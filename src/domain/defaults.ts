@@ -23,6 +23,9 @@ import {
   ShotObjectOverrides,
   Transform,
   Vec3,
+  VideoEncoderMode,
+  VideoPerformanceProfileId,
+  VideoPerformanceSettings,
   EXPORT_CONFIGURATION_SCHEMA_VERSION,
 } from './types';
 import { createId } from '../utils/ids';
@@ -306,13 +309,16 @@ export function normalizeShotExportSettings(
 
 export function createDefaultExportConfiguration(
   defaults: ShotExportSettings = defaultShotExportSettings,
+  activeProfileId: ExportProfileId = 'custom',
 ): ProjectExportConfiguration {
   return {
     schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
-    activeProfileId: 'custom',
+    activeProfileId,
     defaults: normalizeShotExportSettings(defaults),
     // forescene-v2 is opt-in; existing/new projects keep the legacy layout by default.
     packageFormat: 'legacy-v1' satisfies ExportPackageFormat,
+    // Resolved lazily from activeProfileId when absent; explicit value freezes the choice.
+    videoPerformance: undefined,
   };
 }
 
@@ -328,16 +334,53 @@ export function normalizeProjectExportConfiguration(
     'custom',
   ]);
   const packageFormats = new Set<ExportPackageFormat>(['forescene-v2', 'legacy-v1']);
+  const activeProfileId = typeof config.activeProfileId === 'string' && profileIds.has(config.activeProfileId)
+    ? config.activeProfileId
+    : 'custom';
+  const videoPerformance = normalizeVideoPerformanceSettingsField(
+    config.videoPerformance,
+  );
+
   return {
     schemaVersion: EXPORT_CONFIGURATION_SCHEMA_VERSION,
-    activeProfileId: typeof config.activeProfileId === 'string' && profileIds.has(config.activeProfileId)
-      ? config.activeProfileId
-      : 'custom',
+    activeProfileId,
     defaults: normalizeShotExportSettings(config.defaults ?? base.defaults),
     packageFormat: typeof config.packageFormat === 'string' && packageFormats.has(config.packageFormat)
       ? config.packageFormat
       : 'legacy-v1',
+    ...(videoPerformance ? { videoPerformance } : {}),
   };
+}
+
+function normalizeVideoPerformanceSettingsField(
+  settings?: Partial<VideoPerformanceSettings> | null,
+): VideoPerformanceSettings | undefined {
+  if (!settings || typeof settings !== 'object') return undefined;
+  const profileIds = new Set<VideoPerformanceProfileId>([
+    'fast-control',
+    'standard',
+    'high-quality',
+  ]);
+  const encoderModes = new Set<VideoEncoderMode>(['quality', 'fast']);
+  const resolutionIds = new Set(['720p', '1080p', '4k'] as const);
+  if (typeof settings.profileId !== 'string' || !profileIds.has(settings.profileId)) {
+    return undefined;
+  }
+  const next: VideoPerformanceSettings = { profileId: settings.profileId };
+  if (typeof settings.encoderMode === 'string' && encoderModes.has(settings.encoderMode)) {
+    next.encoderMode = settings.encoderMode;
+  }
+  if (
+    typeof settings.resolutionPreset === 'string'
+    && (resolutionIds as Set<string>).has(settings.resolutionPreset)
+  ) {
+    next.resolutionPreset = settings.resolutionPreset;
+  }
+  const frameRate = Number(settings.frameRate);
+  if (Number.isFinite(frameRate) && frameRate >= 1 && frameRate <= 120) {
+    next.frameRate = Math.round(frameRate);
+  }
+  return next;
 }
 
 export function createTransform(position: Vec3 = [0, 0, 0]): Transform {

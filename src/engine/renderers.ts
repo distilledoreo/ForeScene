@@ -60,7 +60,7 @@ import {
   characterPassIncludesGreenMp4,
   characterPassIncludesPngSequence,
 } from './characterPassExport';
-import type { CharacterMotionExportFormat } from '../domain/types';
+import type { CharacterMotionExportFormat, VideoEncoderMode } from '../domain/types';
 import {
   clampShotNearClip,
 } from './cameraClipping';
@@ -72,8 +72,8 @@ import {
   type SceneRenderPass,
 } from './depthRender';
 import {
-  canUseDeterministicMp4Export,
   encodeCanvasFramesToMp4,
+  resolveDeterministicEncoderMode,
 } from './videoEncode';
 import {
   cameraMoveFrameTimeSeconds,
@@ -119,6 +119,11 @@ export interface BlobImageRenderResult {
   height: number;
 }
 
+export interface VideoRenderTimingEvent {
+  stage: 'setup-end' | 'render' | 'encode' | 'finalize';
+  ms: number;
+}
+
 export interface VideoRenderResult {
   blob: Blob;
   /** Present only when `includeDataUrl` was requested (e.g. clay shot-library persistence). */
@@ -133,6 +138,10 @@ export interface VideoRenderResult {
   encodeMode?: 'render' | 'quickPreview';
   frameCount?: number;
   codecString?: string;
+  /** Encoder mode actually used after capability negotiation. */
+  actualEncoderMode?: VideoEncoderMode;
+  /** True when fast mode was requested but quality was used instead. */
+  encoderModeFallback?: boolean;
 }
 
 export interface PanoCubemapRenderResult {
@@ -239,6 +248,13 @@ export interface CameraMoveVideoOptions {
     frameIndex: number,
     timeSeconds: number,
   ) => void | Promise<void>;
+  /**
+   * Requested H.264 encoder mode (`fast` prefers hardware + realtime with fallback).
+   * Defaults to quality for interactive shot export; package export passes project settings.
+   */
+  encoderMode?: VideoEncoderMode;
+  /** Optional stage timing for performance instrumentation / cache metadata. */
+  onTiming?: (event: VideoRenderTimingEvent) => void;
 }
 
 const MP4_MIME_CANDIDATES = [
@@ -259,8 +275,13 @@ export function getSupportedCameraMoveMp4MimeType(): string | undefined {
 /** True when deterministic WebCodecs H.264 export can run for the given preset. */
 export async function canUseRenderMp4Export(
   resolutionPreset: VideoResolutionPresetId = '1080p',
+  encoderMode: VideoEncoderMode = 'quality',
 ): Promise<boolean> {
-  return canUseDeterministicMp4Export(resolveVideoPreset(resolutionPreset));
+  const negotiated = await resolveDeterministicEncoderMode(
+    resolveVideoPreset(resolutionPreset),
+    encoderMode,
+  );
+  return Boolean(negotiated);
 }
 
 function emitProgress(
@@ -456,8 +477,11 @@ export async function renderShotCameraMoveMp4(
   const encodePreset = { ...preset, width, height, frameRate };
 
   if (requestedMode === 'render') {
-    const canRender = await canUseDeterministicMp4Export(encodePreset);
-    if (!canRender) {
+    const requestedEncoderMode = options.encoderMode ?? 'quality';
+    // Negotiate fast/quality so devices that only advertise hardware/realtime
+    // are not rejected by a quality-only capability probe.
+    const negotiated = await resolveDeterministicEncoderMode(encodePreset, requestedEncoderMode);
+    if (!negotiated) {
       throw new Error(
         `Render MP4 requires WebCodecs H.264 for ${encodePreset.label} (${encodePreset.avcCodecString}). `
         + 'This browser or preset is unsupported. Choose Quick Preview explicitly, or try Chrome/Edge with a supported resolution.',
@@ -484,6 +508,8 @@ export async function renderShotCameraMoveMp4(
       transparent: options.transparent === true,
       depthRange: options.depthRange,
       depthInvert: options.depthInvert === true,
+      encoderMode: requestedEncoderMode,
+      onTiming: options.onTiming,
     });
   }
 
@@ -549,6 +575,8 @@ interface CameraMoveRenderContext {
   transparent?: boolean;
   depthRange?: { nearMeters: number; farMeters: number };
   depthInvert?: boolean;
+  encoderMode?: VideoEncoderMode;
+  onTiming?: CameraMoveVideoOptions['onTiming'];
 }
 
 async function renderShotCameraMoveMp4Deterministic(
@@ -577,6 +605,8 @@ async function renderShotCameraMoveMp4Deterministic(
     transparent = false,
     depthRange,
     depthInvert = false,
+    encoderMode = 'quality',
+    onTiming,
   } = ctx;
 
   if (!preset) {
@@ -664,6 +694,8 @@ async function renderShotCameraMoveMp4Deterministic(
       clipping.far,
     );
 
+    onTiming?.({ stage: 'setup-end', ms: 0 });
+
     emitProgress(onProgress, {
       phase: 'rendering',
       progress: 0.02,
@@ -677,6 +709,12 @@ async function renderShotCameraMoveMp4Deterministic(
       preset,
       totalFrames,
       signal,
+      encoderMode,
+      onStageTiming: (stage, ms) => {
+        if (stage === 'render' || stage === 'encode' || stage === 'finalize') {
+          onTiming?.({ stage, ms });
+        }
+      },
       renderFrame: async (frameIndex) => {
         if (signal?.aborted) {
           throw new Error('MP4 export was cancelled.');
@@ -753,6 +791,8 @@ async function renderShotCameraMoveMp4Deterministic(
       encodeMode: 'render',
       frameCount: encoded.frameCount,
       codecString: encoded.codecString,
+      actualEncoderMode: encoded.actualEncoderMode,
+      encoderModeFallback: encoded.encoderModeFallback,
     };
 
     emitProgress(onProgress, {
@@ -1624,6 +1664,7 @@ export interface CharacterMotionExportOptions {
   includeAttachedProps?: boolean;
   frameRate?: number;
   resolutionPreset?: VideoResolutionPresetId;
+  encoderMode?: VideoEncoderMode;
   onProgress?: CameraMoveVideoOptions['onProgress'];
   signal?: AbortSignal;
   /** Receive each transparent PNG frame (1-based numbering handled by caller). */
@@ -1664,6 +1705,7 @@ export async function renderShotCharacterMotion(
       transparent: true,
       resolutionPreset: options.resolutionPreset ?? '1080p',
       frameRate: options.frameRate,
+      encoderMode: options.encoderMode ?? 'quality',
       includeDataUrl: false,
       signal: options.signal,
       onProgress: options.onProgress,
@@ -1696,6 +1738,7 @@ export async function renderShotCharacterMotion(
       backgroundColor,
       resolutionPreset: options.resolutionPreset ?? '1080p',
       frameRate: options.frameRate,
+      encoderMode: options.encoderMode ?? 'quality',
       includeDataUrl: false,
       signal: options.signal,
       onProgress: options.onProgress,

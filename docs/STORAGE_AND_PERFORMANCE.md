@@ -53,9 +53,11 @@ Projects store binary assets in IndexedDB and JSON metadata in local revisions. 
 | Expected 4K camera-move encode pressure | ~1.5 GiB order-of-magnitude peak JS/GPU pressure | Measured baseline |
 | Camera-move duration | 0.5–30 s (UI chrome often 1–20 s) | Hard-enforced limit |
 | Default camera-move duration | 5 s | Hard-enforced limit (default) |
-| Frame rate | 30 fps for 1080p and 4K presets | Hard-enforced limit |
+| Frame rate | Profile-driven: Fast Control 24 fps; Standard/High Quality 30 fps | Hard-enforced limit (per profile) |
+| 720p Fast Control | 1280×720 @ 24, H.264 High Level 3.1, fast encoder preferred | Hard-enforced limit (profile) |
 | 1080p preset | 1920×1080 @ 30, H.264 High Level 4.0 | Hard-enforced limit |
 | 4K preset | 3840×2160 @ 30, H.264 High Level 5.1 | Hard-enforced limit |
+| Fingerprinted MP4 cache | Exact-match reuse across package exports (memory + IndexedDB) | Measured baseline |
 
 Encode availability depends on WebCodecs / browser support. When Render MP4 is unavailable, Quick Preview may still be offered.
 

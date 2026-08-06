@@ -31,6 +31,7 @@ import {
   resetShotExportField as resetShotExportFieldOp,
   resetShotExportOverrides as resetShotExportOverridesOp,
   setProjectPackageFormat as setProjectPackageFormatOp,
+  setProjectVideoPerformance as setProjectVideoPerformanceOp,
   setSceneExportDefaults as setSceneExportDefaultsOp,
   setShotExportOverride as setShotExportOverrideOp,
   syncShotExportFromResolved,
@@ -1022,6 +1023,13 @@ export const createProjectSlice: StateCreator<
     project: touchProject(setProjectPackageFormatOp(
       ensureProjectExportConfiguration(state.project),
       packageFormat,
+    )),
+  })),
+
+  setProjectVideoPerformance: (settings) => set((state) => ({
+    project: touchProject(setProjectVideoPerformanceOp(
+      ensureProjectExportConfiguration(state.project),
+      settings,
     )),
   })),
 
