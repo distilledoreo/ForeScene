@@ -835,6 +835,36 @@ export interface PromptOverrides {
   notes?: string;
 }
 
+export type StillArtifactKind =
+  | 'clay-viewport'
+  | 'projected-viewport'
+  | 'depth-viewport'
+  | 'character-still'
+  | 'clay-reference-frame'
+  | 'projected-reference-frame'
+  | 'depth-reference-frame';
+
+export interface MaterializedStillArtifact {
+  id: string;
+  key: string;
+  kind: StillArtifactKind;
+  assetId: string;
+  fingerprint: string;
+  dependencyIds: string[];
+  width: number;
+  height: number;
+  mimeType: 'image/png';
+  peopleVariant?: 'with_people' | 'clean_plate';
+  appearance: 'clay' | 'projected' | 'depth';
+  timeSeconds?: number;
+  frameRole?: 'primary' | 'start' | 'middle' | 'end';
+  createdAt: string;
+}
+
+export interface ShotMaterializedMedia {
+  stills: Record<string, MaterializedStillArtifact>;
+}
+
 export interface ShotAssetRefs {
   /** Clay still with people (primary camera-roll capture). */
   viewportRenderAssetId?: string;
@@ -878,6 +908,8 @@ export interface Shot {
   promptOverrides: PromptOverrides;
   status: ShotStatus;
   assets: ShotAssetRefs;
+  /** First-class derived still media belonging to the shot (persisted asset IDs + fingerprints). */
+  materializedMedia?: ShotMaterializedMedia;
   /**
    * Optional shot metadata (e.g. system scaffold tags for blank-project detection).
    * Not required for export; preserved across backup/import when present.
