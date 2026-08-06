@@ -31,6 +31,10 @@ export type StillActionRender = (params: {
 export interface ShotStillActionParams {
   project: LocationProject;
   shotId: string;
+  getLiveProject?: () => LocationProject;
+  commitLiveProject?: (
+    updater: (live: LocationProject) => LocationProject,
+  ) => LocationProject;
   onProjectCommit?: (project: LocationProject) => LocationProject;
   render?: StillActionRender;
 }
@@ -76,15 +80,15 @@ export function cancelShotStillPreparation(shotId?: string): {
     shotControllers.clear();
   }
 
-  // Drop queued (not yet running) interactive still work from the coordinator.
-  const cancelledQueueItems = renderWorkCoordinator.cancelQueued((priority) => {
-    return (
-      priority === 'capture-primary-still'
-      || priority === 'capture-secondary-still'
-      || priority === 'edit-primary-still'
-      || priority === 'edit-secondary-still'
-    );
-  });
+  // Drop only this shot's (or no) queued interactive still work — never all shots.
+  const cancelledQueueItems = shotId
+    ? renderWorkCoordinator.cancelByOwner(shotId)
+    : renderWorkCoordinator.cancelQueued((entry) => (
+      entry.priority === 'capture-primary-still'
+      || entry.priority === 'capture-secondary-still'
+      || entry.priority === 'edit-primary-still'
+      || entry.priority === 'edit-secondary-still'
+    ));
 
   return { cancelledShotIds, cancelledQueueItems };
 }
@@ -108,6 +112,8 @@ export async function regenerateShotStills(
       reason: 'manual',
       scope: 'all-configured',
       signal: controller.signal,
+      getLiveProject: params.getLiveProject,
+      commitLiveProject: params.commitLiveProject,
       onProjectCommit: params.onProjectCommit,
       render: params.render,
     });
@@ -141,6 +147,8 @@ export async function retryFailedShotStills(
       reason: 'manual',
       scope: 'stale-only',
       signal: controller.signal,
+      getLiveProject: params.getLiveProject,
+      commitLiveProject: params.commitLiveProject,
       onProjectCommit: params.onProjectCommit,
       render: params.render,
     });

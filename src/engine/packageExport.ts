@@ -237,6 +237,8 @@ export async function buildLegacyShotPackage(
     rootFolder,
     sharedMedia,
     videoPerformanceStats,
+    getLiveProject: options.getLiveProject,
+    commitLiveProject: options.commitLiveProject,
   });
   const blob = await compressZip(zip, {
     tracker,
@@ -338,6 +340,8 @@ export async function buildLegacyMultiShotPackage(
       rootFolder: folderByShotId.get(shot.id),
       sharedMedia,
       videoPerformanceStats,
+      getLiveProject: options.getLiveProject,
+      commitLiveProject: options.commitLiveProject,
     });
     manifestPaths.push(...paths);
   }
@@ -376,11 +380,31 @@ async function appendShotPackageToZip(
     rootFolder?: string;
     sharedMedia: SharedExportMediaCache;
     videoPerformanceStats?: PackageVideoPerformanceStats;
+    getLiveProject?: PackageExportOptions['getLiveProject'];
+    commitLiveProject?: PackageExportOptions['commitLiveProject'];
   },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal, rootFolder, sharedMedia, videoPerformanceStats } = args;
+  const {
+    shotIndex,
+    tracker,
+    signal,
+    rootFolder,
+    sharedMedia,
+    videoPerformanceStats,
+    getLiveProject,
+    commitLiveProject,
+  } = args;
   let frozenProjectForPacking: LocationProject = project;
   const temporaryExportAssetIds: string[] = [];
+  try {
+  return await appendShotPackageToZipBody();
+  } finally {
+    for (const temporaryId of temporaryExportAssetIds) {
+      await cleanupTemporaryExportStill(project.id, temporaryId);
+    }
+  }
+
+  async function appendShotPackageToZipBody(): Promise<string[]> {
   const shotProject = resolveProjectForShot(project, shot);
   const peopleMode = shot.exportSettings.peopleExportMode;
   const peopleVariants = getPeopleRenderVariants(peopleMode);
@@ -412,6 +436,9 @@ async function appendShotPackageToZip(
     emit('rendering', progressLabel, { indeterminate: true });
     const ensured = await ensureStillArtifactForExport({
       frozenProject: frozenProjectForPacking,
+      liveProject: getLiveProject?.(),
+      getLiveProject,
+      commitLiveProject,
       shotId: shot.id,
       specification,
       signal,
@@ -1178,11 +1205,7 @@ async function appendShotPackageToZip(
   const manifest = createShotPackageManifest(shotProject, shot, resolvedRootFolder);
   zip.file(`${resolvedRootFolder}/manifest.json`, JSON.stringify(manifest, null, 2));
   finishUnit('packaging', `${getShotExportProgressLabel(shot)} packaged`);
-
-  for (const temporaryId of temporaryExportAssetIds) {
-    await cleanupTemporaryExportStill(project.id, temporaryId);
-  }
-
   return manifest.files.map((file) => file.path);
+  } // appendShotPackageToZipBody
 }
 

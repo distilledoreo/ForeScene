@@ -1,6 +1,7 @@
 /**
- * Atomic commit of a prepared still into a project snapshot.
+ * Atomic commit of a prepared still into a live project snapshot.
  * Recomputes fingerprint at commit time and rejects stale results.
+ * Awaits durable Blob persistence before attaching the asset record.
  */
 
 import type {
@@ -13,7 +14,7 @@ import { createId } from '../utils/ids';
 import {
   createProjectAssetStorageKey,
   deleteProjectAssetBlob,
-  storeProjectAssetBlob,
+  storeProjectAssetBlobDurable,
 } from './projectAssetStore';
 import { pruneUnreferencedProjectAssets } from './projectAssets';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
@@ -25,9 +26,11 @@ import type { PreparedStillArtifact } from './prepareStillArtifact';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 
 export interface CommitPreparedStillParams {
+  /** Must be the current live project at commit time (not a render snapshot). */
   project: LocationProject;
   shotId: string;
   specification: StillArtifactSpecification;
+  /** Fingerprint of the prepared render; rejected when live state no longer matches. */
   expectedFingerprint: string;
   prepared: PreparedStillArtifact;
 }
@@ -42,8 +45,9 @@ export type CommitPreparedStillResult =
   }
   | {
     ok: false;
-    reason: 'stale' | 'shot-missing' | 'missing-blob';
+    reason: 'stale' | 'shot-missing' | 'missing-blob' | 'persistence-failed';
     project: LocationProject;
+    error?: string;
   };
 
 function resolveShot(project: LocationProject, shotId: string): Shot | undefined {
@@ -51,12 +55,14 @@ function resolveShot(project: LocationProject, shotId: string): Shot | undefined
 }
 
 /**
- * Apply a prepared still to the given project snapshot.
- * On success returns updated project; on stale rejects without attaching bytes.
+ * Apply a prepared still to the given (live) project.
+ * Only mutates that shot's materializedMedia entry and the asset registry for the new asset —
+ * other concurrent shot/scene fields on `project` are preserved.
+ * Awaits durable storage before attaching the record.
  */
-export function commitPreparedStillArtifact(
+export async function commitPreparedStillArtifact(
   params: CommitPreparedStillParams,
-): CommitPreparedStillResult {
+): Promise<CommitPreparedStillResult> {
   const { project, shotId, specification, expectedFingerprint, prepared } = params;
   const shot = resolveShot(project, shotId);
   if (!shot) {
@@ -66,10 +72,6 @@ export function commitPreparedStillArtifact(
   const liveFingerprint = computeStillArtifactFingerprint(project, shot, specification);
   if (liveFingerprint.key !== expectedFingerprint) {
     recordPreparedMediaMetric('staleResultsDiscarded');
-    // Clean up newly rendered blob that will not be attached.
-    if (prepared.blob && prepared.cacheStatus !== 'current' && !prepared.existingAssetId) {
-      // Blob was never stored as a project asset yet — nothing to delete from IDB.
-    }
     return { ok: false, reason: 'stale', project };
   }
 
@@ -129,9 +131,15 @@ export function commitPreparedStillArtifact(
       },
     };
     try {
-      asset = storeProjectAssetBlob(project.id, base, prepared.blob);
-    } catch {
-      return { ok: false, reason: 'missing-blob', project };
+      // Durable write must succeed before the project references the asset.
+      asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'persistence-failed',
+        project,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
     nextAssets = { ...project.assets.assets, [asset.id]: asset };
   }
@@ -165,6 +173,8 @@ export function commitPreparedStillArtifact(
         ? {
           ...item,
           materializedMedia: { stills: nextStills },
+          // Also map viewport stills into legacy camera-roll slots when applicable.
+          assets: mapLegacyViewportSlot(item.assets, specification, asset.id),
           updatedAt: new Date().toISOString(),
         }
         : item
@@ -180,7 +190,6 @@ export function commitPreparedStillArtifact(
     previous && previous.assetId !== asset.id ? previous.assetId : undefined;
 
   if (supersededAssetId) {
-    // Drop superseded asset from registry only when unreferenced after prune.
     nextProject = pruneUnreferencedProjectAssets(nextProject);
     if (!nextProject.assets.assets[supersededAssetId]) {
       const oldAsset = project.assets.assets[supersededAssetId];
@@ -199,9 +208,30 @@ export function commitPreparedStillArtifact(
   };
 }
 
+/** Map prepared viewport stills into legacy shot.assets slots without re-rendering. */
+function mapLegacyViewportSlot(
+  assets: Shot['assets'],
+  specification: StillArtifactSpecification,
+  assetId: string,
+): Shot['assets'] {
+  if (specification.kind === 'clay-viewport') {
+    if (specification.peopleVariant === 'clean_plate') {
+      return { ...assets, viewportCleanPlateAssetId: assetId };
+    }
+    return { ...assets, viewportRenderAssetId: assetId };
+  }
+  if (specification.kind === 'projected-viewport') {
+    if (specification.peopleVariant === 'clean_plate') {
+      return { ...assets, viewportProjectedCleanPlateAssetId: assetId };
+    }
+    return { ...assets, viewportProjectedAssetId: assetId };
+  }
+  return assets;
+}
+
 /**
  * Remove obsolete materialized still records whose keys are no longer desired.
- * Does not delete assets still referenced elsewhere.
+ * Also deletes IndexedDB blobs for assets that become unreferenced.
  */
 export function pruneObsoleteMaterializedStills(
   project: LocationProject,
@@ -216,12 +246,15 @@ export function pruneObsoleteMaterializedStills(
   const obsolete = keys.filter((key) => !desiredKeys.has(key));
   if (obsolete.length === 0) return project;
 
+  const removedAssetIds: string[] = [];
   const nextStills = { ...stills };
   for (const key of obsolete) {
+    const removed = nextStills[key];
+    if (removed) removedAssetIds.push(removed.assetId);
     delete nextStills[key];
   }
 
-  const nextProject: LocationProject = {
+  let nextProject: LocationProject = {
     ...project,
     shots: project.shots.map((item) =>
       item.id === shotId
@@ -235,5 +268,14 @@ export function pruneObsoleteMaterializedStills(
     updatedAt: new Date().toISOString(),
   };
 
-  return pruneUnreferencedProjectAssets(nextProject);
+  nextProject = pruneUnreferencedProjectAssets(nextProject);
+
+  for (const assetId of removedAssetIds) {
+    if (nextProject.assets.assets[assetId]) continue;
+    const oldAsset = project.assets.assets[assetId];
+    const key = oldAsset?.storageKey ?? createProjectAssetStorageKey(project.id, assetId);
+    void deleteProjectAssetBlob(key).catch(() => undefined);
+  }
+
+  return nextProject;
 }

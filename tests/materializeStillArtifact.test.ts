@@ -30,13 +30,13 @@ function claySpec(shot: Shot, peopleVariant: 'with_people' | 'clean_plate' = 'wi
 
 function mockRender(label = 'still') {
   let calls = 0;
-  const render = vi.fn(async () => {
+  const render = vi.fn(async ({ specification }: { specification: { width: number; height: number } }) => {
     calls += 1;
     await new Promise((resolve) => setTimeout(resolve, 5));
     return {
       blob: new Blob([`png-${label}-${calls}`], { type: 'image/png' }),
-      width: 64,
-      height: 36,
+      width: specification.width,
+      height: specification.height,
       mimeType: 'image/png' as const,
     };
   });
@@ -71,7 +71,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
     expect(render).toHaveBeenCalledTimes(1);
 
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,
@@ -105,7 +105,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
       render,
     });
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,
@@ -163,7 +163,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
       ),
     };
 
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project: edited,
       shotId: shot.id,
       specification: spec,
@@ -190,7 +190,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
       render,
     });
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,
@@ -364,7 +364,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
       render,
     });
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,
@@ -411,7 +411,7 @@ describe('prepareStillArtifact + commitPreparedStillArtifact', () => {
       render,
     });
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,

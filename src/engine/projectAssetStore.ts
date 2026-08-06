@@ -124,6 +124,35 @@ export function storeProjectAssetBlob<T extends ProjectAsset>(projectId: string,
   return { ...asset, storageKey, uri };
 }
 
+/**
+ * Store a Blob in memory and await durable IndexedDB write before returning.
+ * Use for prepared-media commits where the project must not reference unpersisted bytes.
+ * On failure, removes the in-memory/object-URL registration so callers stay clean.
+ */
+export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
+  projectId: string,
+  asset: T,
+  blob: Blob,
+): Promise<T> {
+  const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
+  // Cache in memory first so the session can use the blob immediately after durable write.
+  cacheProjectAssetBlob(storageKey, blob, true);
+  try {
+    await putProjectAssetBlobs([{ key: storageKey, blob }]);
+  } catch (error) {
+    memoryBlobs.delete(storageKey);
+    memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);
+    const url = objectUrls.get(storageKey);
+    if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(url);
+    }
+    objectUrls.delete(storageKey);
+    throw error;
+  }
+  const uri = makeObjectUrl(storageKey, blob);
+  return { ...asset, storageKey, uri };
+}
+
 export function registerProjectAssetBlob(key: string, blob: Blob): string {
   cacheProjectAssetBlob(key, blob, true);
   const uri = makeObjectUrl(key, blob);

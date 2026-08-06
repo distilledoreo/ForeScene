@@ -186,14 +186,16 @@ export function createStillReconciliationScheduler(
           scope: 'stale-only',
           signal: controller.signal,
           render: options.render,
-          onProjectCommit: (next) => {
-            options.setProject(next);
+          getLiveProject: options.getProject,
+          commitLiveProject: (updater) => {
+            options.setProject(updater(options.getProject()));
             return options.getProject();
           },
         }).then(
           (result) => {
             if (generation !== state!.generation) return;
             state!.controller = undefined;
+            // result.project is already live-merged; avoid full stale overwrite.
             options.setProject(result.project);
             options.onComplete?.(shotId, result);
           },
@@ -217,6 +219,10 @@ export function createStillReconciliationScheduler(
     if (patch && isMetadataOnlyShotPatch(patch)) return;
     const affected = findShotsAffectedByProjectChange(previous, next, hintShotIds);
     if (affected.length === 0) return;
+    // Drop obsolete background MP4 work for affected shots.
+    void import('./backgroundVideoService').then(({ discardBackgroundVideosForShot }) => {
+      for (const id of affected) discardBackgroundVideosForShot(id);
+    }).catch(() => undefined);
     // Filter to shots that actually need work (fingerprint gate).
     const needing = affected.filter((shotId) => {
       const shot = next.shots.find((item) => item.id === shotId);

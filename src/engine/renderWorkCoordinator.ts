@@ -1,6 +1,7 @@
 /**
  * Single coordinator for GPU-intensive prepared-media work.
  * Interactive stills outrank secondary stills and background video.
+ * Queue entries carry owner metadata so cancellation can be shot-scoped.
  */
 
 export type RenderWorkPriority =
@@ -11,6 +12,12 @@ export type RenderWorkPriority =
   | 'export-recovery-still'
   | 'foreground-export-video'
   | 'background-video';
+
+export interface RenderWorkOptions {
+  /** Owning shot (or other entity) for scoped cancellation. */
+  ownerId?: string;
+  jobId?: string;
+}
 
 const PRIORITY_ORDER: Record<RenderWorkPriority, number> = {
   'capture-primary-still': 0,
@@ -25,6 +32,8 @@ const PRIORITY_ORDER: Record<RenderWorkPriority, number> = {
 interface QueuedWork {
   id: number;
   priority: RenderWorkPriority;
+  ownerId?: string;
+  jobId?: string;
   run: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -34,7 +43,6 @@ interface QueuedWork {
 let nextId = 1;
 const queue: QueuedWork[] = [];
 let activeCount = 0;
-/** One still render + one video encode can coexist only when not interactive stills waiting. */
 const MAX_CONCURRENT = 1;
 
 function isInteractiveStill(priority: RenderWorkPriority): boolean {
@@ -57,7 +65,6 @@ function sortQueue(): void {
 async function pump(): Promise<void> {
   while (activeCount < MAX_CONCURRENT && queue.length > 0) {
     sortQueue();
-    // Do not start background video while interactive still work is waiting.
     const nextIndex = queue.findIndex((item) => {
       if (item.cancelled) return true;
       if (item.priority === 'background-video') {
@@ -84,7 +91,6 @@ async function pump(): Promise<void> {
       item.reject(error);
     } finally {
       activeCount -= 1;
-      // Yield between artifacts so UI and higher-priority work can interleave.
       await Promise.resolve();
     }
   }
@@ -94,11 +100,14 @@ export const renderWorkCoordinator = {
   schedule<T>(
     priority: RenderWorkPriority,
     work: () => Promise<T>,
+    options?: RenderWorkOptions,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const entry: QueuedWork = {
         id: nextId++,
         priority,
+        ownerId: options?.ownerId,
+        jobId: options?.jobId,
         run: work as () => Promise<unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -109,11 +118,27 @@ export const renderWorkCoordinator = {
     });
   },
 
-  /** Cancel all queued (not running) work matching a predicate. */
-  cancelQueued(predicate: (priority: RenderWorkPriority) => boolean): number {
+  /**
+   * Cancel queued (not running) work.
+   * Prefer ownerId for shot-scoped cancellation.
+   */
+  cancelQueued(
+    predicate: (entry: {
+      priority: RenderWorkPriority;
+      ownerId?: string;
+      jobId?: string;
+    }) => boolean,
+  ): number {
     let cancelled = 0;
     for (const item of queue) {
-      if (!item.cancelled && predicate(item.priority)) {
+      if (
+        !item.cancelled
+        && predicate({
+          priority: item.priority,
+          ownerId: item.ownerId,
+          jobId: item.jobId,
+        })
+      ) {
         item.cancelled = true;
         cancelled += 1;
       }
@@ -121,11 +146,16 @@ export const renderWorkCoordinator = {
     return cancelled;
   },
 
+  cancelByOwner(ownerId: string): number {
+    return this.cancelQueued((entry) => entry.ownerId === ownerId);
+  },
+
   inspectForTests() {
     return {
       queueLength: queue.filter((item) => !item.cancelled).length,
       activeCount,
       priorities: queue.filter((item) => !item.cancelled).map((item) => item.priority),
+      owners: queue.filter((item) => !item.cancelled).map((item) => item.ownerId),
     };
   },
 

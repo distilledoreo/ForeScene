@@ -177,7 +177,7 @@ describe('prepared media export path', () => {
       render,
     });
     const fp = computeStillArtifactFingerprint(project, shot, spec);
-    const commit = commitPreparedStillArtifact({
+    const commit = await commitPreparedStillArtifact({
       project,
       shotId: shot.id,
       specification: spec,

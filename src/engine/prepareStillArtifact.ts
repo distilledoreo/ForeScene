@@ -140,8 +140,8 @@ async function lookupCurrentArtifact(
     (existing.width > 0 && existing.width !== specification.width)
     || (existing.height > 0 && existing.height !== specification.height)
   ) {
-    // Dimensions mismatch — treat as stale so export resolution stays correct.
-    // Fingerprint already includes width/height, so this is a defensive check.
+    // Dimensions mismatch — treat as stale / missing so resolution stays correct.
+    return undefined;
   }
 
   const storageKey = asset.storageKey

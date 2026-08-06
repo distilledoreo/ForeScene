@@ -59,6 +59,14 @@ export interface PackageExportOptions {
   plan?: ExportPlan;
   /** Optional stats accumulator shared across shots in a multi-shot package. */
   videoPerformanceStats?: import('./videoPerformance').PackageVideoPerformanceStats;
+  /**
+   * Live project access during export recovery so recovered stills can be committed
+   * when the live fingerprint still matches the frozen export snapshot.
+   */
+  getLiveProject?: () => import('../domain/types').LocationProject;
+  commitLiveProject?: (
+    updater: (live: import('../domain/types').LocationProject) => import('../domain/types').LocationProject,
+  ) => import('../domain/types').LocationProject;
 }
 
 /** Aggregated prepareVideoArtifact cache / stage timings for package export. */

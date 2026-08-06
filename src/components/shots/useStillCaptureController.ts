@@ -18,7 +18,6 @@ import { materializeShotAfterCapture } from '../../engine/materializeShotStills'
 import { isShotFramingAccepted } from '../../engine/workflow';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
-import { createBackgroundVideoScheduler } from '../../engine/backgroundVideoPreparation';
 
 export type StillCaptureStatus = 'idle' | 'capturing' | 'exporting' | 'error';
 
@@ -204,18 +203,15 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
 
     setIsCapturing(true);
     // Canonical capture path: materialize primary still, then remaining configured stills.
+    // Commits re-read live Zustand state so concurrent edits are never overwritten.
     void materializeShotAfterCapture({
       project: latestProject,
       shotId: shot.id,
       mode: 'await-primary',
-      onProjectCommit: (nextProject) => {
+      getLiveProject: () => useProjectStore.getState().project,
+      commitLiveProject: (updater) => {
         useProjectStore.setState((current) => ({
-          project: {
-            ...nextProject,
-            // Preserve any concurrent store mutations outside shots/assets when possible.
-            updatedAt: new Date().toISOString(),
-          },
-          // Keep selected shot stable.
+          project: updater(current.project),
           selectedShotId: current.selectedShotId,
         }));
         return useProjectStore.getState().project;
@@ -230,85 +226,41 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
           setSnapshotError(
             result.warnings[0] ?? 'Could not save the shot preview. Try Capture again.',
           );
-          // Fall back to legacy clay render so the user still gets a preview asset.
-          try {
-            const frame = await renderShotFrame(
-              useProjectStore.getState().project,
-              shotForNaming,
-              { peopleVariant: 'with_people' },
-            );
-            if (generationAtStart !== captureGenerationRef.current) return;
-            setShotFramePreview(shot.id, frame.dataUrl);
-            await attachStillView(
-              { appearance: 'clay', people: 'with_people' },
-              frame.dataUrl,
-              frame.width,
-              frame.height,
-              viewportFileName,
-            );
-          } catch {
-            // Primary failure already reported.
+          // Keep previous preview if present — do not claim ready.
+          const live = useProjectStore.getState().project;
+          const prev = live.shots.find((item) => item.id === shot.id);
+          const fallbackId = prev?.assets.viewportRenderAssetId
+            ?? result.primaryStillAssetId;
+          const fallbackAsset = fallbackId ? live.assets.assets[fallbackId] : undefined;
+          if (fallbackAsset?.uri) {
+            setShotFramePreview(shot.id, fallbackAsset.uri);
           }
           return;
         }
 
         const liveProject = useProjectStore.getState().project;
-        const liveShot = liveProject.shots.find((item) => item.id === shot.id);
         const primaryAssetId = result.primaryStillAssetId;
         const primaryAsset = primaryAssetId
           ? liveProject.assets.assets[primaryAssetId]
           : undefined;
         if (primaryAsset?.uri) {
           setShotFramePreview(shot.id, primaryAsset.uri);
-          // Keep legacy viewport slot populated for older consumers.
-          if (primaryAsset.uri.startsWith('data:')) {
-            await attachStillView(
-              { appearance: 'clay', people: 'with_people' },
-              primaryAsset.uri,
-              primaryAsset.width ?? shotForNaming.exportSettings.width,
-              primaryAsset.height ?? shotForNaming.exportSettings.height,
-              viewportFileName,
-            );
-          } else {
-            // Register legacy asset ref without re-encoding when we only have blob URI.
-            useProjectStore.setState((current) => ({
-              project: {
-                ...current.project,
-                shots: current.project.shots.map((item) =>
-                  item.id === shot.id
-                    ? {
-                      ...item,
-                      assets: {
-                        ...item.assets,
-                        viewportRenderAssetId: primaryAssetId,
-                      },
-                    }
-                    : item
-                ),
-              },
-            }));
-          }
         }
 
         if (options?.markThumbnailFreshOnSuccess) {
           thumbnailFreshAfterFinishRef.current = true;
         }
 
-        // Also keep companion stills in legacy slots for camera-roll toggles.
-        const companionJobs = buildStillCompanionJobs({
-          project: liveProject,
-          shotForNaming: liveShot ?? shotForNaming,
-          viewportFileName,
-          attachStillView,
-        });
-        await runSettledSequentially(companionJobs);
+        // Legacy camera-roll slots are filled by commitPreparedStillArtifact
+        // (mapLegacyViewportSlot) — no second companion WebGL pass.
 
-        // Queue background MP4s after still work.
+        // Queue background MP4s via the app-level singleton scheduler.
         try {
-          const scheduler = createBackgroundVideoScheduler({
-            getProject: () => useProjectStore.getState().project,
-          });
-          void scheduler.queueMissingForShot(shot.id);
+          const { ensureBackgroundVideoService, queueBackgroundVideosForShot } = await import(
+            '../../engine/backgroundVideoService'
+          );
+          ensureBackgroundVideoService(() => useProjectStore.getState().project);
+          void queueBackgroundVideosForShot(shot.id);
         } catch {
           // Background video must never block capture.
         }

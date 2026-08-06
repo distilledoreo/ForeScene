@@ -29,8 +29,12 @@ export type PlannedArtifactSource =
 
 export interface EnsureStillArtifactForExportParams {
   frozenProject: LocationProject;
-  /** Optional live project for post-recovery commit when fingerprints still match. */
+  /** Optional live project snapshot at recovery start. Prefer getLiveProject. */
   liveProject?: LocationProject;
+  /** Read live project immediately before committing recovery into the store. */
+  getLiveProject?: () => LocationProject;
+  /** Apply recovery commit result into the live store (merge only still fields). */
+  commitLiveProject?: (updater: (live: LocationProject) => LocationProject) => LocationProject;
   shotId: string;
   specification: StillArtifactSpecification;
   signal?: AbortSignal;
@@ -118,7 +122,7 @@ export async function ensureStillArtifactForExport(
 
   // Always package the recovered blob for the frozen snapshot.
   // Commit to live only when live fingerprint still matches frozen expected.
-  let liveProject = params.liveProject;
+  let liveProject = params.getLiveProject?.() ?? params.liveProject;
   let temporaryAssetId: string | undefined;
   let assetId: string | undefined;
   let nextFrozen = frozenProject;
@@ -128,7 +132,7 @@ export async function ensureStillArtifactForExport(
     if (liveShot) {
       const liveFp = computeStillArtifactFingerprint(liveProject, liveShot, specification);
       if (liveFp.key === expected.key) {
-        const commit = commitPreparedStillArtifact({
+        const commit = await commitPreparedStillArtifact({
           project: liveProject,
           shotId,
           specification,
@@ -136,9 +140,12 @@ export async function ensureStillArtifactForExport(
           prepared: { ...prepared, cacheStatus: 'rendered' },
         });
         if (commit.ok) {
-          liveProject = commit.project;
+          if (params.commitLiveProject) {
+            liveProject = params.commitLiveProject(() => commit.project);
+          } else {
+            liveProject = commit.project;
+          }
           assetId = commit.assetId;
-          // Mirror into frozen packaging project so asset lookup works.
           const asset = liveProject.assets.assets[commit.assetId];
           if (asset) {
             nextFrozen = {
@@ -177,7 +184,7 @@ export async function ensureStillArtifactForExport(
     }
   }
 
-  // Temporary export media — store under frozen project id for zip packaging, then caller may delete.
+  // Temporary export media — memory-only is enough for packaging; mark for cleanup.
   temporaryAssetId = createId('asset');
   const tempAsset = storeProjectAssetBlob(
     frozenProject.id,

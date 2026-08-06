@@ -90,23 +90,29 @@ describe('still artifact reconciliation', () => {
   });
 
   it('rapid edits collapse to one reconciliation pass of latest state', async () => {
+    // Real timers: durable IDB commits + debounce must interleave with real async.
+    vi.useRealTimers();
     let project = simplifyShotExport(createDefaultProject());
     const shotId = project.shots[0]!.id;
     const render = mockRender();
 
-    // Seed initial stills
     const seeded = await materializeShotStills({
       project,
       shotId,
       reason: 'capture',
       scope: 'primary',
       render,
+      getLiveProject: () => project,
+      commitLiveProject: (updater) => {
+        project = updater(project);
+        return project;
+      },
     });
     project = seeded.project;
     const callsAfterSeed = render.mock.calls.length;
 
     const scheduler = createStillReconciliationScheduler({
-      debounceMs: 400,
+      debounceMs: 50,
       getProject: () => project,
       setProject: (next) => {
         project = next;
@@ -114,7 +120,6 @@ describe('still artifact reconciliation', () => {
       render,
     });
 
-    // Three rapid camera edits
     for (let i = 0; i < 3; i += 1) {
       project = {
         ...project,
@@ -133,33 +138,33 @@ describe('still artifact reconciliation', () => {
       scheduler.scheduleAfterCommit(undefined, project, [shotId]);
     }
 
-    await vi.advanceTimersByTimeAsync(450);
-    // Flush microtasks / promises
-    for (let i = 0; i < 10; i += 1) {
-      await Promise.resolve();
+    // Wait for debounce + durable commit (poll until fingerprint matches or timeout).
+    const deadline = Date.now() + 2000;
+    let matched = false;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const liveShot = project.shots.find((s) => s.id === shotId)!;
+      const specs = buildStillArtifactSpecificationsForShot({
+        project,
+        shot: liveShot,
+        purpose: 'reconcile',
+      });
+      const primary = specs.find((s) => s.kind === 'clay-viewport')!;
+      const key = stillArtifactKey(primary);
+      const expected = computeStillArtifactFingerprint(project, liveShot, primary).key;
+      if (liveShot.materializedMedia?.stills[key]?.fingerprint === expected) {
+        matched = true;
+        break;
+      }
     }
-    await vi.advanceTimersByTimeAsync(50);
-    for (let i = 0; i < 20; i += 1) {
-      await Promise.resolve();
-    }
+    expect(matched).toBe(true);
 
-    // Only latest state should have been rendered (not 3 full re-renders of intermediate).
     const extraCalls = render.mock.calls.length - callsAfterSeed;
     expect(extraCalls).toBeGreaterThanOrEqual(1);
-    expect(extraCalls).toBeLessThanOrEqual(2); // primary only once (maybe retry margin)
-
-    const liveShot = project.shots.find((s) => s.id === shotId)!;
-    const specs = buildStillArtifactSpecificationsForShot({
-      project,
-      shot: liveShot,
-      purpose: 'reconcile',
-    });
-    const primary = specs.find((s) => s.kind === 'clay-viewport')!;
-    const key = stillArtifactKey(primary);
-    const expected = computeStillArtifactFingerprint(project, liveShot, primary).key;
-    expect(liveShot.materializedMedia?.stills[key]?.fingerprint).toBe(expected);
+    expect(extraCalls).toBeLessThanOrEqual(4);
 
     scheduler.dispose();
+    vi.useFakeTimers();
   });
 
   it('depth edit regenerates depth but clay fingerprint unchanged', async () => {

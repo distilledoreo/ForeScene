@@ -1144,12 +1144,14 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             project,
             shotId: input.shotId,
             mode: 'await-all',
-            onProjectCommit: (next) => {
-              useProjectStore.setState({ project: next });
+            getLiveProject: () => useProjectStore.getState().project,
+            commitLiveProject: (updater) => {
+              useProjectStore.setState((current) => ({
+                project: updater(current.project),
+              }));
               return useProjectStore.getState().project;
             },
           });
-          useProjectStore.setState({ project: materialization.project });
         });
 
         const result = materialization!;
@@ -1293,12 +1295,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       const result = await regenerateShotStills({
         project: useProjectStore.getState().project,
         shotId: input.shotId,
-        onProjectCommit: (next) => {
-          useProjectStore.setState({ project: next });
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
           return useProjectStore.getState().project;
         },
       });
-      useProjectStore.setState({ project: result.project });
       return {
         ok: result.status !== 'failed',
         status: result.status,
@@ -1338,12 +1340,12 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       const result = await retryFailedShotStills({
         project: useProjectStore.getState().project,
         shotId: input.shotId,
-        onProjectCommit: (next) => {
-          useProjectStore.setState({ project: next });
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
           return useProjectStore.getState().project;
         },
       });
-      useProjectStore.setState({ project: result.project });
       return {
         ok: result.status !== 'failed',
         status: result.status,
