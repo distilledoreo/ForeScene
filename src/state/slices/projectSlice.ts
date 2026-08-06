@@ -36,6 +36,10 @@ import {
   setShotExportOverride as setShotExportOverrideOp,
   syncShotExportFromResolved,
 } from '../../engine/exportConfiguration';
+import {
+  ensureStillReconciliationBound,
+  scheduleStillReconciliationAfterShotUpdate,
+} from '../stillReconciliationBridge';
 import { initialContinuityProject as initialProject } from './initialProject';
 import {
   isCaptureOriginNearPano,
@@ -888,7 +892,9 @@ export const createProjectSlice: StateCreator<
     });
   },
 
-  updateShot: (id, updates, options) => set((state) => {
+  updateShot: (id, updates, options) => {
+    const previousProject = get().project;
+    set((state) => {
     const shot = state.project.shots.find((item) => item.id === id);
     if (!shot) {
       return {
@@ -965,7 +971,19 @@ export const createProjectSlice: StateCreator<
       ...historyPatch,
       project: touchProject(pruneUnreferencedProjectAssets(nextProject)),
     };
-  }),
+    });
+    // Dependency-aware still reconciliation after committed authoring (not pointer-move drafts).
+    ensureStillReconciliationBound({
+      getProject: () => get().project,
+      setProject: (project) => set({ project }),
+    });
+    scheduleStillReconciliationAfterShotUpdate(
+      previousProject,
+      get().project,
+      id,
+      updates,
+    );
+  },
 
   setSceneExportDefaults: (defaults) => set((state) => ({
     project: touchProject(setSceneExportDefaultsOp(

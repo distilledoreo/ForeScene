@@ -64,14 +64,13 @@ import { canUseProjectedAppearance } from './projectedStyle';
 import {
   renderPanoCubemapFacesAsBlobs,
   renderPanoPerspectiveCrop,
-  renderShotCharacterFrame,
   renderShotCharacterMotion,
-  renderShotDepthFrame,
-  renderShotFrame,
-  renderShotProjectedFrame,
-  renderViewportClay,
-  renderViewportProjected,
 } from './renderers';
+import {
+  cleanupTemporaryExportStill,
+  ensureStillArtifactForExport,
+} from './ensureStillArtifactForExport';
+import type { StillArtifactSpecification } from './stillArtifactTypes';
 import { getPeopleRenderVariants, getPeopleVariantPath, peopleVariantLabel } from './peopleExport';
 import type { PeopleRenderVariant } from './peopleExport';
 import {
@@ -86,10 +85,8 @@ import {
   characterStillPath,
 } from './characterPassExport';
 import { resolveProjectForShot } from './shotSceneState';
-import { interpolateObjectOverrides } from './objectKeyframes';
 import {
   buildDepthMetadata,
-  renderViewportDepth,
   resolveShotDepthRangeForExport,
   resolveShotDepthSettings,
   shouldExportAnyDepth,
@@ -372,25 +369,11 @@ async function appendShotPackageToZipV2(
   /** Remap a legacy-style `${rootFolder}/...` path (same strings the legacy writer uses) to its v2 archive path. */
   const v2 = (legacyPath: string) => remapLegacyShotPathToV2(rootFolder, legacyPath);
 
+  let frozenProjectForPacking: LocationProject = project;
+  const temporaryExportAssetIds: string[] = [];
   const shotProject = resolveProjectForShot(project, shot);
   const peopleMode = shot.exportSettings.peopleExportMode;
   const peopleVariants = getPeopleRenderVariants(peopleMode);
-  const projectForVariantAtTime = (
-    variant: (typeof peopleVariants)[number],
-    timeSeconds: number,
-  ) => {
-    const overrides = interpolateObjectOverrides(
-      shot.cameraKeyframes,
-      timeSeconds,
-      shot.objectOverrides,
-      project.scene.objects,
-    );
-    return resolveProjectForShot(
-      project,
-      { ...shot, objectOverrides: overrides },
-      { contentMode: variant === 'clean_plate' ? 'clean_plate' : 'full_scene' },
-    );
-  };
   const emit = (
     phase: PackageExportPhase,
     message: string,
@@ -410,6 +393,23 @@ async function appendShotPackageToZipV2(
     tracker.advance(1);
     emit(phase, message);
   };
+  const packageStill = async (
+    specification: StillArtifactSpecification,
+    zipPath: string,
+    progressLabel: string,
+  ) => {
+    throwIfAborted(signal);
+    emit('rendering', progressLabel, { indeterminate: true });
+    const ensured = await ensureStillArtifactForExport({
+      frozenProject: frozenProjectForPacking,
+      shotId: shot.id,
+      specification,
+      signal,
+    });
+    frozenProjectForPacking = ensured.frozenProject;
+    if (ensured.temporaryAssetId) temporaryExportAssetIds.push(ensured.temporaryAssetId);
+    await addBlobToZip(zip, zipPath, ensured.blob);
+  };
 
   throwIfAborted(signal);
   emit('preparing', `Preparing ${getShotExportProgressLabel(shot)}…`, { indeterminate: true });
@@ -423,46 +423,69 @@ async function appendShotPackageToZipV2(
 
   if (shot.exportSettings.includeViewport) {
     for (const variant of peopleVariants) {
-      throwIfAborted(signal);
-      emit('rendering', `Rendering clay viewport (${peopleVariantLabel(variant)})…`, { indeterminate: true });
-      const viewport = await renderShotFrame(project, shot, { peopleVariant: variant });
-      addDataUrl(
-        zip,
-        v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_clay.png`, variant, peopleMode)),
-        viewport.dataUrl,
-      );
-      finishUnit('rendering', `Clay viewport (${peopleVariantLabel(variant)}) ready`);
+      try {
+        await packageStill(
+          {
+            kind: 'clay-viewport',
+            appearance: 'clay',
+            peopleVariant: variant,
+            width: shot.exportSettings.width,
+            height: shot.exportSettings.height,
+          },
+          v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_clay.png`, variant, peopleMode)),
+          `Packaging clay viewport (${peopleVariantLabel(variant)})…`,
+        );
+        finishUnit('rendering', `Clay viewport (${peopleVariantLabel(variant)}) ready`);
+      } catch (error) {
+        if (isPackageExportCancelled(error)) throw error;
+        throw new ShotPackageError(
+          error instanceof Error ? error.message : 'Clay viewport export failed.',
+        );
+      }
     }
   }
 
   if (shouldExportViewportDepth(shot.exportSettings.depth)) {
-    const sharedRange = await resolveShotDepthRangeForExport(project, shot);
     for (const variant of peopleVariants) {
-      throwIfAborted(signal);
-      emit('rendering', `Rendering depth viewport (${peopleVariantLabel(variant)})…`, { indeterminate: true });
-      const depthFrame = await renderShotDepthFrame(project, shot, { peopleVariant: variant, depthRange: sharedRange });
-      addDataUrl(
-        zip,
-        v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth.png`, variant, peopleMode)),
-        depthFrame.dataUrl,
-      );
-      finishUnit('rendering', `Depth viewport (${peopleVariantLabel(variant)}) ready`);
+      try {
+        await packageStill(
+          {
+            kind: 'depth-viewport',
+            appearance: 'depth',
+            peopleVariant: variant,
+            width: shot.exportSettings.width,
+            height: shot.exportSettings.height,
+          },
+          v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth.png`, variant, peopleMode)),
+          `Packaging depth viewport (${peopleVariantLabel(variant)})…`,
+        );
+        finishUnit('rendering', `Depth viewport (${peopleVariantLabel(variant)}) ready`);
+      } catch (error) {
+        if (isPackageExportCancelled(error)) throw error;
+        throw new ShotPackageError(
+          error instanceof Error ? error.message : 'Depth viewport export failed.',
+        );
+      }
     }
   }
 
   if (shot.exportSettings.includeProjectedViewport && canUseProjectedAppearance(shotProject)) {
     for (const variant of peopleVariants) {
-      throwIfAborted(signal);
-      emit('rendering', `Rendering projected viewport (${peopleVariantLabel(variant)})…`, { indeterminate: true });
       try {
-        const projected = await renderShotProjectedFrame(project, shot, { peopleVariant: variant });
-        addDataUrl(
-          zip,
+        await packageStill(
+          {
+            kind: 'projected-viewport',
+            appearance: 'projected',
+            peopleVariant: variant,
+            width: shot.exportSettings.width,
+            height: shot.exportSettings.height,
+          },
           v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_projected.png`, variant, peopleMode)),
-          projected.dataUrl,
+          `Packaging projected viewport (${peopleVariantLabel(variant)})…`,
         );
         finishUnit('rendering', `Projected viewport (${peopleVariantLabel(variant)}) ready`);
       } catch (error) {
+        if (isPackageExportCancelled(error)) throw error;
         throw new ShotPackageError(
           error instanceof Error
             ? error.message
@@ -631,6 +654,9 @@ async function appendShotPackageToZipV2(
     }
   }
 
+  const frameRole = (id: 'start' | 'mid' | 'end'): 'start' | 'middle' | 'end' =>
+    (id === 'start' ? 'start' : id === 'mid' ? 'middle' : 'end');
+
   const cameraMoveReferenceFrames = shot.exportSettings.includeCameraMoveReferenceFrames
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
@@ -638,27 +664,30 @@ async function appendShotPackageToZipV2(
     for (let index = 0; index < cameraMoveReferenceFrames.length; index += 1) {
       const frame = cameraMoveReferenceFrames[index];
       for (const variant of peopleVariants) {
-        throwIfAborted(signal);
-        emit(
-          'rendering',
-          `Rendering clay reference frame ${index + 1} of ${cameraMoveReferenceFrames.length} (${peopleVariantLabel(variant)})…`,
-          { unitFraction: 0, indeterminate: true },
-        );
-        const clay = await renderViewportClay(
-          projectForVariantAtTime(variant, frame.timeSeconds),
-          frame.camera,
-          shot.exportSettings.width,
-          shot.exportSettings.height,
-        );
-        addDataUrl(
-          zip,
-          v2(getPeopleVariantPath(`${rootFolder}/inputs/camera_move/clay_${frame.id}.png`, variant, peopleMode)),
-          clay.dataUrl,
-        );
-        finishUnit(
-          'rendering',
-          `Clay reference frame ${index + 1} of ${cameraMoveReferenceFrames.length} (${peopleVariantLabel(variant)}) ready`,
-        );
+        try {
+          await packageStill(
+            {
+              kind: 'clay-reference-frame',
+              appearance: 'clay',
+              peopleVariant: variant,
+              width: shot.exportSettings.width,
+              height: shot.exportSettings.height,
+              timeSeconds: frame.timeSeconds,
+              frameRole: frameRole(frame.id),
+            },
+            v2(getPeopleVariantPath(`${rootFolder}/inputs/camera_move/clay_${frame.id}.png`, variant, peopleMode)),
+            `Packaging clay reference frame ${index + 1} of ${cameraMoveReferenceFrames.length} (${peopleVariantLabel(variant)})…`,
+          );
+          finishUnit(
+            'rendering',
+            `Clay reference frame ${index + 1} of ${cameraMoveReferenceFrames.length} (${peopleVariantLabel(variant)}) ready`,
+          );
+        } catch (error) {
+          if (isPackageExportCancelled(error)) throw error;
+          throw new ShotPackageError(
+            error instanceof Error ? error.message : 'Clay reference frame export failed.',
+          );
+        }
       }
     }
   }
@@ -673,29 +702,26 @@ async function appendShotPackageToZipV2(
     for (let index = 0; index < projectedMoveFrames.length; index += 1) {
       const frame = projectedMoveFrames[index];
       for (const variant of peopleVariants) {
-        throwIfAborted(signal);
-        emit(
-          'rendering',
-          `Rendering projected reference frame ${index + 1} of ${projectedMoveFrames.length} (${peopleVariantLabel(variant)})…`,
-          { indeterminate: true },
-        );
         try {
-          const projected = await renderViewportProjected(
-            projectForVariantAtTime(variant, frame.timeSeconds),
-            frame.camera,
-            shot.exportSettings.width,
-            shot.exportSettings.height,
-          );
-          addDataUrl(
-            zip,
+          await packageStill(
+            {
+              kind: 'projected-reference-frame',
+              appearance: 'projected',
+              peopleVariant: variant,
+              width: shot.exportSettings.width,
+              height: shot.exportSettings.height,
+              timeSeconds: frame.timeSeconds,
+              frameRole: frameRole(frame.id),
+            },
             v2(getPeopleVariantPath(`${rootFolder}/inputs/camera_move/projected_${frame.id}.png`, variant, peopleMode)),
-            projected.dataUrl,
+            `Packaging projected reference frame ${index + 1} of ${projectedMoveFrames.length} (${peopleVariantLabel(variant)})…`,
           );
           finishUnit(
             'rendering',
             `Projected reference frame ${index + 1} of ${projectedMoveFrames.length} (${peopleVariantLabel(variant)}) ready`,
           );
         } catch (error) {
+          if (isPackageExportCancelled(error)) throw error;
           throw new ShotPackageError(
             error instanceof Error
               ? error.message
@@ -710,42 +736,33 @@ async function appendShotPackageToZipV2(
     ? getCameraMoveReferenceFrames(shot.cameraKeyframes)
     : [];
   if (depthMoveFrames.length > 0) {
-    const depthSettings = resolveShotDepthSettings(shot);
-    const sharedRange = await resolveShotDepthRangeForExport(project, shot);
-    const rangeCameras = [shot.camera, ...shot.cameraKeyframes.map((keyframe) => keyframe.camera)];
     for (let index = 0; index < depthMoveFrames.length; index += 1) {
       const frame = depthMoveFrames[index];
       for (const variant of peopleVariants) {
-        throwIfAborted(signal);
-        emit(
-          'rendering',
-          `Rendering depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)})…`,
-          { indeterminate: true },
-        );
-        const depthFrame = await renderViewportDepth(
-          projectForVariantAtTime(variant, frame.timeSeconds),
-          frame.camera,
-          shot.exportSettings.width,
-          shot.exportSettings.height,
-          {
-            depth: {
-              ...depthSettings,
-              rangeMode: 'manual',
-              nearMeters: sharedRange.nearMeters,
-              farMeters: sharedRange.farMeters,
+        try {
+          await packageStill(
+            {
+              kind: 'depth-reference-frame',
+              appearance: 'depth',
+              peopleVariant: variant,
+              width: shot.exportSettings.width,
+              height: shot.exportSettings.height,
+              timeSeconds: frame.timeSeconds,
+              frameRole: frameRole(frame.id),
             },
-            rangeCameras,
-          },
-        );
-        addDataUrl(
-          zip,
-          v2(getPeopleVariantPath(`${rootFolder}/inputs/camera_move/depth_${frame.id}.png`, variant, peopleMode)),
-          depthFrame.dataUrl,
-        );
-        finishUnit(
-          'rendering',
-          `Depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)}) ready`,
-        );
+            v2(getPeopleVariantPath(`${rootFolder}/inputs/camera_move/depth_${frame.id}.png`, variant, peopleMode)),
+            `Packaging depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)})…`,
+          );
+          finishUnit(
+            'rendering',
+            `Depth reference frame ${index + 1} of ${depthMoveFrames.length} (${peopleVariantLabel(variant)}) ready`,
+          );
+        } catch (error) {
+          if (isPackageExportCancelled(error)) throw error;
+          throw new ShotPackageError(
+            error instanceof Error ? error.message : 'Depth reference frame export failed.',
+          );
+        }
       }
     }
   }
@@ -769,14 +786,20 @@ async function appendShotPackageToZipV2(
         stillAppearances.push('projected');
       }
       for (const appearance of stillAppearances) {
-        throwIfAborted(signal);
-        emit('rendering', `Rendering transparent character still (${appearance})…`, { indeterminate: true });
         try {
-          const still = await renderShotCharacterFrame(project, shot, {
-            appearance,
-            includeAttachedProps: characterPass.includeAttachedProps,
-          });
-          await addBlobToZip(zip, v2(characterStillPath(rootFolder, appearance)), still.blob);
+          await packageStill(
+            {
+              kind: 'character-still',
+              appearance,
+              contentMode: 'characters_only',
+              includeCharacterAttachments: characterPass.includeAttachedProps,
+              width: shot.exportSettings.width,
+              height: shot.exportSettings.height,
+              backgroundColor: characterPass.backgroundColor,
+            },
+            v2(characterStillPath(rootFolder, appearance)),
+            `Packaging transparent character still (${appearance})…`,
+          );
           finishUnit('rendering', `Character still (${appearance}) ready`);
         } catch (error) {
           if (isPackageExportCancelled(error)) throw error;
@@ -938,6 +961,11 @@ async function appendShotPackageToZipV2(
   const shotManifest = buildForeSceneV2ShotManifest(shotPlan, shot);
   zip.file(v2(`${rootFolder}/manifest.json`), JSON.stringify(shotManifest, null, 2));
   finishUnit('packaging', `${getShotExportProgressLabel(shot)} packaged`);
+
+  for (const temporaryId of temporaryExportAssetIds) {
+    await cleanupTemporaryExportStill(project.id, temporaryId);
+  }
+
   return shotManifest.files.map((file) => file.path);
 }
 

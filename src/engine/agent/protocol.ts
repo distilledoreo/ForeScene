@@ -1667,6 +1667,8 @@ export interface ForeSceneBrowserApi {
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
   inspectShot(target: AgentEntityTarget): AgentShotInspection;
+  /** Desired vs materialized still readiness for a shot (read-only). */
+  inspectShotPreparedMedia(target: AgentEntityTarget): Promise<import('../stillArtifactRuntime').ShotStillRuntimeStatus>;
   inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
   sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
   sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample;

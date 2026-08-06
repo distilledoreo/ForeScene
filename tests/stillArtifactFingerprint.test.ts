@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
+import {
+  createDefaultProject,
+  createSceneObject,
+  defaultCharacterPassExportSettings,
+  defaultShotDepthSettings,
+} from '../src/domain/defaults';
 import type { MaterializedStillArtifact } from '../src/domain/types';
 import { getReferencedProjectAssetIds, pruneUnreferencedProjectAssets } from '../src/engine/projectAssets';
 import { computeStillArtifactFingerprint } from '../src/engine/stillArtifactFingerprint';
+import {
+  buildStillArtifactSpecificationsForShot,
+  selectPrimaryStillSpecification,
+} from '../src/engine/stillArtifactPlanning';
 import {
   stillArtifactKey,
   type StillArtifactSpecification,
@@ -327,3 +336,73 @@ describe('materialized still asset GC references', () => {
     expect(pruned.assets.assets[assetId]).toBeDefined();
   });
 });
+
+describe('buildStillArtifactSpecificationsForShot + primary selection', () => {
+  it('emits unique keys for people variants and never selects depth/character as primary', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeViewport: true,
+      includeProjectedViewport: false,
+      includeCameraMoveReferenceFrames: false,
+      includeProjectedCameraMoveReferenceFrames: false,
+      peopleExportMode: 'both',
+      characterPass: { ...defaultCharacterPassExportSettings, enabled: false },
+      depth: { ...defaultShotDepthSettings, enabled: true, includeViewportStill: true },
+    };
+    const specs = buildStillArtifactSpecificationsForShot({
+      project,
+      shot,
+      purpose: 'export',
+    });
+    const keys = specs.map((spec) => stillArtifactKey(spec));
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(specs.some((spec) => spec.kind === 'depth-viewport')).toBe(true);
+    expect(specs.some((spec) => spec.peopleVariant === 'clean_plate')).toBe(true);
+
+    const primary = selectPrimaryStillSpecification(project, shot, specs);
+    expect(primary.kind).toBe('clay-viewport');
+    expect(primary.appearance).not.toBe('depth');
+    expect(primary.kind).not.toBe('character-still');
+  });
+});
+
+describe('background video candidates', () => {
+  it('only requests configured variants', async () => {
+    const { buildVideoArtifactSpecificationsForShot } = await import(
+      '../src/engine/backgroundVideoPreparation'
+    );
+    const { setTwoPointCameraKeyframe } = await import('../src/engine/cameraKeyframes');
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    shot.cameraKeyframes = setTwoPointCameraKeyframe({
+      keyframes: [],
+      slot: 'start',
+      camera: shot.camera,
+      durationSeconds: 2,
+    });
+    shot.cameraKeyframes = setTwoPointCameraKeyframe({
+      keyframes: shot.cameraKeyframes,
+      slot: 'end',
+      camera: {
+        ...shot.camera,
+        position: [1, 1.6, 3],
+        target: [1, 1.6, 8],
+      },
+      durationSeconds: 2,
+    });
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeCameraMoveVideo: true,
+      includeProjectedCameraMoveVideo: false,
+      depth: { ...defaultShotDepthSettings, enabled: false },
+      characterPass: { ...defaultCharacterPassExportSettings, enabled: false },
+    };
+    const candidates = buildVideoArtifactSpecificationsForShot(project, shot);
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((c) => c.specification.appearance === 'clay')).toBe(true);
+    expect(candidates.some((c) => c.specification.appearance === 'projected')).toBe(false);
+  });
+});
+

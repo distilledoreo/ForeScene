@@ -569,6 +569,28 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return inspectShotSnapshot(shot);
     },
 
+    async inspectShotPreparedMedia(target: AgentEntityTarget) {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      }
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
+      if (!shot) {
+        throw new AgentApiError(
+          AGENT_DIAGNOSTIC_CODES.targetNotFound,
+          `No shot with id "${resolved.id}".`,
+        );
+      }
+      const { inspectShotPreparedMedia: inspectPrepared } = await import('./inspection');
+      return inspectPrepared(project, shot);
+    },
+
     inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection {
       const blocked = requireInspectionAccess();
       if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
