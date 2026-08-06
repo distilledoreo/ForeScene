@@ -1116,41 +1116,133 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         };
       }
 
-      const rendered = await api.renderShotFrame({
-        shotId: input.shotId,
-        timeSeconds: input.timeSeconds,
-        appearance: 'clay',
-      });
-      if (!rendered.ok || !rendered.pngDataUrl) return rendered;
-
+      // Agent/API default: await-all configured stills via the shared materializer.
       const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
       if (!runDestructive) {
         return {
-          ...rendered,
           ok: false,
           status: 'failed',
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
           diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')],
         };
       }
 
       try {
-        await runDestructive('Attach shot thumbnail', () => {
-          useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
-            name: `shot_${input.shotId}_thumbnail.png`,
-            dataUrl: rendered.pngDataUrl!,
-            width: rendered.width,
-            height: rendered.height,
+        const { materializeShotAfterCapture } = await import('../materializeShotStills');
+        let materialization: Awaited<ReturnType<typeof materializeShotAfterCapture>> | undefined;
+        await runDestructive('Materialize shot stills', async () => {
+          const project = useProjectStore.getState().project;
+          materialization = await materializeShotAfterCapture({
+            project,
+            shotId: input.shotId,
+            mode: 'await-all',
+            onProjectCommit: (next) => {
+              useProjectStore.setState({ project: next });
+              return useProjectStore.getState().project;
+            },
           });
+          useProjectStore.setState({ project: materialization.project });
         });
-        return rendered;
+
+        const result = materialization!;
+        const primaryId = result.primaryStillAssetId;
+        const asset = primaryId
+          ? useProjectStore.getState().project.assets.assets[primaryId]
+          : undefined;
+
+        if (result.status === 'failed' || !primaryId || !asset) {
+          // Fall back to legacy single-frame capture so agents still get a preview when possible.
+          const rendered = await api.renderShotFrame({
+            shotId: input.shotId,
+            timeSeconds: input.timeSeconds,
+            appearance: 'clay',
+          });
+          if (!rendered.ok || !rendered.pngDataUrl) {
+            return {
+              ok: false,
+              status: 'failed' as const,
+              shotId: input.shotId,
+              revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+              width: 0,
+              height: 0,
+              diagnostics: [
+                agentError(
+                  'thumbnail_attach_failed',
+                  result.warnings[0] ?? 'Primary still materialization failed.',
+                ),
+              ],
+            };
+          }
+          await runDestructive('Attach shot thumbnail', () => {
+            useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+              name: `shot_${input.shotId}_thumbnail.png`,
+              dataUrl: rendered.pngDataUrl!,
+              width: rendered.width,
+              height: rendered.height,
+            });
+          });
+          return rendered;
+        }
+
+        if (asset.uri.startsWith('data:')) {
+          await runDestructive('Attach shot thumbnail', () => {
+            useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+              name: `shot_${input.shotId}_thumbnail.png`,
+              dataUrl: asset.uri,
+              width: asset.width ?? 0,
+              height: asset.height ?? 0,
+            });
+          });
+        } else {
+          useProjectStore.setState((current) => ({
+            project: {
+              ...current.project,
+              shots: current.project.shots.map((shot) =>
+                shot.id === input.shotId
+                  ? {
+                    ...shot,
+                    assets: {
+                      ...shot.assets,
+                      viewportRenderAssetId: primaryId,
+                    },
+                  }
+                  : shot
+              ),
+            },
+          }));
+        }
+
+        const warningDiagnostics = result.warnings.map((message) =>
+          agentError('thumbnail_attach_failed', message),
+        );
+        const status = result.warnings.length > 0
+          ? 'completed_with_warnings' as const
+          : 'completed' as const;
+        return {
+          ok: true,
+          status,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: asset.width ?? 0,
+          height: asset.height ?? 0,
+          pngDataUrl: asset.uri.startsWith('data:') ? asset.uri : undefined,
+          diagnostics: warningDiagnostics,
+          source: 'canonical_clay_renderer' as const,
+        };
       } catch (error) {
         return {
-          ...rendered,
           ok: false,
           status: 'failed',
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
           diagnostics: [agentError(
             'thumbnail_attach_failed',
-            error instanceof Error ? error.message : 'Could not attach shot thumbnail.',
+            error instanceof Error ? error.message : 'Could not materialize shot stills.',
           )],
         };
       }
