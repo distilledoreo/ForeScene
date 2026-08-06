@@ -15,8 +15,12 @@ export interface StillArtifactSpecification {
   includeCharacterAttachments?: boolean;
 }
 
+/**
+ * Stable map key for a still artifact. Appearance is always included so clay
+ * and projected character stills (and other same-kind variants) cannot collide.
+ */
 export function stillArtifactKey(spec: StillArtifactSpecification): string {
-  const parts = [spec.kind];
+  const parts: string[] = [spec.kind, spec.appearance];
   if (spec.peopleVariant) parts.push(spec.peopleVariant);
   else if (spec.contentMode === 'characters_only') parts.push('characters_only');
   else if (spec.contentMode === 'clean_plate') parts.push('clean_plate');

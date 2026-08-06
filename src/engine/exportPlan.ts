@@ -114,7 +114,6 @@ export type PlannedArtifactKind =
 
 export type PlannedArtifactDisposition = 'produce' | 'omit';
 
-export type PlannedArtifactSource = 'materialized-asset' | 'source-asset' | 'shared-preparation' | 'video-cache' | 'render-recovery';
 export interface PlannedArtifact {
   id: string;
   shotId: string;
@@ -126,11 +125,6 @@ export interface PlannedArtifact {
   files: PlannedFile[];
   /** Progress-tracker work units for this artifact when produced. */
   workUnits: number;
-  source?: PlannedArtifactSource;
-  sourceAssetId?: string;
-  expectedFingerprint?: string;
-  materializedFingerprint?: string;
-  readiness?: 'ready' | 'stale' | 'missing';
 }
 
 export type ExportPlanIssueSeverity = 'info' | 'warning' | 'error';
