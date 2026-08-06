@@ -1,5 +1,6 @@
 import { getCanonicalPano, getPanoAsset } from './selectors';
 import { LocationProject, ProjectAsset, Shot } from './types';
+import { resolvePrimaryStillPreviewAssetId } from '../engine/stillArtifactRuntime';
 
 export type ShotThumbnailSource =
   | 'materialized_primary'
@@ -30,49 +31,19 @@ const shotAssetPriority: Array<{
   { key: 'panoCropAssetId', source: 'pano_crop', label: 'Pano crop' },
 ];
 
-/**
- * Prefer clay/projected with-people primary materialized still for shot cards.
- * Domain-safe lookup (no engine fingerprint recompute) so legacy + prepared media coexist.
- */
-function resolveMaterializedPrimaryAsset(
-  project: LocationProject,
-  shot: Shot,
-): { asset?: ProjectAsset; stale: boolean } {
-  const stills = shot.materializedMedia?.stills;
-  if (!stills) return { stale: false };
-
-  const preferredKeys = [
-    'projected-viewport:projected:with_people',
-    'clay-viewport:clay:with_people',
-    'projected-viewport:projected:clean_plate',
-    'clay-viewport:clay:clean_plate',
-  ];
-  for (const key of preferredKeys) {
-    const record = stills[key];
-    if (!record) continue;
-    const asset = project.assets.assets[record.assetId];
-    if (asset) return { asset, stale: false };
-  }
-
-  // Any remaining viewport still as last materialized fallback.
-  for (const record of Object.values(stills)) {
-    if (record.kind !== 'clay-viewport' && record.kind !== 'projected-viewport') continue;
-    const asset = project.assets.assets[record.assetId];
-    if (asset) return { asset, stale: true };
-  }
-  return { stale: false };
-}
-
 export function resolveShotThumbnail(project: LocationProject, shot: Shot): ShotThumbnailResolution {
-  // Prefer first-class materialized primary still before legacy asset slots.
-  const primary = resolveMaterializedPrimaryAsset(project, shot);
-  if (primary.asset) {
-    return {
-      asset: primary.asset,
-      source: primary.stale ? 'materialized_primary_stale' : 'materialized_primary',
-      label: primary.stale ? 'Prepared still (updating…)' : 'Prepared still',
-      stale: primary.stale,
-    };
+  // Fingerprint-aware primary: current vs stale after camera/scene/pano edits.
+  const primary = resolvePrimaryStillPreviewAssetId(project, shot);
+  if (primary.assetId && primary.source === 'materialized') {
+    const asset = project.assets.assets[primary.assetId];
+    if (asset) {
+      return {
+        asset,
+        source: primary.stale ? 'materialized_primary_stale' : 'materialized_primary',
+        label: primary.stale ? 'Prepared still (updating…)' : 'Prepared still',
+        stale: primary.stale,
+      };
+    }
   }
 
   for (const candidate of shotAssetPriority) {

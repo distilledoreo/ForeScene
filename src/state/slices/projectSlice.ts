@@ -38,6 +38,8 @@ import {
 } from '../../engine/exportConfiguration';
 import {
   ensureStillReconciliationBound,
+  scheduleStillReconciliationAfterBuildSceneCommit,
+  scheduleStillReconciliationAfterProjectChange,
   scheduleStillReconciliationAfterShotUpdate,
 } from '../stillReconciliationBridge';
 import { initialContinuityProject as initialProject } from './initialProject';
@@ -106,8 +108,26 @@ export const createProjectSlice: StateCreator<
   ProjectSliceState
 > = (set, get) => {
   const history = getHistoryRuntime(set, get);
-  const applyBuildSceneChange = history.applyBuildSceneChange;
   const clearBuildHistoryCoalesceTimer = history.clearBuildHistoryCoalesceTimer;
+
+  // Bind once so build-scene commits can schedule reconciliation from microtasks.
+  ensureStillReconciliationBound({
+    getProject: () => get().project,
+    setProject: (project) => set({ project }),
+  });
+
+  /**
+   * Wrap the pure build-scene mutator so object/pose/pano/model commits
+   * trigger fingerprint-gated still reconciliation (Phase 5).
+   */
+  const applyBuildSceneChange: typeof history.applyBuildSceneChange = (state, change) => {
+    const previousProject = state.project;
+    const nextState = history.applyBuildSceneChange(state, change);
+    if (nextState.project !== state.project) {
+      scheduleStillReconciliationAfterBuildSceneCommit(previousProject);
+    }
+    return nextState;
+  };
 
   function getActivePano(project: LocationProject, activePanoId?: string): PanoReference | undefined {
     return project.panoRefs.find((pano) => pano.id === activePanoId)
@@ -859,28 +879,36 @@ export const createProjectSlice: StateCreator<
     };
   }),
 
-  updatePanoReference: (id, updates) => set((state) => ({
-    project: touchProject({
-      ...state.project,
-      panoRefs: state.project.panoRefs.map((pano) => pano.id === id ? { ...pano, ...updates } : pano),
-      shots: state.project.shots.map((shot) => {
-        if (shot.linkedPanoId !== id) return shot;
-        const linkedPano = state.project.panoRefs.find((pano) => pano.id === id);
-        if (!linkedPano) return shot;
-        const mergedPano = { ...linkedPano, ...updates };
-        return {
-          ...shot,
-          panoCrop: getPanoCropSettingsForShot(
-            shot.camera,
-            mergedPano,
-            shot.exportSettings.width,
-            shot.exportSettings.height,
-          ),
-          updatedAt: new Date().toISOString(),
-        };
+  updatePanoReference: (id, updates) => {
+    const previousProject = get().project;
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        panoRefs: state.project.panoRefs.map((pano) => pano.id === id ? { ...pano, ...updates } : pano),
+        shots: state.project.shots.map((shot) => {
+          if (shot.linkedPanoId !== id) return shot;
+          const linkedPano = state.project.panoRefs.find((pano) => pano.id === id);
+          if (!linkedPano) return shot;
+          const mergedPano = { ...linkedPano, ...updates };
+          return {
+            ...shot,
+            panoCrop: getPanoCropSettingsForShot(
+              shot.camera,
+              mergedPano,
+              shot.exportSettings.width,
+              shot.exportSettings.height,
+            ),
+            updatedAt: new Date().toISOString(),
+          };
+        }),
       }),
-    }),
-  })),
+    }));
+    ensureStillReconciliationBound({
+      getProject: () => get().project,
+      setProject: (project) => set({ project }),
+    });
+    scheduleStillReconciliationAfterProjectChange(previousProject, get().project);
+  },
 
   addCamera: (options) => {
     const state = get();
