@@ -101,15 +101,36 @@ describe('prepared media quality regressions', () => {
     expect(reconciled.project.assets.assets[cleanArtifact!.assetId]).toBeUndefined();
   });
 
-  it('dedicated export-configuration actions enter the reconciliation scheduler', () => {
-    const project = ensureProjectExportConfiguration(createDefaultProject());
-    useProjectStore.setState({ project });
+  it('dedicated export-configuration actions reconcile shots already in the prepared lifecycle', async () => {
+    let project = ensureProjectExportConfiguration(createDefaultProject());
     const shotId = project.shots[0]!.id;
+    const prepared = await materializeShotStills({
+      project,
+      shotId,
+      reason: 'capture',
+      scope: 'primary',
+      render: renderMock(),
+    });
+    project = prepared.project;
+    useProjectStore.setState({ project });
     const before = resolveProjectVideoPerformance(project.exportConfiguration).frameRate;
 
     useProjectStore.getState().setProjectVideoPerformance({ frameRate: before === 24 ? 25 : 24 });
 
     const pending = getAppStillReconciliationScheduler()?.inspectForTests().pendingShots ?? [];
     expect(pending).toContain(shotId);
+  });
+
+  it('does not eagerly materialize an uncaptured shot after an export-configuration edit', () => {
+    const project = ensureProjectExportConfiguration(createDefaultProject());
+    const shotId = project.shots[0]!.id;
+    useProjectStore.setState({ project });
+    const before = resolveProjectVideoPerformance(project.exportConfiguration).frameRate;
+
+    useProjectStore.getState().setProjectVideoPerformance({ frameRate: before === 24 ? 25 : 24 });
+
+    const pending = getAppStillReconciliationScheduler()?.inspectForTests().pendingShots ?? [];
+    expect(pending).not.toContain(shotId);
+    expect(useProjectStore.getState().project.shots[0]!.materializedMedia).toBeUndefined();
   });
 });
