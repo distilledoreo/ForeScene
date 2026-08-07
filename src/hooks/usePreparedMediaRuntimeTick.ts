@@ -1,29 +1,37 @@
 import { useSyncExternalStore } from 'react';
+import { subscribeBackgroundVideoRuntime } from '../engine/backgroundVideoService';
+import { subscribeStillArtifactRuntime } from '../engine/stillArtifactRuntime';
 
 const listeners = new Set<() => void>();
 let version = 0;
-let timer: number | undefined;
+let unsubscribeStill: (() => void) | undefined;
+let unsubscribeVideo: (() => void) | undefined;
 
-function startClock(): void {
-  if (timer !== undefined || typeof window === 'undefined') return;
-  timer = window.setInterval(() => {
-    version += 1;
-    for (const listener of listeners) listener();
-  }, 400);
+function publish(): void {
+  version += 1;
+  for (const listener of listeners) listener();
 }
 
-function stopClock(): void {
-  if (timer === undefined || listeners.size > 0) return;
-  window.clearInterval(timer);
-  timer = undefined;
+function startRuntimeSubscriptions(): void {
+  if (unsubscribeStill || unsubscribeVideo) return;
+  unsubscribeStill = subscribeStillArtifactRuntime(publish);
+  unsubscribeVideo = subscribeBackgroundVideoRuntime(publish);
+}
+
+function stopRuntimeSubscriptions(): void {
+  if (listeners.size > 0) return;
+  unsubscribeStill?.();
+  unsubscribeVideo?.();
+  unsubscribeStill = undefined;
+  unsubscribeVideo = undefined;
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  startClock();
+  startRuntimeSubscriptions();
   return () => {
     listeners.delete(listener);
-    stopClock();
+    stopRuntimeSubscriptions();
   };
 }
 
@@ -36,9 +44,9 @@ function getServerSnapshot(): number {
 }
 
 /**
- * One shared lightweight clock for non-persisted prepared-media runtime maps.
- * Keeps shot cards responsive to queued/rendering/error transitions without
- * putting ephemeral job state into the project document.
+ * Event-driven bridge for non-persisted prepared-media runtime maps.
+ * Project mutations already rerender cards through Zustand/props; this only wakes
+ * the UI for queued/rendering/error/video-status transitions outside project JSON.
  */
 export function usePreparedMediaRuntimeTick(): number {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
