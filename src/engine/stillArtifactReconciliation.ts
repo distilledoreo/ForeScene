@@ -9,6 +9,7 @@ import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
 import { buildStillArtifactSpecificationsForShot } from './stillArtifactPlanning';
 import { stillArtifactKey } from './stillArtifactTypes';
 import type { RenderedStillArtifact } from './stillArtifactRender';
+import { resolveProjectVideoPerformance } from './videoPerformance';
 
 const DEFAULT_DEBOUNCE_MS = 400;
 
@@ -32,11 +33,6 @@ interface ShotReconcileState {
   generation: number;
 }
 
-/**
- * Edit reconciliation is maintenance for shots that have entered the prepared-media
- * lifecycle. It must not eagerly materialize every newly-authored/legacy shot after
- * a global export or scene mutation; explicit capture remains the lifecycle entry.
- */
 export function shotHasPreparedMediaLifecycle(shot: Shot): boolean {
   if (Object.keys(shot.materializedMedia?.stills ?? {}).length > 0) return true;
   return Boolean(
@@ -76,6 +72,15 @@ export function isMetadataOnlyShotPatch(patch: Partial<Shot>): boolean {
   return keys.every((key) => metadataOnly.has(key));
 }
 
+function videoPerformanceChanged(previous: LocationProject, next: LocationProject): boolean {
+  const before = resolveProjectVideoPerformance(previous.exportConfiguration);
+  const after = resolveProjectVideoPerformance(next.exportConfiguration);
+  return before.profileId !== after.profileId
+    || before.resolutionPreset !== after.resolutionPreset
+    || before.frameRate !== after.frameRate
+    || before.encoderMode !== after.encoderMode;
+}
+
 export function findShotsAffectedByProjectChange(
   previous: LocationProject | undefined,
   next: LocationProject,
@@ -94,13 +99,16 @@ export function findShotsAffectedByProjectChange(
     || previous.scene.panoRotation !== next.scene.panoRotation;
   const panoChanged = previous.panoRefs !== next.panoRefs;
   const assetsChanged = previous.assets !== next.assets;
-  const exportConfigurationChanged = previous.exportConfiguration !== next.exportConfiguration;
+  const videoChanged = videoPerformanceChanged(previous, next);
 
-  if (sceneChanged || panoChanged || assetsChanged || exportConfigurationChanged) {
+  if (sceneChanged || panoChanged || assetsChanged || videoChanged) {
     for (const shot of next.shots) affected.add(shot.id);
     return [...affected];
   }
 
+  // Package format and other project-level packaging metadata are intentionally
+  // absent here. Still-affecting scene defaults/overrides rematerialize each
+  // shot's resolved exportSettings, which this per-shot comparison detects.
   const prevById = new Map(previous.shots.map((shot) => [shot.id, shot]));
   for (const shot of next.shots) {
     const prev = prevById.get(shot.id);
@@ -129,8 +137,6 @@ async function queueBackgroundVideoAfterEdit(shotId: string): Promise<void> {
       getBackgroundVideoScheduler,
       queueBackgroundVideosForShot,
     } = await import('./backgroundVideoService');
-    // Capture activates the application-level scheduler. Do not let an ordinary
-    // edit implicitly opt an uncaptured/autonomous workflow into video encoding.
     if (!getBackgroundVideoScheduler()) return;
     await queueBackgroundVideosForShot(shotId);
   } catch {
