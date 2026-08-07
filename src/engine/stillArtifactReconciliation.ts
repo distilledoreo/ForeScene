@@ -36,11 +36,7 @@ export function shotNeedsStillReconciliation(
   project: LocationProject,
   shot: Shot,
 ): boolean {
-  const specs = buildStillArtifactSpecificationsForShot({
-    project,
-    shot,
-    purpose: 'reconcile',
-  });
+  const specs = buildStillArtifactSpecificationsForShot({ project, shot, purpose: 'reconcile' });
   for (const spec of specs) {
     const key = stillArtifactKey(spec);
     const existing = shot.materializedMedia?.stills[key];
@@ -59,15 +55,8 @@ export function isMetadataOnlyShotPatch(patch: Partial<Shot>): boolean {
   const keys = Object.keys(patch);
   if (keys.length === 0) return true;
   const metadataOnly = new Set([
-    'name',
-    'description',
-    'shotNumber',
-    'productionShotId',
-    'promptOverrides',
-    'status',
-    'createdAt',
-    'updatedAt',
-    'metadata',
+    'name', 'description', 'shotNumber', 'productionShotId', 'promptOverrides',
+    'status', 'createdAt', 'updatedAt', 'metadata',
   ]);
   return keys.every((key) => metadataOnly.has(key));
 }
@@ -78,14 +67,9 @@ export function findShotsAffectedByProjectChange(
   hintShotIds?: readonly string[],
 ): string[] {
   if (hintShotIds && hintShotIds.length > 0) {
-    return [...new Set(hintShotIds)].filter((id) =>
-      next.shots.some((shot) => shot.id === id)
-    );
+    return [...new Set(hintShotIds)].filter((id) => next.shots.some((shot) => shot.id === id));
   }
-
-  if (!previous) {
-    return next.shots.map((shot) => shot.id);
-  }
+  if (!previous) return next.shots.map((shot) => shot.id);
 
   const affected = new Set<string>();
   const sceneChanged =
@@ -121,22 +105,26 @@ export function findShotsAffectedByProjectChange(
       affected.add(shot.id);
     }
   }
-
   return [...affected];
 }
 
-async function queueBackgroundVideoAfterEdit(shotId: string): Promise<void> {
+async function queueBackgroundVideoAfterEdit(
+  shotId: string,
+  getProject: () => LocationProject,
+): Promise<void> {
   try {
-    const { queueBackgroundVideosForShot } = await import('./backgroundVideoService');
+    const {
+      ensureBackgroundVideoService,
+      queueBackgroundVideosForShot,
+    } = await import('./backgroundVideoService');
+    ensureBackgroundVideoService(getProject);
     await queueBackgroundVideosForShot(shotId);
   } catch {
     // Background video preparation is best-effort and must not fail authoring.
   }
 }
 
-export function createStillReconciliationScheduler(
-  options: ReconciliationSchedulerOptions,
-) {
+export function createStillReconciliationScheduler(options: ReconciliationSchedulerOptions) {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const perShot = new Map<string, ShotReconcileState>();
 
@@ -169,13 +157,12 @@ export function createStillReconciliationScheduler(
         if (!shot) return;
 
         if (!shotNeedsStillReconciliation(project, shot)) {
-          void queueBackgroundVideoAfterEdit(shotId);
+          void queueBackgroundVideoAfterEdit(shotId, options.getProject);
           return;
         }
 
         const controller = new AbortController();
         state!.controller = controller;
-
         void materializeShotStills({
           project,
           shotId,
@@ -195,7 +182,7 @@ export function createStillReconciliationScheduler(
             options.setProject(result.project);
             options.onComplete?.(shotId, result);
             if (result.status !== 'failed') {
-              void queueBackgroundVideoAfterEdit(shotId);
+              void queueBackgroundVideoAfterEdit(shotId, options.getProject);
             }
           },
           (error) => {
@@ -223,8 +210,6 @@ export function createStillReconciliationScheduler(
       for (const id of affected) discardBackgroundVideosForShot(id);
     }).catch(() => undefined);
 
-    // Debounce both still reconciliation and replacement background-video preparation.
-    // Video-only changes still enter this path even when no still fingerprint changes.
     schedule(affected);
   }
 
@@ -241,13 +226,7 @@ export function createStillReconciliationScheduler(
     };
   }
 
-  return {
-    schedule,
-    scheduleAfterCommit,
-    cancelShot,
-    dispose,
-    inspectForTests,
-  };
+  return { schedule, scheduleAfterCommit, cancelShot, dispose, inspectForTests };
 }
 
 let appScheduler: ReturnType<typeof createStillReconciliationScheduler> | undefined;
