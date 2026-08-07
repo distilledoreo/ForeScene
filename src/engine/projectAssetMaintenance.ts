@@ -2,14 +2,17 @@ import type { LocationProject, ProjectAsset } from '../domain/types';
 import {
   PROJECT_ASSET_URI_PREFIX,
   deleteProjectAssetBlob,
+  getManagedProjectAssetBlobKeyForUri,
   listProjectAssetBlobKeys,
 } from './projectAssetStore';
 import { listAllProjectRevisions } from './projectRevisionStore';
 
 function projectAssetStorageKey(asset: ProjectAsset): string | undefined {
-  return asset.storageKey ?? (asset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)
-    ? asset.uri.slice(PROJECT_ASSET_URI_PREFIX.length)
-    : undefined);
+  if (asset.storageKey) return asset.storageKey;
+  if (asset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)) {
+    return asset.uri.slice(PROJECT_ASSET_URI_PREFIX.length);
+  }
+  return getManagedProjectAssetBlobKeyForUri(asset.uri);
 }
 
 function isRasterOrVideo(asset: ProjectAsset): boolean {
@@ -23,6 +26,10 @@ function isRasterOrVideo(asset: ProjectAsset): boolean {
  * This routine therefore reclaims only transient project/import payloads for the
  * current project that are no longer referenced by the live asset registry and
  * are not named by any retained revision. It never sweeps shared recovery keys.
+ *
+ * Legacy/sample manifests may hold a managed blob: URL without an explicit
+ * storageKey. The project-asset store can reverse-map those URLs; they must be
+ * treated as live or cleanup would revoke the URL underneath the open project.
  */
 export async function cleanupUnreferencedProjectAssetPayloads(
   project: LocationProject,
