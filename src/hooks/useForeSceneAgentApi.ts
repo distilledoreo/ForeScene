@@ -3,9 +3,8 @@
  * Identity check matters under React Strict Mode double-mount.
  *
  * The v1 captureShotThumbnail runtime contract remains a sampled clay render.
- * Prepared-media capture is additive and runs before the requested thumbnail is
- * attached, so existing agents keep their timeSeconds semantics while the shot
- * still gets its configured deterministic references.
+ * Prepared-media capture is exposed as an additive API so legacy calls keep the
+ * same timing, persistence, and busy-state semantics.
  */
 
 import { useEffect } from 'react';
@@ -57,16 +56,17 @@ export function useForeSceneAgentApi(): void {
       captureShotPreparedMedia?: (input: { shotId: string }) => Promise<unknown>;
     };
 
-    const capturePreparedMedia = async (input: { shotId: string }) => {
+    // Additive prepared-media API for callers that want await-all materialization.
+    mutableApi.captureShotPreparedMedia = async (input) => {
       const result = await preparedCapture({ shotId: input.shotId });
+      // The internal materialization implementation historically wrote the selected
+      // primary into the clay legacy slot. Restore canonical clay/projected aliases.
       restorePreparedLegacyViewportSlots(input.shotId);
       return result;
     };
 
-    // Additive prepared-media API for callers that want the richer materialization result.
-    mutableApi.captureShotPreparedMedia = capturePreparedMedia;
-
-    // Compatibility facade: honor the original sampled-render result and timeSeconds.
+    // Compatibility facade: preserve the original sampled-render result/timeSeconds
+    // and do not silently launch background prepared-media work.
     mutableApi.captureShotThumbnail = async (input) => {
       const rendered = await api.renderShotFrame({
         shotId: input.shotId,
@@ -74,14 +74,6 @@ export function useForeSceneAgentApi(): void {
         appearance: 'clay',
       });
       if (!rendered.ok || !rendered.pngDataUrl) return rendered;
-
-      // Prepare configured references first. Failure here must not change the v1
-      // sampled-thumbnail success contract; runtime prepared-media status exposes it.
-      try {
-        await capturePreparedMedia({ shotId: input.shotId });
-      } catch {
-        // Best effort — the requested thumbnail is still valid and attachable.
-      }
 
       const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
       if (!runDestructive) {
