@@ -10,6 +10,10 @@ import {
   commitPreparedStillArtifact,
   pruneObsoleteMaterializedStills,
 } from './commitPreparedStillArtifact';
+import {
+  createProjectAssetStorageKey,
+  deleteProjectAssetBlob,
+} from './projectAssetStore';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
 import {
   buildStillArtifactSpecificationsForShot,
@@ -290,13 +294,15 @@ export async function materializeShotStills(
           const asset = commitResult.project.assets.assets[assetId];
           project = params.commitLiveProject((live) => {
             const liveShotNow = live.shots.find((item) => item.id === shotId);
-            if (!liveShotNow || !asset) return live;
+            if (!liveShotNow || !asset) {
+              discardedAsStale = true;
+              return live;
+            }
             const liveFp = computeStillArtifactFingerprint(live, liveShotNow, spec).key;
             if (liveFp !== prepared.fingerprint.key) {
               discardedAsStale = true;
               return live;
             }
-            // `spec` is the loop specification being committed.
             const legacySlot = legacyViewportSlotPatch(spec, assetId);
             return {
               ...live,
@@ -328,9 +334,12 @@ export async function materializeShotStills(
             };
           });
           if (discardedAsStale) {
+            if (asset) {
+              const storageKey = asset.storageKey
+                ?? createProjectAssetStorageKey(commitResult.project.id, assetId);
+              await deleteProjectAssetBlob(storageKey).catch(() => undefined);
+            }
             commitResult = { ok: false, reason: 'stale', project };
-            // Asset was persisted but must not remain if unreferenced — prune.
-            recordPreparedMediaMetric('staleResultsDiscarded');
           } else {
             project = readLive(params, project);
             commitResult = { ...commitResult, project };
