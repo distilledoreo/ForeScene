@@ -72,6 +72,10 @@ export interface MaterializeShotStillsParams {
   reason: MaterializeReason;
   scope?: MaterializeScope;
   signal?: AbortSignal;
+  /** Force selected/configured artifacts to render even when their fingerprint is current. */
+  force?: boolean;
+  /** Optional exact artifact-key subset. Used by targeted retry actions. */
+  artifactKeys?: ReadonlySet<string>;
   /**
    * Read the current live project immediately before fingerprint validation / commit.
    * Required for interactive and agent paths that share a Zustand store.
@@ -173,6 +177,8 @@ export async function materializeShotStills(
 
   if (scope === 'primary') {
     specs = [primary];
+  } else if (params.artifactKeys) {
+    specs = specs.filter((spec) => params.artifactKeys!.has(stillArtifactKey(spec)));
   } else if (scope === 'stale-only') {
     specs = specs.filter((spec) => {
       const key = stillArtifactKey(spec);
@@ -228,7 +234,7 @@ export async function materializeShotStills(
     const expectedFingerprint = computeStillArtifactFingerprint(project, liveShot, spec).key;
     const existing = liveShot.materializedMedia?.stills[key];
 
-    if (existing && existing.fingerprint === expectedFingerprint) {
+    if (!params.force && existing && existing.fingerprint === expectedFingerprint) {
       const asset = project.assets.assets[existing.assetId];
       if (asset) {
         artifacts.push({
@@ -257,6 +263,7 @@ export async function materializeShotStills(
           shotId,
           specification: spec,
           signal,
+          force: params.force,
           render: params.render,
         }),
         { ownerId: shotId, jobId: `${shotId}:${key}` },
