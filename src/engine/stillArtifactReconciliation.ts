@@ -81,6 +81,12 @@ function videoPerformanceChanged(previous: LocationProject, next: LocationProjec
     || before.encoderMode !== after.encoderMode;
 }
 
+/** Export settings/overrides are plain persisted data; compare values, not rebuilt object identity. */
+function persistedSettingsEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function findShotsAffectedByProjectChange(
   previous: LocationProject | undefined,
   next: LocationProject,
@@ -106,9 +112,8 @@ export function findShotsAffectedByProjectChange(
     return [...affected];
   }
 
-  // Package format and other project-level packaging metadata are intentionally
-  // absent here. Still-affecting scene defaults/overrides rematerialize each
-  // shot's resolved exportSettings, which this per-shot comparison detects.
+  // Package-format changes can reconstruct equivalent resolved export objects.
+  // Compare their persisted values so packaging-only changes remain a true no-op.
   const prevById = new Map(previous.shots.map((shot) => [shot.id, shot]));
   for (const shot of next.shots) {
     const prev = prevById.get(shot.id);
@@ -122,8 +127,8 @@ export function findShotsAffectedByProjectChange(
       || prev.cameraKeyframes !== shot.cameraKeyframes
       || prev.objectOverrides !== shot.objectOverrides
       || prev.linkedPanoId !== shot.linkedPanoId
-      || prev.exportSettings !== shot.exportSettings
-      || prev.exportOverrides !== shot.exportOverrides
+      || !persistedSettingsEqual(prev.exportSettings, shot.exportSettings)
+      || !persistedSettingsEqual(prev.exportOverrides, shot.exportOverrides)
     ) {
       affected.add(shot.id);
     }
