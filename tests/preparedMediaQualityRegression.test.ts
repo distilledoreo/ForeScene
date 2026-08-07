@@ -4,12 +4,14 @@ import {
   defaultCharacterPassExportSettings,
   defaultShotDepthSettings,
 } from '../src/domain/defaults';
+import { ensureProjectExportConfiguration } from '../src/engine/exportConfiguration';
 import { materializeShotStills } from '../src/engine/materializeShotStills';
 import { resetPrepareStillArtifactInflightForTests } from '../src/engine/prepareStillArtifact';
 import { resetProjectAssetStoreForTests } from '../src/engine/projectAssetStore';
 import { renderWorkCoordinator } from '../src/engine/renderWorkCoordinator';
 import { stillArtifactKey } from '../src/engine/stillArtifactTypes';
 import { getAppStillReconciliationScheduler } from '../src/engine/stillArtifactReconciliation';
+import { resolveProjectVideoPerformance } from '../src/engine/videoPerformance';
 import { useProjectStore } from '../src/state/useProjectStore';
 
 function renderMock() {
@@ -100,10 +102,10 @@ describe('prepared media quality regressions', () => {
   });
 
   it('dedicated export-configuration actions enter the reconciliation scheduler', () => {
-    const project = createDefaultProject();
+    const project = ensureProjectExportConfiguration(createDefaultProject());
     useProjectStore.setState({ project });
     const shotId = project.shots[0]!.id;
-    const before = useProjectStore.getState().project.exportConfiguration.videoPerformance.frameRate;
+    const before = resolveProjectVideoPerformance(project.exportConfiguration).frameRate;
 
     useProjectStore.getState().setProjectVideoPerformance({ frameRate: before === 24 ? 25 : 24 });
 
