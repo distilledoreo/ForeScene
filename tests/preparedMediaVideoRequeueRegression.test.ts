@@ -12,13 +12,13 @@ import { resolveProjectVideoPerformance } from '../src/engine/videoPerformance';
 
 vi.mock('../src/engine/backgroundVideoService', () => ({
   discardBackgroundVideosForShot: vi.fn(),
-  ensureBackgroundVideoService: vi.fn(),
+  getBackgroundVideoScheduler: vi.fn(() => ({ active: true })),
   queueBackgroundVideosForShot: vi.fn(async () => undefined),
 }));
 
 import {
   discardBackgroundVideosForShot,
-  ensureBackgroundVideoService,
+  getBackgroundVideoScheduler,
   queueBackgroundVideosForShot,
 } from '../src/engine/backgroundVideoService';
 import { createStillReconciliationScheduler } from '../src/engine/stillArtifactReconciliation';
@@ -51,7 +51,7 @@ function minimalProject() {
 describe('background video edit reconciliation', () => {
   beforeEach(() => {
     vi.mocked(discardBackgroundVideosForShot).mockClear();
-    vi.mocked(ensureBackgroundVideoService).mockClear();
+    vi.mocked(getBackgroundVideoScheduler).mockClear();
     vi.mocked(queueBackgroundVideosForShot).mockClear();
     resetPrepareStillArtifactInflightForTests();
     renderWorkCoordinator.resetForTests();
@@ -62,7 +62,7 @@ describe('background video edit reconciliation', () => {
     renderWorkCoordinator.resetForTests();
   });
 
-  it('debounces a video-only configuration change and queues replacement video after invalidation', async () => {
+  it('debounces a video-only configuration change and queues replacement video when capture already activated the service', async () => {
     let project = minimalProject();
     const shotId = project.shots[0]!.id;
     const seeded = await materializeShotStills({
@@ -101,7 +101,7 @@ describe('background video edit reconciliation', () => {
       expect(discardBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
     });
     await vi.waitFor(() => {
-      expect(ensureBackgroundVideoService).toHaveBeenCalledTimes(1);
+      expect(getBackgroundVideoScheduler).toHaveBeenCalled();
       expect(queueBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
     });
 
