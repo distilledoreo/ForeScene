@@ -1,5 +1,6 @@
 import type { LocationProject, Shot } from '../../domain/types';
 import { downloadBlob } from '../fileTransfers';
+import { renderWorkCoordinator } from '../renderWorkCoordinator';
 import { renderShotCameraMoveMp4, type CameraMoveExportProgress } from '../renderers';
 import { resolveVideoPreset } from '../videoPresets';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
@@ -113,7 +114,6 @@ export async function renderAgentShotVideo(
   const attachToShot = input.attachToShot !== false;
   const shouldDownload = input.download !== false;
   const resolutionPreset = input.resolutionPreset ?? '1080p';
-  // Resolve the preset here so invalid future ids fail before rendering.
   if (!['720p', '1080p', '4k'].includes(resolutionPreset)) {
     return {
       ok: false,
@@ -129,17 +129,23 @@ export async function renderAgentShotVideo(
   latestProgress = { phase: 'preparing', progress: 0, shotId: shot.id, message: 'Preparing shot video render.' };
 
   try {
-    const video = await renderShotCameraMoveMp4(project, shot, {
-      mode: input.mode ?? 'render',
-      resolutionPreset,
-      appearance: input.appearance ?? 'clay',
-      contentMode: input.contentMode,
-      backgroundColor: input.backgroundColor,
-      includeCharacterAttachments: input.includeCharacterAttachments,
-      includeDataUrl: attachToShot,
-      signal: controller.signal,
-      onProgress: (progress) => { latestProgress = toProgress(shot.id, progress); },
-    });
+    // Foreground agent video shares the same GPU coordinator as prepared stills/background
+    // video, preventing concurrent WebGL/encoder work after an edit reconciliation.
+    const video = await renderWorkCoordinator.schedule(
+      'foreground-export-video',
+      () => renderShotCameraMoveMp4(project, shot, {
+        mode: input.mode ?? 'render',
+        resolutionPreset,
+        appearance: input.appearance ?? 'clay',
+        contentMode: input.contentMode,
+        backgroundColor: input.backgroundColor,
+        includeCharacterAttachments: input.includeCharacterAttachments,
+        includeDataUrl: attachToShot,
+        signal: controller.signal,
+        onProgress: (progress) => { latestProgress = toProgress(shot.id, progress); },
+      }),
+      { ownerId: shot.id, jobId: `agent-video:${shot.id}` },
+    );
 
     let assetId: string | undefined;
     if (attachToShot) {
