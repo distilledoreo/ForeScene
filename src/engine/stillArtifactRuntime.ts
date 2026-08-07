@@ -45,6 +45,17 @@ const shotRuntime = new Map<string, {
   jobs: Map<string, PreparedArtifactRuntimeStatus>;
   errors: Map<string, string>;
 }>();
+const runtimeListeners = new Set<() => void>();
+
+function notifyRuntimeListeners(): void {
+  for (const listener of runtimeListeners) listener();
+}
+
+/** Subscribe to actual prepared-still runtime transitions; no polling required. */
+export function subscribeStillArtifactRuntime(listener: () => void): () => void {
+  runtimeListeners.add(listener);
+  return () => runtimeListeners.delete(listener);
+}
 
 export function setStillArtifactJobStatus(
   shotId: string,
@@ -53,17 +64,22 @@ export function setStillArtifactJobStatus(
 ): void {
   let entry = shotRuntime.get(shotId);
   if (!entry) {
+    if (status === null) return;
     entry = { jobs: new Map(), errors: new Map() };
     shotRuntime.set(shotId, entry);
   }
+
+  const previous = entry.jobs.get(artifactKey);
   if (status === null) {
-    entry.jobs.delete(artifactKey);
+    if (!entry.jobs.delete(artifactKey)) return;
   } else {
+    if (previous === status) return;
     entry.jobs.set(artifactKey, status);
   }
   if (entry.jobs.size === 0 && entry.errors.size === 0) {
     shotRuntime.delete(shotId);
   }
+  notifyRuntimeListeners();
 }
 
 export function setStillArtifactError(
@@ -73,23 +89,38 @@ export function setStillArtifactError(
 ): void {
   let entry = shotRuntime.get(shotId);
   if (!entry) {
+    if (error === null) return;
     entry = { jobs: new Map(), errors: new Map() };
     shotRuntime.set(shotId, entry);
   }
+
+  const previous = entry.errors.get(artifactKey);
   if (error === null) {
-    entry.errors.delete(artifactKey);
+    if (!entry.errors.delete(artifactKey)) return;
   } else {
+    if (previous === error) return;
     entry.errors.set(artifactKey, error);
   }
+  if (entry.jobs.size === 0 && entry.errors.size === 0) {
+    shotRuntime.delete(shotId);
+  }
+  notifyRuntimeListeners();
 }
 
 export function clearStillArtifactRuntime(shotId?: string): void {
-  if (shotId) shotRuntime.delete(shotId);
-  else shotRuntime.clear();
+  if (shotId) {
+    if (!shotRuntime.delete(shotId)) return;
+  } else {
+    if (shotRuntime.size === 0) return;
+    shotRuntime.clear();
+  }
+  notifyRuntimeListeners();
 }
 
 export function resetStillArtifactRuntimeForTests(): void {
+  const changed = shotRuntime.size > 0;
   shotRuntime.clear();
+  if (changed) notifyRuntimeListeners();
 }
 
 function deriveEntryStatus(
