@@ -183,16 +183,15 @@ describe('background video service', () => {
     expect(calls).toBe(3);
   });
 
-  it('paused scheduler queues nothing and resumes on unpause', async () => {
+  it('paused scheduler keeps work queued and resumes it without another queue call', async () => {
     const scheduler = ensureBackgroundVideoService(() => project);
     scheduler.setPaused(true);
     await queueBackgroundVideosForShot(project.shots[0]!.id);
     expect(getBackgroundVideoServiceStatus().paused).toBe(true);
-    expect(getBackgroundVideoServiceStatus().pending).toBe(0);
+    expect(getBackgroundVideoServiceStatus().pending).toBe(2);
     expect(vi.mocked(prepareVideoArtifact)).not.toHaveBeenCalled();
 
     scheduler.setPaused(false);
-    await queueBackgroundVideosForShot(project.shots[0]!.id);
     await waitForStatus((status) => !status.running && status.pending === 0);
     expect(vi.mocked(prepareVideoArtifact)).toHaveBeenCalledTimes(2);
   });
