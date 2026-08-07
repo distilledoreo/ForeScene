@@ -2,7 +2,7 @@
  * Diff / fingerprint helpers for prepared agent plans.
  */
 
-import type { LocationProject, Workspace } from '../../domain/types';
+import type { LocationProject, ProjectAsset, Shot, Workspace } from '../../domain/types';
 import type { AgentPlanDiff, AgentPlanSummary, AgentEntityReference } from './protocol';
 
 export interface AgentSelectionState {
@@ -28,17 +28,76 @@ function fingerprintHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+function isPreparedDerivedAsset(asset: ProjectAsset): boolean {
+  const provenance = asset.metadata?.provenance;
+  return provenance === 'forescene-derived-still'
+    || provenance === 'forescene-export-recovery-temporary';
+}
+
+/**
+ * Agent stale-plan/undo fingerprints represent authored project state, not
+ * asynchronously regenerated prepared references. Prepared still attachment can
+ * legitimately occur immediately after an agent edit; treating that as a user
+ * edit would make undo stale even though no authored state changed.
+ */
+function authoredProjectFingerprintState(project: LocationProject): unknown {
+  const preparedAssetIds = new Set<string>();
+  for (const [assetId, asset] of Object.entries(project.assets.assets)) {
+    if (isPreparedDerivedAsset(asset)) preparedAssetIds.add(assetId);
+  }
+  for (const shot of project.shots) {
+    for (const artifact of Object.values(shot.materializedMedia?.stills ?? {})) {
+      preparedAssetIds.add(artifact.assetId);
+    }
+  }
+
+  const normalizeShot = (shot: Shot) => {
+    const {
+      materializedMedia: _materializedMedia,
+      updatedAt: _updatedAt,
+      ...authoredShot
+    } = shot;
+    const assets = { ...shot.assets };
+    const preparedLegacySlots: Array<keyof Shot['assets']> = [
+      'viewportRenderAssetId',
+      'viewportCleanPlateAssetId',
+      'viewportProjectedAssetId',
+      'viewportProjectedCleanPlateAssetId',
+    ];
+    for (const slot of preparedLegacySlots) {
+      const assetId = assets[slot];
+      if (assetId && preparedAssetIds.has(assetId)) delete assets[slot];
+    }
+    return { ...authoredShot, assets };
+  };
+
+  const {
+    updatedAt: _updatedAt,
+    ...authoredProject
+  } = project;
+  return {
+    ...authoredProject,
+    assets: {
+      ...project.assets,
+      assets: Object.fromEntries(
+        Object.entries(project.assets.assets)
+          .filter(([assetId]) => !preparedAssetIds.has(assetId)),
+      ),
+    },
+    shots: project.shots.map(normalizeShot),
+  };
+}
+
 export function projectFingerprint(project: LocationProject): string {
-  // Keep the readable structural prefix for diagnostics, then include a
-  // content fingerprint so same-millisecond camera/staging edits invalidate
-  // stale plans and still-layout approvals as well.
+  // Keep a readable structural prefix for diagnostics. The state hash excludes
+  // prepared-derived media so background reconciliation does not invalidate
+  // agent undo/stale-plan checks, while authored same-millisecond edits still do.
   const objectIds = project.scene.objects.map((object) => object.id).join(',');
   const shotIds = project.shots.map((shot) => shot.id).join(',');
   const landmarkIds = project.landmarks.map((landmark) => landmark.id).join(',');
-  const stateHash = fingerprintHash(stableSerialize(project));
+  const stateHash = fingerprintHash(stableSerialize(authoredProjectFingerprintState(project)));
   return [
     project.id,
-    project.updatedAt,
     project.name,
     String(project.scene.objects.length),
     String(project.shots.length),
