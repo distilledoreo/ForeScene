@@ -15,9 +15,9 @@ let bound = false;
 let getProjectFn: (() => LocationProject) | undefined;
 let setProjectFn: ((project: LocationProject) => void) | undefined;
 
-export function ensureStillReconciliationBound(
-  options: Pick<ReconciliationSchedulerOptions, 'getProject' | 'setProject'>,
-): void {
+type BridgeOptions = Pick<ReconciliationSchedulerOptions, 'getProject' | 'setProject'>;
+
+export function ensureStillReconciliationBound(options: BridgeOptions): void {
   getProjectFn = options.getProject;
   setProjectFn = options.setProject;
   if (bound && getAppStillReconciliationScheduler()) return;
@@ -27,6 +27,16 @@ export function ensureStillReconciliationBound(
     setProject: options.setProject,
   });
   bound = true;
+}
+
+/** Dispose queued/in-flight reconciliation and bind a fresh scheduler to the new project. */
+export function rebindStillReconciliation(options: BridgeOptions): void {
+  bound = false;
+  ensureStillReconciliationBound(options);
+}
+
+export function cancelStillReconciliationForShot(shotId: string): void {
+  getAppStillReconciliationScheduler()?.cancelShot(shotId);
 }
 
 export function scheduleStillReconciliationAfterShotUpdate(
@@ -41,10 +51,6 @@ export function scheduleStillReconciliationAfterShotUpdate(
   scheduler.scheduleAfterCommit(previous, next, [shotId], patch);
 }
 
-/**
- * After any project mutation that may affect still fingerprints
- * (scene objects, poses, pano origin/rotation, model assets, etc.).
- */
 export function scheduleStillReconciliationAfterProjectChange(
   previous: LocationProject,
   next: LocationProject,
@@ -55,10 +61,6 @@ export function scheduleStillReconciliationAfterProjectChange(
   scheduler.scheduleAfterCommit(previous, next);
 }
 
-/**
- * Schedule from inside a Zustand reducer after a build-scene commit.
- * Defers to a microtask so get() sees the committed project.
- */
 export function scheduleStillReconciliationAfterBuildSceneCommit(
   previousProject: LocationProject,
 ): void {
