@@ -79,11 +79,21 @@ function makeObjectUrl(key: string, blob: Blob): string {
   return url;
 }
 
+/**
+ * Return the backing local-storage key for an object URL created by this store.
+ * Some legacy/sample manifests kept the managed blob URL but did not persist the
+ * storageKey field. Maintenance must still treat that backing payload as live.
+ */
+export function getManagedProjectAssetBlobKeyForUri(uri: string): string | undefined {
+  if (!uri.startsWith('blob:')) return undefined;
+  for (const [key, objectUrl] of objectUrls) {
+    if (objectUrl === uri) return key;
+  }
+  return undefined;
+}
+
 function persistProjectAssetBlob(key: string, blob: Blob) {
   void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
-    // The in-memory blob remains usable for the current session, but this is
-    // now observable by the project safety controller instead of being a
-    // silent durability failure.
     for (const listener of persistenceFailureListeners) listener({ key, error });
   });
 }
@@ -135,7 +145,6 @@ export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
   blob: Blob,
 ): Promise<T> {
   const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
-  // Cache in memory first so the session can use the blob immediately after durable write.
   cacheProjectAssetBlob(storageKey, blob, true);
   try {
     await putProjectAssetBlobs([{ key: storageKey, blob }]);
@@ -219,7 +228,6 @@ function enqueueAssetDatabaseOperation<T>(operation: () => Promise<T>): Promise<
 
 export function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
   if (entries.length === 0) return Promise.resolve();
-
   return enqueueAssetDatabaseOperation(() => putProjectAssetBlobsNow(entries));
 }
 
@@ -316,7 +324,6 @@ function dataUrlToBlob(dataUrl: string): Blob {
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     return new Blob([bytes], { type: mimeType });
   } catch {
-    // Keep permissive legacy fixtures/imports usable; valid browser data URLs always take the fast path above.
     return new Blob([payload], { type: mimeType });
   }
 }
