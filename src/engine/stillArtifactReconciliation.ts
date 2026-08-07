@@ -32,6 +32,21 @@ interface ShotReconcileState {
   generation: number;
 }
 
+/**
+ * Edit reconciliation is maintenance for shots that have entered the prepared-media
+ * lifecycle. It must not eagerly materialize every newly-authored/legacy shot after
+ * a global export or scene mutation; explicit capture remains the lifecycle entry.
+ */
+export function shotHasPreparedMediaLifecycle(shot: Shot): boolean {
+  if (Object.keys(shot.materializedMedia?.stills ?? {}).length > 0) return true;
+  return Boolean(
+    shot.assets.viewportRenderAssetId
+    || shot.assets.viewportCleanPlateAssetId
+    || shot.assets.viewportProjectedAssetId
+    || shot.assets.viewportProjectedCleanPlateAssetId
+  );
+}
+
 export function shotNeedsStillReconciliation(
   project: LocationProject,
   shot: Shot,
@@ -108,16 +123,15 @@ export function findShotsAffectedByProjectChange(
   return [...affected];
 }
 
-async function queueBackgroundVideoAfterEdit(
-  shotId: string,
-  getProject: () => LocationProject,
-): Promise<void> {
+async function queueBackgroundVideoAfterEdit(shotId: string): Promise<void> {
   try {
     const {
-      ensureBackgroundVideoService,
+      getBackgroundVideoScheduler,
       queueBackgroundVideosForShot,
     } = await import('./backgroundVideoService');
-    ensureBackgroundVideoService(getProject);
+    // Capture activates the application-level scheduler. Do not let an ordinary
+    // edit implicitly opt an uncaptured/autonomous workflow into video encoding.
+    if (!getBackgroundVideoScheduler()) return;
     await queueBackgroundVideosForShot(shotId);
   } catch {
     // Background video preparation is best-effort and must not fail authoring.
@@ -154,10 +168,10 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
         state!.timer = undefined;
         const project = options.getProject();
         const shot = project.shots.find((item) => item.id === shotId);
-        if (!shot) return;
+        if (!shot || !shotHasPreparedMediaLifecycle(shot)) return;
 
         if (!shotNeedsStillReconciliation(project, shot)) {
-          void queueBackgroundVideoAfterEdit(shotId, options.getProject);
+          void queueBackgroundVideoAfterEdit(shotId);
           return;
         }
 
@@ -181,9 +195,7 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
             state!.controller = undefined;
             options.setProject(result.project);
             options.onComplete?.(shotId, result);
-            if (result.status !== 'failed') {
-              void queueBackgroundVideoAfterEdit(shotId, options.getProject);
-            }
+            if (result.status !== 'failed') void queueBackgroundVideoAfterEdit(shotId);
           },
           (error) => {
             if (generation !== state!.generation) return;
@@ -203,7 +215,11 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
     patch?: Partial<Shot>,
   ): void {
     if (patch && isMetadataOnlyShotPatch(patch)) return;
-    const affected = findShotsAffectedByProjectChange(previous, next, hintShotIds);
+    const affected = findShotsAffectedByProjectChange(previous, next, hintShotIds)
+      .filter((shotId) => {
+        const shot = next.shots.find((item) => item.id === shotId);
+        return Boolean(shot && shotHasPreparedMediaLifecycle(shot));
+      });
     if (affected.length === 0) return;
 
     void import('./backgroundVideoService').then(({ discardBackgroundVideosForShot }) => {
