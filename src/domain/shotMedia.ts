@@ -1,8 +1,9 @@
-import { CameraKeyframe, LocationProject, ProjectAsset, Shot } from './types';
+import { CameraKeyframe, LocationProject, MaterializedStillArtifact, ProjectAsset, Shot } from './types';
 
 export type ShotMediaSource =
   | 'camera_move'
   | 'captured_still'
+  | 'prepared_reference'
   | 'ai_result'
   | 'final_frame'
   | 'pano_crop';
@@ -43,12 +44,48 @@ function resolveAsset(
   return project.assets.assets[assetId];
 }
 
+function peopleLabel(artifact: MaterializedStillArtifact): string | undefined {
+  if (artifact.peopleVariant === 'clean_plate') return 'clean plate';
+  if (artifact.peopleVariant === 'with_people') return 'with people';
+  return undefined;
+}
+
+function preparedReferenceLabel(artifact: MaterializedStillArtifact): string {
+  const people = peopleLabel(artifact);
+  const appearance = artifact.appearance === 'projected'
+    ? 'Projected'
+    : artifact.appearance === 'depth'
+      ? 'Depth'
+      : 'Clay';
+
+  if (artifact.kind === 'character-still') {
+    return `${appearance} characters`;
+  }
+  if (artifact.kind === 'depth-viewport') {
+    return people ? `Depth viewport · ${people}` : 'Depth viewport';
+  }
+  if (
+    artifact.kind === 'clay-reference-frame'
+    || artifact.kind === 'projected-reference-frame'
+    || artifact.kind === 'depth-reference-frame'
+  ) {
+    const role = artifact.frameRole === 'middle'
+      ? 'middle'
+      : artifact.frameRole ?? 'reference';
+    return [appearance, `${role} reference`, people].filter(Boolean).join(' · ');
+  }
+  return [appearance, 'reference', people].filter(Boolean).join(' · ');
+}
+
 /**
  * Strict camera-roll media list — only assets actually captured or attached to the shot.
- * Linked/canonical panoramas are intentionally excluded.
+ * Linked/canonical panoramas are intentionally excluded. Materialized reference
+ * stills are included when they are not already represented by the captured-still
+ * viewport/toggle UI, so the existing viewer can inspect generated references.
  */
 export function resolveShotMedia(project: LocationProject, shot: Shot): ShotMediaItem[] {
   const items: ShotMediaItem[] = [];
+  const seenAssetIds = new Set<string>();
 
   for (const candidate of shotMediaPriority) {
     const asset = resolveAsset(project, shot.assets[candidate.key]);
@@ -61,6 +98,24 @@ export function resolveShotMedia(project: LocationProject, shot: Shot): ShotMedi
       label: candidate.label,
       source: candidate.source,
     });
+    seenAssetIds.add(asset.id);
+  }
+
+  const prepared = Object.values(shot.materializedMedia?.stills ?? {})
+    .filter((artifact) => artifact.kind !== 'clay-viewport' && artifact.kind !== 'projected-viewport')
+    .sort((left, right) => left.key.localeCompare(right.key));
+  for (const artifact of prepared) {
+    if (seenAssetIds.has(artifact.assetId)) continue;
+    const asset = resolveAsset(project, artifact.assetId);
+    if (!asset) continue;
+    items.push({
+      id: `${shot.id}:prepared:${artifact.key}`,
+      asset,
+      kind: 'image',
+      label: preparedReferenceLabel(artifact),
+      source: 'prepared_reference',
+    });
+    seenAssetIds.add(asset.id);
   }
 
   return items;
