@@ -18,9 +18,22 @@ let boundGetProject: (() => LocationProject) | undefined;
 let visibilityHandler: (() => void) | undefined;
 let visibilityBound = false;
 const shotStatuses = new Map<string, BackgroundVideoRuntimeStatus>();
+const runtimeListeners = new Set<() => void>();
+
+function notifyRuntimeListeners(): void {
+  for (const listener of runtimeListeners) listener();
+}
+
+/** Subscribe to per-shot background-video runtime transitions. */
+export function subscribeBackgroundVideoRuntime(listener: () => void): () => void {
+  runtimeListeners.add(listener);
+  return () => runtimeListeners.delete(listener);
+}
 
 function setShotStatus(shotId: string, status: BackgroundVideoRuntimeStatus): void {
+  if (shotStatuses.get(shotId) === status) return;
   shotStatuses.set(shotId, status);
+  notifyRuntimeListeners();
 }
 
 export function bindBackgroundVideoService(options: {
@@ -112,10 +125,11 @@ export function discardBackgroundVideosForShot(shotId: string): void {
 /** Remove all queued/running/status state for a shot that no longer exists. */
 export function forgetBackgroundVideosForShot(shotId: string): void {
   scheduler?.discardForShot(shotId);
-  shotStatuses.delete(shotId);
+  if (shotStatuses.delete(shotId)) notifyRuntimeListeners();
 }
 
 export function disposeBackgroundVideoService(): void {
+  const hadRuntimeState = Boolean(scheduler) || shotStatuses.size > 0;
   scheduler?.dispose();
   scheduler = undefined;
   boundGetProject = undefined;
@@ -125,6 +139,7 @@ export function disposeBackgroundVideoService(): void {
   }
   visibilityHandler = undefined;
   visibilityBound = false;
+  if (hadRuntimeState) notifyRuntimeListeners();
 }
 
 export function resetBackgroundVideoServiceForTests(): void {
