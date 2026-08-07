@@ -1,4 +1,5 @@
 import type { LocationProject } from '../domain/types';
+import { cleanupUnreferencedProjectAssetPayloads } from './projectAssetMaintenance';
 import {
   createProjectSnapshot,
   loadProjectRevision,
@@ -370,10 +371,16 @@ export class ProjectPersistenceController {
     // Reload the committed manifest and hash-verify every referenced binary.
     // This object is deliberately independent from mutable Zustand state.
     const verified = await loadProjectRevision(result.revision.id);
+    let maintenanceWarning = result.maintenanceWarning;
+    try {
+      await cleanupUnreferencedProjectAssetPayloads(project);
+    } catch {
+      maintenanceWarning ??= 'Saved safely, but old local prepared-media cleanup will be retried later.';
+    }
     this.hasUnsavedChanges = this.latestProject !== project || this.pendingSave;
     this.emit({
       status: 'saved',
-      message: result.maintenanceWarning ?? 'Saved locally and ready for recovery.',
+      message: maintenanceWarning ?? 'Saved locally and ready for recovery.',
       lastSavedAt: result.revision.createdAt,
       activeRevisionId: result.revision.id,
       criticalWrite: false,
