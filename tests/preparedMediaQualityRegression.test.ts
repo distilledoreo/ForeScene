@@ -43,9 +43,13 @@ function projectWithClayPeopleBoth() {
   return project;
 }
 
-function resetRuntime(): void {
+function resetReconciliationRuntime(): void {
   resetAppStillReconciliationSchedulerForTests();
   resetStillReconciliationBridgeForTests();
+}
+
+function resetRuntime(): void {
+  resetReconciliationRuntime();
   resetProjectAssetStoreForTests();
   resetPrepareStillArtifactInflightForTests();
   renderWorkCoordinator.resetForTests();
@@ -116,6 +120,7 @@ describe('prepared media quality regressions', () => {
     });
     project = prepared.project;
     useProjectStore.setState({ project });
+    resetReconciliationRuntime();
     const before = resolveProjectVideoPerformance(project.exportConfiguration).frameRate;
 
     useProjectStore.getState().setProjectVideoPerformance({ frameRate: before === 24 ? 25 : 24 });
@@ -136,6 +141,8 @@ describe('prepared media quality regressions', () => {
     });
     project = prepared.project;
     useProjectStore.setState({ project });
+    // Ignore any transition work caused only by seeding the singleton test store.
+    resetReconciliationRuntime();
 
     useProjectStore.getState().setProjectPackageFormat('forescene-v2');
 
@@ -147,6 +154,7 @@ describe('prepared media quality regressions', () => {
     const project = ensureProjectExportConfiguration(createDefaultProject());
     const shotId = project.shots[0]!.id;
     useProjectStore.setState({ project });
+    resetReconciliationRuntime();
     const before = resolveProjectVideoPerformance(project.exportConfiguration).frameRate;
 
     useProjectStore.getState().setProjectVideoPerformance({ frameRate: before === 24 ? 25 : 24 });
