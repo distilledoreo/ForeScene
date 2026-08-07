@@ -2,10 +2,10 @@ import { useSyncExternalStore } from 'react';
 
 const listeners = new Set<() => void>();
 let version = 0;
-let timer: ReturnType<typeof setInterval> | undefined;
+let timer: number | undefined;
 
 function startClock(): void {
-  if (timer || typeof window === 'undefined') return;
+  if (timer !== undefined || typeof window === 'undefined') return;
   timer = window.setInterval(() => {
     version += 1;
     for (const listener of listeners) listener();
@@ -13,8 +13,8 @@ function startClock(): void {
 }
 
 function stopClock(): void {
-  if (!timer || listeners.size > 0) return;
-  clearInterval(timer);
+  if (timer === undefined || listeners.size > 0) return;
+  window.clearInterval(timer);
   timer = undefined;
 }
 
