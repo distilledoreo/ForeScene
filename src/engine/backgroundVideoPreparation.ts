@@ -30,6 +30,14 @@ import { getVideoArtifactFromCache } from './videoArtifactCache';
 import { resolveProjectVideoPerformance } from './videoPerformance';
 import { resolveVideoPreset } from './videoPresets';
 
+export type BackgroundVideoRuntimeStatus =
+  | 'not-requested'
+  | 'pending'
+  | 'queued'
+  | 'encoding'
+  | 'ready'
+  | 'failed';
+
 export interface ShotVideoCandidate {
   shotId: string;
   specification: VideoArtifactSpecification;
@@ -160,6 +168,7 @@ export interface BackgroundVideoSchedulerOptions {
   getProject: () => LocationProject;
   onPrepared?: (shotId: string, result: PreparedVideoArtifact) => void;
   onError?: (shotId: string, error: unknown) => void;
+  onStatusChange?: (shotId: string, status: BackgroundVideoRuntimeStatus) => void;
 }
 
 interface QueuedVideo {
@@ -178,6 +187,11 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
   let disposed = false;
   let paused = false;
 
+  const pendingForShot = (shotId: string) => [...pending.values()]
+    .some((job) => job.candidate.shotId === shotId);
+  const runningForShot = (shotId: string) => [...runningJobs.values()]
+    .some((job) => job.candidate.shotId === shotId);
+
   async function processQueue(): Promise<void> {
     if (running || disposed || paused) return;
     running = true;
@@ -187,6 +201,8 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
         pending.delete(key);
         if (job.controller.signal.aborted) continue;
         runningJobs.set(key, job);
+        options.onStatusChange?.(job.candidate.shotId, 'encoding');
+        let failed = false;
 
         try {
           const project = options.getProject();
@@ -225,9 +241,20 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
           options.onPrepared?.(job.candidate.shotId, result);
         } catch (error) {
           if (error instanceof Error && error.name === 'AbortError') continue;
+          failed = true;
           options.onError?.(job.candidate.shotId, error);
+          options.onStatusChange?.(job.candidate.shotId, 'failed');
         } finally {
           runningJobs.delete(key);
+          if (!failed && !job.controller.signal.aborted) {
+            if (runningForShot(job.candidate.shotId)) {
+              options.onStatusChange?.(job.candidate.shotId, 'encoding');
+            } else if (pendingForShot(job.candidate.shotId)) {
+              options.onStatusChange?.(job.candidate.shotId, 'queued');
+            } else {
+              options.onStatusChange?.(job.candidate.shotId, 'ready');
+            }
+          }
         }
       }
     } finally {
@@ -237,7 +264,7 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
   }
 
   async function queueMissingForShot(shotId: string): Promise<void> {
-    if (disposed || paused) return;
+    if (disposed) return;
     const project = options.getProject();
     const shot = project.shots.find((item) => item.id === shotId);
     if (!shot) return;
@@ -246,6 +273,11 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       buildVideoArtifactSpecificationsForShot(project, shot),
       shotId,
     );
+    if (candidates.length === 0) {
+      options.onStatusChange?.(shotId, 'not-requested');
+      return;
+    }
+
     const perf = resolveProjectVideoPerformance(project.exportConfiguration);
     const preset = resolveVideoPreset(perf.resolutionPreset);
 
@@ -272,7 +304,6 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       const key = fingerprint.key;
       if (pending.has(key) || runningJobs.has(key)) continue;
 
-      // Cancel obsolete queued jobs for same shot with different fingerprints later via discardForShot.
       pending.set(key, {
         candidate,
         fingerprintKey: key,
@@ -280,26 +311,47 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       });
     }
 
-    void processQueue();
+    if (runningForShot(shotId)) {
+      options.onStatusChange?.(shotId, 'encoding');
+    } else if (pendingForShot(shotId)) {
+      options.onStatusChange?.(shotId, 'queued');
+    } else {
+      options.onStatusChange?.(shotId, 'ready');
+    }
+
+    if (!paused) void processQueue();
   }
 
   function discardForShot(shotId: string): void {
+    let discarded = false;
     for (const [key, job] of pending) {
       if (job.candidate.shotId === shotId) {
         job.controller.abort();
         pending.delete(key);
+        discarded = true;
       }
     }
-    // Also cancel in-flight work for that shot (abort propagates to the render).
     for (const job of runningJobs.values()) {
-      if (job.candidate.shotId === shotId) job.controller.abort();
+      if (job.candidate.shotId === shotId) {
+        job.controller.abort();
+        discarded = true;
+      }
     }
+    if (discarded) options.onStatusChange?.(shotId, 'pending');
   }
 
   function discardAll(): void {
-    for (const job of pending.values()) job.controller.abort();
-    for (const job of runningJobs.values()) job.controller.abort();
+    const affected = new Set<string>();
+    for (const job of pending.values()) {
+      affected.add(job.candidate.shotId);
+      job.controller.abort();
+    }
+    for (const job of runningJobs.values()) {
+      affected.add(job.candidate.shotId);
+      job.controller.abort();
+    }
     pending.clear();
+    for (const shotId of affected) options.onStatusChange?.(shotId, 'pending');
   }
 
   function dispose(): void {
@@ -320,6 +372,8 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       paused,
       keys: [...pending.keys()],
       runningKeys: [...runningJobs.keys()],
+      pendingShotIds: [...new Set([...pending.values()].map((job) => job.candidate.shotId))],
+      runningShotIds: [...new Set([...runningJobs.values()].map((job) => job.candidate.shotId))],
     };
   }
 
