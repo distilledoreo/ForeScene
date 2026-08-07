@@ -74,6 +74,34 @@ async function loadAssetBlob(
   return getProjectAssetBlob(key);
 }
 
+function legacyViewportSlotPatch(
+  specification: StillArtifactSpecification,
+  assetId: string,
+): Partial<Shot['assets']> {
+  if (specification.kind === 'clay-viewport') {
+    if (specification.peopleVariant === 'clean_plate') {
+      return { viewportCleanPlateAssetId: assetId };
+    }
+    return { viewportRenderAssetId: assetId };
+  }
+  if (specification.kind === 'projected-viewport') {
+    if (specification.peopleVariant === 'clean_plate') {
+      return { viewportProjectedCleanPlateAssetId: assetId };
+    }
+    return { viewportProjectedAssetId: assetId };
+  }
+  return {};
+}
+
+async function cleanupPersistedRecoveryAsset(
+  projectId: string,
+  assetId: string,
+  storageKey?: string,
+): Promise<void> {
+  const key = storageKey ?? createProjectAssetStorageKey(projectId, assetId);
+  await deleteProjectAssetBlob(key).catch(() => undefined);
+}
+
 /**
  * Ensure a still is available for packaging against a frozen export snapshot.
  */
@@ -140,19 +168,38 @@ export async function ensureStillArtifactForExport(
           prepared: { ...prepared, cacheStatus: 'rendered' },
         });
         if (commit.ok) {
-          if (params.commitLiveProject) {
-            liveProject = params.commitLiveProject(() => commit.project);
-          } else {
-            liveProject = commit.project;
+          const committedAsset = commit.project.assets.assets[commit.assetId];
+          if (!committedAsset) {
+            throw new Error(`Recovered still ${key} committed without an asset record.`);
           }
-          assetId = commit.assetId;
-          const asset = liveProject.assets.assets[commit.assetId];
-          if (asset) {
-            nextFrozen = {
-              ...frozenProject,
-              shots: frozenProject.shots.map((item) =>
-                item.id === shotId
-                  ? {
+
+          if (params.commitLiveProject) {
+            let mergedIntoLive = false;
+            liveProject = params.commitLiveProject((live) => {
+              const liveShotNow = live.shots.find((item) => item.id === shotId);
+              if (!liveShotNow) return live;
+
+              const liveFingerprintNow = computeStillArtifactFingerprint(
+                live,
+                liveShotNow,
+                specification,
+              );
+              if (liveFingerprintNow.key !== expected.key) return live;
+
+              mergedIntoLive = true;
+              const legacySlot = legacyViewportSlotPatch(specification, commit.assetId);
+              return {
+                ...live,
+                assets: {
+                  ...live.assets,
+                  assets: {
+                    ...live.assets.assets,
+                    [commit.assetId]: committedAsset,
+                  },
+                },
+                shots: live.shots.map((item) => {
+                  if (item.id !== shotId) return item;
+                  return {
                     ...item,
                     materializedMedia: {
                       stills: {
@@ -160,18 +207,58 @@ export async function ensureStillArtifactForExport(
                         [key]: commit.artifact,
                       },
                     },
-                  }
-                  : item
-              ),
-              assets: {
-                ...frozenProject.assets,
-                assets: {
-                  ...frozenProject.assets.assets,
-                  [asset.id]: asset,
-                },
-              },
-            };
+                    assets: {
+                      ...item.assets,
+                      ...legacySlot,
+                    },
+                    updatedAt: new Date().toISOString(),
+                  };
+                }),
+                updatedAt: new Date().toISOString(),
+              };
+            });
+
+            if (!mergedIntoLive) {
+              await cleanupPersistedRecoveryAsset(
+                frozenProject.id,
+                commit.assetId,
+                committedAsset.storageKey,
+              );
+              return {
+                blob: prepared.blob,
+                source: 'render-recovery',
+                frozenProject,
+                liveProject,
+              };
+            }
+          } else {
+            liveProject = commit.project;
           }
+
+          assetId = commit.assetId;
+          nextFrozen = {
+            ...frozenProject,
+            shots: frozenProject.shots.map((item) =>
+              item.id === shotId
+                ? {
+                  ...item,
+                  materializedMedia: {
+                    stills: {
+                      ...(item.materializedMedia?.stills ?? {}),
+                      [key]: commit.artifact,
+                    },
+                  },
+                }
+                : item
+            ),
+            assets: {
+              ...frozenProject.assets,
+              assets: {
+                ...frozenProject.assets.assets,
+                [committedAsset.id]: committedAsset,
+              },
+            },
+          };
           return {
             blob: prepared.blob,
             assetId,
@@ -184,7 +271,8 @@ export async function ensureStillArtifactForExport(
     }
   }
 
-  // Temporary export media — memory-only is enough for packaging; mark for cleanup.
+  // Temporary export media — only the returned Blob is required for packaging,
+  // but retain the existing temporary-asset lifecycle for callers that inspect it.
   temporaryAssetId = createId('asset');
   const tempAsset = storeProjectAssetBlob(
     frozenProject.id,
