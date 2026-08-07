@@ -29,10 +29,7 @@ export function bindBackgroundVideoService(options: {
   onError?: (shotId: string, error: unknown) => void;
 }): void {
   boundGetProject = options.getProject;
-  if (scheduler) {
-    // Rebind getProject without dropping the queue.
-    return;
-  }
+  if (scheduler) return;
   scheduler = createBackgroundVideoScheduler({
     getProject: () => (boundGetProject ? boundGetProject() : options.getProject()),
     onPrepared: options.onPrepared,
@@ -42,7 +39,6 @@ export function bindBackgroundVideoService(options: {
   bindVisibilityLifecycle();
 }
 
-/** Pause background MP4 work while the tab is hidden; resume when visible again. */
 function bindVisibilityLifecycle(): void {
   if (visibilityBound || typeof document === 'undefined') return;
   visibilityBound = true;
@@ -72,11 +68,6 @@ export function getBackgroundVideoServiceStatus(): {
   };
 }
 
-/**
- * Resolve a user-facing per-shot video preparation state.
- * Configured-but-never-queued shots report pending; shots with no requested
- * MP4 candidates report not-requested.
- */
 export function getBackgroundVideoShotStatus(
   project: LocationProject,
   shotId: string,
@@ -116,6 +107,12 @@ export function discardBackgroundVideosForShot(shotId: string): void {
   if (shotStatuses.get(shotId) !== 'not-requested') {
     setShotStatus(shotId, 'pending');
   }
+}
+
+/** Remove all queued/running/status state for a shot that no longer exists. */
+export function forgetBackgroundVideosForShot(shotId: string): void {
+  scheduler?.discardForShot(shotId);
+  shotStatuses.delete(shotId);
 }
 
 export function disposeBackgroundVideoService(): void {
