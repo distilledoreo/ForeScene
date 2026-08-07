@@ -3,8 +3,7 @@ import { Download, MoreHorizontal, Pencil, RefreshCw, Trash2, X } from 'lucide-r
 import { getShotPrimaryLabel, hasCustomShotTitle } from '../../domain/shotIdentity';
 import { resolveShotMedia, resolveShotMediaPoster } from '../../domain/shotMedia';
 import { LocationProject, ProjectAsset, Shot } from '../../domain/types';
-import { getBackgroundVideoServiceStatus } from '../../engine/backgroundVideoService';
-import { buildVideoArtifactSpecificationsForShot } from '../../engine/backgroundVideoPreparation';
+import { getBackgroundVideoShotStatus } from '../../engine/backgroundVideoService';
 import { downloadDataUrl } from '../../engine/fileTransfers';
 import {
   cancelShotStillPreparation,
@@ -62,11 +61,18 @@ export function ShotsLibraryCard({
       || artifact.status === 'missing'
       || artifact.status === 'stale',
   );
-  const videoRequested = buildVideoArtifactSpecificationsForShot(project, shot).length > 0;
-  const backgroundVideoStatus = getBackgroundVideoServiceStatus();
-  const backgroundVideoActive = selected
-    && videoRequested
-    && (backgroundVideoStatus.running || backgroundVideoStatus.pending > 0);
+  const videoStatus = getBackgroundVideoShotStatus(project, shot.id);
+  const videoLabel = videoStatus === 'not-requested'
+    ? undefined
+    : videoStatus === 'pending'
+      ? 'Video pending'
+      : videoStatus === 'queued'
+        ? 'Video queued'
+        : videoStatus === 'encoding'
+          ? 'Video encoding…'
+          : videoStatus === 'failed'
+            ? 'Video preparation failed'
+            : 'Video ready';
 
   useEffect(() => {
     if (!sheetOpen) setMenuOpen(false);
@@ -247,9 +253,20 @@ export function ShotsLibraryCard({
             >
               {preparedStatus.label}
             </p>
-            {backgroundVideoActive && (
-              <p className="truncate text-[9px] text-sky-300" data-background-video-status>
-                Background video preparing…
+            {videoLabel && (
+              <p
+                className={`truncate text-[9px] ${
+                  videoStatus === 'failed'
+                    ? 'text-red-300'
+                    : videoStatus === 'ready'
+                      ? 'text-emerald-300'
+                      : videoStatus === 'encoding' || videoStatus === 'queued'
+                        ? 'text-sky-300'
+                        : 'text-white/55'
+                }`}
+                data-background-video-status
+              >
+                {videoLabel}
               </p>
             )}
           </>
