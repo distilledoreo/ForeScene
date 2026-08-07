@@ -54,12 +54,6 @@ function resolveShot(project: LocationProject, shotId: string): Shot | undefined
   return project.shots.find((item) => item.id === shotId);
 }
 
-/**
- * Apply a prepared still to the given (live) project.
- * Only mutates that shot's materializedMedia entry and the asset registry for the new asset —
- * other concurrent shot/scene fields on `project` are preserved.
- * Awaits durable storage before attaching the record.
- */
 export async function commitPreparedStillArtifact(
   params: CommitPreparedStillParams,
 ): Promise<CommitPreparedStillResult> {
@@ -78,7 +72,6 @@ export async function commitPreparedStillArtifact(
   const artifactKey = stillArtifactKey(specification);
   const previous = shot.materializedMedia?.stills[artifactKey];
 
-  // Reuse existing asset when preparation confirmed current bytes.
   if (
     prepared.cacheStatus === 'current'
     && prepared.existingAssetId
@@ -131,7 +124,6 @@ export async function commitPreparedStillArtifact(
       },
     };
     try {
-      // Durable write must succeed before the project references the asset.
       asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob);
     } catch (error) {
       return {
@@ -173,7 +165,6 @@ export async function commitPreparedStillArtifact(
         ? {
           ...item,
           materializedMedia: { stills: nextStills },
-          // Also map viewport stills into legacy camera-roll slots when applicable.
           assets: mapLegacyViewportSlot(item.assets, specification, asset.id),
           updatedAt: new Date().toISOString(),
         }
@@ -208,7 +199,6 @@ export async function commitPreparedStillArtifact(
   };
 }
 
-/** Map prepared viewport stills into legacy shot.assets slots without re-rendering. */
 function mapLegacyViewportSlot(
   assets: Shot['assets'],
   specification: StillArtifactSpecification,
@@ -229,10 +219,34 @@ function mapLegacyViewportSlot(
   return assets;
 }
 
-/**
- * Remove obsolete materialized still records whose keys are no longer desired.
- * Also deletes IndexedDB blobs for assets that become unreferenced.
- */
+function clearLegacyViewportSlotForArtifact(
+  assets: Shot['assets'],
+  artifact: MaterializedStillArtifact,
+): Shot['assets'] {
+  if (artifact.kind === 'clay-viewport') {
+    if (artifact.peopleVariant === 'clean_plate') {
+      return assets.viewportCleanPlateAssetId === artifact.assetId
+        ? { ...assets, viewportCleanPlateAssetId: undefined }
+        : assets;
+    }
+    return assets.viewportRenderAssetId === artifact.assetId
+      ? { ...assets, viewportRenderAssetId: undefined }
+      : assets;
+  }
+  if (artifact.kind === 'projected-viewport') {
+    if (artifact.peopleVariant === 'clean_plate') {
+      return assets.viewportProjectedCleanPlateAssetId === artifact.assetId
+        ? { ...assets, viewportProjectedCleanPlateAssetId: undefined }
+        : assets;
+    }
+    return assets.viewportProjectedAssetId === artifact.assetId
+      ? { ...assets, viewportProjectedAssetId: undefined }
+      : assets;
+  }
+  return assets;
+}
+
+/** Remove obsolete materialized stills and their matching legacy viewport aliases. */
 export function pruneObsoleteMaterializedStills(
   project: LocationProject,
   shotId: string,
@@ -242,38 +256,42 @@ export function pruneObsoleteMaterializedStills(
   if (!shot?.materializedMedia) return project;
 
   const stills = shot.materializedMedia.stills;
-  const keys = Object.keys(stills);
-  const obsolete = keys.filter((key) => !desiredKeys.has(key));
+  const obsolete = Object.keys(stills).filter((key) => !desiredKeys.has(key));
   if (obsolete.length === 0) return project;
 
-  const removedAssetIds: string[] = [];
+  const removedArtifacts: MaterializedStillArtifact[] = [];
   const nextStills = { ...stills };
   for (const key of obsolete) {
     const removed = nextStills[key];
-    if (removed) removedAssetIds.push(removed.assetId);
+    if (removed) removedArtifacts.push(removed);
     delete nextStills[key];
   }
 
   let nextProject: LocationProject = {
     ...project,
-    shots: project.shots.map((item) =>
-      item.id === shotId
-        ? {
-          ...item,
-          materializedMedia: { stills: nextStills },
-          updatedAt: new Date().toISOString(),
-        }
-        : item
-    ),
+    shots: project.shots.map((item) => {
+      if (item.id !== shotId) return item;
+      const nextShotAssets = removedArtifacts.reduce(
+        (assets, artifact) => clearLegacyViewportSlotForArtifact(assets, artifact),
+        item.assets,
+      );
+      return {
+        ...item,
+        materializedMedia: { stills: nextStills },
+        assets: nextShotAssets,
+        updatedAt: new Date().toISOString(),
+      };
+    }),
     updatedAt: new Date().toISOString(),
   };
 
   nextProject = pruneUnreferencedProjectAssets(nextProject);
 
-  for (const assetId of removedAssetIds) {
-    if (nextProject.assets.assets[assetId]) continue;
-    const oldAsset = project.assets.assets[assetId];
-    const key = oldAsset?.storageKey ?? createProjectAssetStorageKey(project.id, assetId);
+  for (const artifact of removedArtifacts) {
+    if (nextProject.assets.assets[artifact.assetId]) continue;
+    const oldAsset = project.assets.assets[artifact.assetId];
+    const key = oldAsset?.storageKey
+      ?? createProjectAssetStorageKey(project.id, artifact.assetId);
     void deleteProjectAssetBlob(key).catch(() => undefined);
   }
 
