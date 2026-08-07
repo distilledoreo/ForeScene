@@ -5,7 +5,6 @@
 import type { LocationProject, Shot } from '../domain/types';
 import {
   materializeShotStills,
-  type MaterializeShotStillsParams,
   type ShotStillMaterializationResult,
 } from './materializeShotStills';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
@@ -40,7 +39,6 @@ export interface ShotStillActionParams {
 }
 
 function bindController(shotId: string): AbortController {
-  // Supersede any prior batch for this shot.
   const existing = shotControllers.get(shotId);
   existing?.abort();
   const controller = new AbortController();
@@ -80,7 +78,6 @@ export function cancelShotStillPreparation(shotId?: string): {
     shotControllers.clear();
   }
 
-  // Drop only this shot's (or no) queued interactive still work — never all shots.
   const cancelledQueueItems = shotId
     ? renderWorkCoordinator.cancelByOwner(shotId)
     : renderWorkCoordinator.cancelQueued((entry) => (
@@ -93,9 +90,7 @@ export function cancelShotStillPreparation(shotId?: string): {
   return { cancelledShotIds, cancelledQueueItems };
 }
 
-/**
- * Regenerate all configured stills for a shot (force re-materialize stale + missing).
- */
+/** Force-regenerate every currently configured reference, even when fingerprints are current. */
 export async function regenerateShotStills(
   params: ShotStillActionParams,
 ): Promise<ShotStillMaterializationResult> {
@@ -111,6 +106,7 @@ export async function regenerateShotStills(
       shotId: params.shotId,
       reason: 'manual',
       scope: 'all-configured',
+      force: true,
       signal: controller.signal,
       getLiveProject: params.getLiveProject,
       commitLiveProject: params.commitLiveProject,
@@ -122,30 +118,46 @@ export async function regenerateShotStills(
   }
 }
 
-/**
- * Retry only failed / missing / stale stills for a shot.
- */
+/** Retry exactly the runtime failed/missing/stale references, forcing those keys only. */
 export async function retryFailedShotStills(
   params: ShotStillActionParams,
 ): Promise<ShotStillMaterializationResult> {
   const controller = bindController(params.shotId);
   try {
     const status = inspectShotStillRuntime(params.project, params.shotId);
-    for (const artifact of status.artifacts) {
-      if (
-        artifact.status === 'failed'
-        || artifact.status === 'missing'
-        || artifact.status === 'stale'
-      ) {
-        setStillArtifactJobStatus(params.shotId, artifact.key, 'queued');
-        setStillArtifactError(params.shotId, artifact.key, null);
-      }
+    const retryKeys = new Set(
+      status.artifacts
+        .filter((artifact) => (
+          artifact.status === 'failed'
+          || artifact.status === 'missing'
+          || artifact.status === 'stale'
+        ))
+        .map((artifact) => artifact.key),
+    );
+
+    for (const key of retryKeys) {
+      setStillArtifactJobStatus(params.shotId, key, 'queued');
+      setStillArtifactError(params.shotId, key, null);
     }
+
+    if (retryKeys.size === 0) {
+      return {
+        project: params.getLiveProject?.() ?? params.project,
+        shotId: params.shotId,
+        primaryStillAssetId: status.primary?.assetId,
+        status: 'ready',
+        artifacts: [],
+        warnings: [],
+      };
+    }
+
     return await materializeShotStills({
       project: params.project,
       shotId: params.shotId,
       reason: 'manual',
       scope: 'stale-only',
+      artifactKeys: retryKeys,
+      force: true,
       signal: controller.signal,
       getLiveProject: params.getLiveProject,
       commitLiveProject: params.commitLiveProject,
