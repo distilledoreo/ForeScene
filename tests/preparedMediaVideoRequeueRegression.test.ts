@@ -96,14 +96,15 @@ describe('background video edit reconciliation', () => {
     };
 
     scheduler.scheduleAfterCommit(previous, project);
-    expect(discardBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
 
-    for (let index = 0; index < 50 && vi.mocked(queueBackgroundVideosForShot).mock.calls.length === 0; index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await vi.waitFor(() => {
+      expect(discardBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
+    });
+    await vi.waitFor(() => {
+      expect(ensureBackgroundVideoService).toHaveBeenCalledTimes(1);
+      expect(queueBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
+    });
 
-    expect(ensureBackgroundVideoService).toHaveBeenCalledTimes(1);
-    expect(queueBackgroundVideosForShot).toHaveBeenCalledWith(shotId);
     scheduler.dispose();
   });
 });
