@@ -4,9 +4,11 @@ import {
   defaultCharacterPassExportSettings,
   defaultShotDepthSettings,
 } from '../src/domain/defaults';
+import { ensureProjectExportConfiguration } from '../src/engine/exportConfiguration';
 import { materializeShotStills } from '../src/engine/materializeShotStills';
 import { resetPrepareStillArtifactInflightForTests } from '../src/engine/prepareStillArtifact';
 import { renderWorkCoordinator } from '../src/engine/renderWorkCoordinator';
+import { resolveProjectVideoPerformance } from '../src/engine/videoPerformance';
 
 vi.mock('../src/engine/backgroundVideoService', () => ({
   discardBackgroundVideosForShot: vi.fn(),
@@ -31,7 +33,7 @@ function renderMock() {
 }
 
 function minimalProject() {
-  const project = createDefaultProject();
+  const project = ensureProjectExportConfiguration(createDefaultProject());
   const shot = project.shots[0]!;
   shot.exportSettings = {
     ...shot.exportSettings,
@@ -79,13 +81,16 @@ describe('background video edit reconciliation', () => {
     });
 
     const previous = project;
+    const currentPerf = resolveProjectVideoPerformance(project.exportConfiguration);
     project = {
       ...project,
       exportConfiguration: {
-        ...project.exportConfiguration,
+        ...project.exportConfiguration!,
         videoPerformance: {
-          ...project.exportConfiguration.videoPerformance,
-          frameRate: project.exportConfiguration.videoPerformance.frameRate === 24 ? 25 : 24,
+          profileId: currentPerf.profileId,
+          resolutionPreset: currentPerf.resolutionPreset,
+          encoderMode: currentPerf.encoderMode,
+          frameRate: currentPerf.frameRate === 24 ? 25 : 24,
         },
       },
     };
