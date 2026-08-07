@@ -6,9 +6,7 @@
 import type { LocationProject, Shot } from '../domain/types';
 import { materializeShotStills } from './materializeShotStills';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
-import {
-  buildStillArtifactSpecificationsForShot,
-} from './stillArtifactPlanning';
+import { buildStillArtifactSpecificationsForShot } from './stillArtifactPlanning';
 import { stillArtifactKey } from './stillArtifactTypes';
 import type { RenderedStillArtifact } from './stillArtifactRender';
 
@@ -34,9 +32,6 @@ interface ShotReconcileState {
   generation: number;
 }
 
-/**
- * Pure check: would reconciliation cause any still re-renders for this shot?
- */
 export function shotNeedsStillReconciliation(
   project: LocationProject,
   shot: Shot,
@@ -53,7 +48,6 @@ export function shotNeedsStillReconciliation(
     const fp = computeStillArtifactFingerprint(project, shot, spec).key;
     if (existing.fingerprint !== fp) return true;
   }
-  // Also check for obsolete artifacts.
   const desired = new Set(specs.map((spec) => stillArtifactKey(spec)));
   for (const key of Object.keys(shot.materializedMedia?.stills ?? {})) {
     if (!desired.has(key)) return true;
@@ -61,9 +55,6 @@ export function shotNeedsStillReconciliation(
   return false;
 }
 
-/**
- * Metadata-only fields that must never trigger reconciliation.
- */
 export function isMetadataOnlyShotPatch(patch: Partial<Shot>): boolean {
   const keys = Object.keys(patch);
   if (keys.length === 0) return true;
@@ -81,10 +72,6 @@ export function isMetadataOnlyShotPatch(patch: Partial<Shot>): boolean {
   return keys.every((key) => metadataOnly.has(key));
 }
 
-/**
- * Identify shots whose still fingerprints may have changed after a project mutation.
- * Global scene / pano / model changes can affect many shots.
- */
 export function findShotsAffectedByProjectChange(
   previous: LocationProject | undefined,
   next: LocationProject,
@@ -101,8 +88,6 @@ export function findShotsAffectedByProjectChange(
   }
 
   const affected = new Set<string>();
-
-  // Global dependency changes: scene objects, pano refs, assets content.
   const sceneChanged =
     previous.scene !== next.scene
     || previous.scene.objects !== next.scene.objects
@@ -110,8 +95,9 @@ export function findShotsAffectedByProjectChange(
     || previous.scene.panoRotation !== next.scene.panoRotation;
   const panoChanged = previous.panoRefs !== next.panoRefs;
   const assetsChanged = previous.assets !== next.assets;
+  const exportConfigurationChanged = previous.exportConfiguration !== next.exportConfiguration;
 
-  if (sceneChanged || panoChanged || assetsChanged) {
+  if (sceneChanged || panoChanged || assetsChanged || exportConfigurationChanged) {
     for (const shot of next.shots) affected.add(shot.id);
     return [...affected];
   }
@@ -124,7 +110,6 @@ export function findShotsAffectedByProjectChange(
       continue;
     }
     if (prev === shot) continue;
-    // Compare fields that affect fingerprints.
     if (
       prev.camera !== shot.camera
       || prev.cameraKeyframes !== shot.cameraKeyframes
@@ -138,6 +123,15 @@ export function findShotsAffectedByProjectChange(
   }
 
   return [...affected];
+}
+
+async function queueBackgroundVideoAfterEdit(shotId: string): Promise<void> {
+  try {
+    const { queueBackgroundVideosForShot } = await import('./backgroundVideoService');
+    await queueBackgroundVideosForShot(shotId);
+  } catch {
+    // Background video preparation is best-effort and must not fail authoring.
+  }
 }
 
 export function createStillReconciliationScheduler(
@@ -163,7 +157,6 @@ export function createStillReconciliationScheduler(
         perShot.set(shotId, state);
       }
       if (state.timer !== undefined) clearTimeout(state.timer);
-      // Supersede any in-flight work for this shot.
       state.controller?.abort();
       state.controller = undefined;
       state.generation += 1;
@@ -174,7 +167,11 @@ export function createStillReconciliationScheduler(
         const project = options.getProject();
         const shot = project.shots.find((item) => item.id === shotId);
         if (!shot) return;
-        if (!shotNeedsStillReconciliation(project, shot)) return;
+
+        if (!shotNeedsStillReconciliation(project, shot)) {
+          void queueBackgroundVideoAfterEdit(shotId);
+          return;
+        }
 
         const controller = new AbortController();
         state!.controller = controller;
@@ -195,9 +192,11 @@ export function createStillReconciliationScheduler(
           (result) => {
             if (generation !== state!.generation) return;
             state!.controller = undefined;
-            // result.project is already live-merged; avoid full stale overwrite.
             options.setProject(result.project);
             options.onComplete?.(shotId, result);
+            if (result.status !== 'failed') {
+              void queueBackgroundVideoAfterEdit(shotId);
+            }
           },
           (error) => {
             if (generation !== state!.generation) return;
@@ -219,16 +218,14 @@ export function createStillReconciliationScheduler(
     if (patch && isMetadataOnlyShotPatch(patch)) return;
     const affected = findShotsAffectedByProjectChange(previous, next, hintShotIds);
     if (affected.length === 0) return;
-    // Drop obsolete background MP4 work for affected shots.
+
     void import('./backgroundVideoService').then(({ discardBackgroundVideosForShot }) => {
       for (const id of affected) discardBackgroundVideosForShot(id);
     }).catch(() => undefined);
-    // Filter to shots that actually need work (fingerprint gate).
-    const needing = affected.filter((shotId) => {
-      const shot = next.shots.find((item) => item.id === shotId);
-      return shot ? shotNeedsStillReconciliation(next, shot) : false;
-    });
-    if (needing.length > 0) schedule(needing);
+
+    // Debounce both still reconciliation and replacement background-video preparation.
+    // Video-only changes still enter this path even when no still fingerprint changes.
+    schedule(affected);
   }
 
   function dispose(): void {
@@ -253,7 +250,6 @@ export function createStillReconciliationScheduler(
   };
 }
 
-/** Singleton used by the app store (lazily bound). */
 let appScheduler: ReturnType<typeof createStillReconciliationScheduler> | undefined;
 
 export function bindAppStillReconciliationScheduler(
