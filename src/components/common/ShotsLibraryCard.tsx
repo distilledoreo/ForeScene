@@ -1,9 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Download, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { Download, MoreHorizontal, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
 import { getShotPrimaryLabel, hasCustomShotTitle } from '../../domain/shotIdentity';
 import { resolveShotMedia, resolveShotMediaPoster } from '../../domain/shotMedia';
 import { LocationProject, ProjectAsset, Shot } from '../../domain/types';
+import { getBackgroundVideoServiceStatus } from '../../engine/backgroundVideoService';
+import { buildVideoArtifactSpecificationsForShot } from '../../engine/backgroundVideoPreparation';
 import { downloadDataUrl } from '../../engine/fileTransfers';
+import {
+  cancelShotStillPreparation,
+  regenerateShotStills,
+  retryFailedShotStills,
+} from '../../engine/shotStillActions';
+import { inspectShotStillRuntime } from '../../engine/stillArtifactRuntime';
+import { usePreparedMediaRuntimeTick } from '../../hooks/usePreparedMediaRuntimeTick';
+import { useProjectStore } from '../../state/useProjectStore';
 import { AnchoredMenuPopover } from './AnchoredMenuPopover';
 import { ShotCameraRollThumbnail } from './ShotCameraRollThumbnail';
 
@@ -32,12 +42,31 @@ export function ShotsLibraryCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [preparedActionBusy, setPreparedActionBusy] = useState(false);
   const [draftProductionId, setDraftProductionId] = useState(shot.productionShotId ?? '');
   const [draftTitle, setDraftTitle] = useState(shot.name);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const poster = resolveShotMediaPoster(project, shot);
   const primaryLabel = getShotPrimaryLabel(shot);
   const customTitle = hasCustomShotTitle(shot);
+
+  // Runtime preparation state intentionally lives outside the project document.
+  // One shared clock keeps cards current while queued/running jobs change.
+  usePreparedMediaRuntimeTick();
+  const preparedStatus = inspectShotStillRuntime(project, shot);
+  const preparedUpdating = preparedStatus.artifacts.some(
+    (artifact) => artifact.status === 'queued' || artifact.status === 'rendering',
+  );
+  const preparedNeedsAttention = preparedStatus.artifacts.some(
+    (artifact) => artifact.status === 'failed'
+      || artifact.status === 'missing'
+      || artifact.status === 'stale',
+  );
+  const videoRequested = buildVideoArtifactSpecificationsForShot(project, shot).length > 0;
+  const backgroundVideoStatus = getBackgroundVideoServiceStatus();
+  const backgroundVideoActive = selected
+    && videoRequested
+    && (backgroundVideoStatus.running || backgroundVideoStatus.pending > 0);
 
   useEffect(() => {
     if (!sheetOpen) setMenuOpen(false);
@@ -76,6 +105,38 @@ export function ShotsLibraryCard({
     setMenuOpen(false);
     if (!canDelete) return;
     onRequestDelete(shot);
+  };
+
+  const preparedActionParams = () => ({
+    project: useProjectStore.getState().project,
+    shotId: shot.id,
+    getLiveProject: () => useProjectStore.getState().project,
+    commitLiveProject: (updater: (live: LocationProject) => LocationProject) => {
+      useProjectStore.setState((current) => ({
+        project: updater(current.project),
+      }));
+      return useProjectStore.getState().project;
+    },
+  });
+
+  const runRegenerate = () => {
+    setMenuOpen(false);
+    setPreparedActionBusy(true);
+    void regenerateShotStills(preparedActionParams())
+      .finally(() => setPreparedActionBusy(false));
+  };
+
+  const runRetry = () => {
+    setMenuOpen(false);
+    setPreparedActionBusy(true);
+    void retryFailedShotStills(preparedActionParams())
+      .finally(() => setPreparedActionBusy(false));
+  };
+
+  const runCancel = () => {
+    cancelShotStillPreparation(shot.id);
+    setPreparedActionBusy(false);
+    setMenuOpen(false);
   };
 
   return (
@@ -156,20 +217,42 @@ export function ShotsLibraryCard({
             </div>
           </form>
         ) : (
-          <button
-            type="button"
-            onClick={() => setRenaming(true)}
-            className="group flex w-full items-start gap-1 text-left"
-            aria-label={`Rename ${primaryLabel}`}
-          >
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[11px] font-semibold text-white">{primaryLabel}</p>
-              {customTitle && (
-                <p className="truncate text-[10px] text-white/65">{shot.name}</p>
-              )}
-            </div>
-            <Pencil className="mt-0.5 h-3 w-3 shrink-0 text-white/35 opacity-0 transition group-hover:opacity-100" />
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => setRenaming(true)}
+              className="group flex w-full items-start gap-1 text-left"
+              aria-label={`Rename ${primaryLabel}`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-semibold text-white">{primaryLabel}</p>
+                {customTitle && (
+                  <p className="truncate text-[10px] text-white/65">{shot.name}</p>
+                )}
+              </div>
+              <Pencil className="mt-0.5 h-3 w-3 shrink-0 text-white/35 opacity-0 transition group-hover:opacity-100" />
+            </button>
+            <p
+              className={`truncate text-[9px] ${
+                preparedStatus.overall === 'failed'
+                  ? 'text-red-300'
+                  : preparedUpdating
+                    ? 'text-amber-200'
+                    : preparedStatus.overall === 'ready'
+                      ? 'text-emerald-300'
+                      : 'text-white/55'
+              }`}
+              title={preparedStatus.label}
+              data-prepared-media-status
+            >
+              {preparedStatus.label}
+            </p>
+            {backgroundVideoActive && (
+              <p className="truncate text-[9px] text-sky-300" data-background-video-status>
+                Background video preparing…
+              </p>
+            )}
+          </>
         )}
       </div>
 
@@ -192,15 +275,35 @@ export function ShotsLibraryCard({
           open={menuOpen}
           anchorRef={menuButtonRef}
           onClose={() => setMenuOpen(false)}
-          className="min-w-[9rem] rounded-lg border border-white/10 bg-zinc-900 py-1 shadow-soft"
+          className="min-w-[11rem] rounded-lg border border-white/10 bg-zinc-900 py-1 shadow-soft"
           aria-label={`Actions for ${primaryLabel}`}
         >
           <MenuButton label="Rename" onClick={() => { setRenaming(true); setMenuOpen(false); }} />
           <MenuButton label="Open shot" onClick={() => { onOpenShot(shot.id); setMenuOpen(false); }} />
+          <MenuButton label="Inspect references" onClick={() => { onOpenMedia(shot.id); setMenuOpen(false); }} />
+          <MenuButton
+            label="Regenerate references"
+            onClick={runRegenerate}
+            disabled={preparedActionBusy || preparedUpdating}
+            icon={<RefreshCw className="h-3 w-3" />}
+          />
+          <MenuButton
+            label="Retry failed references"
+            onClick={runRetry}
+            disabled={preparedActionBusy || preparedUpdating || !preparedNeedsAttention}
+            icon={<RefreshCw className="h-3 w-3" />}
+          />
+          <MenuButton
+            label="Cancel preparation"
+            onClick={runCancel}
+            disabled={!preparedUpdating}
+            icon={<X className="h-3 w-3" />}
+          />
           <MenuButton
             label="Download"
             onClick={downloadPrimaryAsset}
             disabled={!poster}
+            icon={<Download className="h-3 w-3" />}
           />
           <MenuButton
             label="Delete"
@@ -233,11 +336,13 @@ function MenuButton({
   onClick,
   disabled,
   destructive,
+  icon,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  icon?: React.ReactNode;
 }) {
   return (
     <button
@@ -245,11 +350,12 @@ function MenuButton({
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className={`block w-full px-3 py-1.5 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${
         destructive ? 'text-red-300 hover:bg-red-950/50' : 'text-white/85 hover:bg-white/10'
       }`}
     >
-      {label}
+      {icon}
+      <span>{label}</span>
     </button>
   );
 }
