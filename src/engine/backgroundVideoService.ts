@@ -5,7 +5,9 @@
 
 import type { LocationProject } from '../domain/types';
 import {
+  buildVideoArtifactSpecificationsForShot,
   createBackgroundVideoScheduler,
+  type BackgroundVideoRuntimeStatus,
 } from './backgroundVideoPreparation';
 import type { PreparedVideoArtifact } from './prepareVideoArtifact';
 
@@ -15,6 +17,11 @@ let scheduler: Scheduler | undefined;
 let boundGetProject: (() => LocationProject) | undefined;
 let visibilityHandler: (() => void) | undefined;
 let visibilityBound = false;
+const shotStatuses = new Map<string, BackgroundVideoRuntimeStatus>();
+
+function setShotStatus(shotId: string, status: BackgroundVideoRuntimeStatus): void {
+  shotStatuses.set(shotId, status);
+}
 
 export function bindBackgroundVideoService(options: {
   getProject: () => LocationProject;
@@ -30,6 +37,7 @@ export function bindBackgroundVideoService(options: {
     getProject: () => (boundGetProject ? boundGetProject() : options.getProject()),
     onPrepared: options.onPrepared,
     onError: options.onError,
+    onStatusChange: setShotStatus,
   });
   bindVisibilityLifecycle();
 }
@@ -64,6 +72,23 @@ export function getBackgroundVideoServiceStatus(): {
   };
 }
 
+/**
+ * Resolve a user-facing per-shot video preparation state.
+ * Configured-but-never-queued shots report pending; shots with no requested
+ * MP4 candidates report not-requested.
+ */
+export function getBackgroundVideoShotStatus(
+  project: LocationProject,
+  shotId: string,
+): BackgroundVideoRuntimeStatus {
+  const shot = project.shots.find((item) => item.id === shotId);
+  if (!shot) return 'not-requested';
+  if (buildVideoArtifactSpecificationsForShot(project, shot).length === 0) {
+    return 'not-requested';
+  }
+  return shotStatuses.get(shotId) ?? 'pending';
+}
+
 export function ensureBackgroundVideoService(
   getProject: () => LocationProject,
 ): Scheduler {
@@ -76,17 +101,28 @@ export function ensureBackgroundVideoService(
 
 export async function queueBackgroundVideosForShot(shotId: string): Promise<void> {
   if (!scheduler || !boundGetProject) return;
+  const project = boundGetProject();
+  const shot = project.shots.find((item) => item.id === shotId);
+  if (!shot || buildVideoArtifactSpecificationsForShot(project, shot).length === 0) {
+    setShotStatus(shotId, 'not-requested');
+    return;
+  }
+  setShotStatus(shotId, 'queued');
   await scheduler.queueMissingForShot(shotId);
 }
 
 export function discardBackgroundVideosForShot(shotId: string): void {
   scheduler?.discardForShot(shotId);
+  if (shotStatuses.get(shotId) !== 'not-requested') {
+    setShotStatus(shotId, 'pending');
+  }
 }
 
 export function disposeBackgroundVideoService(): void {
   scheduler?.dispose();
   scheduler = undefined;
   boundGetProject = undefined;
+  shotStatuses.clear();
   if (visibilityHandler && typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', visibilityHandler);
   }
