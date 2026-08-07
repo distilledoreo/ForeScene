@@ -51,7 +51,12 @@ export function ShotCameraRollThumbnail({
 }) {
   const [hovered, setHovered] = useState(false);
   const poster = resolveShotMediaPoster(project, shot);
-  const mediaCount = resolveShotMedia(project, shot).length;
+  // The badge represents primary/captured media. Generated depth/character/reference
+  // stills remain inspectable in the viewer but should not make a single capture look
+  // like a dozen manually captured items.
+  const mediaCount = resolveShotMedia(project, shot)
+    .filter((item) => item.source !== 'prepared_reference')
+    .length;
   const hasCapture = hasShotCapture(project, shot);
   const hasCameraMove = shotHasCameraMoveVideo(project, shot);
   const hasKeyframeMove = shotHasCameraKeyframeMove(shot);
@@ -60,7 +65,6 @@ export function ShotCameraRollThumbnail({
     [shot.cameraKeyframes],
   );
   const useKeyframeRoll = keyframeFrames.length >= 2;
-  // Animate when hovered, or when parent forces it (selected card). Default: static first frame.
   const animate = animateKeyframeRoll ?? hovered;
   const src = poster?.kind === 'image' ? poster.asset.uri : undefined;
   const videoSrc = poster?.kind === 'video' ? poster.asset.uri : undefined;
