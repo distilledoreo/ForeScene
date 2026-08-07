@@ -25,7 +25,7 @@ function twoShotProject(): LocationProject {
   const first = project.shots[0]!;
   const second = structuredClone(first);
   second.id = 'shot-performance-2';
-  second.shotNumber = 2;
+  second.shotNumber = '2';
   second.name = 'Performance Shot 2';
   second.materializedMedia = undefined;
   second.assets = {};
