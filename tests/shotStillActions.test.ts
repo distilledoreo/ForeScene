@@ -15,11 +15,15 @@ import {
 } from '../src/engine/shotStillActions';
 import { resolveShotThumbnail } from '../src/domain/shotThumbnails';
 import { stillArtifactKey } from '../src/engine/stillArtifactTypes';
-import { selectPrimaryStillSpecification, buildStillArtifactSpecificationsForShot } from '../src/engine/stillArtifactPlanning';
+import { buildStillArtifactSpecificationsForShot, selectPrimaryStillSpecification } from '../src/engine/stillArtifactPlanning';
+import {
+  resetStillArtifactRuntimeForTests,
+  setStillArtifactError,
+} from '../src/engine/stillArtifactRuntime';
 
 function mockRender() {
   return vi.fn(async ({ specification }) => ({
-    blob: new Blob([`png-${specification.kind}`], { type: 'image/png' }),
+    blob: new Blob([`png-${specification.kind}-${Date.now()}`], { type: 'image/png' }),
     width: specification.width,
     height: specification.height,
     mimeType: 'image/png' as const,
@@ -47,15 +51,17 @@ describe('shot still actions + stale thumbnails', () => {
     resetPrepareStillArtifactInflightForTests();
     renderWorkCoordinator.resetForTests();
     resetShotStillActionsForTests();
+    resetStillArtifactRuntimeForTests();
   });
 
   afterEach(() => {
     resetPrepareStillArtifactInflightForTests();
     renderWorkCoordinator.resetForTests();
     resetShotStillActionsForTests();
+    resetStillArtifactRuntimeForTests();
   });
 
-  it('regenerateShotStills re-materializes configured stills', async () => {
+  it('regenerateShotStills forces a fresh render even when the artifact is current', async () => {
     let project = minimalProject();
     const shotId = project.shots[0]!.id;
     const render = mockRender();
@@ -67,24 +73,19 @@ describe('shot still actions + stale thumbnails', () => {
       render,
     });
     project = first.project;
-    const callsAfterFirst = render.mock.calls.length;
-
-    // Invalidate
-    project = {
-      ...project,
-      shots: project.shots.map((item) =>
-        item.id === shotId
-          ? { ...item, camera: { ...item.camera, fovDegrees: item.camera.fovDegrees + 4 } }
-          : item
-      ),
-    };
+    const firstAssetId = first.primaryStillAssetId;
+    render.mockClear();
 
     const regen = await regenerateShotStills({ project, shotId, render });
     expect(regen.status).toBe('ready');
-    expect(render.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(regen.artifacts).toHaveLength(1);
+    expect(regen.artifacts[0]?.status).toBe('rendered');
+    expect(regen.primaryStillAssetId).toBeTruthy();
+    expect(regen.primaryStillAssetId).not.toBe(firstAssetId);
   });
 
-  it('retryFailedShotStills only targets stale/missing', async () => {
+  it('retryFailedShotStills forces a runtime-failed key even when its stored fingerprint is current', async () => {
     let project = minimalProject();
     const shotId = project.shots[0]!.id;
     const render = mockRender();
@@ -97,7 +98,32 @@ describe('shot still actions + stale thumbnails', () => {
     });
     project = first.project;
 
-    // Make primary stale via camera edit
+    const shot = project.shots[0]!;
+    const specs = buildStillArtifactSpecificationsForShot({ project, shot, purpose: 'reconcile' });
+    const primary = selectPrimaryStillSpecification(project, shot, specs);
+    const key = stillArtifactKey(primary);
+    setStillArtifactError(shotId, key, 'previous render failed');
+    render.mockClear();
+
+    const retry = await retryFailedShotStills({ project, shotId, render });
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(retry.artifacts).toHaveLength(1);
+    expect(retry.artifacts[0]?.key).toBe(key);
+    expect(retry.artifacts[0]?.status).toBe('rendered');
+  });
+
+  it('retryFailedShotStills targets a fingerprint-stale artifact', async () => {
+    let project = minimalProject();
+    const shotId = project.shots[0]!.id;
+    const render = mockRender();
+    const first = await materializeShotStills({
+      project,
+      shotId,
+      reason: 'capture',
+      scope: 'primary',
+      render,
+    });
+    project = first.project;
     project = {
       ...project,
       shots: project.shots.map((item) =>
@@ -106,10 +132,10 @@ describe('shot still actions + stale thumbnails', () => {
           : item
       ),
     };
-    const before = render.mock.calls.length;
+    render.mockClear();
     const retry = await retryFailedShotStills({ project, shotId, render });
-    expect(retry.artifacts.some((a) => a.status === 'rendered' || a.status === 'current')).toBe(true);
-    expect(render.mock.calls.length).toBeGreaterThan(before);
+    expect(retry.artifacts.some((a) => a.status === 'rendered')).toBe(true);
+    expect(render).toHaveBeenCalledTimes(1);
   });
 
   it('cancelShotStillPreparation aborts in-flight batch', async () => {
@@ -137,7 +163,6 @@ describe('shot still actions + stale thumbnails', () => {
     });
 
     const promise = regenerateShotStills({ project, shotId, render });
-    // Wait until render starts
     for (let i = 0; i < 50 && !started; i += 1) {
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -163,7 +188,6 @@ describe('shot still actions + stale thumbnails', () => {
     expect(readyThumb.stale).toBe(false);
     expect(readyThumb.source).toBe('materialized_primary');
 
-    // Edit camera without regenerating — fingerprint no longer matches.
     const editedShot = {
       ...liveShot,
       camera: { ...liveShot.camera, fovDegrees: liveShot.camera.fovDegrees + 9 },
@@ -180,15 +204,10 @@ describe('shot still actions + stale thumbnails', () => {
 });
 
 describe('project change reconciliation hook surface', () => {
-  it('applyBuildSceneChange wrapper schedules reconciliation path exists', async () => {
-    // Structural: stillReconciliationBridge exports project-level scheduler used by projectSlice.
+  it('build-scene and project-level scheduling surfaces exist', async () => {
     const bridge = await import('../src/state/stillReconciliationBridge');
     expect(typeof bridge.scheduleStillReconciliationAfterProjectChange).toBe('function');
     expect(typeof bridge.scheduleStillReconciliationAfterBuildSceneCommit).toBe('function');
-    const source = await import('node:fs').then((fs) =>
-      fs.readFileSync(new URL('../src/state/slices/projectSlice.ts', import.meta.url), 'utf8'),
-    );
-    expect(source).toContain('scheduleStillReconciliationAfterBuildSceneCommit');
-    expect(source).toContain('scheduleStillReconciliationAfterProjectChange');
+    expect(typeof bridge.rebindStillReconciliation).toBe('function');
   });
 });
