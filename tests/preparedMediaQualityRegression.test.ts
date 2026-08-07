@@ -10,8 +10,12 @@ import { resetPrepareStillArtifactInflightForTests } from '../src/engine/prepare
 import { resetProjectAssetStoreForTests } from '../src/engine/projectAssetStore';
 import { renderWorkCoordinator } from '../src/engine/renderWorkCoordinator';
 import { stillArtifactKey } from '../src/engine/stillArtifactTypes';
-import { getAppStillReconciliationScheduler } from '../src/engine/stillArtifactReconciliation';
+import {
+  getAppStillReconciliationScheduler,
+  resetAppStillReconciliationSchedulerForTests,
+} from '../src/engine/stillArtifactReconciliation';
 import { resolveProjectVideoPerformance } from '../src/engine/videoPerformance';
+import { resetStillReconciliationBridgeForTests } from '../src/state/stillReconciliationBridge';
 import { useProjectStore } from '../src/state/useProjectStore';
 
 function renderMock() {
@@ -39,18 +43,17 @@ function projectWithClayPeopleBoth() {
   return project;
 }
 
-describe('prepared media quality regressions', () => {
-  beforeEach(() => {
-    resetProjectAssetStoreForTests();
-    resetPrepareStillArtifactInflightForTests();
-    renderWorkCoordinator.resetForTests();
-  });
+function resetRuntime(): void {
+  resetAppStillReconciliationSchedulerForTests();
+  resetStillReconciliationBridgeForTests();
+  resetProjectAssetStoreForTests();
+  resetPrepareStillArtifactInflightForTests();
+  renderWorkCoordinator.resetForTests();
+}
 
-  afterEach(() => {
-    resetProjectAssetStoreForTests();
-    resetPrepareStillArtifactInflightForTests();
-    renderWorkCoordinator.resetForTests();
-  });
+describe('prepared media quality regressions', () => {
+  beforeEach(resetRuntime);
+  afterEach(resetRuntime);
 
   it('clears the matching legacy viewport slot when an output variant is pruned', async () => {
     let project = projectWithClayPeopleBoth();
