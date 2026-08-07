@@ -107,6 +107,10 @@ export async function queueBackgroundVideosForShot(shotId: string): Promise<void
     setShotStatus(shotId, 'not-requested');
     return;
   }
+  if (getBackgroundVideoServiceStatus().paused) {
+    setShotStatus(shotId, 'pending');
+    return;
+  }
   setShotStatus(shotId, 'queued');
   await scheduler.queueMissingForShot(shotId);
 }
