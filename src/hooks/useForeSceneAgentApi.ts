@@ -11,23 +11,57 @@ import { useEffect } from 'react';
 import { createForeSceneBrowserApi } from '../engine/agent/browserApi';
 import type {
   AgentShotMaterializationResult,
+  ForeSceneAgentStatus,
   ForeSceneBrowserApi,
 } from '../engine/agent/protocol';
+import { renderWorkCoordinator } from '../engine/renderWorkCoordinator';
 import { useProjectSafetyStore } from '../state/useProjectSafetyStore';
 import { useProjectStore } from '../state/useProjectStore';
 
+function statusIsBusy(status: ForeSceneAgentStatus): boolean {
+  return status.busy.criticalWrite
+    || status.busy.grayboxRender
+    || status.busy.packageExport
+    || status.busy.videoRender
+    || status.busy.characterImport;
+}
+
 /**
  * Apply the exact runtime facade installed on window.foreScene.
- * Exported so protocol/compatibility tests exercise the installed behavior rather
- * than source-grepping the underlying browser API implementation.
+ * Exported so protocol/compatibility tests exercise installed behavior.
  */
 export function applyForeSceneAgentApiFacade(api: ForeSceneBrowserApi): ForeSceneBrowserApi {
   const preparedCapture = api.captureShotThumbnail.bind(api);
+  const baseGetStatus = api.getStatus.bind(api);
   const mutableApi = api as ForeSceneBrowserApi & {
     captureShotPreparedMedia?: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
   };
 
   mutableApi.captureShotPreparedMedia = (input) => preparedCapture({ shotId: input.shotId });
+
+  // The v1 busy schema has no separate prepared-media field. Fold coordinator
+  // activity into the existing render-busy bit on the installed surface so CLI
+  // getStatus/waitForIdle cannot report idle while a still/video GPU job is live.
+  mutableApi.getStatus = () => {
+    const status = baseGetStatus();
+    const preparedBusy = renderWorkCoordinator.getStatus().activeCount > 0;
+    if (!preparedBusy || status.busy.videoRender) return status;
+    return {
+      ...status,
+      busy: { ...status.busy, videoRender: true },
+    };
+  };
+
+  mutableApi.waitForIdle = async (options = {}) => {
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const startedAt = Date.now();
+    while (true) {
+      const status = mutableApi.getStatus();
+      if (!statusIsBusy(status)) return status;
+      if (Date.now() - startedAt >= timeoutMs) return status;
+      await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    }
+  };
 
   mutableApi.captureShotThumbnail = async (input): Promise<AgentShotMaterializationResult> => {
     const rendered = await api.renderShotFrame({
