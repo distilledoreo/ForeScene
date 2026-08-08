@@ -4,11 +4,13 @@
 
 import type { LocationProject, Shot } from '../domain/types';
 import { commitPreparedStillArtifact } from './commitPreparedStillArtifact';
+import { getLiveProjectAccess } from './liveProjectAccess';
 import {
   createProjectAssetStorageKey,
   deleteProjectAssetBlob,
   getProjectAssetBlob,
 } from './projectAssetStore';
+import { pruneUnreferencedProjectAssets } from './projectAssets';
 import { prepareStillArtifact } from './prepareStillArtifact';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
@@ -84,6 +86,32 @@ async function cleanupPersistedRecoveryAsset(
   await deleteProjectAssetBlob(key).catch(() => undefined);
 }
 
+function resolveLiveAccess(params: EnsureStillArtifactForExportParams): {
+  getLiveProject?: () => LocationProject;
+  commitLiveProject?: (updater: (live: LocationProject) => LocationProject) => LocationProject;
+  initialLiveProject?: LocationProject;
+} {
+  if (params.getLiveProject || params.commitLiveProject || params.liveProject) {
+    const explicit = params.getLiveProject?.() ?? params.liveProject;
+    return explicit?.id === params.frozenProject.id
+      ? {
+        getLiveProject: params.getLiveProject,
+        commitLiveProject: params.commitLiveProject,
+        initialLiveProject: explicit,
+      }
+      : {};
+  }
+
+  const bound = getLiveProjectAccess();
+  const active = bound?.getProject();
+  if (!bound || !active || active.id !== params.frozenProject.id) return {};
+  return {
+    getLiveProject: bound.getProject,
+    commitLiveProject: bound.commitProject,
+    initialLiveProject: active,
+  };
+}
+
 export async function ensureStillArtifactForExport(
   params: EnsureStillArtifactForExportParams,
 ): Promise<EnsureStillArtifactForExportResult> {
@@ -94,6 +122,7 @@ export async function ensureStillArtifactForExport(
   const expected = computeStillArtifactFingerprint(frozenProject, shot, specification);
   const key = stillArtifactKey(specification);
   const existing = shot.materializedMedia?.stills[key];
+  const liveAccess = resolveLiveAccess(params);
 
   if (existing && existing.fingerprint === expected.key) {
     const blob = await loadAssetBlob(frozenProject, existing.assetId);
@@ -104,7 +133,7 @@ export async function ensureStillArtifactForExport(
         assetId: existing.assetId,
         source: 'materialized-asset',
         frozenProject,
-        liveProject: params.liveProject,
+        liveProject: liveAccess.initialLiveProject,
       };
     }
   }
@@ -125,14 +154,18 @@ export async function ensureStillArtifactForExport(
 
   if (!prepared.blob) throw new Error(`Still recovery for ${key} produced no blob.`);
 
-  let liveProject = params.getLiveProject?.() ?? params.liveProject;
+  let liveProject = liveAccess.getLiveProject?.() ?? liveAccess.initialLiveProject;
   let nextFrozen = frozenProject;
 
-  if (liveProject) {
+  if (liveProject?.id === frozenProject.id) {
     const liveShot = liveProject.shots.find((item) => item.id === shotId);
     if (liveShot) {
       const liveFp = computeStillArtifactFingerprint(liveProject, liveShot, specification);
       if (liveFp.key === expected.key) {
+        const previousArtifact = liveShot.materializedMedia?.stills[key];
+        const previousAsset = previousArtifact
+          ? liveProject.assets.assets[previousArtifact.assetId]
+          : undefined;
         const commit = await commitPreparedStillArtifact({
           project: liveProject,
           shotId,
@@ -143,10 +176,15 @@ export async function ensureStillArtifactForExport(
         if (commit.ok) {
           const committedAsset = commit.project.assets.assets[commit.assetId];
           if (!committedAsset) throw new Error(`Recovered still ${key} committed without an asset record.`);
+          const supersededAssetId = commit.supersededAssetId;
+          const supersededStorageKey = supersededAssetId
+            ? previousAsset?.storageKey ?? createProjectAssetStorageKey(frozenProject.id, supersededAssetId)
+            : undefined;
 
-          if (params.commitLiveProject) {
+          if (liveAccess.commitLiveProject) {
             let mergedIntoLive = false;
-            liveProject = params.commitLiveProject((live) => {
+            liveProject = liveAccess.commitLiveProject((live) => {
+              if (live.id !== frozenProject.id) return live;
               const liveShotNow = live.shots.find((item) => item.id === shotId);
               if (!liveShotNow) return live;
               const liveFingerprintNow = computeStillArtifactFingerprint(live, liveShotNow, specification);
@@ -154,7 +192,7 @@ export async function ensureStillArtifactForExport(
 
               mergedIntoLive = true;
               const legacySlot = legacyViewportSlotPatch(specification, commit.assetId);
-              return {
+              const merged: LocationProject = {
                 ...live,
                 assets: {
                   ...live.assets,
@@ -170,6 +208,7 @@ export async function ensureStillArtifactForExport(
                 } : item),
                 updatedAt: new Date().toISOString(),
               };
+              return supersededAssetId ? pruneUnreferencedProjectAssets(merged) : merged;
             });
 
             if (!mergedIntoLive) {
@@ -178,6 +217,15 @@ export async function ensureStillArtifactForExport(
             }
           } else {
             liveProject = commit.project;
+          }
+
+          if (
+            supersededAssetId
+            && supersededStorageKey
+            && liveProject
+            && !liveProject.assets.assets[supersededAssetId]
+          ) {
+            await deleteProjectAssetBlob(supersededStorageKey).catch(() => undefined);
           }
 
           nextFrozen = {
