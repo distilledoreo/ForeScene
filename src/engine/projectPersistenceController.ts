@@ -149,9 +149,6 @@ export class ProjectPersistenceController {
       this.ignoredProject = undefined;
       return;
     }
-    // The explicit destructive transaction has already committed its pre-change
-    // snapshot. It takes responsibility for immediately saving this exact next
-    // state, so the comparison detector stays a fallback rather than a delay.
     if (this.protectedMutationDepth > 0) return;
     const reason = getAutomaticSnapshotReason(previous, next);
     if (reason && this.shouldCreateAutomaticSnapshot(reason)) {
@@ -189,11 +186,6 @@ export class ProjectPersistenceController {
     });
   }
 
-  /**
-   * Commit the pre-change snapshot before mutating Zustand state, then write
-   * and reload the changed revision. If the process stops at any point, the
-   * snapshot remains the active, fully validated recovery point.
-   */
   async runDestructiveMutation(
     _projectBeforeMutation: LocationProject,
     reason: string,
@@ -203,8 +195,6 @@ export class ProjectPersistenceController {
     if (this.disposed) return undefined;
     this.clearTimer();
     return this.enqueue(async () => {
-      // Capture the pre-change state only after earlier queued persistence work
-      // has completed. The caller's original object may be stale by this point.
       const projectBeforeMutation = cloneProject(getCurrentProject());
       this.emit({ status: 'saving', message: 'Creating a recovery point before this change…', criticalWrite: true });
       const snapshot = await createProjectSnapshot(projectBeforeMutation, reason);
@@ -244,11 +234,6 @@ export class ProjectPersistenceController {
     return this.enqueue(() => this.persistPending(reason));
   }
 
-  /**
-   * Flush the supplied live-store snapshot. This closes the small startup
-   * window where store normalization has completed but its subscription has
-   * not yet reached `noteProjectChange`.
-   */
   async flushCurrentProject(
     project: LocationProject,
     reason = 'Manual save',
@@ -264,7 +249,6 @@ export class ProjectPersistenceController {
     return this.hasUnsavedChanges || this.pendingSave || this.pendingSnapshots.length > 0;
   }
 
-  /** Surface a background asset-cache failure instead of hiding it from users. */
   reportAssetPersistenceFailure(error: unknown): void {
     if (this.disposed) return;
     this.hasUnsavedChanges = true;
@@ -305,9 +289,6 @@ export class ProjectPersistenceController {
 
   private shouldCreateAutomaticSnapshot(reason: string): boolean {
     if (this.pendingSnapshots.some((snapshot) => snapshot.reason === reason)) return false;
-    // Settings can emit dozens of slider updates in one interaction. Keep the
-    // first pre-change state, then rely on normal revisions until a new
-    // meaningful settings session begins.
     if (reason !== 'Before major project settings change') return true;
     const now = Date.now();
     const previous = this.lastAutomaticSnapshotAtByReason.get(reason) ?? 0;
@@ -368,12 +349,12 @@ export class ProjectPersistenceController {
   ): Promise<VerifiedProjectRevision> {
     this.emit({ status: 'saving', message: 'Saving a verified local revision…', criticalWrite: true });
     const result = await saveProjectRevision(project, { kind, reason });
-    // Reload the committed manifest and hash-verify every referenced binary.
-    // This object is deliberately independent from mutable Zustand state.
     const verified = await loadProjectRevision(result.revision.id);
     let maintenanceWarning = result.maintenanceWarning;
     try {
-      await cleanupUnreferencedProjectAssetPayloads(project);
+      await cleanupUnreferencedProjectAssetPayloads(project, {
+        getLiveProject: () => this.latestProject,
+      });
     } catch {
       maintenanceWarning ??= 'Saved safely, but old local prepared-media cleanup will be retried later.';
     }
