@@ -158,8 +158,7 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
     if (!state) return;
     if (state.timer !== undefined) clearTimeout(state.timer);
     state.controller?.abort();
-    state.timer = undefined;
-    state.controller = undefined;
+    perShot.delete(shotId);
   }
 
   function schedule(shotIds: readonly string[]): void {
@@ -204,7 +203,10 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
           (result) => {
             if (generation !== state!.generation) return;
             state!.controller = undefined;
-            options.setProject(result.project);
+            // materializeShotStills already committed each accepted artifact through
+            // commitLiveProject against the latest live project. Never write the
+            // returned whole-project snapshot here: another shot may have advanced
+            // between the final read and this continuation.
             options.onComplete?.(shotId, result);
             if (result.status !== 'failed') void queueBackgroundVideoAfterEdit(shotId);
           },
@@ -241,7 +243,7 @@ export function createStillReconciliationScheduler(options: ReconciliationSchedu
   }
 
   function dispose(): void {
-    for (const shotId of perShot.keys()) cancelShot(shotId);
+    for (const shotId of [...perShot.keys()]) cancelShot(shotId);
     perShot.clear();
   }
 
