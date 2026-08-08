@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 
 import { useShallow } from 'zustand/shallow';
 import type { CameraData, Shot } from '../../domain/types';
 import type { ShotStillViewSelection } from '../../domain/shotStillViews';
+import { runSettledSequentially } from '../../engine/asyncJobs';
 import {
   getProjectedStillDownloadName,
   getViewportStillDownloadName,
@@ -132,21 +133,21 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
         });
         downloadDataUrl(frame.dataUrl, clayName);
         if (canUseProjectedAppearance(renderProject)) {
-          try {
-            const projected = await renderShotProjectedFrame(renderProject, renderShot, { peopleVariant: variant });
-            const baseProjectedName = getProjectedStillDownloadName(renderShot);
-            const projectedName = getPeopleVariantPath(baseProjectedName, variant, peopleMode);
-            attachViewportRenderToShot(renderShot.id, {
-              name: projectedName,
-              dataUrl: projected.dataUrl,
-              width: projected.width,
-              height: projected.height,
-              stillView: { appearance: 'projected', people: stillPeople },
-            });
-            downloadDataUrl(projected.dataUrl, projectedName);
-          } catch {
-            // Soft-fail projected companion; clay already succeeded.
-          }
+          await runSettledSequentially([
+            async () => {
+              const projected = await renderShotProjectedFrame(renderProject, renderShot, { peopleVariant: variant });
+              const baseProjectedName = getProjectedStillDownloadName(renderShot);
+              const projectedName = getPeopleVariantPath(baseProjectedName, variant, peopleMode);
+              attachViewportRenderToShot(renderShot.id, {
+                name: projectedName,
+                dataUrl: projected.dataUrl,
+                width: projected.width,
+                height: projected.height,
+                stillView: { appearance: 'projected', people: stillPeople },
+              });
+              downloadDataUrl(projected.dataUrl, projectedName);
+            },
+          ]);
         }
       }
       if (!shotCameraFlying) updateShot(renderShot.id, { status: 'exported' });
@@ -181,6 +182,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
         target: [...camera.target] as CameraData['target'],
       },
     };
+    void previewShot;
     setSnapshotError(undefined);
     if (options?.markThumbnailFreshOnSuccess) thumbnailFreshAfterFinishRef.current = false;
 
