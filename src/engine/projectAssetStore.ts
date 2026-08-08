@@ -92,6 +92,37 @@ export function getManagedProjectAssetBlobKeyForUri(uri: string): string | undef
   return undefined;
 }
 
+/**
+ * True while a payload is resident in the active session. Cleanup must not
+ * delete resident keys merely because an older save snapshot does not contain
+ * a newly committed asset yet. Such keys can be reconsidered after they are
+ * explicitly released or on a later session.
+ */
+export function hasResidentProjectAssetBlob(key: string): boolean {
+  return memoryBlobs.has(key) || objectUrls.has(key);
+}
+
+/**
+ * Release only in-memory payloads/object URLs for a departed project. Durable
+ * IndexedDB rows remain available for local-first reopening and quota/LRU policy.
+ */
+export function releaseProjectAssetMemoryForProject(projectId: string): void {
+  const prefixes = [`project/${projectId}/`, `import/${projectId}/`];
+  const matches = (key: string) => prefixes.some((prefix) => key.startsWith(prefix));
+  for (const key of [...memoryBlobs.keys()]) {
+    if (!matches(key)) continue;
+    memoryBlobs.delete(key);
+    memoryBlobVersions.delete(key);
+  }
+  for (const [key, url] of [...objectUrls.entries()]) {
+    if (!matches(key)) continue;
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(url);
+    }
+    objectUrls.delete(key);
+  }
+}
+
 function persistProjectAssetBlob(key: string, blob: Blob) {
   void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
     for (const listener of persistenceFailureListeners) listener({ key, error });
