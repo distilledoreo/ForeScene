@@ -347,6 +347,7 @@ export class ProjectPersistenceController {
     kind: ProjectRevisionKind,
     reason: string,
   ): Promise<VerifiedProjectRevision> {
+    const saveStartedAt = Date.now();
     this.emit({ status: 'saving', message: 'Saving a verified local revision…', criticalWrite: true });
     const result = await saveProjectRevision(project, { kind, reason });
     const verified = await loadProjectRevision(result.revision.id);
@@ -354,6 +355,7 @@ export class ProjectPersistenceController {
     try {
       await cleanupUnreferencedProjectAssetPayloads(project, {
         getLiveProject: () => this.latestProject,
+        protectWrittenAtOrAfter: saveStartedAt,
       });
     } catch {
       maintenanceWarning ??= 'Saved safely, but old local prepared-media cleanup will be retried later.';
