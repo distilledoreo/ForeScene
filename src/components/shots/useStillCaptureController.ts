@@ -58,7 +58,7 @@ export function useStillCaptureController(options: StillCaptureControllerOptions
 
   const thumbnailFreshAfterFinishRef = useRef(false);
   const captureGenerationRef = useRef(0);
-  const captureAbortControllerRef = useRef<AbortController>();
+  const captureAbortControllerRef = useRef<AbortController | undefined>(undefined);
   const [landFlash, setLandFlash] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
 
