@@ -3,6 +3,7 @@ import {
   PROJECT_ASSET_URI_PREFIX,
   deleteProjectAssetBlob,
   getManagedProjectAssetBlobKeyForUri,
+  hasResidentProjectAssetBlob,
   listProjectAssetBlobKeys,
 } from './projectAssetStore';
 import { listAllProjectRevisions } from './projectRevisionStore';
@@ -24,8 +25,15 @@ function isRasterOrVideo(asset: ProjectAsset): boolean {
  *
  * Recovery revisions pin immutable, content-addressed copies of their binaries.
  * This routine therefore reclaims only transient project/import payloads for the
- * current project that are no longer referenced by the live asset registry and
- * are not named by any retained revision. It never sweeps shared recovery keys.
+ * current project that are no longer referenced by the saved asset registry and
+ * are not named by any retained revision.
+ *
+ * A save may finish while a newer prepared asset is being durably written and
+ * merged into live state. Those newer bytes are resident in the active asset
+ * store even though the older save snapshot cannot reference them yet. Resident
+ * keys are therefore protected from maintenance and reconsidered only after an
+ * explicit release/project switch or a later session. This prevents save-time
+ * cleanup from deleting newer unsaved assets.
  *
  * Legacy/sample manifests may hold a managed blob: URL without an explicit
  * storageKey. The project-asset store can reverse-map those URLs; they must be
@@ -58,11 +66,15 @@ export async function cleanupUnreferencedProjectAssetPayloads(
     (key.startsWith(projectPrefix) || key.startsWith(importPrefix))
     && !liveKeys.has(key)
     && !retainedKeys.has(key)
+    && !hasResidentProjectAssetBlob(key)
   ));
 
   for (const key of staleKeys) {
+    // A key could become resident after the candidate scan but before deletion
+    // because asset DB work is asynchronous. Re-check at the destructive edge.
+    if (hasResidentProjectAssetBlob(key)) continue;
     await deleteProjectAssetBlob(key);
   }
 
-  return { removed: staleKeys.length, keys: staleKeys };
+  return { removed: staleKeys.filter((key) => !hasResidentProjectAssetBlob(key)).length, keys: staleKeys };
 }
