@@ -14,9 +14,10 @@ export type RenderWorkPriority =
   | 'background-video';
 
 export interface RenderWorkOptions {
-  /** Owning shot (or other entity) for scoped cancellation. */
   ownerId?: string;
   jobId?: string;
+  /** Optional active-job abort hook for work that owns an AbortController. */
+  abort?: () => void;
 }
 
 const PRIORITY_ORDER: Record<RenderWorkPriority, number> = {
@@ -34,6 +35,7 @@ interface QueuedWork {
   priority: RenderWorkPriority;
   ownerId?: string;
   jobId?: string;
+  abort?: () => void;
   run: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -42,8 +44,12 @@ interface QueuedWork {
 
 let nextId = 1;
 const queue: QueuedWork[] = [];
-let activeCount = 0;
+const active = new Map<number, QueuedWork>();
 const MAX_CONCURRENT = 1;
+
+function abortError(message = 'Render work was cancelled.'): Error {
+  return Object.assign(new Error(message), { name: 'AbortError' });
+}
 
 function isInteractiveStill(priority: RenderWorkPriority): boolean {
   return (
@@ -63,14 +69,11 @@ function sortQueue(): void {
 }
 
 async function pump(): Promise<void> {
-  while (activeCount < MAX_CONCURRENT && queue.length > 0) {
+  while (active.size < MAX_CONCURRENT && queue.length > 0) {
     sortQueue();
     const nextIndex = queue.findIndex((item) => {
-      if (item.cancelled) return true;
       if (item.priority === 'background-video') {
-        const interactiveWaiting = queue.some(
-          (other) => !other.cancelled && isInteractiveStill(other.priority),
-        );
+        const interactiveWaiting = queue.some((other) => isInteractiveStill(other.priority));
         if (interactiveWaiting) return false;
       }
       return true;
@@ -78,22 +81,38 @@ async function pump(): Promise<void> {
     if (nextIndex < 0) break;
 
     const item = queue.splice(nextIndex, 1)[0]!;
-    if (item.cancelled) {
-      item.reject(Object.assign(new Error('Render work was cancelled.'), { name: 'AbortError' }));
-      continue;
-    }
+    if (item.cancelled) continue;
 
-    activeCount += 1;
+    active.set(item.id, item);
     try {
       const value = await item.run();
-      item.resolve(value);
+      if (item.cancelled) item.reject(abortError());
+      else item.resolve(value);
     } catch (error) {
       item.reject(error);
     } finally {
-      activeCount -= 1;
+      active.delete(item.id);
       await Promise.resolve();
     }
   }
+}
+
+function removeQueued(
+  predicate: (entry: QueuedWork) => boolean,
+  message = 'Render work was cancelled.',
+): number {
+  let cancelled = 0;
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const item = queue[index]!;
+    if (!predicate(item)) continue;
+    queue.splice(index, 1);
+    item.cancelled = true;
+    item.abort?.();
+    item.reject(abortError(message));
+    cancelled += 1;
+  }
+  if (cancelled > 0) void pump();
+  return cancelled;
 }
 
 export const renderWorkCoordinator = {
@@ -108,6 +127,7 @@ export const renderWorkCoordinator = {
         priority,
         ownerId: options?.ownerId,
         jobId: options?.jobId,
+        abort: options?.abort,
         run: work as () => Promise<unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -118,10 +138,6 @@ export const renderWorkCoordinator = {
     });
   },
 
-  /**
-   * Cancel queued (not running) work.
-   * Prefer ownerId for shot-scoped cancellation.
-   */
   cancelQueued(
     predicate: (entry: {
       priority: RenderWorkPriority;
@@ -129,43 +145,52 @@ export const renderWorkCoordinator = {
       jobId?: string;
     }) => boolean,
   ): number {
-    let cancelled = 0;
-    for (const item of queue) {
-      if (
-        !item.cancelled
-        && predicate({
-          priority: item.priority,
-          ownerId: item.ownerId,
-          jobId: item.jobId,
-        })
-      ) {
-        item.cancelled = true;
-        cancelled += 1;
-      }
+    return removeQueued((item) => predicate({
+      priority: item.priority,
+      ownerId: item.ownerId,
+      jobId: item.jobId,
+    }));
+  },
+
+  cancelByOwner(ownerId: string): number {
+    let cancelled = removeQueued((item) => item.ownerId === ownerId);
+    for (const item of active.values()) {
+      if (item.ownerId !== ownerId || item.cancelled) continue;
+      item.cancelled = true;
+      item.abort?.();
+      cancelled += 1;
     }
     return cancelled;
   },
 
-  cancelByOwner(ownerId: string): number {
-    return this.cancelQueued((entry) => entry.ownerId === ownerId);
+  getStatus() {
+    return {
+      queueLength: queue.length,
+      activeCount: active.size,
+      activePriorities: [...active.values()].map((item) => item.priority),
+      queuedPriorities: queue.map((item) => item.priority),
+      activeOwners: [...active.values()].map((item) => item.ownerId),
+    };
   },
 
   inspectForTests() {
+    const status = this.getStatus();
     return {
-      queueLength: queue.filter((item) => !item.cancelled).length,
-      activeCount,
-      priorities: queue.filter((item) => !item.cancelled).map((item) => item.priority),
-      owners: queue.filter((item) => !item.cancelled).map((item) => item.ownerId),
+      queueLength: status.queueLength,
+      activeCount: status.activeCount,
+      priorities: status.queuedPriorities,
+      owners: queue.map((item) => item.ownerId),
+      activePriorities: status.activePriorities,
+      activeOwners: status.activeOwners,
     };
   },
 
   resetForTests() {
-    for (const item of queue) {
+    removeQueued(() => true, 'Render work coordinator reset.');
+    for (const item of active.values()) {
       item.cancelled = true;
-      item.reject(Object.assign(new Error('Render work coordinator reset.'), { name: 'AbortError' }));
+      item.abort?.();
     }
-    queue.length = 0;
-    activeCount = 0;
     nextId = 1;
   },
 };
