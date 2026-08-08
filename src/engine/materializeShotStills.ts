@@ -162,9 +162,8 @@ export async function materializeShotStills(
   } else if (params.artifactKeys) {
     specs = specs.filter((spec) => params.artifactKeys!.has(stillArtifactKey(spec)));
   }
-  // Do not pre-filter stale-only by fingerprint alone. A fingerprint-current
-  // record with evicted/missing backing bytes must flow through the fast-path
-  // byte check below and recover with one render.
+  // stale-only intentionally flows all configured specs through the byte-aware
+  // current fast path so a fingerprint-current artifact with missing bytes heals.
 
   specs = sortStillSpecificationsByPriority(specs, primaryKey);
 
@@ -246,14 +245,13 @@ export async function materializeShotStills(
 
       if (commitResult.ok) {
         const supersededAssetId = commitResult.supersededAssetId;
+        const supersededAsset = supersededAssetId
+          ? liveNow.assets.assets[supersededAssetId]
+          : undefined;
         const supersededStorageKey = supersededAssetId
-          ? storageKeyForAsset(liveNow.id, liveNow.assets.assets[supersededAssetId] ?? {
-            id: supersededAssetId,
-            type: 'image',
-            name: supersededAssetId,
-            uri: '',
-            createdAt: '',
-          }) ?? createProjectAssetStorageKey(liveNow.id, supersededAssetId)
+          ? (supersededAsset
+            ? storageKeyForAsset(liveNow.id, supersededAsset)
+            : undefined) ?? createProjectAssetStorageKey(liveNow.id, supersededAssetId)
           : undefined;
 
         if (params.commitLiveProject) {
@@ -392,4 +390,53 @@ export async function materializeShotStills(
   }
 
   return { project, shotId, primaryStillAssetId, status, artifacts, warnings };
+}
+
+/** Capture-time entry: materialize according to mode defaults. */
+export async function materializeShotAfterCapture(params: {
+  project: LocationProject;
+  shotId: string;
+  mode: ShotCaptureMaterializationMode;
+  signal?: AbortSignal;
+  getLiveProject?: () => LocationProject;
+  commitLiveProject?: MaterializeShotStillsParams['commitLiveProject'];
+  onProjectCommit?: (project: LocationProject) => LocationProject;
+  render?: MaterializeShotStillsParams['render'];
+}): Promise<ShotStillMaterializationResult> {
+  if (params.mode === 'deferred') {
+    return {
+      project: params.getLiveProject?.() ?? params.project,
+      shotId: params.shotId,
+      status: 'ready',
+      artifacts: [],
+      warnings: ['Materialization deferred.'],
+    };
+  }
+
+  const shared = {
+    project: params.project,
+    shotId: params.shotId,
+    reason: 'capture' as const,
+    signal: params.signal,
+    getLiveProject: params.getLiveProject,
+    commitLiveProject: params.commitLiveProject,
+    onProjectCommit: params.onProjectCommit,
+    render: params.render,
+  };
+
+  if (params.mode === 'await-primary') {
+    const primaryResult = await materializeShotStills({ ...shared, scope: 'primary' });
+
+    if (primaryResult.status !== 'failed' && !params.signal?.aborted) {
+      void materializeShotStills({
+        ...shared,
+        project: primaryResult.project,
+        scope: 'stale-only',
+      }).catch(() => undefined);
+    }
+
+    return primaryResult;
+  }
+
+  return materializeShotStills({ ...shared, scope: 'all-configured' });
 }
