@@ -14,6 +14,7 @@ export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 
 const memoryBlobs = new Map<string, Blob>();
 const memoryBlobVersions = new Map<string, number>();
+const memoryBlobWrittenAt = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
@@ -92,14 +93,13 @@ export function getManagedProjectAssetBlobKeyForUri(uri: string): string | undef
   return undefined;
 }
 
-/**
- * True while a payload is resident in the active session. Cleanup must not
- * delete resident keys merely because an older save snapshot does not contain
- * a newly committed asset yet. Such keys can be reconsidered after they are
- * explicitly released or on a later session.
- */
 export function hasResidentProjectAssetBlob(key: string): boolean {
   return memoryBlobs.has(key) || objectUrls.has(key);
+}
+
+/** Timestamp of the most recent explicit local write/replacement for this key. */
+export function getProjectAssetBlobWrittenAt(key: string): number | undefined {
+  return memoryBlobWrittenAt.get(key);
 }
 
 /**
@@ -113,6 +113,7 @@ export function releaseProjectAssetMemoryForProject(projectId: string): void {
     if (!matches(key)) continue;
     memoryBlobs.delete(key);
     memoryBlobVersions.delete(key);
+    memoryBlobWrittenAt.delete(key);
   }
   for (const [key, url] of [...objectUrls.entries()]) {
     if (!matches(key)) continue;
@@ -182,6 +183,7 @@ export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
   } catch (error) {
     memoryBlobs.delete(storageKey);
     memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);
+    memoryBlobWrittenAt.delete(storageKey);
     const url = objectUrls.get(storageKey);
     if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
       URL.revokeObjectURL(url);
@@ -202,7 +204,10 @@ export function registerProjectAssetBlob(key: string, blob: Blob): string {
 
 function cacheProjectAssetBlob(key: string, blob: Blob, replace: boolean): void {
   memoryBlobs.set(key, blob);
-  if (replace) memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+  if (replace) {
+    memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    memoryBlobWrittenAt.set(key, Date.now());
+  }
 }
 
 /** Changes whenever a local raster/video key is explicitly replaced or removed. */
@@ -308,6 +313,7 @@ export async function deleteProjectAssetBlob(key: string): Promise<void> {
   return enqueueAssetDatabaseOperation(async () => {
     memoryBlobs.delete(key);
     memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    memoryBlobWrittenAt.delete(key);
     const url = objectUrls.get(key);
     if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
     objectUrls.delete(key);
@@ -331,6 +337,7 @@ export function resetProjectAssetStoreForTests() {
   }
   memoryBlobs.clear();
   memoryBlobVersions.clear();
+  memoryBlobWrittenAt.clear();
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;
