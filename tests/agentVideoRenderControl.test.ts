@@ -179,4 +179,50 @@ describe('agent shot video transactions', () => {
     expect(useProjectStore.getState().project.shots[0]!.assets.cameraMoveVideoAssetId).toBe(previous.id);
     expect(useProjectStore.getState().project.assets.assets[previous.id]).toBeTruthy();
   });
+
+  it('preserves unrelated live edits while rolling back a failed video attachment save', async () => {
+    const initial = useProjectStore.getState().project;
+    const primaryShot = initial.shots[0]!;
+    const otherShot = {
+      ...structuredClone(primaryShot),
+      id: 'shot-unrelated',
+      name: 'Unrelated before render',
+    };
+    useProjectStore.setState({
+      project: { ...initial, shots: [...initial.shots, otherShot] },
+    });
+
+    const previous = useProjectStore.getState().attachCameraMoveVideoToShot(primaryShot.id, {
+      name: 'previous.mp4',
+      dataUrl: renderedVideo().dataUrl,
+      mimeType: 'video/mp4',
+      width: 1280,
+      height: 720,
+      durationSeconds: 2,
+      frameRate: 24,
+      encodeMode: 'render',
+    });
+    const verifiedAtStart = structuredClone(useProjectStore.getState().project);
+    const flushProject = vi.fn()
+      .mockResolvedValueOnce({ project: verifiedAtStart })
+      .mockImplementationOnce(async () => {
+        useProjectStore.setState((state) => ({
+          project: {
+            ...state.project,
+            shots: state.project.shots.map((shot) => shot.id === otherShot.id
+              ? { ...shot, name: 'Concurrent edit survives' }
+              : shot),
+          },
+        }));
+        throw new Error('persistence failed');
+      });
+    useProjectSafetyStore.setState({ flushProject });
+
+    const result = await renderAgentShotVideo({ shotId: primaryShot.id, download: false });
+
+    expect(result.ok).toBe(false);
+    const live = useProjectStore.getState().project;
+    expect(live.shots.find((shot) => shot.id === primaryShot.id)?.assets.cameraMoveVideoAssetId).toBe(previous.id);
+    expect(live.shots.find((shot) => shot.id === otherShot.id)?.name).toBe('Concurrent edit survives');
+  });
 });
