@@ -53,7 +53,6 @@ export function shouldContributeProjectionOcclusion(
 }
 
 function cloneAsCubeTexture(target: THREE.WebGLCubeRenderTarget): THREE.CubeTexture {
-  // The cube render target's texture IS a CubeTexture subclass in three.js.
   return target.texture as unknown as THREE.CubeTexture;
 }
 
@@ -67,10 +66,6 @@ function buildOccluderScene(
   hiddenObjectTypes: SceneObjectType[] = [],
 ): THREE.Scene {
   const hiddenTypes = new Set<string>(hiddenObjectTypes);
-  // Geometry-only scene: no background, no environment, no grid, no lights,
-  // no helpers, no frustums, no pano origin. The depth cubemap must contain
-  // only solid occluder meshes; any other object would pollute the packed
-  // depth and corrupt the visibility contract.
   const scene = new THREE.Scene();
   scene.background = null;
   scene.environment = null;
@@ -83,7 +78,6 @@ function buildOccluderScene(
     scene.add(mesh);
   }
 
-  // The depth material is assigned per-map in generateProjectorOcclusionMap.
   return scene;
 }
 
@@ -92,7 +86,7 @@ function createRadialDepthMaterial(
   nearMeters: number,
   farMeters: number,
 ): THREE.ShaderMaterial {
-  const material = new THREE.ShaderMaterial({
+  return new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
     fog: false,
     uniforms: {
@@ -100,14 +94,14 @@ function createRadialDepthMaterial(
       occlusionNear: { value: nearMeters },
       occlusionFar: { value: farMeters },
     },
-      vertexShader: /* glsl */`
-        varying vec3 vOcclusionWorldPosition;
-        void main() {
-          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-          vOcclusionWorldPosition = worldPosition.xyz;
-          gl_Position = projectionMatrix * viewMatrix * worldPosition;
-        }
-      `,
+    vertexShader: /* glsl */`
+      varying vec3 vOcclusionWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vOcclusionWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
     fragmentShader: /* glsl */`
       uniform vec3 occlusionOrigin;
       uniform float occlusionNear;
@@ -129,24 +123,26 @@ function createRadialDepthMaterial(
           0.0,
           1.0
         );
-        // Blue channel = valid hit flag (1.0). Green/Red pack the normalized depth.
         gl_FragColor = vec4(packDepth16(normalizedDepth), 1.0, 1.0);
       }
     `,
   });
-  return material;
 }
 
-/**
- * Far plane for a projector-origin depth cubemap: enclose all visible geometry
- * from that specific origin. Each projector may use a different far distance.
- */
 export function computeProjectorFarPlane(
   scene: THREE.Scene,
   projectorOrigin: Vec3,
   nearMeters = DEFAULT_OCCLUSION_NEAR,
 ): number {
   return computeGrayboxPanoFarPlane(scene, projectorOrigin, nearMeters);
+}
+
+function disposeOccluderScene(scene: THREE.Scene): void {
+  scene.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    if (!releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
+  });
 }
 
 export function generateProjectorOcclusionMap(
@@ -157,11 +153,8 @@ export function generateProjectorOcclusionMap(
 ): ProjectorOcclusionMap {
   const faceSize = options.faceSize ?? DEFAULT_OCCLUSION_FACE_SIZE;
   const nearMeters = options.nearMeters ?? DEFAULT_OCCLUSION_NEAR;
-
   const occluderScene = buildOccluderScene(project, options.hiddenObjectTypes);
-
   const farMeters = computeProjectorFarPlane(occluderScene, origin, nearMeters);
-
   const target = new THREE.WebGLCubeRenderTarget(faceSize, {
     type: THREE.UnsignedByteType,
     generateMipmaps: false,
@@ -169,19 +162,16 @@ export function generateProjectorOcclusionMap(
     magFilter: THREE.NearestFilter,
     depthBuffer: true,
   });
-  // Packed-depth data, not color: no sRGB conversion, no filtering.
   target.texture.colorSpace = THREE.NoColorSpace;
   target.texture.generateMipmaps = false;
   target.texture.minFilter = THREE.NearestFilter;
   target.texture.magFilter = THREE.NearestFilter;
   (target.texture as THREE.CubeTexture).mapping = THREE.CubeReflectionMapping;
 
-  // The depth material must be re-created per origin/far so its uniforms match.
   const depthMaterial = createRadialDepthMaterial(origin, nearMeters, farMeters);
   occluderScene.traverse((child) => {
     const mesh = child as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    mesh.material = depthMaterial;
+    if (mesh.isMesh) mesh.material = depthMaterial;
   });
 
   const previousClearColor = new THREE.Color();
@@ -193,6 +183,7 @@ export function generateProjectorOcclusionMap(
 
   const cubeCamera = new THREE.CubeCamera(nearMeters, farMeters, target);
   cubeCamera.position.set(origin[0], origin[1], origin[2]);
+  let rendered = false;
 
   try {
     renderer.toneMapping = THREE.NoToneMapping;
@@ -200,25 +191,19 @@ export function generateProjectorOcclusionMap(
     renderer.autoClear = true;
     renderer.setClearColor(NO_HIT_CLEAR, 1);
     cubeCamera.update(renderer, occluderScene);
+    rendered = true;
   } finally {
     renderer.setClearColor(previousClearColor, previousClearAlpha);
     renderer.autoClear = previousAutoClear;
     renderer.toneMapping = previousToneMapping;
     renderer.outputColorSpace = previousOutputColorSpace;
+    disposeOccluderScene(occluderScene);
+    depthMaterial.dispose();
+    // On failure the caller never receives the target, so release it here.
+    if (!rendered) target.dispose();
   }
 
   const key = computeProjectorOcclusionKey(project, origin);
-
-  // Dispose occluder scene resources. Imported-model geometry is
-  // reference-counted via releaseImportedGeometry; share-owned buffers must not
-  // be disposed directly or cached GPU resources become unstable.
-  occluderScene.traverse((child) => {
-    const mesh = child as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry) return;
-    if (!releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
-  });
-  depthMaterial.dispose();
-
   return {
     target,
     texture: cloneAsCubeTexture(target),
@@ -233,23 +218,15 @@ export function generateProjectorOcclusionMap(
   };
 }
 
-// --- Stable, geometry-only occlusion generation key -------------------------
-
 function fnv1aHash(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i += 1) {
     hash ^= input.charCodeAt(i);
-    // Multiply by FNV prime.
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-/**
- * Deterministic key covering only projection-occluding geometry + projector
- * origin. Color/exposure/camera/selections and people do NOT affect occlusion,
- * so maps do not regenerate on those changes.
- */
 export function computeProjectorOcclusionKey(
   project: LocationProject,
   primaryOrigin: Vec3,
