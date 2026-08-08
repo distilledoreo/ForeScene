@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { disposeBackgroundVideoService, forgetBackgroundVideosForShot } from '../engine/backgroundVideoService';
+import { bindLiveProjectAccess } from '../engine/liveProjectAccess';
 import { releaseProjectAssetMemoryForProject } from '../engine/projectAssetStore';
 import { cancelShotStillPreparation } from '../engine/shotStillActions';
 import { clearStillArtifactRuntime } from '../engine/stillArtifactRuntime';
@@ -48,6 +49,16 @@ export const useProjectStore = create<ProjectStore>((...args) => ({
   ...createSessionSlice(...args),
 }));
 
+bindLiveProjectAccess({
+  getProject: () => useProjectStore.getState().project,
+  commitProject: (updater) => {
+    useProjectStore.setState((state) => ({
+      project: updater(state.project),
+    }));
+    return useProjectStore.getState().project;
+  },
+});
+
 const reconciliationOptions = () => ({
   getProject: () => useProjectStore.getState().project,
   setProject: (project: ProjectStore['project']) => useProjectStore.setState({ project }),
@@ -68,8 +79,6 @@ useProjectStore.subscribe((state, previousState) => {
     clearStillArtifactRuntime();
     disposeBackgroundVideoService();
     rebindStillReconciliation(reconciliationOptions());
-    // Drop only RAM/object-URL residency for the departed project. Durable local
-    // bytes remain in IndexedDB so reopening stays instant and local-first.
     releaseProjectAssetMemoryForProject(previous.id);
     return;
   }
