@@ -2,50 +2,15 @@
  * Registers `window.foreScene` idempotently.
  * Identity check matters under React Strict Mode double-mount.
  *
- * The v1 captureShotThumbnail runtime contract remains a sampled clay render.
- * Prepared-media capture is exposed as an additive API so legacy calls keep the
- * same timing, persistence, and busy-state semantics.
+ * captureShotThumbnail keeps the legacy sampled-render behavior (including
+ * timeSeconds) but now returns the declared materialization-shaped fields as
+ * well. Full await-all prepared-media capture is exposed separately.
  */
 
 import { useEffect } from 'react';
-import type { Shot } from '../domain/types';
 import { createForeSceneBrowserApi } from '../engine/agent/browserApi';
 import { useProjectSafetyStore } from '../state/useProjectSafetyStore';
 import { useProjectStore } from '../state/useProjectStore';
-
-function restorePreparedLegacyViewportSlots(shotId: string): void {
-  useProjectStore.setState((state) => {
-    const shot = state.project.shots.find((item) => item.id === shotId);
-    if (!shot?.materializedMedia) return state;
-
-    let assets: Shot['assets'] = { ...shot.assets };
-    for (const artifact of Object.values(shot.materializedMedia.stills)) {
-      if (artifact.kind === 'clay-viewport') {
-        if (artifact.peopleVariant === 'clean_plate') {
-          assets.viewportCleanPlateAssetId = artifact.assetId;
-        } else {
-          assets.viewportRenderAssetId = artifact.assetId;
-        }
-      } else if (artifact.kind === 'projected-viewport') {
-        if (artifact.peopleVariant === 'clean_plate') {
-          assets.viewportProjectedCleanPlateAssetId = artifact.assetId;
-        } else {
-          assets.viewportProjectedAssetId = artifact.assetId;
-        }
-      }
-    }
-
-    return {
-      ...state,
-      project: {
-        ...state.project,
-        shots: state.project.shots.map((item) =>
-          item.id === shotId ? { ...item, assets } : item
-        ),
-      },
-    };
-  });
-}
 
 export function useForeSceneAgentApi(): void {
   useEffect(() => {
@@ -56,57 +21,84 @@ export function useForeSceneAgentApi(): void {
       captureShotPreparedMedia?: (input: { shotId: string }) => Promise<unknown>;
     };
 
-    // Additive prepared-media API for callers that want await-all materialization.
-    mutableApi.captureShotPreparedMedia = async (input) => {
-      const result = await preparedCapture({ shotId: input.shotId });
-      // The internal materialization implementation historically wrote the selected
-      // primary into the clay legacy slot. Restore canonical clay/projected aliases.
-      restorePreparedLegacyViewportSlots(input.shotId);
-      return result;
-    };
+    // Explicit await-all prepared-media API. The canonical materializer already
+    // maintains legacy clay/projected aliases transactionally; no raw store repair
+    // is needed here.
+    mutableApi.captureShotPreparedMedia = (input) => preparedCapture({ shotId: input.shotId });
 
-    // Compatibility facade: preserve the original sampled-render result/timeSeconds
-    // and do not silently launch background prepared-media work.
+    // Compatibility facade: preserve sampled-frame/timeSeconds semantics while
+    // also satisfying the declared AgentShotMaterializationResult shape. Extra
+    // render fields remain present for older runtime callers.
     mutableApi.captureShotThumbnail = async (input) => {
       const rendered = await api.renderShotFrame({
         shotId: input.shotId,
         timeSeconds: input.timeSeconds,
         appearance: 'clay',
       });
-      if (!rendered.ok || !rendered.pngDataUrl) return rendered;
+      const baseResult = {
+        ...rendered,
+        shotId: input.shotId,
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        primaryStillAssetId: undefined as string | undefined,
+        artifacts: [] as Array<{
+          key: string;
+          status: 'current' | 'rendered' | 'failed' | 'skipped';
+          assetId?: string;
+        }>,
+        warnings: [] as string[],
+      };
+
+      if (!rendered.ok || !rendered.pngDataUrl) {
+        return {
+          ...baseResult,
+          ok: false,
+          status: 'failed' as const,
+          warnings: ['Sampled thumbnail render did not produce attachable PNG data.'],
+        };
+      }
 
       const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
       if (!runDestructive) {
         return {
-          ...rendered,
+          ...baseResult,
           ok: false,
           status: 'failed' as const,
-          diagnostics: [{
-            code: 'busy',
-            message: 'Project persistence is not ready.',
-          }],
+          diagnostics: [{ code: 'busy', message: 'Project persistence is not ready.' }],
+          warnings: ['Project persistence is not ready.'],
         };
       }
 
+      let attachedAssetId: string | undefined;
       try {
         await runDestructive('Attach shot thumbnail', () => {
-          useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+          const asset = useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
             name: `shot_${input.shotId}_thumbnail.png`,
             dataUrl: rendered.pngDataUrl!,
             width: rendered.width,
             height: rendered.height,
           });
+          attachedAssetId = asset.id;
         });
-        return rendered;
-      } catch (error) {
         return {
-          ...rendered,
+          ...baseResult,
+          ok: true,
+          status: 'ready' as const,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? baseResult.revisionId,
+          primaryStillAssetId: attachedAssetId,
+          artifacts: attachedAssetId ? [{
+            key: `sampled-clay-thumbnail@${input.timeSeconds ?? 0}`,
+            status: 'rendered' as const,
+            assetId: attachedAssetId,
+          }] : [],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not attach shot thumbnail.';
+        return {
+          ...baseResult,
           ok: false,
           status: 'failed' as const,
-          diagnostics: [{
-            code: 'thumbnail_attach_failed',
-            message: error instanceof Error ? error.message : 'Could not attach shot thumbnail.',
-          }],
+          diagnostics: [{ code: 'thumbnail_attach_failed', message }],
+          warnings: [message],
         };
       }
     };
@@ -114,9 +106,7 @@ export function useForeSceneAgentApi(): void {
     window.foreScene = api;
 
     return () => {
-      if (window.foreScene === api) {
-        delete window.foreScene;
-      }
+      if (window.foreScene === api) delete window.foreScene;
     };
   }, []);
 }
