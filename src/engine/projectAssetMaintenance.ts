@@ -3,6 +3,7 @@ import {
   PROJECT_ASSET_URI_PREFIX,
   deleteProjectAssetBlob,
   getManagedProjectAssetBlobKeyForUri,
+  getProjectAssetBlobWrittenAt,
   listProjectAssetBlobKeys,
 } from './projectAssetStore';
 import { listAllProjectRevisions } from './projectRevisionStore';
@@ -33,12 +34,16 @@ function referencedStorageKeys(project: LocationProject): Set<string> {
  *
  * `project` is the verified snapshot whose stale transient payloads may be
  * reclaimed. `getLiveProject`, when provided, is re-read immediately before
- * each deletion so an asset committed while the older save was in flight can
- * never be swept as an orphan.
+ * each deletion. `protectWrittenAtOrAfter` closes the smaller durable-write /
+ * live-manifest-merge window: bytes written after the save began are never
+ * eligible for that save's cleanup even if the live merge has not happened yet.
  */
 export async function cleanupUnreferencedProjectAssetPayloads(
   project: LocationProject,
-  options: { getLiveProject?: () => LocationProject | undefined } = {},
+  options: {
+    getLiveProject?: () => LocationProject | undefined;
+    protectWrittenAtOrAfter?: number;
+  } = {},
 ): Promise<{ removed: number; keys: string[] }> {
   const savedKeys = referencedStorageKeys(project);
 
@@ -52,6 +57,13 @@ export async function cleanupUnreferencedProjectAssetPayloads(
     }
   }
 
+  const wasWrittenDuringSave = (key: string): boolean => {
+    const cutoff = options.protectWrittenAtOrAfter;
+    if (cutoff === undefined) return false;
+    const writtenAt = getProjectAssetBlobWrittenAt(key);
+    return writtenAt !== undefined && writtenAt >= cutoff;
+  };
+
   const projectPrefix = `project/${project.id}/`;
   const importPrefix = `import/${project.id}/`;
   const storedKeys = await listProjectAssetBlobKeys();
@@ -59,6 +71,7 @@ export async function cleanupUnreferencedProjectAssetPayloads(
     (key.startsWith(projectPrefix) || key.startsWith(importPrefix))
     && !savedKeys.has(key)
     && !retainedKeys.has(key)
+    && !wasWrittenDuringSave(key)
   ));
 
   const removedKeys: string[] = [];
@@ -67,8 +80,7 @@ export async function cleanupUnreferencedProjectAssetPayloads(
     if (currentLive?.id === project.id && referencedStorageKeys(currentLive).has(key)) {
       continue;
     }
-    // There is no await between the latest-live check and queueing deletion, so
-    // browser mutations cannot interleave inside this destructive edge.
+    if (wasWrittenDuringSave(key)) continue;
     await deleteProjectAssetBlob(key);
     removedKeys.push(key);
   }
