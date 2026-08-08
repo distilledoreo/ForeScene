@@ -3,16 +3,12 @@
  */
 
 import type { LocationProject, Shot } from '../domain/types';
-import {
-  commitPreparedStillArtifact,
-} from './commitPreparedStillArtifact';
+import { commitPreparedStillArtifact } from './commitPreparedStillArtifact';
 import {
   createProjectAssetStorageKey,
   deleteProjectAssetBlob,
   getProjectAssetBlob,
-  storeProjectAssetBlob,
 } from './projectAssetStore';
-import { createId } from '../utils/ids';
 import { prepareStillArtifact } from './prepareStillArtifact';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
@@ -29,11 +25,8 @@ export type PlannedArtifactSource =
 
 export interface EnsureStillArtifactForExportParams {
   frozenProject: LocationProject;
-  /** Optional live project snapshot at recovery start. Prefer getLiveProject. */
   liveProject?: LocationProject;
-  /** Read live project immediately before committing recovery into the store. */
   getLiveProject?: () => LocationProject;
-  /** Apply recovery commit result into the live store (merge only still fields). */
   commitLiveProject?: (updater: (live: LocationProject) => LocationProject) => LocationProject;
   shotId: string;
   specification: StillArtifactSpecification;
@@ -50,20 +43,13 @@ export interface EnsureStillArtifactForExportResult {
   blob: Blob;
   assetId?: string;
   source: 'materialized-asset' | 'render-recovery';
-  /** Updated frozen project when recovery committed into the frozen snapshot assets. */
   frozenProject: LocationProject;
-  /**
-   * Live project when recovery was committed to live (fingerprints matched).
-   * Undefined when recovery was temporary export-only media.
-   */
   liveProject?: LocationProject;
+  /** Retained for compatibility; export-only recovery no longer persists a temp asset. */
   temporaryAssetId?: string;
 }
 
-async function loadAssetBlob(
-  project: LocationProject,
-  assetId: string,
-): Promise<Blob | undefined> {
+async function loadAssetBlob(project: LocationProject, assetId: string): Promise<Blob | undefined> {
   const asset = project.assets.assets[assetId];
   if (!asset) return undefined;
   if (asset.uri?.startsWith('data:')) {
@@ -79,15 +65,11 @@ function legacyViewportSlotPatch(
   assetId: string,
 ): Partial<Shot['assets']> {
   if (specification.kind === 'clay-viewport') {
-    if (specification.peopleVariant === 'clean_plate') {
-      return { viewportCleanPlateAssetId: assetId };
-    }
+    if (specification.peopleVariant === 'clean_plate') return { viewportCleanPlateAssetId: assetId };
     return { viewportRenderAssetId: assetId };
   }
   if (specification.kind === 'projected-viewport') {
-    if (specification.peopleVariant === 'clean_plate') {
-      return { viewportProjectedCleanPlateAssetId: assetId };
-    }
+    if (specification.peopleVariant === 'clean_plate') return { viewportProjectedCleanPlateAssetId: assetId };
     return { viewportProjectedAssetId: assetId };
   }
   return {};
@@ -102,9 +84,6 @@ async function cleanupPersistedRecoveryAsset(
   await deleteProjectAssetBlob(key).catch(() => undefined);
 }
 
-/**
- * Ensure a still is available for packaging against a frozen export snapshot.
- */
 export async function ensureStillArtifactForExport(
   params: EnsureStillArtifactForExportParams,
 ): Promise<EnsureStillArtifactForExportResult> {
@@ -130,7 +109,6 @@ export async function ensureStillArtifactForExport(
     }
   }
 
-  // Recovery through shared materializer (never packages stale bytes silently).
   recordPreparedMediaMetric('exportStillRecoveryRenders');
   const prepared = await renderWorkCoordinator.schedule(
     'export-recovery-still',
@@ -142,17 +120,12 @@ export async function ensureStillArtifactForExport(
       force: true,
       render: params.render,
     }),
+    { ownerId: shotId, jobId: `export-still:${key}` },
   );
 
-  if (!prepared.blob) {
-    throw new Error(`Still recovery for ${key} produced no blob.`);
-  }
+  if (!prepared.blob) throw new Error(`Still recovery for ${key} produced no blob.`);
 
-  // Always package the recovered blob for the frozen snapshot.
-  // Commit to live only when live fingerprint still matches frozen expected.
   let liveProject = params.getLiveProject?.() ?? params.liveProject;
-  let temporaryAssetId: string | undefined;
-  let assetId: string | undefined;
   let nextFrozen = frozenProject;
 
   if (liveProject) {
@@ -169,21 +142,14 @@ export async function ensureStillArtifactForExport(
         });
         if (commit.ok) {
           const committedAsset = commit.project.assets.assets[commit.assetId];
-          if (!committedAsset) {
-            throw new Error(`Recovered still ${key} committed without an asset record.`);
-          }
+          if (!committedAsset) throw new Error(`Recovered still ${key} committed without an asset record.`);
 
           if (params.commitLiveProject) {
             let mergedIntoLive = false;
             liveProject = params.commitLiveProject((live) => {
               const liveShotNow = live.shots.find((item) => item.id === shotId);
               if (!liveShotNow) return live;
-
-              const liveFingerprintNow = computeStillArtifactFingerprint(
-                live,
-                liveShotNow,
-                specification,
-              );
+              const liveFingerprintNow = computeStillArtifactFingerprint(live, liveShotNow, specification);
               if (liveFingerprintNow.key !== expected.key) return live;
 
               mergedIntoLive = true;
@@ -192,76 +158,44 @@ export async function ensureStillArtifactForExport(
                 ...live,
                 assets: {
                   ...live.assets,
-                  assets: {
-                    ...live.assets.assets,
-                    [commit.assetId]: committedAsset,
-                  },
+                  assets: { ...live.assets.assets, [commit.assetId]: committedAsset },
                 },
-                shots: live.shots.map((item) => {
-                  if (item.id !== shotId) return item;
-                  return {
-                    ...item,
-                    materializedMedia: {
-                      stills: {
-                        ...(item.materializedMedia?.stills ?? {}),
-                        [key]: commit.artifact,
-                      },
-                    },
-                    assets: {
-                      ...item.assets,
-                      ...legacySlot,
-                    },
-                    updatedAt: new Date().toISOString(),
-                  };
-                }),
+                shots: live.shots.map((item) => item.id === shotId ? {
+                  ...item,
+                  materializedMedia: {
+                    stills: { ...(item.materializedMedia?.stills ?? {}), [key]: commit.artifact },
+                  },
+                  assets: { ...item.assets, ...legacySlot },
+                  updatedAt: new Date().toISOString(),
+                } : item),
                 updatedAt: new Date().toISOString(),
               };
             });
 
             if (!mergedIntoLive) {
-              await cleanupPersistedRecoveryAsset(
-                frozenProject.id,
-                commit.assetId,
-                committedAsset.storageKey,
-              );
-              return {
-                blob: prepared.blob,
-                source: 'render-recovery',
-                frozenProject,
-                liveProject,
-              };
+              await cleanupPersistedRecoveryAsset(frozenProject.id, commit.assetId, committedAsset.storageKey);
+              return { blob: prepared.blob, source: 'render-recovery', frozenProject, liveProject };
             }
           } else {
             liveProject = commit.project;
           }
 
-          assetId = commit.assetId;
           nextFrozen = {
             ...frozenProject,
-            shots: frozenProject.shots.map((item) =>
-              item.id === shotId
-                ? {
-                  ...item,
-                  materializedMedia: {
-                    stills: {
-                      ...(item.materializedMedia?.stills ?? {}),
-                      [key]: commit.artifact,
-                    },
-                  },
-                }
-                : item
-            ),
+            shots: frozenProject.shots.map((item) => item.id === shotId ? {
+              ...item,
+              materializedMedia: {
+                stills: { ...(item.materializedMedia?.stills ?? {}), [key]: commit.artifact },
+              },
+            } : item),
             assets: {
               ...frozenProject.assets,
-              assets: {
-                ...frozenProject.assets.assets,
-                [committedAsset.id]: committedAsset,
-              },
+              assets: { ...frozenProject.assets.assets, [committedAsset.id]: committedAsset },
             },
           };
           return {
             blob: prepared.blob,
-            assetId,
+            assetId: commit.assetId,
             source: 'render-recovery',
             frozenProject: nextFrozen,
             liveProject,
@@ -271,52 +205,18 @@ export async function ensureStillArtifactForExport(
     }
   }
 
-  // Temporary export media — only the returned Blob is required for packaging,
-  // but retain the existing temporary-asset lifecycle for callers that inspect it.
-  temporaryAssetId = createId('asset');
-  const tempAsset = storeProjectAssetBlob(
-    frozenProject.id,
-    {
-      id: temporaryAssetId,
-      type: 'image',
-      name: `export_recovery_${key}.png`,
-      uri: '',
-      storageKey: createProjectAssetStorageKey(frozenProject.id, temporaryAssetId),
-      mimeType: 'image/png',
-      width: prepared.width,
-      height: prepared.height,
-      createdAt: new Date().toISOString(),
-      metadata: {
-        provenance: 'forescene-export-recovery-temporary',
-        ownerShotId: shotId,
-        artifactKey: key,
-      },
-    },
-    prepared.blob,
-  );
-
-  nextFrozen = {
-    ...frozenProject,
-    assets: {
-      ...frozenProject.assets,
-      assets: {
-        ...frozenProject.assets.assets,
-        [tempAsset.id]: tempAsset,
-      },
-    },
-  };
-
+  // Export-only recovery is deliberately ephemeral. The package writer only
+  // needs this Blob; persisting a temporary project asset creates quota risk and
+  // leak paths on cancellation/failure. No temp IDB row or object URL is created.
   return {
     blob: prepared.blob,
-    assetId: temporaryAssetId,
     source: 'render-recovery',
-    frozenProject: nextFrozen,
+    frozenProject,
     liveProject,
-    temporaryAssetId,
   };
 }
 
-/** Remove temporary export recovery assets after packaging. */
+/** Compatibility no-op for writers that still call cleanup unconditionally. */
 export async function cleanupTemporaryExportStill(
   projectId: string,
   temporaryAssetId: string | undefined,
