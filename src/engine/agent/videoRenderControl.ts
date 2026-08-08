@@ -1,7 +1,13 @@
 import type { LocationProject, Shot } from '../../domain/types';
 import { downloadBlob } from '../fileTransfers';
+import {
+  createProjectAssetStorageKey,
+  deleteProjectAssetBlob,
+} from '../projectAssetStore';
+import { pruneUnreferencedProjectAssets } from '../projectAssets';
+import { prepareVideoArtifact } from '../prepareVideoArtifact';
 import { renderWorkCoordinator } from '../renderWorkCoordinator';
-import { renderShotCameraMoveMp4, type CameraMoveExportProgress } from '../renderers';
+import type { CameraMoveExportProgress } from '../renderers';
 import { resolveVideoPreset } from '../videoPresets';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -87,6 +93,30 @@ function renderName(shot: Shot): string {
   return `shot_${shot.shotNumber}_camera_move.mp4`;
 }
 
+async function rollbackAttachedVideo(assetId: string, storageKey: string | undefined): Promise<void> {
+  useProjectStore.setState((state) => {
+    const shot = state.project.shots.find((item) => item.assets.cameraMoveVideoAssetId === assetId);
+    if (!shot) return state;
+    const nextProject = pruneUnreferencedProjectAssets({
+      ...state.project,
+      shots: state.project.shots.map((item) => item.id === shot.id ? {
+        ...item,
+        assets: { ...item.assets, cameraMoveVideoAssetId: undefined },
+        updatedAt: new Date().toISOString(),
+      } : item),
+      updatedAt: new Date().toISOString(),
+    });
+    return { ...state, project: nextProject };
+  });
+
+  const current = useProjectStore.getState().project;
+  if (!current.assets.assets[assetId]) {
+    await deleteProjectAssetBlob(
+      storageKey ?? createProjectAssetStorageKey(current.id, assetId),
+    ).catch(() => undefined);
+  }
+}
+
 export async function renderAgentShotVideo(
   input: AgentShotVideoRenderInput,
 ): Promise<AgentShotVideoRenderResult> {
@@ -129,19 +159,24 @@ export async function renderAgentShotVideo(
   latestProgress = { phase: 'preparing', progress: 0, shotId: shot.id, message: 'Preparing shot video render.' };
 
   try {
-    // Foreground agent video shares the same GPU coordinator as prepared stills/background
-    // video, preventing concurrent WebGL/encoder work after an edit reconciliation.
+    // Foreground agent video uses the same fingerprinted cache/in-flight join as
+    // package/background preparation while sharing the GPU coordinator.
     const video = await renderWorkCoordinator.schedule(
       'foreground-export-video',
-      () => renderShotCameraMoveMp4(project, shot, {
-        mode: input.mode ?? 'render',
-        resolutionPreset,
-        appearance: input.appearance ?? 'clay',
-        contentMode: input.contentMode,
-        backgroundColor: input.backgroundColor,
-        includeCharacterAttachments: input.includeCharacterAttachments,
+      () => prepareVideoArtifact({
+        project,
+        shotId: shot.id,
+        priority: 'foreground',
         includeDataUrl: attachToShot,
         signal: controller.signal,
+        specification: {
+          mode: input.mode ?? 'render',
+          resolutionPreset,
+          appearance: input.appearance ?? 'clay',
+          contentMode: input.contentMode,
+          backgroundColor: input.backgroundColor,
+          includeCharacterAttachments: input.includeCharacterAttachments,
+        },
         onProgress: (progress) => { latestProgress = toProgress(shot.id, progress); },
       }),
       { ownerId: shot.id, jobId: `agent-video:${shot.id}` },
@@ -204,7 +239,7 @@ export async function renderAgentShotVideo(
       try {
         await flushProject('Persist agent shot video attachment');
       } catch (error) {
-        useProjectStore.getState().setProject(project);
+        await rollbackAttachedVideo(asset.id, asset.storageKey);
         throw error;
       }
     }
@@ -251,7 +286,7 @@ export async function renderAgentShotVideo(
       ok: false,
       status: cancelled ? 'cancelled' : 'failed',
       shotId: shot.id,
-      diagnostics: [agentError(cancelled ? 'video_render_cancelled' : 'video_render_failed', latestProgress.message, { })],
+      diagnostics: [agentError(cancelled ? 'video_render_cancelled' : 'video_render_failed', latestProgress.message, {})],
       progress: latestProgress,
     };
   } finally {
