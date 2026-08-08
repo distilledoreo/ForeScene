@@ -179,6 +179,37 @@ describe('prepared-media audit integrity regressions', () => {
     expect(await getProjectAssetBlob(stored.storageKey!)).toBeDefined();
   });
 
+  it('protects bytes written after save start even before their live manifest merge', async () => {
+    const savedSnapshot = createDefaultProject();
+    const saveStartedAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const base: ProjectAsset = {
+      id: 'asset-mid-save',
+      type: 'image',
+      name: 'mid-save.png',
+      uri: '',
+      mimeType: 'image/png',
+      width: 16,
+      height: 9,
+      createdAt: new Date().toISOString(),
+    };
+    const stored = await storeProjectAssetBlobDurable(
+      savedSnapshot.id,
+      base,
+      new Blob(['mid-save'], { type: 'image/png' }),
+    );
+
+    // Simulate the exact microtask window where durable bytes exist but the live
+    // project has not yet accepted the artifact record.
+    const cleanup = await cleanupUnreferencedProjectAssetPayloads(savedSnapshot, {
+      getLiveProject: () => savedSnapshot,
+      protectWrittenAtOrAfter: saveStartedAt,
+    });
+
+    expect(cleanup.keys).not.toContain(stored.storageKey);
+    expect(await getProjectAssetBlob(stored.storageKey!)).toBeDefined();
+  });
+
   it('reconciliation does not perform a redundant whole-project write after transactional commits', async () => {
     const first = await materializeOne({ live: createDefaultProject(), render: renderMock() });
     let live = bumpCamera(first.live);
@@ -196,8 +227,6 @@ describe('prepared-media audit integrity regressions', () => {
         onComplete: (_shotId, result) => {
           try {
             const rendered = result.artifacts.filter((artifact) => artifact.status === 'rendered').length;
-            // One transactional call prunes obsolete configuration; each rendered
-            // artifact then commits once. There must be no final setProject(result.project).
             expect(setProjectCalls).toBe(1 + rendered);
             scheduler.dispose();
             resolve();
