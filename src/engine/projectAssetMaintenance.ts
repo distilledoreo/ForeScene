@@ -3,7 +3,6 @@ import {
   PROJECT_ASSET_URI_PREFIX,
   deleteProjectAssetBlob,
   getManagedProjectAssetBlobKeyForUri,
-  hasResidentProjectAssetBlob,
   listProjectAssetBlobKeys,
 } from './projectAssetStore';
 import { listAllProjectRevisions } from './projectRevisionStore';
@@ -20,34 +19,28 @@ function isRasterOrVideo(asset: ProjectAsset): boolean {
   return asset.type === 'image' || asset.type === 'video';
 }
 
-/**
- * Best-effort maintenance after a verified project save.
- *
- * Recovery revisions pin immutable, content-addressed copies of their binaries.
- * This routine therefore reclaims only transient project/import payloads for the
- * current project that are no longer referenced by the saved asset registry and
- * are not named by any retained revision.
- *
- * A save may finish while a newer prepared asset is being durably written and
- * merged into live state. Those newer bytes are resident in the active asset
- * store even though the older save snapshot cannot reference them yet. Resident
- * keys are therefore protected from maintenance and reconsidered only after an
- * explicit release/project switch or a later session. This prevents save-time
- * cleanup from deleting newer unsaved assets.
- *
- * Legacy/sample manifests may hold a managed blob: URL without an explicit
- * storageKey. The project-asset store can reverse-map those URLs; they must be
- * treated as live or cleanup would revoke the URL underneath the open project.
- */
-export async function cleanupUnreferencedProjectAssetPayloads(
-  project: LocationProject,
-): Promise<{ removed: number; keys: string[] }> {
-  const liveKeys = new Set(
+function referencedStorageKeys(project: LocationProject): Set<string> {
+  return new Set(
     Object.values(project.assets.assets)
       .filter(isRasterOrVideo)
       .map(projectAssetStorageKey)
       .filter((key): key is string => Boolean(key)),
   );
+}
+
+/**
+ * Best-effort maintenance after a verified project save.
+ *
+ * `project` is the verified snapshot whose stale transient payloads may be
+ * reclaimed. `getLiveProject`, when provided, is re-read immediately before
+ * each deletion so an asset committed while the older save was in flight can
+ * never be swept as an orphan.
+ */
+export async function cleanupUnreferencedProjectAssetPayloads(
+  project: LocationProject,
+  options: { getLiveProject?: () => LocationProject | undefined } = {},
+): Promise<{ removed: number; keys: string[] }> {
+  const savedKeys = referencedStorageKeys(project);
 
   const revisions = await listAllProjectRevisions();
   const retainedKeys = new Set(
@@ -62,19 +55,23 @@ export async function cleanupUnreferencedProjectAssetPayloads(
   const projectPrefix = `project/${project.id}/`;
   const importPrefix = `import/${project.id}/`;
   const storedKeys = await listProjectAssetBlobKeys();
-  const staleKeys = storedKeys.filter((key) => (
+  const candidates = storedKeys.filter((key) => (
     (key.startsWith(projectPrefix) || key.startsWith(importPrefix))
-    && !liveKeys.has(key)
+    && !savedKeys.has(key)
     && !retainedKeys.has(key)
-    && !hasResidentProjectAssetBlob(key)
   ));
 
-  for (const key of staleKeys) {
-    // A key could become resident after the candidate scan but before deletion
-    // because asset DB work is asynchronous. Re-check at the destructive edge.
-    if (hasResidentProjectAssetBlob(key)) continue;
+  const removedKeys: string[] = [];
+  for (const key of candidates) {
+    const currentLive = options.getLiveProject?.();
+    if (currentLive?.id === project.id && referencedStorageKeys(currentLive).has(key)) {
+      continue;
+    }
+    // There is no await between the latest-live check and queueing deletion, so
+    // browser mutations cannot interleave inside this destructive edge.
     await deleteProjectAssetBlob(key);
+    removedKeys.push(key);
   }
 
-  return { removed: staleKeys.filter((key) => !hasResidentProjectAssetBlob(key)).length, keys: staleKeys };
+  return { removed: removedKeys.length, keys: removedKeys };
 }
