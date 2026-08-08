@@ -180,14 +180,12 @@ export async function commitPreparedStillArtifact(
   const supersededAssetId =
     previous && previous.assetId !== asset.id ? previous.assetId : undefined;
 
+  // Prune the returned snapshot for callers that use it directly, but do NOT
+  // delete superseded bytes here. A newer live project may have gained another
+  // reference while the durable write was in flight. Final live merge code must
+  // decide whether the old asset is still unreferenced before deleting bytes.
   if (supersededAssetId) {
     nextProject = pruneUnreferencedProjectAssets(nextProject);
-    if (!nextProject.assets.assets[supersededAssetId]) {
-      const oldAsset = project.assets.assets[supersededAssetId];
-      const key = oldAsset?.storageKey
-        ?? createProjectAssetStorageKey(project.id, supersededAssetId);
-      void deleteProjectAssetBlob(key).catch(() => undefined);
-    }
   }
 
   return {
@@ -287,13 +285,8 @@ export function pruneObsoleteMaterializedStills(
 
   nextProject = pruneUnreferencedProjectAssets(nextProject);
 
-  for (const artifact of removedArtifacts) {
-    if (nextProject.assets.assets[artifact.assetId]) continue;
-    const oldAsset = project.assets.assets[artifact.assetId];
-    const key = oldAsset?.storageKey
-      ?? createProjectAssetStorageKey(project.id, artifact.assetId);
-    void deleteProjectAssetBlob(key).catch(() => undefined);
-  }
-
+  // This helper works from a supplied snapshot and cannot prove a removed asset
+  // is still unreferenced in the latest live project. Leave physical deletion to
+  // revision-aware post-save maintenance rather than risking concurrent data loss.
   return nextProject;
 }
