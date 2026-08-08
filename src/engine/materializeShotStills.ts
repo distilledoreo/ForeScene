@@ -5,15 +5,19 @@
  * and applies only the artifact record + asset — never a full stale project.
  */
 
-import type { LocationProject, Shot } from '../domain/types';
+import type { LocationProject, ProjectAsset, Shot } from '../domain/types';
 import {
   commitPreparedStillArtifact,
   pruneObsoleteMaterializedStills,
 } from './commitPreparedStillArtifact';
 import {
+  PROJECT_ASSET_URI_PREFIX,
   createProjectAssetStorageKey,
   deleteProjectAssetBlob,
+  getManagedProjectAssetBlobKeyForUri,
+  getProjectAssetBlob,
 } from './projectAssetStore';
+import { pruneUnreferencedProjectAssets } from './projectAssets';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
 import {
   buildStillArtifactSpecificationsForShot,
@@ -63,35 +67,17 @@ export interface ShotStillMaterializationResult {
 }
 
 export interface MaterializeShotStillsParams {
-  /**
-   * Initial snapshot used to plan specs / start rendering.
-   * Prefer pairing with getLiveProject so commits never overwrite newer live state.
-   */
   project: LocationProject;
   shotId: string;
   reason: MaterializeReason;
   scope?: MaterializeScope;
   signal?: AbortSignal;
-  /** Force selected/configured artifacts to render even when their fingerprint is current. */
   force?: boolean;
-  /** Optional exact artifact-key subset. Used by targeted retry actions. */
   artifactKeys?: ReadonlySet<string>;
-  /**
-   * Read the current live project immediately before fingerprint validation / commit.
-   * Required for interactive and agent paths that share a Zustand store.
-   */
   getLiveProject?: () => LocationProject;
-  /**
-   * Apply a pure update against the live project and return the new live project.
-   * The updater receives the latest live project and must only merge artifact-specific fields.
-   */
   commitLiveProject?: (
     updater: (live: LocationProject) => LocationProject,
   ) => LocationProject;
-  /**
-   * @deprecated Prefer getLiveProject + commitLiveProject.
-   * If provided alone, called after each successful commit with the commit result project.
-   */
   onProjectCommit?: (project: LocationProject) => LocationProject;
   render?: (params: {
     project: LocationProject;
@@ -107,14 +93,9 @@ function purposeForReason(reason: MaterializeReason): StillArtifactPurpose {
   return 'reconcile';
 }
 
-function priorityFor(
-  reason: MaterializeReason,
-  isPrimary: boolean,
-): RenderWorkPriority {
+function priorityFor(reason: MaterializeReason, isPrimary: boolean): RenderWorkPriority {
   if (reason === 'export-recovery') return 'export-recovery-still';
-  if (reason === 'edit') {
-    return isPrimary ? 'edit-primary-still' : 'edit-secondary-still';
-  }
+  if (reason === 'edit') return isPrimary ? 'edit-primary-still' : 'edit-secondary-still';
   return isPrimary ? 'capture-primary-still' : 'capture-secondary-still';
 }
 
@@ -124,36 +105,43 @@ function resolveShot(project: LocationProject, shotId: string): Shot {
   return shot;
 }
 
-/** Map prepared viewport stills into legacy camera-roll slots without re-rendering. */
 function legacyViewportSlotPatch(
   specification: StillArtifactSpecification,
   assetId: string,
 ): Partial<Shot['assets']> {
   if (specification.kind === 'clay-viewport') {
-    if (specification.peopleVariant === 'clean_plate') {
-      return { viewportCleanPlateAssetId: assetId };
-    }
+    if (specification.peopleVariant === 'clean_plate') return { viewportCleanPlateAssetId: assetId };
     return { viewportRenderAssetId: assetId };
   }
   if (specification.kind === 'projected-viewport') {
-    if (specification.peopleVariant === 'clean_plate') {
-      return { viewportProjectedCleanPlateAssetId: assetId };
-    }
+    if (specification.peopleVariant === 'clean_plate') return { viewportProjectedCleanPlateAssetId: assetId };
     return { viewportProjectedAssetId: assetId };
   }
   return {};
 }
 
-function readLive(
-  params: MaterializeShotStillsParams,
-  fallback: LocationProject,
-): LocationProject {
+function readLive(params: MaterializeShotStillsParams, fallback: LocationProject): LocationProject {
   return params.getLiveProject?.() ?? fallback;
 }
 
-/**
- * Materialize desired stills for one shot in priority order.
- */
+function storageKeyForAsset(projectId: string, asset: ProjectAsset): string | undefined {
+  if (asset.storageKey) return asset.storageKey;
+  if (asset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)) {
+    return asset.uri.slice(PROJECT_ASSET_URI_PREFIX.length);
+  }
+  return getManagedProjectAssetBlobKeyForUri(asset.uri)
+    ?? (asset.metadata?.provenance === 'forescene-derived-still'
+      ? createProjectAssetStorageKey(projectId, asset.id)
+      : undefined);
+}
+
+async function hasUsableAssetBytes(project: LocationProject, asset: ProjectAsset): Promise<boolean> {
+  if (asset.uri.startsWith('data:')) return true;
+  const storageKey = storageKeyForAsset(project.id, asset);
+  if (!storageKey) return Boolean(asset.uri);
+  return Boolean(await getProjectAssetBlob(storageKey));
+}
+
 export async function materializeShotStills(
   params: MaterializeShotStillsParams,
 ): Promise<ShotStillMaterializationResult> {
@@ -161,17 +149,11 @@ export async function materializeShotStills(
   let project = readLive(params, params.project);
   const scope = params.scope ?? 'all-configured';
 
-  if (reason === 'capture') {
-    recordPreparedMediaMetric('captureStillRequests');
-  }
+  if (reason === 'capture') recordPreparedMediaMetric('captureStillRequests');
 
   const shot0 = resolveShot(project, shotId);
   const purpose = purposeForReason(reason);
-  let specs = buildStillArtifactSpecificationsForShot({
-    project,
-    shot: shot0,
-    purpose,
-  });
+  let specs = buildStillArtifactSpecificationsForShot({ project, shot: shot0, purpose });
   const primary = selectPrimaryStillSpecification(project, shot0, specs);
   const primaryKey = stillArtifactKey(primary);
 
@@ -179,37 +161,23 @@ export async function materializeShotStills(
     specs = [primary];
   } else if (params.artifactKeys) {
     specs = specs.filter((spec) => params.artifactKeys!.has(stillArtifactKey(spec)));
-  } else if (scope === 'stale-only') {
-    specs = specs.filter((spec) => {
-      const key = stillArtifactKey(spec);
-      const existing = shot0.materializedMedia?.stills[key];
-      if (!existing) return true;
-      const fp = computeStillArtifactFingerprint(project, shot0, spec).key;
-      return existing.fingerprint !== fp;
-    });
   }
+  // Do not pre-filter stale-only by fingerprint alone. A fingerprint-current
+  // record with evicted/missing backing bytes must flow through the fast-path
+  // byte check below and recover with one render.
 
   specs = sortStillSpecificationsByPriority(specs, primaryKey);
 
-  // Prune obsolete configured artifacts against live project.
   if (scope === 'all-configured' || scope === 'stale-only') {
     const live = readLive(params, project);
     const liveShot = resolveShot(live, shotId);
-    const allDesired = buildStillArtifactSpecificationsForShot({
-      project: live,
-      shot: liveShot,
-      purpose,
-    });
+    const allDesired = buildStillArtifactSpecificationsForShot({ project: live, shot: liveShot, purpose });
     const desiredKeys = new Set(allDesired.map((spec) => stillArtifactKey(spec)));
     if (params.commitLiveProject) {
-      project = params.commitLiveProject((current) =>
-        pruneObsoleteMaterializedStills(current, shotId, desiredKeys)
-      );
+      project = params.commitLiveProject((current) => pruneObsoleteMaterializedStills(current, shotId, desiredKeys));
     } else {
       project = pruneObsoleteMaterializedStills(live, shotId, desiredKeys);
-      if (params.onProjectCommit) {
-        project = params.onProjectCommit(project);
-      }
+      if (params.onProjectCommit) project = params.onProjectCommit(project);
     }
   }
 
@@ -227,8 +195,6 @@ export async function materializeShotStills(
 
     const key = stillArtifactKey(spec);
     const isPrimary = key === primaryKey;
-
-    // Always re-read live before deciding whether to render.
     project = readLive(params, project);
     const liveShot = resolveShot(project, shotId);
     const expectedFingerprint = computeStillArtifactFingerprint(project, liveShot, spec).key;
@@ -236,13 +202,8 @@ export async function materializeShotStills(
 
     if (!params.force && existing && existing.fingerprint === expectedFingerprint) {
       const asset = project.assets.assets[existing.assetId];
-      if (asset) {
-        artifacts.push({
-          key,
-          status: 'current',
-          assetId: existing.assetId,
-          cacheStatus: 'current',
-        });
+      if (asset && await hasUsableAssetBytes(project, asset)) {
+        artifacts.push({ key, status: 'current', assetId: existing.assetId, cacheStatus: 'current' });
         if (isPrimary) primaryStillAssetId = existing.assetId;
         recordPreparedMediaMetric('stillReuseCount');
         continue;
@@ -251,8 +212,6 @@ export async function materializeShotStills(
 
     setStillArtifactJobStatus(shotId, key, 'rendering');
     setStillArtifactError(shotId, key, null);
-
-    // Freeze a render snapshot; concurrent edits after this are caught at commit.
     const renderSnapshot = project;
 
     try {
@@ -270,18 +229,12 @@ export async function materializeShotStills(
       );
 
       if (prepared.cacheStatus === 'current' && prepared.existingAssetId) {
-        artifacts.push({
-          key,
-          status: 'current',
-          assetId: prepared.existingAssetId,
-          cacheStatus: 'current',
-        });
+        artifacts.push({ key, status: 'current', assetId: prepared.existingAssetId, cacheStatus: 'current' });
         if (isPrimary) primaryStillAssetId = prepared.existingAssetId;
         setStillArtifactJobStatus(shotId, key, null);
         continue;
       }
 
-      // Transactional commit against the LIVE project — never the render snapshot.
       const liveNow = readLive(params, project);
       let commitResult = await commitPreparedStillArtifact({
         project: liveNow,
@@ -292,9 +245,18 @@ export async function materializeShotStills(
       });
 
       if (commitResult.ok) {
+        const supersededAssetId = commitResult.supersededAssetId;
+        const supersededStorageKey = supersededAssetId
+          ? storageKeyForAsset(liveNow.id, liveNow.assets.assets[supersededAssetId] ?? {
+            id: supersededAssetId,
+            type: 'image',
+            name: supersededAssetId,
+            uri: '',
+            createdAt: '',
+          }) ?? createProjectAssetStorageKey(liveNow.id, supersededAssetId)
+          : undefined;
+
         if (params.commitLiveProject) {
-          // Merge only the prepared still/asset into whatever is live *now*
-          // (may have advanced further during the durable write).
           let discardedAsStale = false;
           const artifact = commitResult.artifact;
           const assetId = commitResult.assetId;
@@ -311,50 +273,45 @@ export async function materializeShotStills(
               return live;
             }
             const legacySlot = legacyViewportSlotPatch(spec, assetId);
-            return {
+            const merged: LocationProject = {
               ...live,
               assets: {
                 ...live.assets,
-                assets: {
-                  ...live.assets.assets,
-                  [assetId]: asset,
-                },
+                assets: { ...live.assets.assets, [assetId]: asset },
               },
               shots: live.shots.map((item) => {
                 if (item.id !== shotId) return item;
                 return {
                   ...item,
                   materializedMedia: {
-                    stills: {
-                      ...(item.materializedMedia?.stills ?? {}),
-                      [key]: artifact,
-                    },
+                    stills: { ...(item.materializedMedia?.stills ?? {}), [key]: artifact },
                   },
-                  assets: {
-                    ...item.assets,
-                    ...legacySlot,
-                  },
+                  assets: { ...item.assets, ...legacySlot },
                   updatedAt: new Date().toISOString(),
                 };
               }),
               updatedAt: new Date().toISOString(),
             };
+            return supersededAssetId ? pruneUnreferencedProjectAssets(merged) : merged;
           });
           if (discardedAsStale) {
             if (asset) {
-              const storageKey = asset.storageKey
-                ?? createProjectAssetStorageKey(commitResult.project.id, assetId);
+              const storageKey = asset.storageKey ?? createProjectAssetStorageKey(commitResult.project.id, assetId);
               await deleteProjectAssetBlob(storageKey).catch(() => undefined);
             }
             commitResult = { ok: false, reason: 'stale', project };
           } else {
             project = readLive(params, project);
+            if (supersededAssetId && supersededStorageKey && !project.assets.assets[supersededAssetId]) {
+              await deleteProjectAssetBlob(supersededStorageKey).catch(() => undefined);
+            }
             commitResult = { ...commitResult, project };
           }
         } else {
           project = commitResult.project;
-          if (params.onProjectCommit) {
-            project = params.onProjectCommit(project);
+          if (params.onProjectCommit) project = params.onProjectCommit(project);
+          if (supersededAssetId && supersededStorageKey && !project.assets.assets[supersededAssetId]) {
+            await deleteProjectAssetBlob(supersededStorageKey).catch(() => undefined);
           }
         }
       } else {
@@ -434,69 +391,5 @@ export async function materializeShotStills(
     status = 'ready-with-warnings';
   }
 
-  return {
-    project,
-    shotId,
-    primaryStillAssetId,
-    status,
-    artifacts,
-    warnings,
-  };
-}
-
-/**
- * Capture-time entry: materialize according to mode defaults.
- */
-export async function materializeShotAfterCapture(params: {
-  project: LocationProject;
-  shotId: string;
-  mode: ShotCaptureMaterializationMode;
-  signal?: AbortSignal;
-  getLiveProject?: () => LocationProject;
-  commitLiveProject?: MaterializeShotStillsParams['commitLiveProject'];
-  onProjectCommit?: (project: LocationProject) => LocationProject;
-  render?: MaterializeShotStillsParams['render'];
-}): Promise<ShotStillMaterializationResult> {
-  if (params.mode === 'deferred') {
-    return {
-      project: params.getLiveProject?.() ?? params.project,
-      shotId: params.shotId,
-      status: 'ready',
-      artifacts: [],
-      warnings: ['Materialization deferred.'],
-    };
-  }
-
-  const shared = {
-    project: params.project,
-    shotId: params.shotId,
-    reason: 'capture' as const,
-    signal: params.signal,
-    getLiveProject: params.getLiveProject,
-    commitLiveProject: params.commitLiveProject,
-    onProjectCommit: params.onProjectCommit,
-    render: params.render,
-  };
-
-  if (params.mode === 'await-primary') {
-    const primaryResult = await materializeShotStills({
-      ...shared,
-      scope: 'primary',
-    });
-
-    if (primaryResult.status !== 'failed') {
-      void materializeShotStills({
-        ...shared,
-        project: primaryResult.project,
-        scope: 'stale-only',
-      }).catch(() => undefined);
-    }
-
-    return primaryResult;
-  }
-
-  return materializeShotStills({
-    ...shared,
-    scope: 'all-configured',
-  });
+  return { project, shotId, primaryStillAssetId, status, artifacts, warnings };
 }
