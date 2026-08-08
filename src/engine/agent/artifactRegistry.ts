@@ -29,11 +29,26 @@ interface StoredArtifact {
 }
 
 const registry = new Map<string, StoredArtifact>();
+const MAX_RETAINED_ARTIFACTS = 64;
+const MAX_RETAINED_ARTIFACT_BYTES = 512 * 1024 * 1024;
 let artifactCounter = 0;
 
 function nextArtifactId(): string {
   artifactCounter += 1;
   return `artifact_${Date.now().toString(36)}_${artifactCounter.toString(36)}`;
+}
+
+function pruneArtifactRegistry(): void {
+  let bytes = [...registry.values()].reduce((total, artifact) => total + artifact.blob.size, 0);
+  while (
+    registry.size > 1
+    && (registry.size > MAX_RETAINED_ARTIFACTS || bytes > MAX_RETAINED_ARTIFACT_BYTES)
+  ) {
+    const oldest = registry.entries().next().value as [string, StoredArtifact] | undefined;
+    if (!oldest) break;
+    registry.delete(oldest[0]);
+    bytes -= oldest[1].blob.size;
+  }
 }
 
 function assetTypeFromMime(mimeType: string): ProjectAsset['type'] {
@@ -63,6 +78,7 @@ export function registerAgentArtifact(params: {
     shotId: params.shotId,
     createdAt: Date.now(),
   });
+  pruneArtifactRegistry();
   return {
     artifactId: id,
     mimeType: params.mimeType,
@@ -107,19 +123,11 @@ export async function downloadAgentArtifact(input: {
     return {
       ok: false,
       status: 'failed',
-      diagnostics: [{
-        code: 'artifact_not_found',
-        message: `No artifact with id "${input.artifactId}".`,
-        severity: 'error',
-      }],
+      diagnostics: [{ code: 'artifact_not_found', message: `No artifact with id "${input.artifactId}".`, severity: 'error' }],
     };
   }
 
-  const shouldDownload = input.download !== false;
-  if (shouldDownload) {
-    downloadBlob(stored.blob, stored.fileName);
-  }
-
+  if (input.download !== false) downloadBlob(stored.blob, stored.fileName);
   const dataUrl = await blobToDataUrl(stored.blob);
   return {
     ok: true,
@@ -136,7 +144,6 @@ export async function downloadAgentArtifact(input: {
   };
 }
 
-/** Test helper — clears the in-memory registry. */
 export function resetAgentArtifactRegistryForTests(): void {
   registry.clear();
   artifactCounter = 0;
@@ -167,33 +174,16 @@ export function listAgentArtifacts(filter: {
 export async function persistAgentArtifact(artifactId: string): Promise<import('./protocol').AgentArtifactStatusResult> {
   const stored = registry.get(artifactId);
   if (!stored) {
-    return {
-      ok: false,
-      diagnostics: [{
-        code: 'artifact_not_found',
-        message: `No artifact with id "${artifactId}".`,
-        severity: 'error',
-      }],
-    };
+    return { ok: false, diagnostics: [{ code: 'artifact_not_found', message: `No artifact with id "${artifactId}".`, severity: 'error' }] };
   }
 
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
-    return {
-      ok: false,
-      diagnostics: [writeAccessRequiredDiagnostic('persistArtifact')],
-    };
+    return { ok: false, diagnostics: [writeAccessRequiredDiagnostic('persistArtifact')] };
   }
 
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructive) {
-    return {
-      ok: false,
-      diagnostics: [{
-        code: 'persistence_not_ready',
-        message: 'Project persistence is not ready.',
-        severity: 'error',
-      }],
-    };
+    return { ok: false, diagnostics: [{ code: 'persistence_not_ready', message: 'Project persistence is not ready.', severity: 'error' }] };
   }
 
   const projectId = useProjectStore.getState().project.id;
@@ -209,22 +199,14 @@ export async function persistAgentArtifact(artifactId: string): Promise<import('
         uri: '',
         mimeType: stored.mimeType,
         createdAt: new Date().toISOString(),
-        metadata: {
-          source: 'agent_artifact',
-          artifactId: stored.id,
-        },
+        metadata: { source: 'agent_artifact', artifactId: stored.id },
       };
       const persistedAsset = storeProjectAssetBlob(projectId, baseAsset, stored.blob);
 
       useProjectStore.setState((state) => ({
         project: touchProject({
           ...state.project,
-          assets: {
-            assets: {
-              ...state.project.assets.assets,
-              [persistedAsset.id]: persistedAsset,
-            },
-          },
+          assets: { assets: { ...state.project.assets.assets, [persistedAsset.id]: persistedAsset } },
         }),
       }));
 
@@ -246,14 +228,7 @@ export async function persistAgentArtifact(artifactId: string): Promise<import('
       diagnostics: [],
     };
   } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [{
-        code: 'persist_failed',
-        message: error instanceof Error ? error.message : 'Artifact persistence failed.',
-        severity: 'error',
-      }],
-    };
+    return { ok: false, diagnostics: [{ code: 'persist_failed', message: error instanceof Error ? error.message : 'Artifact persistence failed.', severity: 'error' }] };
   }
 }
 
@@ -262,9 +237,7 @@ export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boo
   if (!stored) return { ok: false };
 
   if (stored.persisted || stored.persistedKey || stored.projectAssetId) {
-    if (useAgentControlStore.getState().controlMode !== 'read-write') {
-      return { ok: false };
-    }
+    if (useAgentControlStore.getState().controlMode !== 'read-write') return { ok: false };
   }
 
   if (stored.persistedKey) {
@@ -274,19 +247,12 @@ export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boo
 
   if (stored.projectAssetId) {
     const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
-    if (!runDestructive) {
-      return { ok: false };
-    }
+    if (!runDestructive) return { ok: false };
     await runDestructive('Remove persisted agent artifact', () => {
       useProjectStore.setState((state) => {
         const assets = { ...state.project.assets.assets };
         delete assets[stored.projectAssetId!];
-        return {
-          project: touchProject({
-            ...state.project,
-            assets: { assets },
-          }),
-        };
+        return { project: touchProject({ ...state.project, assets: { assets } }) };
       });
     });
   }
@@ -297,14 +263,7 @@ export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boo
 export function getAgentArtifactStatus(artifactId: string): import('./protocol').AgentArtifactStatusResult {
   const stored = registry.get(artifactId);
   if (!stored) {
-    return {
-      ok: false,
-      diagnostics: [{
-        code: 'artifact_not_found',
-        message: `No artifact with id "${artifactId}".`,
-        severity: 'error',
-      }],
-    };
+    return { ok: false, diagnostics: [{ code: 'artifact_not_found', message: `No artifact with id "${artifactId}".`, severity: 'error' }] };
   }
   return {
     ok: true,
