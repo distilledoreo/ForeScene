@@ -3,9 +3,7 @@
  */
 
 import type { LocationProject, Shot } from '../domain/types';
-import {
-  hasRenderableCameraMove,
-} from './cameraKeyframes';
+import { hasRenderableCameraMove } from './cameraKeyframes';
 import {
   characterPassIncludesGreenMp4,
   shotHasVisibleCharactersForPass,
@@ -23,9 +21,7 @@ import { canUseProjectedAppearance } from './projectedStyle';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
 import type { VideoArtifactSpecification } from './videoArtifactFingerprint';
-import {
-  computeVideoArtifactFingerprint,
-} from './videoArtifactFingerprint';
+import { computeVideoArtifactFingerprint } from './videoArtifactFingerprint';
 import { getVideoArtifactFromCache } from './videoArtifactCache';
 import { resolveProjectVideoPerformance } from './videoPerformance';
 import { resolveVideoPreset } from './videoPresets';
@@ -44,10 +40,6 @@ export interface ShotVideoCandidate {
   label: string;
 }
 
-/**
- * Translate shot settings into requested MP4 specifications.
- * Does not create a second cache — uses VideoArtifactSpecification + prepareVideoArtifact.
- */
 export function buildVideoArtifactSpecificationsForShot(
   project: LocationProject,
   shot: Shot,
@@ -72,12 +64,7 @@ export function buildVideoArtifactSpecificationsForShot(
       candidates.push({
         shotId: shot.id,
         label: `clay-camera-move:${peopleVariant}`,
-        specification: {
-          appearance: 'clay',
-          peopleVariant,
-          mode: 'render',
-          ...baseDims,
-        },
+        specification: { appearance: 'clay', peopleVariant, mode: 'render', ...baseDims },
       });
     }
   }
@@ -87,12 +74,7 @@ export function buildVideoArtifactSpecificationsForShot(
       candidates.push({
         shotId: shot.id,
         label: `projected-camera-move:${peopleVariant}`,
-        specification: {
-          appearance: 'projected',
-          peopleVariant,
-          mode: 'render',
-          ...baseDims,
-        },
+        specification: { appearance: 'projected', peopleVariant, mode: 'render', ...baseDims },
       });
     }
   }
@@ -102,12 +84,7 @@ export function buildVideoArtifactSpecificationsForShot(
       candidates.push({
         shotId: shot.id,
         label: `depth-camera-move:${peopleVariant}`,
-        specification: {
-          appearance: 'depth',
-          peopleVariant,
-          mode: 'render',
-          ...baseDims,
-        },
+        specification: { appearance: 'depth', peopleVariant, mode: 'render', ...baseDims },
       });
     }
   }
@@ -141,7 +118,6 @@ export function buildVideoArtifactSpecificationsForShot(
   return candidates;
 }
 
-/** Preferred order: projected, clay, depth, character, then other shots. */
 export function sortVideoCandidates(
   candidates: readonly ShotVideoCandidate[],
   preferredShotId?: string,
@@ -159,8 +135,7 @@ export function sortVideoCandidates(
     const aChar = a.specification.contentMode === 'characters_only' ? 1 : 0;
     const bChar = b.specification.contentMode === 'characters_only' ? 1 : 0;
     if (aChar !== bChar) return aChar - bChar;
-    return appearanceRank(a.specification.appearance)
-      - appearanceRank(b.specification.appearance);
+    return appearanceRank(a.specification.appearance) - appearanceRank(b.specification.appearance);
   });
 }
 
@@ -177,12 +152,10 @@ interface QueuedVideo {
   controller: AbortController;
 }
 
-/**
- * After still materialization, queue missing MP4s at background priority.
- */
 export function createBackgroundVideoScheduler(options: BackgroundVideoSchedulerOptions) {
   const pending = new Map<string, QueuedVideo>();
   const runningJobs = new Map<string, QueuedVideo>();
+  const failedKeysByShot = new Map<string, Set<string>>();
   let running = false;
   let disposed = false;
   let paused = false;
@@ -191,6 +164,29 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
     .some((job) => job.candidate.shotId === shotId);
   const runningForShot = (shotId: string) => [...runningJobs.values()]
     .some((job) => job.candidate.shotId === shotId);
+  const failedForShot = (shotId: string) => (failedKeysByShot.get(shotId)?.size ?? 0) > 0;
+
+  const markFailure = (shotId: string, key: string) => {
+    let keys = failedKeysByShot.get(shotId);
+    if (!keys) {
+      keys = new Set();
+      failedKeysByShot.set(shotId, keys);
+    }
+    keys.add(key);
+  };
+  const clearFailure = (shotId: string, key: string) => {
+    const keys = failedKeysByShot.get(shotId);
+    if (!keys) return;
+    keys.delete(key);
+    if (keys.size === 0) failedKeysByShot.delete(shotId);
+  };
+
+  function settleShotStatus(shotId: string): void {
+    if (runningForShot(shotId)) options.onStatusChange?.(shotId, 'encoding');
+    else if (pendingForShot(shotId)) options.onStatusChange?.(shotId, 'queued');
+    else if (failedForShot(shotId)) options.onStatusChange?.(shotId, 'failed');
+    else options.onStatusChange?.(shotId, 'ready');
+  }
 
   async function processQueue(): Promise<void> {
     if (running || disposed || paused) return;
@@ -202,11 +198,9 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
         if (job.controller.signal.aborted) continue;
         runningJobs.set(key, job);
         options.onStatusChange?.(job.candidate.shotId, 'encoding');
-        let failed = false;
 
         try {
           const project = options.getProject();
-          // Depth range for depth MP4s
           let specification = job.candidate.specification;
           if (specification.appearance === 'depth' && !specification.depthRange) {
             const shot = project.shots.find((item) => item.id === job.candidate.shotId);
@@ -229,32 +223,25 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
               priority: 'background',
               signal: job.controller.signal,
             }),
+            { ownerId: job.candidate.shotId, jobId: `video:${key}` },
           );
 
-          if (result.cacheStatus === 'hit') {
-            recordPreparedMediaMetric('videoCacheHits');
-          } else if (result.cacheStatus === 'joined') {
-            recordPreparedMediaMetric('videoJobsJoined');
-          } else {
-            recordPreparedMediaMetric('videoBackgroundRenders');
-          }
+          clearFailure(job.candidate.shotId, key);
+          if (result.cacheStatus === 'hit') recordPreparedMediaMetric('videoCacheHits');
+          else if (result.cacheStatus === 'joined') recordPreparedMediaMetric('videoJobsJoined');
+          else recordPreparedMediaMetric('videoBackgroundRenders');
           options.onPrepared?.(job.candidate.shotId, result);
         } catch (error) {
-          if (error instanceof Error && error.name === 'AbortError') continue;
-          failed = true;
+          // prepareVideoArtifact historically throws a plain Error on abort. The
+          // signal is authoritative; cancellation is not a rendering failure.
+          if (job.controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+            continue;
+          }
+          markFailure(job.candidate.shotId, key);
           options.onError?.(job.candidate.shotId, error);
-          options.onStatusChange?.(job.candidate.shotId, 'failed');
         } finally {
           runningJobs.delete(key);
-          if (!failed && !job.controller.signal.aborted) {
-            if (runningForShot(job.candidate.shotId)) {
-              options.onStatusChange?.(job.candidate.shotId, 'encoding');
-            } else if (pendingForShot(job.candidate.shotId)) {
-              options.onStatusChange?.(job.candidate.shotId, 'queued');
-            } else {
-              options.onStatusChange?.(job.candidate.shotId, 'ready');
-            }
-          }
+          if (!job.controller.signal.aborted) settleShotStatus(job.candidate.shotId);
         }
       }
     } finally {
@@ -269,11 +256,9 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
     const shot = project.shots.find((item) => item.id === shotId);
     if (!shot) return;
 
-    const candidates = sortVideoCandidates(
-      buildVideoArtifactSpecificationsForShot(project, shot),
-      shotId,
-    );
+    const candidates = sortVideoCandidates(buildVideoArtifactSpecificationsForShot(project, shot), shotId);
     if (candidates.length === 0) {
+      failedKeysByShot.delete(shotId);
       options.onStatusChange?.(shotId, 'not-requested');
       return;
     }
@@ -289,54 +274,37 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
         height: candidate.specification.height ?? preset.height,
         encoderMode: candidate.specification.encoderMode ?? perf.encoderMode,
       };
-      const fingerprint = computeVideoArtifactFingerprint(
-        project,
-        shot,
-        candidate.specification,
-        resolved,
-      );
+      const fingerprint = computeVideoArtifactFingerprint(project, shot, candidate.specification, resolved);
       const cached = await getVideoArtifactFromCache(fingerprint);
       if (cached) {
+        clearFailure(shotId, fingerprint.key);
         recordPreparedMediaMetric('videoCacheHits');
         continue;
       }
 
       const key = fingerprint.key;
       if (pending.has(key) || runningJobs.has(key)) continue;
-
-      pending.set(key, {
-        candidate,
-        fingerprintKey: key,
-        controller: new AbortController(),
-      });
+      pending.set(key, { candidate, fingerprintKey: key, controller: new AbortController() });
     }
 
-    if (runningForShot(shotId)) {
-      options.onStatusChange?.(shotId, 'encoding');
-    } else if (pendingForShot(shotId)) {
-      options.onStatusChange?.(shotId, 'queued');
-    } else {
-      options.onStatusChange?.(shotId, 'ready');
-    }
-
+    settleShotStatus(shotId);
     if (!paused) void processQueue();
   }
 
   function discardForShot(shotId: string): void {
     let discarded = false;
     for (const [key, job] of pending) {
-      if (job.candidate.shotId === shotId) {
-        job.controller.abort();
-        pending.delete(key);
-        discarded = true;
-      }
+      if (job.candidate.shotId !== shotId) continue;
+      job.controller.abort();
+      pending.delete(key);
+      discarded = true;
     }
     for (const job of runningJobs.values()) {
-      if (job.candidate.shotId === shotId) {
-        job.controller.abort();
-        discarded = true;
-      }
+      if (job.candidate.shotId !== shotId) continue;
+      job.controller.abort();
+      discarded = true;
     }
+    failedKeysByShot.delete(shotId);
     if (discarded) options.onStatusChange?.(shotId, 'pending');
   }
 
@@ -351,6 +319,7 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       job.controller.abort();
     }
     pending.clear();
+    failedKeysByShot.clear();
     for (const shotId of affected) options.onStatusChange?.(shotId, 'pending');
   }
 
@@ -374,6 +343,7 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
       runningKeys: [...runningJobs.keys()],
       pendingShotIds: [...new Set([...pending.values()].map((job) => job.candidate.shotId))],
       runningShotIds: [...new Set([...runningJobs.values()].map((job) => job.candidate.shotId))],
+      failedShotIds: [...failedKeysByShot.keys()],
     };
   }
 
