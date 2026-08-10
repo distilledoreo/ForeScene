@@ -5,7 +5,11 @@ import { createProjectPackage, readProjectFile, validateProjectPackage } from '.
 import {
   PROJECT_ASSET_URI_PREFIX,
   getProjectAssetBlob,
+  inspectProjectAssetMemoryForTests,
   resetProjectAssetStoreForTests,
+  setProjectAssetMemoryActiveProject,
+  setProjectAssetMemoryLimitsForTests,
+  storeProjectAssetBlobDurable,
   storeProjectAssetDataUrl,
 } from '../src/engine/projectAssetStore';
 
@@ -131,5 +135,30 @@ describe('local-first raster and video assets', () => {
     zip.file(`project-assets/${encodeURIComponent(asset.storageKey!)}.bin`, new TextEncoder().encode('wxyz'));
 
     await expect(validateProjectPackage(await zip.generateAsync({ type: 'blob' }))).rejects.toThrow('SHA-256 integrity verification');
+  });
+
+  it('reclaims the least-recently-used decoded payload while preserving durable bytes', async () => {
+    const project = createDefaultProject();
+    setProjectAssetMemoryActiveProject(undefined);
+    setProjectAssetMemoryLimitsForTests({ maxBytes: 3, maxEntries: 8 });
+
+    const first = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'first.png', uri: '', width: 1, height: 1 }),
+      new Blob(['one'], { type: 'image/png' }),
+    );
+    const second = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'second.png', uri: '', width: 1, height: 1 }),
+      new Blob(['two'], { type: 'image/png' }),
+    );
+
+    const memory = inspectProjectAssetMemoryForTests();
+    expect(memory.bytes).toBe(3);
+    expect(memory.keys).toContain(second.storageKey);
+    expect(memory.keys).not.toContain(first.storageKey);
+    if (typeof indexedDB !== 'undefined') {
+      await expect(getProjectAssetBlob(first.storageKey!)).resolves.toBeInstanceOf(Blob);
+    }
   });
 });

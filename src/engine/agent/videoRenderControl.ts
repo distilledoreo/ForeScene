@@ -191,7 +191,12 @@ export async function renderAgentShotVideo(
         },
         onProgress: (progress) => { latestProgress = toProgress(shot.id, progress); },
       }),
-      { ownerId: shot.id, jobId: `agent-video:${shot.id}`, abort: () => controller.abort() },
+      {
+        ownerId: shot.id,
+        jobId: `agent-video:${shot.id}`,
+        abort: () => controller.abort(),
+        signal: controller.signal,
+      },
     );
 
     let assetId: string | undefined;

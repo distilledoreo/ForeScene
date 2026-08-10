@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import { disposeBackgroundVideoService, forgetBackgroundVideosForShot } from '../engine/backgroundVideoService';
 import { bindLiveProjectAccess } from '../engine/liveProjectAccess';
-import { releaseProjectAssetMemoryForProject } from '../engine/projectAssetStore';
+import {
+  releaseProjectAssetMemoryForProject,
+  setProjectAssetMemoryActiveProject,
+} from '../engine/projectAssetStore';
 import { cancelShotStillPreparation } from '../engine/shotStillActions';
 import { clearStillArtifactRuntime } from '../engine/stillArtifactRuntime';
 import type { ProjectStoreSlices } from './slices/types';
@@ -80,6 +83,7 @@ useProjectStore.subscribe((state, previousState) => {
     disposeBackgroundVideoService();
     rebindStillReconciliation(reconciliationOptions());
     releaseProjectAssetMemoryForProject(previous.id);
+    setProjectAssetMemoryActiveProject(next.id);
     return;
   }
 
@@ -97,3 +101,7 @@ useProjectStore.subscribe((state, previousState) => {
     scheduleStillReconciliationAfterProjectChange(previous, next);
   }
 });
+
+// Keep the currently open project's decoded media warm while allowing
+// temporary/imported/agent payloads to be reclaimed by the asset-store LRU.
+setProjectAssetMemoryActiveProject(useProjectStore.getState().project.id);

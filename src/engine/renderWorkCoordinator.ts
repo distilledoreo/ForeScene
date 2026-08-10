@@ -18,6 +18,8 @@ export interface RenderWorkOptions {
   jobId?: string;
   /** Optional active-job abort hook for work that owns an AbortController. */
   abort?: () => void;
+  /** AbortSignal for queued work; cancellation is propagated before execution and while active. */
+  signal?: AbortSignal;
 }
 
 const PRIORITY_ORDER: Record<RenderWorkPriority, number> = {
@@ -36,10 +38,14 @@ interface QueuedWork {
   ownerId?: string;
   jobId?: string;
   abort?: () => void;
+  signal?: AbortSignal;
   run: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   cancelled: boolean;
+  started: boolean;
+  settled: boolean;
+  removeAbortListener?: () => void;
 }
 
 let nextId = 1;
@@ -68,6 +74,34 @@ function sortQueue(): void {
   });
 }
 
+function settleResolve(item: QueuedWork, value: unknown): void {
+  if (item.settled) return;
+  item.settled = true;
+  item.removeAbortListener?.();
+  item.resolve(value);
+}
+
+function settleReject(item: QueuedWork, error: unknown): void {
+  if (item.settled) return;
+  item.settled = true;
+  item.removeAbortListener?.();
+  item.reject(error);
+}
+
+function cancelEntry(
+  item: QueuedWork,
+  message = 'Render work was cancelled.',
+  settleImmediately = true,
+): void {
+  if (item.cancelled) return;
+  item.cancelled = true;
+  item.abort?.();
+  // Queued cancellation is immediately observable. Active work remains in the
+  // coordinator until its renderer unwinds, but its public promise is settled
+  // now so a caller never waits on a non-cooperative renderer.
+  if (settleImmediately) settleReject(item, abortError(message));
+}
+
 async function pump(): Promise<void> {
   while (active.size < MAX_CONCURRENT && queue.length > 0) {
     sortQueue();
@@ -84,12 +118,13 @@ async function pump(): Promise<void> {
     if (item.cancelled) continue;
 
     active.set(item.id, item);
+    item.started = true;
     try {
       const value = await item.run();
-      if (item.cancelled) item.reject(abortError());
-      else item.resolve(value);
+      if (item.cancelled) settleReject(item, abortError());
+      else settleResolve(item, value);
     } catch (error) {
-      item.reject(error);
+      settleReject(item, error);
     } finally {
       active.delete(item.id);
       await Promise.resolve();
@@ -106,9 +141,7 @@ function removeQueued(
     const item = queue[index]!;
     if (!predicate(item)) continue;
     queue.splice(index, 1);
-    item.cancelled = true;
-    item.abort?.();
-    item.reject(abortError(message));
+    cancelEntry(item, message);
     cancelled += 1;
   }
   if (cancelled > 0) void pump();
@@ -128,11 +161,32 @@ export const renderWorkCoordinator = {
         ownerId: options?.ownerId,
         jobId: options?.jobId,
         abort: options?.abort,
+        signal: options?.signal,
         run: work as () => Promise<unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
         cancelled: false,
+        started: false,
+        settled: false,
       };
+      if (entry.signal?.aborted) {
+        cancelEntry(entry, 'Render work was cancelled before it was queued.');
+        return;
+      }
+      if (entry.signal) {
+        const onAbort = () => {
+          if (entry.started) {
+            cancelEntry(entry, 'Render work was cancelled.');
+            return;
+          }
+          const index = queue.indexOf(entry);
+          if (index >= 0) queue.splice(index, 1);
+          cancelEntry(entry, 'Render work was cancelled before it started.');
+          void pump();
+        };
+        entry.signal.addEventListener('abort', onAbort, { once: true });
+        entry.removeAbortListener = () => entry.signal?.removeEventListener('abort', onAbort);
+      }
       queue.push(entry);
       void pump();
     });
@@ -156,8 +210,7 @@ export const renderWorkCoordinator = {
     let cancelled = removeQueued((item) => item.ownerId === ownerId);
     for (const item of active.values()) {
       if (item.ownerId !== ownerId || item.cancelled) continue;
-      item.cancelled = true;
-      item.abort?.();
+      cancelEntry(item, 'Render work was cancelled.', false);
       cancelled += 1;
     }
     return cancelled;
@@ -188,8 +241,7 @@ export const renderWorkCoordinator = {
   resetForTests() {
     removeQueued(() => true, 'Render work coordinator reset.');
     for (const item of active.values()) {
-      item.cancelled = true;
-      item.abort?.();
+      cancelEntry(item, 'Render work coordinator reset.', false);
     }
     nextId = 1;
   },

@@ -33,9 +33,7 @@ function statusIsBusy(status: ForeSceneAgentStatus): boolean {
 export function applyForeSceneAgentApiFacade(api: ForeSceneBrowserApi): ForeSceneBrowserApi {
   const preparedCapture = api.captureShotThumbnail.bind(api);
   const baseGetStatus = api.getStatus.bind(api);
-  const mutableApi = api as ForeSceneBrowserApi & {
-    captureShotPreparedMedia?: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
-  };
+  const mutableApi = api as ForeSceneBrowserApi;
 
   mutableApi.captureShotPreparedMedia = (input) => preparedCapture({ shotId: input.shotId });
 
@@ -44,7 +42,8 @@ export function applyForeSceneAgentApiFacade(api: ForeSceneBrowserApi): ForeScen
   // getStatus/waitForIdle cannot report idle while a still/video GPU job is live.
   mutableApi.getStatus = () => {
     const status = baseGetStatus();
-    const preparedBusy = renderWorkCoordinator.getStatus().activeCount > 0;
+    const renderStatus = renderWorkCoordinator.getStatus();
+    const preparedBusy = renderStatus.activeCount > 0 || renderStatus.queueLength > 0;
     if (!preparedBusy || status.busy.videoRender) return status;
     return {
       ...status,

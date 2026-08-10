@@ -4,8 +4,10 @@ import type { LocationProject, SceneObject, Shot } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
 import {
   getAgentArtifactBlob,
+  getAgentArtifactHandle,
   registerAgentArtifact,
   resetAgentArtifactRegistryForTests,
+  setAgentArtifactRegistryLimitsForTests,
 } from '../src/engine/agent/artifactRegistry';
 import { deriveOperationOk, deriveOperationStatus } from '../src/engine/agent/renderResult';
 import { resetAgentPackageExportControl } from '../src/engine/agent/packageExportControl';
@@ -163,6 +165,33 @@ describe('agent API improvements', () => {
     expect(blob).toBeTruthy();
     const text = await blob!.text();
     expect(text).toBe(payload);
+  });
+
+  it('prunes the least-recently-used unpersisted artifact instead of the oldest handle', () => {
+    setAgentArtifactRegistryLimitsForTests({ maxArtifacts: 2 });
+    const first = registerAgentArtifact({
+      blob: new Blob(['first'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'first.txt',
+    });
+    const second = registerAgentArtifact({
+      blob: new Blob(['second'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'second.txt',
+    });
+
+    // Refresh the first handle before the third registration. The second one
+    // is now the least recently used entry and should be reclaimed.
+    expect(getAgentArtifactHandle(first.artifactId)?.artifactId).toBe(first.artifactId);
+    const third = registerAgentArtifact({
+      blob: new Blob(['third'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'third.txt',
+    });
+
+    expect(getAgentArtifactBlob(first.artifactId)).toBeTruthy();
+    expect(getAgentArtifactBlob(third.artifactId)).toBeTruthy();
+    expect(getAgentArtifactBlob(second.artifactId)).toBeUndefined();
   });
 
   it('clears linked panorama and active pano when unlinking the selected shot', async () => {

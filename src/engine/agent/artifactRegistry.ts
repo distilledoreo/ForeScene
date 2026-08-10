@@ -26,28 +26,38 @@ interface StoredArtifact {
   persisted?: boolean;
   persistedKey?: string;
   projectAssetId?: string;
+  lastAccessOrder: number;
 }
 
 const registry = new Map<string, StoredArtifact>();
-const MAX_RETAINED_ARTIFACTS = 64;
-const MAX_RETAINED_ARTIFACT_BYTES = 512 * 1024 * 1024;
+export const DEFAULT_MAX_RETAINED_ARTIFACTS = 64;
+export const DEFAULT_MAX_RETAINED_ARTIFACT_BYTES = 512 * 1024 * 1024;
+let maxRetainedArtifacts = DEFAULT_MAX_RETAINED_ARTIFACTS;
+let maxRetainedArtifactBytes = DEFAULT_MAX_RETAINED_ARTIFACT_BYTES;
 let artifactCounter = 0;
+let artifactAccessOrder = 0;
 
 function nextArtifactId(): string {
   artifactCounter += 1;
   return `artifact_${Date.now().toString(36)}_${artifactCounter.toString(36)}`;
 }
 
+function touchArtifact(stored: StoredArtifact): void {
+  artifactAccessOrder += 1;
+  stored.lastAccessOrder = artifactAccessOrder;
+}
+
 function pruneArtifactRegistry(): void {
   let bytes = [...registry.values()].reduce((total, artifact) => total + artifact.blob.size, 0);
   while (
     registry.size > 1
-    && (registry.size > MAX_RETAINED_ARTIFACTS || bytes > MAX_RETAINED_ARTIFACT_BYTES)
+    && (registry.size > maxRetainedArtifacts || bytes > maxRetainedArtifactBytes)
   ) {
-    const oldest = registry.entries().next().value as [string, StoredArtifact] | undefined;
+    const oldest = [...registry.values()]
+      .sort((a, b) => a.lastAccessOrder - b.lastAccessOrder || a.createdAt - b.createdAt)[0];
     if (!oldest) break;
-    registry.delete(oldest[0]);
-    bytes -= oldest[1].blob.size;
+    registry.delete(oldest.id);
+    bytes -= oldest.blob.size;
   }
 }
 
@@ -68,7 +78,7 @@ export function registerAgentArtifact(params: {
   shotId?: string;
 }): AgentArtifactHandle {
   const id = nextArtifactId();
-  registry.set(id, {
+  const stored: StoredArtifact = {
     id,
     blob: params.blob,
     mimeType: params.mimeType,
@@ -77,7 +87,10 @@ export function registerAgentArtifact(params: {
     jobId: params.jobId,
     shotId: params.shotId,
     createdAt: Date.now(),
-  });
+    lastAccessOrder: 0,
+  };
+  touchArtifact(stored);
+  registry.set(id, stored);
   pruneArtifactRegistry();
   return {
     artifactId: id,
@@ -89,12 +102,16 @@ export function registerAgentArtifact(params: {
 }
 
 export function getAgentArtifactBlob(artifactId: string): Blob | undefined {
-  return registry.get(artifactId)?.blob;
+  const stored = registry.get(artifactId);
+  if (!stored) return undefined;
+  touchArtifact(stored);
+  return stored.blob;
 }
 
 export function getAgentArtifactHandle(artifactId: string): AgentArtifactHandle | undefined {
   const stored = registry.get(artifactId);
   if (!stored) return undefined;
+  touchArtifact(stored);
   return {
     artifactId: stored.id,
     mimeType: stored.mimeType,
@@ -126,6 +143,7 @@ export async function downloadAgentArtifact(input: {
       diagnostics: [{ code: 'artifact_not_found', message: `No artifact with id "${input.artifactId}".`, severity: 'error' }],
     };
   }
+  touchArtifact(stored);
 
   if (input.download !== false) downloadBlob(stored.blob, stored.fileName);
   const dataUrl = await blobToDataUrl(stored.blob);
@@ -147,6 +165,30 @@ export async function downloadAgentArtifact(input: {
 export function resetAgentArtifactRegistryForTests(): void {
   registry.clear();
   artifactCounter = 0;
+  artifactAccessOrder = 0;
+  maxRetainedArtifacts = DEFAULT_MAX_RETAINED_ARTIFACTS;
+  maxRetainedArtifactBytes = DEFAULT_MAX_RETAINED_ARTIFACT_BYTES;
+}
+
+export function setAgentArtifactRegistryLimitsForTests(params: {
+  maxArtifacts?: number;
+  maxBytes?: number;
+}): void {
+  if (params.maxArtifacts !== undefined) maxRetainedArtifacts = Math.max(1, Math.floor(params.maxArtifacts));
+  if (params.maxBytes !== undefined) maxRetainedArtifactBytes = Math.max(1, Math.floor(params.maxBytes));
+  pruneArtifactRegistry();
+}
+
+export function inspectAgentArtifactRegistryForTests(): Array<{
+  artifactId: string;
+  lastAccessOrder: number;
+  byteLength: number;
+}> {
+  return [...registry.values()].map((stored) => ({
+    artifactId: stored.id,
+    lastAccessOrder: stored.lastAccessOrder,
+    byteLength: stored.blob.size,
+  }));
 }
 
 export function listAgentArtifacts(filter: {
@@ -265,6 +307,7 @@ export function getAgentArtifactStatus(artifactId: string): import('./protocol')
   if (!stored) {
     return { ok: false, diagnostics: [{ code: 'artifact_not_found', message: `No artifact with id "${artifactId}".`, severity: 'error' }] };
   }
+  touchArtifact(stored);
   return {
     ok: true,
     artifact: {

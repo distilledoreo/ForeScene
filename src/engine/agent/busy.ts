@@ -31,7 +31,7 @@ export function collectAgentBusyDiagnostics(): AgentDiagnostic[] {
     return [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Shot video rendering is in progress.')];
   }
   const renderStatus = renderWorkCoordinator.getStatus();
-  if (renderStatus.activeCount > 0) {
+  if (renderStatus.activeCount > 0 || renderStatus.queueLength > 0) {
     return [agentError(
       AGENT_DIAGNOSTIC_CODES.busy,
       `Prepared-media rendering is in progress (${renderStatus.activePriorities.join(', ')}).`,

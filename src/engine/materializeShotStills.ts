@@ -224,7 +224,7 @@ export async function materializeShotStills(
           force: params.force,
           render: params.render,
         }),
-        { ownerId: shotId, jobId: `${shotId}:${key}` },
+        { ownerId: shotId, jobId: `${shotId}:${key}`, signal },
       );
 
       if (prepared.cacheStatus === 'current' && prepared.existingAssetId) {

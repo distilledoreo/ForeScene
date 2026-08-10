@@ -92,9 +92,7 @@ describe('installed ForeScene agent facade', () => {
     expect(result.artifacts[0]!.key).toBe('sampled-clay-thumbnail@1.5');
     expect(result.warnings).toEqual([]);
 
-    const prepared = await (installed as ForeSceneBrowserApi & {
-      captureShotPreparedMedia?: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
-    }).captureShotPreparedMedia?.({ shotId: shot.id });
+    const prepared = await installed.captureShotPreparedMedia({ shotId: shot.id });
     expect(prepared).toEqual(preparedResult);
 
     useProjectSafetyStore.setState({
@@ -133,5 +131,33 @@ describe('installed ForeScene agent facade', () => {
     await active;
     const finalStatus = await waiting;
     expect(finalStatus.busy.videoRender).toBe(false);
+  });
+
+  it('does not report idle while prepared-media work is queued', async () => {
+    const api = {
+      getStatus: vi.fn(() => idleStatus()),
+      waitForIdle: vi.fn(async () => idleStatus()),
+      captureShotThumbnail: vi.fn(),
+      renderShotFrame: vi.fn(),
+    } as unknown as ForeSceneBrowserApi;
+    const installed = applyForeSceneAgentApiFacade(api);
+
+    let release!: () => void;
+    const active = renderWorkCoordinator.schedule(
+      'background-video',
+      () => new Promise<void>((resolve) => { release = resolve; }),
+      { ownerId: 'shot-active' },
+    );
+    await Promise.resolve();
+    const queued = renderWorkCoordinator.schedule(
+      'capture-primary-still',
+      async () => undefined,
+      { ownerId: 'shot-queued' },
+    );
+
+    expect(installed.getStatus().busy.videoRender).toBe(true);
+    release();
+    await active;
+    await queued;
   });
 });
