@@ -1435,6 +1435,28 @@ export interface AgentRenderShotFrameResult {
     | 'canonical_character_renderer';
 }
 
+/** Capture-time still materialization result (agent/API await-all path). */
+export interface AgentShotMaterializationArtifact {
+  key: string;
+  status: 'current' | 'rendered' | 'failed' | 'skipped';
+  assetId?: string;
+}
+
+export interface AgentShotMaterializationResult {
+  ok: boolean;
+  shotId: string;
+  revisionId: string;
+  /** GOAL capture status — never 'ready' when primary failed. */
+  status: 'ready' | 'ready-with-warnings' | 'failed';
+  primaryStillAssetId?: string;
+  artifacts: AgentShotMaterializationArtifact[];
+  warnings: string[];
+  width: number;
+  height: number;
+  pngDataUrl?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
 export interface AgentShotVideoRenderInput {
   shotId: string;
   mode?: 'render' | 'quickPreview';
@@ -1667,6 +1689,8 @@ export interface ForeSceneBrowserApi {
   inspectObject(target: AgentEntityTarget): AgentObjectInspection;
   listShots(): AgentShotSummary[];
   inspectShot(target: AgentEntityTarget): AgentShotInspection;
+  /** Desired vs materialized still readiness for a shot (read-only). */
+  inspectShotPreparedMedia(target: AgentEntityTarget): Promise<import('../stillArtifactRuntime').ShotStillRuntimeStatus>;
   inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
   sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
   sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample;
@@ -1778,7 +1802,13 @@ export interface ForeSceneBrowserApi {
   // Shot library and sequence review
   duplicateShot(input: AgentDuplicateShotInput): Promise<AgentDuplicateShotResult>;
   reorderShots(input: AgentReorderShotsInput): Promise<{ ok: boolean; revisionId?: string; diagnostics: AgentDiagnostic[] }>;
-  captureShotThumbnail(input: { shotId: string; timeSeconds?: number }): Promise<AgentRenderShotFrameResult>;
+  captureShotThumbnail(input: { shotId: string; timeSeconds?: number }): Promise<AgentShotMaterializationResult>;
+  /** Regenerate configured stills for a shot (manual refresh). */
+  regenerateShotStills(input: { shotId: string }): Promise<AgentShotMaterializationResult>;
+  /** Retry failed/missing/stale stills only. */
+  retryFailedShotStills(input: { shotId: string }): Promise<AgentShotMaterializationResult>;
+  /** Cancel queued/in-flight still preparation for a shot (or all when shotId omitted). */
+  cancelShotStillPreparation(input?: { shotId?: string }): { ok: boolean; cancelledShotIds: string[] };
   listShotMedia(input: { shotId: string }): AgentShotMediaItem[];
   compareAdjacentShots(input: { shotId: string }): AgentSequenceContinuityDelta;
   inspectSequenceContinuity(input: { shotIds: string[] }): AgentSequenceContinuityDelta[];

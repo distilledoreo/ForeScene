@@ -220,6 +220,11 @@ export function ExportWorkspace() {
         signal: controller.signal,
         onProgress: handlePackageProgress,
         plan: verifiedPlan,
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
+          return useProjectStore.getState().project;
+        },
       });
       downloadBlob(result.blob, result.fileName);
       setLastExport(result.manifestPaths);
@@ -283,6 +288,11 @@ export function ExportWorkspace() {
         signal: controller.signal,
         onProgress: handlePackageProgress,
         plan: verifiedPlan,
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
+          return useProjectStore.getState().project;
+        },
       });
       downloadBlob(result.blob, result.fileName);
       setLastExport(result.manifestPaths);

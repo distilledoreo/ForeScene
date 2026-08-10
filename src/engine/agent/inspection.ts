@@ -170,6 +170,15 @@ export function inspectShotSnapshot(shot: Shot): AgentShotInspection {
   };
 }
 
+/** Read-only prepared-media inspection for agents (desired vs ready vs stale). */
+export async function inspectShotPreparedMedia(
+  project: LocationProject,
+  shot: Shot | string,
+) {
+  const { inspectShotStillRuntime } = await import('../stillArtifactRuntime');
+  return inspectShotStillRuntime(project, shot);
+}
+
 export function inspectShotTimelineSnapshot(
   project: LocationProject,
   shot: Shot,

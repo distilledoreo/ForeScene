@@ -10,6 +10,7 @@ import type { ProjectAsset, Shot } from '../domain/types';
 import { getShotExportProgressLabel } from './exportNaming';
 import type { ExportPlan } from './exportPlan';
 import { getProjectAssetBlob } from './projectAssetStore';
+import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 import type { CameraMoveExportProgress } from './renderers';
 
 export type PackageExportPhase =
@@ -59,6 +60,14 @@ export interface PackageExportOptions {
   plan?: ExportPlan;
   /** Optional stats accumulator shared across shots in a multi-shot package. */
   videoPerformanceStats?: import('./videoPerformance').PackageVideoPerformanceStats;
+  /**
+   * Live project access during export recovery so recovered stills can be committed
+   * when the live fingerprint still matches the frozen export snapshot.
+   */
+  getLiveProject?: () => import('../domain/types').LocationProject;
+  commitLiveProject?: (
+    updater: (live: import('../domain/types').LocationProject) => import('../domain/types').LocationProject,
+  ) => import('../domain/types').LocationProject;
 }
 
 /** Aggregated prepareVideoArtifact cache / stage timings for package export. */
@@ -154,6 +163,7 @@ export async function compressZip(
     indeterminate: true,
   });
 
+  const startedAt = performance.now();
   const blob = await zip.generateAsync(
     { type: 'blob' },
     (metadata) => {
@@ -173,6 +183,7 @@ export async function compressZip(
       });
     },
   );
+  recordPreparedMediaMetric('zipAssemblyMs', Math.round(performance.now() - startedAt));
 
   throwIfAborted(args.signal);
   args.tracker.advance(1);

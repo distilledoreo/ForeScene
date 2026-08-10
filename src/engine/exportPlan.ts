@@ -60,6 +60,11 @@ import {
 import { getPeopleRenderVariants, getPeopleVariantPath } from './peopleExport';
 import { canUseProjectedAppearance } from './projectedStyle';
 import {
+  buildStillArtifactSpecificationsForShot,
+} from './stillArtifactPlanning';
+import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
+import { stillArtifactKey, type StillArtifactSpecification } from './stillArtifactTypes';
+import {
   computePixelFrameCount,
   formatPixelFrameWorkload,
   resolveProjectVideoPerformance,
@@ -114,6 +119,13 @@ export type PlannedArtifactKind =
 
 export type PlannedArtifactDisposition = 'produce' | 'omit';
 
+export type PlannedArtifactSource =
+  | 'materialized-asset'
+  | 'source-asset'
+  | 'shared-preparation'
+  | 'video-cache'
+  | 'render-recovery';
+
 export interface PlannedArtifact {
   id: string;
   shotId: string;
@@ -125,6 +137,12 @@ export interface PlannedArtifact {
   files: PlannedFile[];
   /** Progress-tracker work units for this artifact when produced. */
   workUnits: number;
+  /** How packaging intends to obtain this artifact. */
+  source?: PlannedArtifactSource;
+  sourceAssetId?: string;
+  expectedFingerprint?: string;
+  materializedFingerprint?: string;
+  readiness?: 'ready' | 'stale' | 'missing';
 }
 
 export type ExportPlanIssueSeverity = 'info' | 'warning' | 'error';
@@ -234,7 +252,7 @@ function produceArtifact(
   kind: PlannedArtifactKind,
   files: PlannedFile[],
   workUnits: number,
-  extras: Partial<Pick<PlannedArtifact, 'variant' | 'appearance'>> & { suffix?: string } = {},
+  extras: Partial<Pick<PlannedArtifact, 'variant' | 'appearance' | 'source' | 'sourceAssetId' | 'expectedFingerprint' | 'materializedFingerprint' | 'readiness'>> & { suffix?: string } = {},
 ): PlannedArtifact {
   return {
     id: artifactId(shotId, kind, extras.suffix),
@@ -245,6 +263,144 @@ function produceArtifact(
     appearance: extras.appearance,
     files,
     workUnits,
+    source: extras.source,
+    sourceAssetId: extras.sourceAssetId,
+    expectedFingerprint: extras.expectedFingerprint,
+    materializedFingerprint: extras.materializedFingerprint,
+    readiness: extras.readiness,
+  };
+}
+
+const STILL_PLAN_KINDS = new Set<PlannedArtifactKind>([
+  'clay-viewport',
+  'projected-viewport',
+  'depth-viewport',
+  'clay-reference-frames',
+  'projected-reference-frames',
+  'depth-reference-frames',
+  'character-still',
+]);
+
+/**
+ * Annotate produced still artifacts with fingerprint readiness from materializedMedia.
+ * Does not read Blobs during planning.
+ */
+export function annotateStillArtifactReadiness(
+  project: LocationProject,
+  shot: Shot,
+  artifact: PlannedArtifact,
+  specification?: StillArtifactSpecification,
+): PlannedArtifact {
+  if (artifact.disposition !== 'produce' || !STILL_PLAN_KINDS.has(artifact.kind)) {
+    return artifact;
+  }
+  if (!specification) {
+    // Without a concrete spec we can only mark missing when no materialized media exists.
+    const hasAny = Object.keys(shot.materializedMedia?.stills ?? {}).length > 0;
+    return {
+      ...artifact,
+      readiness: hasAny ? artifact.readiness : 'missing',
+      source: hasAny ? artifact.source : 'render-recovery',
+    };
+  }
+  const expected = computeStillArtifactFingerprint(project, shot, specification);
+  const key = stillArtifactKey(specification);
+  const existing = shot.materializedMedia?.stills[key];
+  if (!existing) {
+    return {
+      ...artifact,
+      expectedFingerprint: expected.key,
+      readiness: 'missing',
+      source: 'render-recovery',
+    };
+  }
+  if (existing.fingerprint !== expected.key) {
+    return {
+      ...artifact,
+      expectedFingerprint: expected.key,
+      materializedFingerprint: existing.fingerprint,
+      sourceAssetId: existing.assetId,
+      readiness: 'stale',
+      source: 'render-recovery',
+    };
+  }
+  const asset = project.assets.assets[existing.assetId];
+  if (!asset) {
+    return {
+      ...artifact,
+      expectedFingerprint: expected.key,
+      materializedFingerprint: existing.fingerprint,
+      sourceAssetId: existing.assetId,
+      readiness: 'missing',
+      source: 'render-recovery',
+    };
+  }
+  return {
+    ...artifact,
+    expectedFingerprint: expected.key,
+    materializedFingerprint: existing.fingerprint,
+    sourceAssetId: existing.assetId,
+    readiness: 'ready',
+    source: 'materialized-asset',
+  };
+}
+
+/**
+ * Reference-frame groups span every start/middle/end frame × people variant.
+ * A group is only `ready` when every expected spec is materialized, fresh, and
+ * backed by a registry asset — never inferred from a single unrelated still.
+ */
+export function annotateReferenceFrameGroupReadiness(
+  project: LocationProject,
+  shot: Shot,
+  artifact: PlannedArtifact,
+): PlannedArtifact {
+  if (
+    artifact.disposition !== 'produce'
+    || artifact.kind !== 'clay-reference-frames'
+    && artifact.kind !== 'projected-reference-frames'
+    && artifact.kind !== 'depth-reference-frames'
+  ) {
+    return artifact;
+  }
+  const specKind: StillArtifactSpecification['kind'] = artifact.kind === 'clay-reference-frames'
+    ? 'clay-reference-frame'
+    : artifact.kind === 'projected-reference-frames'
+      ? 'projected-reference-frame'
+      : 'depth-reference-frame';
+  const expectedSpecs = buildStillArtifactSpecificationsForShot({
+    project,
+    shot,
+    purpose: 'export',
+  }).filter((spec) => spec.kind === specKind);
+  if (expectedSpecs.length === 0) {
+    return { ...artifact, readiness: 'missing', source: 'render-recovery' };
+  }
+
+  let fresh = 0;
+  let present = 0;
+  let expectedPrimary: string | undefined;
+  for (const spec of expectedSpecs) {
+    const key = stillArtifactKey(spec);
+    const expected = computeStillArtifactFingerprint(project, shot, spec).key;
+    expectedPrimary ??= expected;
+    const existing = shot.materializedMedia?.stills[key];
+    if (!existing) continue;
+    present += 1;
+    if (existing.fingerprint === expected && project.assets.assets[existing.assetId]) {
+      fresh += 1;
+    }
+  }
+
+  const ready = fresh === expectedSpecs.length;
+  return {
+    ...artifact,
+    expectedFingerprint: expectedPrimary,
+    sourceAssetId: ready
+      ? shot.materializedMedia?.stills[stillArtifactKey(expectedSpecs[0]!)]?.assetId
+      : undefined,
+    readiness: ready ? 'ready' : present > 0 ? 'stale' : 'missing',
+    source: ready ? 'materialized-asset' : 'render-recovery',
   };
 }
 
@@ -1189,12 +1345,67 @@ export function createExportPlan(
       ...shot,
       exportSettings: settingsForPlan,
     };
-    const { artifacts, issues: shotIssues, hasVisibleCharacters } = planShotArtifacts(
+    const planned = planShotArtifacts(
       project,
       planningShot,
       rootFolder,
       settingsForPlan,
     );
+    const hasVisibleCharacters = planned.hasVisibleCharacters;
+    const shotIssues = planned.issues;
+    // Annotate still readiness from materializedMedia (no Blob reads).
+    const artifacts = planned.artifacts.map((artifact) => {
+      if (!STILL_PLAN_KINDS.has(artifact.kind) || artifact.disposition !== 'produce') {
+        return artifact;
+      }
+      // Build a representative specification for viewport stills (primary people variant).
+      if (
+        artifact.kind === 'clay-viewport'
+        || artifact.kind === 'projected-viewport'
+        || artifact.kind === 'depth-viewport'
+      ) {
+        const peopleVariant = artifact.variant
+          ?? (settingsForPlan.peopleExportMode === 'clean_plate' ? 'clean_plate' : 'with_people');
+        const appearance =
+          artifact.kind === 'clay-viewport'
+            ? 'clay' as const
+            : artifact.kind === 'projected-viewport'
+              ? 'projected' as const
+              : 'depth' as const;
+        const kind =
+          artifact.kind === 'clay-viewport'
+            ? 'clay-viewport' as const
+            : artifact.kind === 'projected-viewport'
+              ? 'projected-viewport' as const
+              : 'depth-viewport' as const;
+        return annotateStillArtifactReadiness(project, planningShot, artifact, {
+          kind,
+          appearance,
+          peopleVariant,
+          width: settingsForPlan.width,
+          height: settingsForPlan.height,
+        });
+      }
+      if (artifact.kind === 'character-still') {
+        return annotateStillArtifactReadiness(project, planningShot, artifact, {
+          kind: 'character-still',
+          appearance: artifact.appearance === 'projected' ? 'projected' : 'clay',
+          contentMode: 'characters_only',
+          width: settingsForPlan.width,
+          height: settingsForPlan.height,
+        });
+      }
+      // Reference-frame groups: ready only when every start/middle/end frame and
+      // people variant is materialized and fresh (never inferred from one still).
+      if (
+        artifact.kind === 'clay-reference-frames'
+        || artifact.kind === 'projected-reference-frames'
+        || artifact.kind === 'depth-reference-frames'
+      ) {
+        return annotateReferenceFrameGroupReadiness(project, planningShot, artifact);
+      }
+      return annotateStillArtifactReadiness(project, planningShot, artifact);
+    });
 
     for (const warning of getShotWarnings(project, planningShot)) {
       issues.push(warningToIssue(warning, shot.id));

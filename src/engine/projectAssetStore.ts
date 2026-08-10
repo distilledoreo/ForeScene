@@ -14,6 +14,7 @@ export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 
 const memoryBlobs = new Map<string, Blob>();
 const memoryBlobVersions = new Map<string, number>();
+const memoryBlobWrittenAt = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
@@ -79,11 +80,52 @@ function makeObjectUrl(key: string, blob: Blob): string {
   return url;
 }
 
+/**
+ * Return the backing local-storage key for an object URL created by this store.
+ * Some legacy/sample manifests kept the managed blob URL but did not persist the
+ * storageKey field. Maintenance must still treat that backing payload as live.
+ */
+export function getManagedProjectAssetBlobKeyForUri(uri: string): string | undefined {
+  if (!uri.startsWith('blob:')) return undefined;
+  for (const [key, objectUrl] of objectUrls) {
+    if (objectUrl === uri) return key;
+  }
+  return undefined;
+}
+
+export function hasResidentProjectAssetBlob(key: string): boolean {
+  return memoryBlobs.has(key) || objectUrls.has(key);
+}
+
+/** Timestamp of the most recent explicit local write/replacement for this key. */
+export function getProjectAssetBlobWrittenAt(key: string): number | undefined {
+  return memoryBlobWrittenAt.get(key);
+}
+
+/**
+ * Release only in-memory payloads/object URLs for a departed project. Durable
+ * IndexedDB rows remain available for local-first reopening and quota/LRU policy.
+ */
+export function releaseProjectAssetMemoryForProject(projectId: string): void {
+  const prefixes = [`project/${projectId}/`, `import/${projectId}/`];
+  const matches = (key: string) => prefixes.some((prefix) => key.startsWith(prefix));
+  for (const key of [...memoryBlobs.keys()]) {
+    if (!matches(key)) continue;
+    memoryBlobs.delete(key);
+    memoryBlobVersions.delete(key);
+    memoryBlobWrittenAt.delete(key);
+  }
+  for (const [key, url] of [...objectUrls.entries()]) {
+    if (!matches(key)) continue;
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(url);
+    }
+    objectUrls.delete(key);
+  }
+}
+
 function persistProjectAssetBlob(key: string, blob: Blob) {
   void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
-    // The in-memory blob remains usable for the current session, but this is
-    // now observable by the project safety controller instead of being a
-    // silent durability failure.
     for (const listener of persistenceFailureListeners) listener({ key, error });
   });
 }
@@ -124,6 +166,35 @@ export function storeProjectAssetBlob<T extends ProjectAsset>(projectId: string,
   return { ...asset, storageKey, uri };
 }
 
+/**
+ * Store a Blob in memory and await durable IndexedDB write before returning.
+ * Use for prepared-media commits where the project must not reference unpersisted bytes.
+ * On failure, removes the in-memory/object-URL registration so callers stay clean.
+ */
+export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
+  projectId: string,
+  asset: T,
+  blob: Blob,
+): Promise<T> {
+  const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
+  cacheProjectAssetBlob(storageKey, blob, true);
+  try {
+    await putProjectAssetBlobs([{ key: storageKey, blob }]);
+  } catch (error) {
+    memoryBlobs.delete(storageKey);
+    memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);
+    memoryBlobWrittenAt.delete(storageKey);
+    const url = objectUrls.get(storageKey);
+    if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(url);
+    }
+    objectUrls.delete(storageKey);
+    throw error;
+  }
+  const uri = makeObjectUrl(storageKey, blob);
+  return { ...asset, storageKey, uri };
+}
+
 export function registerProjectAssetBlob(key: string, blob: Blob): string {
   cacheProjectAssetBlob(key, blob, true);
   const uri = makeObjectUrl(key, blob);
@@ -133,7 +204,10 @@ export function registerProjectAssetBlob(key: string, blob: Blob): string {
 
 function cacheProjectAssetBlob(key: string, blob: Blob, replace: boolean): void {
   memoryBlobs.set(key, blob);
-  if (replace) memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+  if (replace) {
+    memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    memoryBlobWrittenAt.set(key, Date.now());
+  }
 }
 
 /** Changes whenever a local raster/video key is explicitly replaced or removed. */
@@ -190,7 +264,6 @@ function enqueueAssetDatabaseOperation<T>(operation: () => Promise<T>): Promise<
 
 export function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]): Promise<void> {
   if (entries.length === 0) return Promise.resolve();
-
   return enqueueAssetDatabaseOperation(() => putProjectAssetBlobsNow(entries));
 }
 
@@ -240,6 +313,7 @@ export async function deleteProjectAssetBlob(key: string): Promise<void> {
   return enqueueAssetDatabaseOperation(async () => {
     memoryBlobs.delete(key);
     memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    memoryBlobWrittenAt.delete(key);
     const url = objectUrls.get(key);
     if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
     objectUrls.delete(key);
@@ -263,6 +337,7 @@ export function resetProjectAssetStoreForTests() {
   }
   memoryBlobs.clear();
   memoryBlobVersions.clear();
+  memoryBlobWrittenAt.clear();
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;
@@ -287,7 +362,6 @@ function dataUrlToBlob(dataUrl: string): Blob {
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     return new Blob([bytes], { type: mimeType });
   } catch {
-    // Keep permissive legacy fixtures/imports usable; valid browser data URLs always take the fast path above.
     return new Blob([payload], { type: mimeType });
   }
 }

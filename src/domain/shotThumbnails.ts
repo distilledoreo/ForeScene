@@ -1,7 +1,10 @@
 import { getCanonicalPano, getPanoAsset } from './selectors';
 import { LocationProject, ProjectAsset, Shot } from './types';
+import { resolvePrimaryStillPreviewAssetId } from '../engine/stillArtifactRuntime';
 
 export type ShotThumbnailSource =
+  | 'materialized_primary'
+  | 'materialized_primary_stale'
   | 'ai_result'
   | 'final_frame'
   | 'viewport_render'
@@ -13,6 +16,8 @@ export interface ShotThumbnailResolution {
   asset?: ProjectAsset;
   source?: ShotThumbnailSource;
   label: string;
+  /** True when showing a previous materialized still after a failed/stale refresh. */
+  stale?: boolean;
 }
 
 const shotAssetPriority: Array<{
@@ -27,6 +32,20 @@ const shotAssetPriority: Array<{
 ];
 
 export function resolveShotThumbnail(project: LocationProject, shot: Shot): ShotThumbnailResolution {
+  // Fingerprint-aware primary: current vs stale after camera/scene/pano edits.
+  const primary = resolvePrimaryStillPreviewAssetId(project, shot);
+  if (primary.assetId && primary.source === 'materialized') {
+    const asset = project.assets.assets[primary.assetId];
+    if (asset) {
+      return {
+        asset,
+        source: primary.stale ? 'materialized_primary_stale' : 'materialized_primary',
+        label: primary.stale ? 'Prepared still (updating…)' : 'Prepared still',
+        stale: primary.stale,
+      };
+    }
+  }
+
   for (const candidate of shotAssetPriority) {
     const assetId = shot.assets[candidate.key];
     const asset = assetId ? project.assets.assets[assetId] : undefined;

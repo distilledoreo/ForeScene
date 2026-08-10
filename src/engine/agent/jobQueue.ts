@@ -24,6 +24,10 @@ interface StoredJob extends AgentJobProgress {
   runGeneration: number;
 }
 
+const jobs = new Map<string, StoredJob>();
+const MAX_RETAINED_JOBS = 100;
+let jobCounter = 0;
+
 function updateJobCheckpoint(job: StoredJob) {
   job.completedItems = job.completedIndexes.size;
   job.progress = job.totalItems > 0 ? job.completedIndexes.size / job.totalItems : 1;
@@ -36,9 +40,6 @@ function markJobItemSettled(job: StoredJob, index: number) {
   job.completedIndexes.add(index);
   updateJobCheckpoint(job);
 }
-
-const jobs = new Map<string, StoredJob>();
-let jobCounter = 0;
 
 function nextJobId(): string {
   jobCounter += 1;
@@ -73,14 +74,49 @@ function isTerminalStatus(status: AgentJobStatus): boolean {
     || status === 'cancelled';
 }
 
-/**
- * Idle states for waitForAgentJob — the job is not actively executing items.
- * Failed jobs with remaining work are still idle; use resumeAgentJob to retry
- * unsettled items (when continueOnError was false, the failed index is not in
- * completedIndexes).
- */
+function pruneRetainedJobs(): void {
+  if (jobs.size < MAX_RETAINED_JOBS) return;
+  for (const [id, job] of jobs) {
+    if (jobs.size < MAX_RETAINED_JOBS) break;
+    if (!isTerminalStatus(job.status) || job.listeners.size > 0) continue;
+    jobs.delete(id);
+  }
+}
+
 function isJobWaitComplete(progress: AgentJobProgress): boolean {
   return progress.status !== 'pending' && progress.status !== 'running';
+}
+
+async function runHandlerWithoutOrphaning(
+  runHandler: () => Promise<void>,
+  timeoutMs?: number,
+): Promise<void> {
+  if (!timeoutMs) {
+    await runHandler();
+    return;
+  }
+
+  const handlerPromise = runHandler();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error('Job item timed out.'));
+    }, timeoutMs);
+  });
+
+  try {
+    await Promise.race([handlerPromise, timeoutPromise]);
+  } catch (error) {
+    // Legacy handlers do not all accept AbortSignal yet. If timeout wins, wait for
+    // the already-started handler to settle before releasing the worker so a
+    // second GPU render can never begin concurrently behind an orphaned timeout.
+    if (timedOut) await handlerPromise.catch(() => undefined);
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function runJob(job: StoredJob): Promise<void> {
@@ -109,7 +145,6 @@ async function runJob(job: StoredJob): Promise<void> {
     return;
   }
 
-  let settledCount = job.completedIndexes.size;
   const artifactIds = [...(job.artifactIds ?? [])];
   const registerArtifact = (artifactId: string) => {
     if (!artifactIds.includes(artifactId)) artifactIds.push(artifactId);
@@ -117,12 +152,7 @@ async function runJob(job: StoredJob): Promise<void> {
   };
 
   const runItem = async (index: number, item: unknown) => {
-    if (job.abortController?.signal.aborted) {
-      job.status = 'cancelled';
-      job.message = 'Job cancelled.';
-      notify(job);
-      return;
-    }
+    if (job.abortController?.signal.aborted) return;
 
     job.currentItem = String(index);
     job.message = 'Processing item ' + String(index + 1) + ' of ' + String(job.totalItems) + '.';
@@ -135,23 +165,12 @@ async function runJob(job: StoredJob): Promise<void> {
     });
 
     try {
-      if (job.input.timeoutMsPerItem) {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('Job item timed out.')), job.input.timeoutMsPerItem);
-          runHandler()
-            .then(() => {
-              clearTimeout(timer);
-              resolve();
-            })
-            .catch((error) => {
-              clearTimeout(timer);
-              reject(error);
-            });
-        });
-      } else {
-        await runHandler();
-      }
+      await runHandlerWithoutOrphaning(runHandler, job.input.timeoutMsPerItem);
     } catch (error) {
+      // Cancel/pause owns the final state. A late handler rejection after either
+      // must not become an error or mark the item settled.
+      if (job.abortController?.signal.aborted) return;
+
       const diagnostic = agentError(
         'job_item_failed',
         error instanceof Error ? error.message : 'Job item failed.',
@@ -160,19 +179,16 @@ async function runJob(job: StoredJob): Promise<void> {
       if (!continueOnError) {
         job.status = 'failed';
         job.message = diagnostic.message;
-        // Do not mark failed index as completed — resume will retry this item.
         notify(job);
         throw error;
       }
-      // continueOnError: count failed items as settled so the batch can finish.
       markJobItemSettled(job, index);
-      settledCount = job.completedIndexes.size;
       notify(job);
       return;
     }
 
+    if (job.abortController?.signal.aborted) return;
     markJobItemSettled(job, index);
-    settledCount = job.completedIndexes.size;
     notify(job);
   };
 
@@ -197,7 +213,8 @@ async function runJob(job: StoredJob): Promise<void> {
     });
     await Promise.all(workers);
 
-    if ((job.status as AgentJobStatus) === 'cancelled') return;
+    if ((job.status as AgentJobStatus) === 'cancelled' || (job.status as AgentJobStatus) === 'paused') return;
+    if (job.abortController?.signal.aborted) return;
 
     const hasErrors = (job.errors?.length ?? 0) > 0;
     job.status = hasErrors ? 'completed_with_warnings' : 'completed';
@@ -231,6 +248,7 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     shotIds: input.shotIds,
     passes: input.passes,
   });
+  pruneRetainedJobs();
   const jobId = nextJobId();
   const job: StoredJob = {
     jobId,
@@ -250,15 +268,9 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
     runGeneration: 0,
   };
   jobs.set(jobId, job);
-
   void runJob(job);
 
-  return {
-    ok: true,
-    jobId,
-    status: 'pending',
-    diagnostics: [],
-  };
+  return { ok: true, jobId, status: 'pending', diagnostics: [] };
 }
 
 export function getAgentJob(jobId: string): AgentJobProgress | undefined {
@@ -268,9 +280,7 @@ export function getAgentJob(jobId: string): AgentJobProgress | undefined {
 
 export function cancelAgentJob(jobId: string): AgentSubmitJobResult {
   const job = jobs.get(jobId);
-  if (!job) {
-    return { ok: false, diagnostics: [agentError('job_not_found', `No job with id "${jobId}".`)] };
-  }
+  if (!job) return { ok: false, diagnostics: [agentError('job_not_found', `No job with id "${jobId}".`)] };
   job.abortController?.abort();
   job.status = 'cancelled';
   job.message = 'Job cancelled.';
@@ -280,16 +290,9 @@ export function cancelAgentJob(jobId: string): AgentSubmitJobResult {
 
 export async function resumeAgentJob(jobId: string): Promise<AgentSubmitJobResult> {
   const job = jobs.get(jobId);
-  if (!job) {
-    return { ok: false, diagnostics: [agentError('job_not_found', `No job with id "${jobId}".`)] };
-  }
-  if (job.status === 'running') {
-    return { ok: true, jobId, status: job.status, diagnostics: [] };
-  }
-  if (
-    (job.status === 'paused' || job.status === 'failed')
-    && job.resumeIndex < job.totalItems
-  ) {
+  if (!job) return { ok: false, diagnostics: [agentError('job_not_found', `No job with id "${jobId}".`)] };
+  if (job.status === 'running') return { ok: true, jobId, status: job.status, diagnostics: [] };
+  if ((job.status === 'paused' || job.status === 'failed') && job.resumeIndex < job.totalItems) {
     job.abortController = new AbortController();
     job.status = 'pending';
     void runJob(job);
@@ -314,9 +317,7 @@ export function waitForAgentJob(
   options: { timeoutMs?: number } = {},
 ): Promise<AgentJobProgress> {
   const existing = getAgentJob(jobId);
-  if (existing && isJobWaitComplete(existing)) {
-    return Promise.resolve(existing);
-  }
+  if (existing && isJobWaitComplete(existing)) return Promise.resolve(existing);
 
   return new Promise((resolve, reject) => {
     let unsub: (() => void) | undefined;
@@ -338,6 +339,7 @@ export function waitForAgentJob(
 }
 
 export function resetAgentJobsForTests(): void {
+  for (const job of jobs.values()) job.abortController?.abort();
   jobs.clear();
   jobCounter = 0;
 }

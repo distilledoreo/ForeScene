@@ -536,6 +536,9 @@ export function useProjectLifecycle({ closeProjectOverlays }: UseProjectLifecycl
       persistenceControllerRef.current = undefined;
       resolveControllerReadyRef.current = undefined;
       controllerReadyPromiseRef.current = undefined;
+      void import('../engine/backgroundVideoService').then(
+        ({ disposeBackgroundVideoService }) => disposeBackgroundVideoService(),
+      ).catch(() => undefined);
     };
   }, [setAppMode, setFlushProject, setPersistenceState, setProject, setRecovered, setRunDestructiveProjectMutation]);
 

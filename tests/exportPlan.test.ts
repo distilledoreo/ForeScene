@@ -4,6 +4,8 @@ import {
   createDefaultProject,
   createPanoReference,
   createSceneObject,
+  defaultCharacterPassExportSettings,
+  defaultShotDepthSettings,
   defaultShotExportSettings,
   normalizeShotExportSettings,
 } from '../src/domain/defaults';
@@ -18,6 +20,9 @@ import {
 import { createShotPackageManifest } from '../src/engine/exportManifest';
 import { setShotExportOverride } from '../src/engine/exportConfiguration';
 import { countShotPackageUnits } from '../src/engine/packageExport';
+import { computeStillArtifactFingerprint } from '../src/engine/stillArtifactFingerprint';
+import { buildStillArtifactSpecificationsForShot } from '../src/engine/stillArtifactPlanning';
+import { stillArtifactKey, type StillArtifactSpecification } from '../src/engine/stillArtifactTypes';
 
 function cloneProject(): LocationProject {
   return structuredClone(createDefaultProject());
@@ -254,5 +259,141 @@ describe('export plan', () => {
     expect(plan.issues.some((issue) => issue.code === 'pano-crop-missing-asset')).toBe(true);
     expect(plan.issues.some((issue) => issue.code === 'global-reference-missing-asset')).toBe(true);
     expect(plan.issues.some((issue) => issue.code === 'ai-result-missing-asset')).toBe(true);
+  });
+});
+
+describe('reference-frame group readiness', () => {
+  function projectWithReferenceFrames(): LocationProject {
+    const project = cloneProject();
+    const shot = project.shots[0]!;
+    project.shots = [withMove(shot)];
+    project.shots[0]!.exportSettings = {
+      ...project.shots[0]!.exportSettings,
+      includeViewport: true,
+      includeProjectedViewport: false,
+      includeCameraMoveReferenceFrames: true,
+      includeProjectedCameraMoveReferenceFrames: false,
+      includeCameraMoveVideo: false,
+      peopleExportMode: 'both',
+      characterPass: { ...defaultCharacterPassExportSettings, enabled: false },
+      depth: { ...defaultShotDepthSettings, enabled: false },
+    };
+    return project;
+  }
+
+  function seedReferenceFrames(project: LocationProject, spec: StillArtifactSpecification): LocationProject {
+    const shot = project.shots[0]!;
+    const expected = computeStillArtifactFingerprint(project, shot, spec).key;
+    const key = stillArtifactKey(spec);
+    const assetId = `asset-${key.replace(/[^a-z0-9]/gi, '-')}`;
+    return {
+      ...project,
+      assets: {
+        ...project.assets,
+        assets: {
+          ...project.assets.assets,
+          [assetId]: {
+            id: assetId,
+            type: 'image',
+            name: key,
+            uri: `blob:ref-${assetId}`,
+            mimeType: 'image/png',
+            width: spec.width,
+            height: spec.height,
+            createdAt: new Date().toISOString(),
+          },
+        },
+      },
+      shots: project.shots.map((item) => (
+        item.id === shot.id
+          ? {
+            ...item,
+            materializedMedia: {
+              stills: {
+                ...(item.materializedMedia?.stills ?? {}),
+                [key]: {
+                  id: `still-${key}`,
+                  key,
+                  kind: spec.kind,
+                  assetId,
+                  fingerprint: expected,
+                  dependencyIds: [],
+                  width: spec.width,
+                  height: spec.height,
+                  mimeType: 'image/png' as const,
+                  appearance: spec.appearance,
+                  peopleVariant: spec.peopleVariant,
+                  timeSeconds: spec.timeSeconds,
+                  frameRole: spec.frameRole,
+                  createdAt: new Date().toISOString(),
+                },
+              },
+            },
+          }
+          : item
+      )),
+    };
+  }
+
+  it('group is ready only when every frame and people variant is fresh', () => {
+    let project = projectWithReferenceFrames();
+    const shot = project.shots[0]!;
+    const specs = buildStillArtifactSpecificationsForShot({ project, shot, purpose: 'export' })
+      .filter((spec) => spec.kind === 'clay-reference-frame');
+    expect(specs.length).toBeGreaterThan(1);
+    for (const spec of specs) project = seedReferenceFrames(project, spec);
+
+    const plan = createExportPlan(project, [project.shots[0]!]);
+    const group = plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'clay-reference-frames');
+    expect(group?.readiness).toBe('ready');
+    expect(group?.source).toBe('materialized-asset');
+  });
+
+  it('reports stale when one frame of the group is missing or outdated', () => {
+    let project = projectWithReferenceFrames();
+    const shot = project.shots[0]!;
+    const specs = buildStillArtifactSpecificationsForShot({ project, shot, purpose: 'export' })
+      .filter((spec) => spec.kind === 'clay-reference-frame');
+    expect(specs.length).toBeGreaterThan(1);
+    for (const spec of specs) project = seedReferenceFrames(project, spec);
+
+    // Drop exactly one frame from the group (e.g. mid frame of clean plate).
+    const droppedKey = stillArtifactKey(specs[specs.length - 1]!);
+    project = {
+      ...project,
+      shots: project.shots.map((item) => (
+        item.id === shot.id
+          ? {
+            ...item,
+            materializedMedia: {
+              stills: (() => {
+                const stills = { ...(item.materializedMedia?.stills ?? {}) };
+                delete stills[droppedKey];
+                return stills;
+              })(),
+            },
+          }
+          : item
+      )),
+    };
+
+    const plan = createExportPlan(project, [project.shots[0]!]);
+    const group = plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'clay-reference-frames');
+    expect(group?.readiness).toBe('stale');
+    expect(group?.source).toBe('render-recovery');
+  });
+
+  it('does not infer group readiness from an unrelated still', () => {
+    const project = projectWithReferenceFrames();
+    const shot = project.shots[0]!;
+    // Seed only a single viewport still — the classic false-positive case.
+    const clayViewport = buildStillArtifactSpecificationsForShot({ project, shot, purpose: 'export' })
+      .find((spec) => spec.kind === 'clay-viewport')!;
+    const seeded = seedReferenceFrames(project, clayViewport);
+
+    const plan = createExportPlan(seeded, [seeded.shots[0]!]);
+    const group = plan.shots[0]!.artifacts.find((artifact) => artifact.kind === 'clay-reference-frames');
+    expect(group?.readiness).toBe('missing');
+    expect(group?.source).toBe('render-recovery');
   });
 });

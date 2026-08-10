@@ -12,6 +12,7 @@ import {
   renderShotProjectedFrame,
 } from '../renderers';
 import { sampleShotTimeline } from '../shotTimeline';
+import { cancelShotStillPreparation as cancelShotStillPreparationAction } from '../shotStillActions';
 import {
   computePixelStatsFromDataUrl,
   rejectRenderPixelStats,
@@ -569,6 +570,28 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return inspectShotSnapshot(shot);
     },
 
+    async inspectShotPreparedMedia(target: AgentEntityTarget) {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      }
+      const project = readInspectionContext().project;
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
+      if (!shot) {
+        throw new AgentApiError(
+          AGENT_DIAGNOSTIC_CODES.targetNotFound,
+          `No shot with id "${resolved.id}".`,
+        );
+      }
+      const { inspectShotPreparedMedia: inspectPrepared } = await import('./inspection');
+      return inspectPrepared(project, shot);
+    },
+
     inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection {
       const blocked = requireInspectionAccess();
       if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
@@ -1085,53 +1108,267 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       if (blocked) {
         return {
           ok: false,
-          status: 'failed',
+          status: 'failed' as const,
           shotId: input.shotId,
           revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
           width: 0,
           height: 0,
+          artifacts: [],
+          warnings: [],
           diagnostics: blocked,
         };
       }
 
-      const rendered = await api.renderShotFrame({
-        shotId: input.shotId,
-        timeSeconds: input.timeSeconds,
-        appearance: 'clay',
-      });
-      if (!rendered.ok || !rendered.pngDataUrl) return rendered;
-
+      // Agent/API default: await-all configured stills via the shared materializer.
       const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
       if (!runDestructive) {
         return {
-          ...rendered,
           ok: false,
-          status: 'failed',
+          status: 'failed' as const,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          artifacts: [],
+          warnings: [],
           diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')],
         };
       }
 
       try {
-        await runDestructive('Attach shot thumbnail', () => {
-          useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
-            name: `shot_${input.shotId}_thumbnail.png`,
-            dataUrl: rendered.pngDataUrl!,
-            width: rendered.width,
-            height: rendered.height,
+        const { materializeShotAfterCapture } = await import('../materializeShotStills');
+        let materialization: Awaited<ReturnType<typeof materializeShotAfterCapture>> | undefined;
+        await runDestructive('Materialize shot stills', async () => {
+          const project = useProjectStore.getState().project;
+          materialization = await materializeShotAfterCapture({
+            project,
+            shotId: input.shotId,
+            mode: 'await-all',
+            getLiveProject: () => useProjectStore.getState().project,
+            commitLiveProject: (updater) => {
+              useProjectStore.setState((current) => ({
+                project: updater(current.project),
+              }));
+              return useProjectStore.getState().project;
+            },
           });
         });
-        return rendered;
+
+        const result = materialization!;
+        const primaryId = result.primaryStillAssetId;
+        const asset = primaryId
+          ? useProjectStore.getState().project.assets.assets[primaryId]
+          : undefined;
+        const artifacts = result.artifacts.map((item) => ({
+          key: item.key,
+          status: item.status,
+          assetId: item.assetId,
+        }));
+        const revisionId = useProjectSafetyStore.getState().activeRevisionId ?? '';
+
+        // Primary failure must never report ready — keep previous preview if present.
+        if (result.status === 'failed') {
+          // Best-effort legacy preview preserve for UI; status remains failed for the agent.
+          if (!primaryId) {
+            try {
+              const rendered = await api.renderShotFrame({
+                shotId: input.shotId,
+                timeSeconds: input.timeSeconds,
+                appearance: 'clay',
+              });
+              if (rendered.ok && rendered.pngDataUrl) {
+                await runDestructive('Attach shot thumbnail', () => {
+                  useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+                    name: `shot_${input.shotId}_thumbnail.png`,
+                    dataUrl: rendered.pngDataUrl!,
+                    width: rendered.width,
+                    height: rendered.height,
+                  });
+                });
+              }
+            } catch {
+              // Ignore fallback preview errors; failure is already reported.
+            }
+          }
+          return {
+            ok: false,
+            status: 'failed' as const,
+            shotId: input.shotId,
+            revisionId,
+            primaryStillAssetId: primaryId,
+            artifacts,
+            warnings: result.warnings,
+            width: asset?.width ?? 0,
+            height: asset?.height ?? 0,
+            pngDataUrl: asset?.uri?.startsWith('data:') ? asset.uri : undefined,
+            diagnostics: [
+              agentError(
+                'thumbnail_attach_failed',
+                result.warnings[0] ?? 'Primary still materialization failed.',
+              ),
+              ...result.warnings.slice(1).map((message) =>
+                agentError('thumbnail_attach_failed', message)
+              ),
+            ],
+          };
+        }
+
+        if (primaryId && asset) {
+          if (asset.uri.startsWith('data:')) {
+            await runDestructive('Attach shot thumbnail', () => {
+              useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+                name: `shot_${input.shotId}_thumbnail.png`,
+                dataUrl: asset.uri,
+                width: asset.width ?? 0,
+                height: asset.height ?? 0,
+              });
+            });
+          } else {
+            useProjectStore.setState((current) => ({
+              project: {
+                ...current.project,
+                shots: current.project.shots.map((shot) =>
+                  shot.id === input.shotId
+                    ? {
+                      ...shot,
+                      assets: {
+                        ...shot.assets,
+                        viewportRenderAssetId: primaryId,
+                      },
+                    }
+                    : shot
+                ),
+              },
+            }));
+          }
+        }
+
+        return {
+          ok: true,
+          status: result.status,
+          shotId: input.shotId,
+          revisionId,
+          primaryStillAssetId: primaryId,
+          artifacts,
+          warnings: result.warnings,
+          width: asset?.width ?? 0,
+          height: asset?.height ?? 0,
+          pngDataUrl: asset?.uri?.startsWith('data:') ? asset.uri : undefined,
+          diagnostics: result.warnings.map((message) =>
+            agentError('thumbnail_attach_failed', message)
+          ),
+        };
       } catch (error) {
         return {
-          ...rendered,
           ok: false,
-          status: 'failed',
+          status: 'failed' as const,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          artifacts: [],
+          warnings: [],
           diagnostics: [agentError(
             'thumbnail_attach_failed',
-            error instanceof Error ? error.message : 'Could not attach shot thumbnail.',
+            error instanceof Error ? error.message : 'Could not materialize shot stills.',
           )],
         };
       }
+    },
+
+    async regenerateShotStills(input) {
+      const blocked = refinementWriteDiagnostics('regenerateShotStills');
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          artifacts: [],
+          warnings: [],
+          diagnostics: blocked,
+        };
+      }
+      const { regenerateShotStills } = await import('../shotStillActions');
+      const result = await regenerateShotStills({
+        project: useProjectStore.getState().project,
+        shotId: input.shotId,
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
+          return useProjectStore.getState().project;
+        },
+      });
+      return {
+        ok: result.status !== 'failed',
+        status: result.status,
+        shotId: input.shotId,
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        primaryStillAssetId: result.primaryStillAssetId,
+        artifacts: result.artifacts.map((item) => ({
+          key: item.key,
+          status: item.status,
+          assetId: item.assetId,
+        })),
+        warnings: result.warnings,
+        width: 0,
+        height: 0,
+        diagnostics: result.warnings.map((message) =>
+          agentError('thumbnail_attach_failed', message)
+        ),
+      };
+    },
+
+    async retryFailedShotStills(input) {
+      const blocked = refinementWriteDiagnostics('retryFailedShotStills');
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          artifacts: [],
+          warnings: [],
+          diagnostics: blocked,
+        };
+      }
+      const { retryFailedShotStills } = await import('../shotStillActions');
+      const result = await retryFailedShotStills({
+        project: useProjectStore.getState().project,
+        shotId: input.shotId,
+        getLiveProject: () => useProjectStore.getState().project,
+        commitLiveProject: (updater) => {
+          useProjectStore.setState((current) => ({ project: updater(current.project) }));
+          return useProjectStore.getState().project;
+        },
+      });
+      return {
+        ok: result.status !== 'failed',
+        status: result.status,
+        shotId: input.shotId,
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        primaryStillAssetId: result.primaryStillAssetId,
+        artifacts: result.artifacts.map((item) => ({
+          key: item.key,
+          status: item.status,
+          assetId: item.assetId,
+        })),
+        warnings: result.warnings,
+        width: 0,
+        height: 0,
+        diagnostics: result.warnings.map((message) =>
+          agentError('thumbnail_attach_failed', message)
+        ),
+      };
+    },
+
+    cancelShotStillPreparation(input) {
+      const result = cancelShotStillPreparationAction(input?.shotId);
+      return { ok: true, cancelledShotIds: result.cancelledShotIds };
     },
 
     listShotMedia(input) {
