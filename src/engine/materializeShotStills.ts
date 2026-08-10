@@ -8,6 +8,8 @@
 import type { LocationProject, ProjectAsset, Shot } from '../domain/types';
 import {
   commitPreparedStillArtifact,
+  commitPreparedStillArtifacts,
+  type PreparedStillBatchEntry,
   pruneObsoleteMaterializedStills,
 } from './commitPreparedStillArtifact';
 import {
@@ -18,6 +20,7 @@ import {
   getProjectAssetBlob,
 } from './projectAssetStore';
 import { pruneUnreferencedProjectAssets } from './projectAssets';
+import { resolveShotDepthRangeForExport, type DepthRangeMeters } from './depthRender';
 import { computeStillArtifactFingerprint } from './stillArtifactFingerprint';
 import {
   buildStillArtifactSpecificationsForShot,
@@ -74,6 +77,10 @@ export interface MaterializeShotStillsParams {
   signal?: AbortSignal;
   force?: boolean;
   artifactKeys?: ReadonlySet<string>;
+  /** Optional sampled time for agent/capture materialization. */
+  timeSeconds?: number;
+  /** Stage all rendered misses and persist the shot in one asset transaction. */
+  batchCommit?: boolean;
   getLiveProject?: () => LocationProject;
   commitLiveProject?: (
     updater: (live: LocationProject) => LocationProject,
@@ -84,6 +91,7 @@ export interface MaterializeShotStillsParams {
     shot: Shot;
     specification: StillArtifactSpecification;
     signal?: AbortSignal;
+    depthRange?: DepthRangeMeters;
   }) => Promise<RenderedStillArtifact>;
 }
 
@@ -154,6 +162,11 @@ export async function materializeShotStills(
   const shot0 = resolveShot(project, shotId);
   const purpose = purposeForReason(reason);
   let specs = buildStillArtifactSpecificationsForShot({ project, shot: shot0, purpose });
+  if (params.timeSeconds !== undefined) {
+    specs = specs.map((spec) => spec.timeSeconds === undefined
+      ? { ...spec, timeSeconds: params.timeSeconds }
+      : spec);
+  }
   const primary = selectPrimaryStillSpecification(project, shot0, specs);
   const primaryKey = stillArtifactKey(primary);
 
@@ -166,6 +179,14 @@ export async function materializeShotStills(
   // current fast path so a fingerprint-current artifact with missing bytes heals.
 
   specs = sortStillSpecificationsByPriority(specs, primaryKey);
+
+  // Share depth analysis across every depth artifact in this shot batch. This
+  // is the first layer of the shot-scoped render session: standalone callers
+  // still resolve their own range, while batched capture pays the analysis cost
+  // once and reuses it for all depth passes. Resolve lazily so warm artifacts
+  // still take the zero-render fast path.
+  let sharedDepthRange: DepthRangeMeters | undefined;
+  let depthRangeResolved = false;
 
   if (scope === 'all-configured' || scope === 'stale-only') {
     const live = readLive(params, project);
@@ -184,6 +205,7 @@ export async function materializeShotStills(
   const warnings: string[] = [];
   let primaryStillAssetId: string | undefined;
   let primaryFailed = false;
+  const pendingBatchCommits: Array<PreparedStillBatchEntry & { key: string; isPrimary: boolean }> = [];
 
   for (const spec of specs) {
     if (signal?.aborted) {
@@ -214,6 +236,10 @@ export async function materializeShotStills(
     const renderSnapshot = project;
 
     try {
+      if (spec.appearance === 'depth' && !depthRangeResolved) {
+        sharedDepthRange = await resolveShotDepthRangeForExport(renderSnapshot, liveShot);
+        depthRangeResolved = true;
+      }
       const prepared = await renderWorkCoordinator.schedule(
         priorityFor(reason, isPrimary),
         () => prepareStillArtifact({
@@ -221,6 +247,7 @@ export async function materializeShotStills(
           shotId,
           specification: spec,
           signal,
+          depthRange: sharedDepthRange,
           force: params.force,
           render: params.render,
         }),
@@ -231,6 +258,17 @@ export async function materializeShotStills(
         artifacts.push({ key, status: 'current', assetId: prepared.existingAssetId, cacheStatus: 'current' });
         if (isPrimary) primaryStillAssetId = prepared.existingAssetId;
         setStillArtifactJobStatus(shotId, key, null);
+        continue;
+      }
+
+      if (params.batchCommit) {
+        pendingBatchCommits.push({
+          key,
+          isPrimary,
+          specification: spec,
+          expectedFingerprint: prepared.fingerprint.key,
+          prepared,
+        });
         continue;
       }
 
@@ -380,6 +418,122 @@ export async function materializeShotStills(
     }
   }
 
+  if (pendingBatchCommits.length > 0) {
+    try {
+      const batch = await commitPreparedStillArtifacts({
+        project: readLive(params, project),
+        shotId,
+        entries: pendingBatchCommits,
+      });
+      const committedByKey = new Map(batch.ok ? batch.commits.map((commit) => [commit.key, commit]) : []);
+      const discardedKeys = new Set<string>();
+      const oldStorageKeys = new Map<string, string | undefined>();
+
+      if (batch.ok && params.commitLiveProject) {
+        project = params.commitLiveProject((live) => {
+          let merged = live;
+          for (const pending of pendingBatchCommits) {
+            const commit = committedByKey.get(pending.key);
+            if (!commit) continue;
+            const liveShotNow = merged.shots.find((item) => item.id === shotId);
+            if (!liveShotNow || computeStillArtifactFingerprint(merged, liveShotNow, pending.specification).key !== pending.expectedFingerprint) {
+              discardedKeys.add(pending.key);
+              continue;
+            }
+            const previous = liveShotNow.materializedMedia?.stills[pending.key];
+            if (previous && previous.assetId !== commit.assetId) {
+              const oldAsset = merged.assets.assets[previous.assetId];
+              oldStorageKeys.set(previous.assetId, oldAsset
+                ? storageKeyForAsset(merged.id, oldAsset)
+                : createProjectAssetStorageKey(merged.id, previous.assetId));
+            }
+            const legacySlot = legacyViewportSlotPatch(pending.specification, commit.assetId);
+            merged = {
+              ...merged,
+              assets: {
+                ...merged.assets,
+                assets: { ...merged.assets.assets, [commit.assetId]: commit.asset },
+              },
+              shots: merged.shots.map((item) => item.id === shotId
+                ? {
+                  ...item,
+                  materializedMedia: {
+                    stills: { ...(item.materializedMedia?.stills ?? {}), [pending.key]: commit.artifact },
+                  },
+                  assets: { ...item.assets, ...legacySlot },
+                  updatedAt: new Date().toISOString(),
+                }
+                : item),
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          return merged;
+        });
+      } else if (batch.ok) {
+        project = batch.project;
+        if (params.onProjectCommit) project = params.onProjectCommit(project);
+      }
+
+      project = readLive(params, project);
+      const batchFailureReason = batch.ok ? undefined : batch.reason;
+      for (const pending of pendingBatchCommits) {
+        const commit = committedByKey.get(pending.key);
+        if (!batch.ok || !commit || discardedKeys.has(pending.key)) {
+          const message = !batch.ok && batch.reason === 'persistence-failed'
+            ? batch.error ?? 'Asset persistence failed.'
+            : discardedKeys.has(pending.key) || batchFailureReason === 'stale'
+              ? 'Stale result discarded.'
+              : 'Still batch commit failed.';
+          warnings.push(`Failed to persist ${pending.key}: ${message}`);
+          artifacts.push({ key: pending.key, status: 'failed', error: message });
+          if (pending.isPrimary) primaryFailed = true;
+          setStillArtifactJobStatus(shotId, pending.key, null);
+          setStillArtifactError(shotId, pending.key, message);
+          continue;
+        }
+        artifacts.push({
+          key: pending.key,
+          status: 'rendered',
+          assetId: commit.assetId,
+          cacheStatus: pending.prepared.cacheStatus,
+        });
+        if (pending.isPrimary) primaryStillAssetId = commit.assetId;
+        setStillArtifactJobStatus(shotId, pending.key, null);
+        setStillArtifactError(shotId, pending.key, null);
+      }
+
+      for (const [assetId, storageKey] of oldStorageKeys) {
+        if (storageKey && !project.assets.assets[assetId]) {
+          await deleteProjectAssetBlob(storageKey).catch(() => undefined);
+        }
+      }
+      // A batch can finish its durable write just before a concurrent live
+      // edit makes one of its entries stale. Those newly written assets were
+      // never part of the live manifest, so remove their bytes after the live
+      // merge unless another writer adopted the asset in the meantime.
+      if (batch.ok) {
+        for (const pending of pendingBatchCommits) {
+          if (!discardedKeys.has(pending.key)) continue;
+          const commit = committedByKey.get(pending.key);
+          if (!commit || project.assets.assets[commit.assetId]) continue;
+          const storageKey = storageKeyForAsset(project.id, commit.asset)
+            ?? createProjectAssetStorageKey(project.id, commit.assetId);
+          await deleteProjectAssetBlob(storageKey).catch(() => undefined);
+        }
+      }
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      for (const pending of pendingBatchCommits) {
+        warnings.push(`Failed to persist ${pending.key}: ${message}`);
+        artifacts.push({ key: pending.key, status: 'failed', error: message });
+        if (pending.isPrimary) primaryFailed = true;
+        setStillArtifactJobStatus(shotId, pending.key, null);
+        setStillArtifactError(shotId, pending.key, message);
+      }
+    }
+  }
+
   project = readLive(params, project);
 
   let status: ShotStillMaterializationResult['status'] = 'ready';
@@ -398,6 +552,7 @@ export async function materializeShotAfterCapture(params: {
   shotId: string;
   mode: ShotCaptureMaterializationMode;
   signal?: AbortSignal;
+  timeSeconds?: number;
   getLiveProject?: () => LocationProject;
   commitLiveProject?: MaterializeShotStillsParams['commitLiveProject'];
   onProjectCommit?: (project: LocationProject) => LocationProject;
@@ -418,6 +573,8 @@ export async function materializeShotAfterCapture(params: {
     shotId: params.shotId,
     reason: 'capture' as const,
     signal: params.signal,
+    timeSeconds: params.timeSeconds,
+    batchCommit: params.mode === 'await-all',
     getLiveProject: params.getLiveProject,
     commitLiveProject: params.commitLiveProject,
     onProjectCommit: params.onProjectCommit,

@@ -99,6 +99,21 @@ export interface ProjectSliceState {
     resolutionPreset?: string;
     validated?: boolean;
   }) => ProjectAsset;
+  /** Blob-native counterpart used by cached/agent video renders. */
+  attachCameraMoveVideoBlobToShot: (shotId: string, params: {
+    name: string;
+    blob: Blob;
+    mimeType: string;
+    width: number;
+    height: number;
+    durationSeconds: number;
+    frameRate: number;
+    encodeMode?: 'render' | 'quickPreview';
+    codecString?: string;
+    frameCount?: number;
+    resolutionPreset?: string;
+    validated?: boolean;
+  }) => Promise<ProjectAsset>;
   attachViewportRenderToShot: (shotId: string, params: {
     name: string;
     dataUrl: string;

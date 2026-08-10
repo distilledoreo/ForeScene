@@ -20,6 +20,7 @@ import {
   renderStillArtifact,
   type RenderedStillArtifact,
 } from './stillArtifactRender';
+import type { DepthRangeMeters } from './depthRender';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
 
 export interface PreparedStillArtifact {
@@ -48,7 +49,10 @@ export interface PrepareStillArtifactParams {
     shot: Shot;
     specification: StillArtifactSpecification;
     signal?: AbortSignal;
+    depthRange?: DepthRangeMeters;
   }) => Promise<RenderedStillArtifact>;
+  /** Shared shot-wide depth range, resolved once for a batch. */
+  depthRange?: DepthRangeMeters;
 }
 
 type InflightSubscriber = {
@@ -72,6 +76,7 @@ let testRenderOverride:
     shot: Shot;
     specification: StillArtifactSpecification;
     signal?: AbortSignal;
+    depthRange?: DepthRangeMeters;
   }) => Promise<RenderedStillArtifact>)
   | undefined;
 
@@ -191,6 +196,7 @@ async function renderPrepared(
     shot,
     specification: params.specification,
     signal,
+    depthRange: params.depthRange,
   });
   throwIfCancelled(signal);
   return {

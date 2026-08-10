@@ -1,56 +1,119 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDefaultProject } from '../src/domain/defaults';
+import { createForeSceneBrowserApi } from '../src/engine/agent/browserApi';
+import type {
+  AgentShotMaterializationResult,
+  ForeSceneBrowserApi,
+} from '../src/engine/agent/protocol';
+import { resetBackgroundVideoServiceForTests } from '../src/engine/backgroundVideoService';
+import { useAgentControlStore } from '../src/state/useAgentControlStore';
+import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
+import { useProjectStore } from '../src/state/useProjectStore';
 
-/**
- * Structural + type-surface proofs that agent capture returns the GOAL materialization shape
- * and never reports ready on primary failure.
- */
+const shotStillActionMocks = vi.hoisted(() => ({
+  captureShotStillPreparation: vi.fn(),
+}));
+
+vi.mock('../src/engine/shotStillActions', async () => {
+  const actual = await vi.importActual<typeof import('../src/engine/shotStillActions')>(
+    '../src/engine/shotStillActions',
+  );
+  return { ...actual, captureShotStillPreparation: shotStillActionMocks.captureShotStillPreparation };
+});
+
+function materializationResult(
+  project: ReturnType<typeof createDefaultProject>,
+  status: AgentShotMaterializationResult['status'],
+  warnings: string[] = [],
+): AgentShotMaterializationResult {
+  const shotId = project.shots[0]!.id;
+  return {
+    ok: status !== 'failed',
+    shotId,
+    revisionId: 'revision-prepared',
+    status,
+    primaryStillAssetId: status === 'failed' ? undefined : 'prepared-primary',
+    artifacts: status === 'failed'
+      ? [{ key: 'prepared', status: 'failed' }]
+      : [{ key: 'prepared', status: 'rendered', assetId: 'prepared-primary' }],
+    warnings,
+    width: 64,
+    height: 36,
+    diagnostics: [],
+  };
+}
+
 describe('agent capture materialization contract', () => {
-  const browserApi = readFileSync(
-    new URL('../src/engine/agent/browserApi.ts', import.meta.url),
-    'utf8',
-  );
-  const protocol = readFileSync(
-    new URL('../src/engine/agent/protocol.ts', import.meta.url),
-    'utf8',
-  );
+  beforeEach(() => {
+    const project = createDefaultProject();
+    useProjectStore.setState({ project, selectedShotId: project.shots[0]!.id });
+    useAgentControlStore.setState({ controlMode: 'read-write' });
+    useProjectSafetyStore.setState({
+      status: 'saved',
+      activeRevisionId: 'revision-test',
+      criticalWrite: false,
+      flushProject: vi.fn(async () => undefined),
+      runDestructiveProjectMutation: undefined,
+    });
+    shotStillActionMocks.captureShotStillPreparation.mockReset();
+  });
 
-  it('declares AgentShotMaterializationResult with required fields', () => {
-    expect(protocol).toContain('export interface AgentShotMaterializationResult');
-    expect(protocol).toContain("status: 'ready' | 'ready-with-warnings' | 'failed'");
-    expect(protocol).toContain('primaryStillAssetId?: string');
-    expect(protocol).toContain('artifacts: AgentShotMaterializationArtifact[]');
-    expect(protocol).toContain('warnings: string[]');
-    expect(protocol).toContain(
-      'captureShotThumbnail(input: { shotId: string; timeSeconds?: number }): Promise<AgentShotMaterializationResult>',
+  afterEach(() => {
+    resetBackgroundVideoServiceForTests();
+    useAgentControlStore.setState({ controlMode: 'read-only' });
+    useProjectSafetyStore.setState({
+      status: 'unsaved',
+      activeRevisionId: undefined,
+      criticalWrite: false,
+      flushProject: undefined,
+      runDestructiveProjectMutation: undefined,
+    });
+  });
+
+  it('drives the installed API and preserves the declared await-all result shape', async () => {
+    const project = useProjectStore.getState().project;
+    const prepared = materializationResult(project, 'ready');
+    shotStillActionMocks.captureShotStillPreparation.mockResolvedValue(prepared);
+
+    const api: ForeSceneBrowserApi = createForeSceneBrowserApi();
+    const result = await api.captureShotThumbnail({
+      shotId: project.shots[0]!.id,
+      timeSeconds: 1.5,
+    });
+
+    expect(shotStillActionMocks.captureShotStillPreparation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shotId: project.shots[0]!.id,
+        mode: 'await-all',
+        timeSeconds: 1.5,
+      }),
     );
+    expect(useProjectSafetyStore.getState().flushProject).toHaveBeenCalledWith(
+      'Persist materialized shot stills',
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'ready',
+      primaryStillAssetId: 'prepared-primary',
+      artifacts: [{ key: 'prepared', status: 'rendered', assetId: 'prepared-primary' }],
+      warnings: [],
+    });
   });
 
-  it('captureShotThumbnail returns failed status on primary materialization failure', () => {
-    // Failure branch must set status failed and ok false — never return legacy render as success.
-    expect(browserApi).toContain("status: 'failed' as const");
-    expect(browserApi).toContain('Primary still materialization failed');
-    // Must not return the raw renderShotFrame success path after primary failure.
-    const failureBlockStart = browserApi.indexOf("if (result.status === 'failed')");
-    expect(failureBlockStart).toBeGreaterThan(0);
-    const failureBlock = browserApi.slice(failureBlockStart, failureBlockStart + 1200);
-    expect(failureBlock).toContain("status: 'failed'");
-    expect(failureBlock).toContain('ok: false');
-    expect(failureBlock).not.toContain('return rendered');
-  });
+  it('never reports ready when primary materialization fails', async () => {
+    const project = useProjectStore.getState().project;
+    shotStillActionMocks.captureShotStillPreparation.mockResolvedValue(
+      materializationResult(project, 'failed', ['Primary render failed.']),
+    );
 
-  it('success path returns primaryStillAssetId and artifacts', () => {
-    expect(browserApi).toContain('primaryStillAssetId: primaryId');
-    expect(browserApi).toContain('artifacts,');
-    expect(browserApi).toContain("mode: 'await-all'");
-  });
+    const result = await createForeSceneBrowserApi().captureShotThumbnail({
+      shotId: project.shots[0]!.id,
+    });
 
-  it('exposes regenerate/retry/cancel still actions on the agent API', () => {
-    expect(protocol).toContain('regenerateShotStills');
-    expect(protocol).toContain('retryFailedShotStills');
-    expect(protocol).toContain('cancelShotStillPreparation');
-    expect(browserApi).toContain('async regenerateShotStills');
-    expect(browserApi).toContain('async retryFailedShotStills');
-    expect(browserApi).toContain('cancelShotStillPreparation(input)');
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'prepared_media_failed', severity: 'error' }),
+    ]);
   });
 });

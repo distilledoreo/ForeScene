@@ -206,11 +206,16 @@ export const renderWorkCoordinator = {
     }));
   },
 
-  cancelByOwner(ownerId: string): number {
-    let cancelled = removeQueued((item) => item.ownerId === ownerId);
+  cancelByOwner(ownerId: string, priorities?: readonly RenderWorkPriority[]): number {
+    const matches = (item: QueuedWork) => item.ownerId === ownerId
+      && (!priorities || priorities.includes(item.priority));
+    let cancelled = removeQueued(matches);
     for (const item of active.values()) {
-      if (item.ownerId !== ownerId || item.cancelled) continue;
-      cancelEntry(item, 'Render work was cancelled.', false);
+      if (!matches(item) || item.cancelled) continue;
+      // The renderer may still need a cooperative frame-boundary unwind, but
+      // owner-scoped callers must observe cancellation immediately and release
+      // their waiting resources now.
+      cancelEntry(item, 'Render work was cancelled.', true);
       cancelled += 1;
     }
     return cancelled;

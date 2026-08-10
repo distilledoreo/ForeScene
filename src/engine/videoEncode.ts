@@ -34,6 +34,8 @@ export interface DeterministicEncodeOptions {
   encoderMode?: VideoEncoderMode;
   /** Optional per-stage timing hooks (render / encode / mux finalize). */
   onStageTiming?: (stage: 'render' | 'encode' | 'finalize', ms: number) => void;
+  /** Bounded number of encoder writes allowed to overlap canvas rendering. */
+  encodeQueueDepth?: number;
 }
 
 export interface DeterministicEncodeResult {
@@ -69,6 +71,12 @@ function encoderModeParams(mode: VideoEncoderMode): EncoderModeParams {
     hardwareAcceleration: 'no-preference',
     latencyMode: 'quality',
   };
+}
+
+function cancellationError(): Error {
+  const error = new Error('MP4 export was cancelled.');
+  error.name = 'AbortError';
+  return error;
 }
 
 /**
@@ -185,12 +193,13 @@ export async function encodeCanvasFramesToMp4(
     onFrameEncoded,
     encoderMode = 'quality',
     onStageTiming,
+    encodeQueueDepth = 2,
   } = options;
   if (totalFrames < 1) {
     throw new Error('Camera move export requires at least one frame.');
   }
   if (signal?.aborted) {
-    throw new Error('MP4 export was cancelled.');
+    throw cancellationError();
   }
 
   const negotiated = await resolveDeterministicEncoderMode(preset, encoderMode);
@@ -226,10 +235,23 @@ export async function encodeCanvasFramesToMp4(
   };
   signal?.addEventListener('abort', onAbort);
 
+  const pendingEncodes: Array<{
+    frameIndex: number;
+    startedAt: number;
+    promise: Promise<void>;
+  }> = [];
+  const requestedQueueDepth = Number.isFinite(encodeQueueDepth) ? Math.floor(encodeQueueDepth) : 2;
+  const queueDepth = Math.max(1, Math.min(4, requestedQueueDepth));
+  const settleOneEncode = async (entry: (typeof pendingEncodes)[number]) => {
+    await entry.promise;
+    onStageTiming?.('encode', performance.now() - entry.startedAt);
+    onFrameEncoded?.(entry.frameIndex + 1, totalFrames);
+  };
+
   try {
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
       if (cancelled || signal?.aborted) {
-        throw new Error('MP4 export was cancelled.');
+        throw cancellationError();
       }
 
       const renderStarted = performance.now();
@@ -238,11 +260,24 @@ export async function encodeCanvasFramesToMp4(
 
       const timestamp = frameIndex * frameDuration;
       // Await add() so muxer/encoder backpressure stalls the render loop
-      // instead of buffering unbounded VideoFrames in memory.
+      // instead of buffering unbounded VideoFrames in memory. A small bounded
+      // queue lets the next GPU frame render while the encoder drains the
+      // previous sample without allowing memory to grow with the timeline.
       const encodeStarted = performance.now();
-      await videoSource.add(timestamp, frameDuration);
-      onStageTiming?.('encode', performance.now() - encodeStarted);
-      onFrameEncoded?.(frameIndex + 1, totalFrames);
+      pendingEncodes.push({
+        frameIndex,
+        startedAt: encodeStarted,
+        promise: videoSource.add(timestamp, frameDuration),
+      });
+      if (pendingEncodes.length >= queueDepth) {
+        const oldest = pendingEncodes.shift();
+        if (oldest) await settleOneEncode(oldest);
+      }
+    }
+
+    while (pendingEncodes.length > 0) {
+      const next = pendingEncodes.shift();
+      if (next) await settleOneEncode(next);
     }
 
     videoSource.close();
@@ -250,6 +285,7 @@ export async function encodeCanvasFramesToMp4(
     await output.finalize();
     onStageTiming?.('finalize', performance.now() - finalizeStarted);
   } catch (error) {
+    await Promise.allSettled(pendingEncodes.map((entry) => entry.promise));
     try {
       videoSource.close();
     } catch {

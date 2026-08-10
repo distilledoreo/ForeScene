@@ -56,6 +56,8 @@ export function throwIfAborted(signal?: AbortSignal) {
 export interface PackageExportOptions {
   onProgress?: (progress: PackageExportProgress) => void;
   signal?: AbortSignal;
+  /** Bounded parallelism for independent shot packaging tasks. */
+  packageConcurrency?: number;
   /** Optional precomputed plan; when omitted, packaging builds one. */
   plan?: ExportPlan;
   /** Optional stats accumulator shared across shots in a multi-shot package. */
@@ -68,6 +70,27 @@ export interface PackageExportOptions {
   commitLiveProject?: (
     updater: (live: import('../domain/types').LocationProject) => import('../domain/types').LocationProject,
   ) => import('../domain/types').LocationProject;
+}
+
+export async function runPackageTasksWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(Math.floor(concurrency) || 1, items.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]!, index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** Aggregated prepareVideoArtifact cache / stage timings for package export. */
@@ -218,21 +241,29 @@ export function addDataUrl(zip: JSZip, path: string, dataUrl: string) {
   zip.file(path, payload, { base64: /;base64/i.test(dataUrl.slice(0, Math.max(0, comma))) });
 }
 
-/** Add binary image/video data without materializing an inflated base64 string. */
+/** Add binary image/video data without materializing an ArrayBuffer copy. */
 export async function addBlobToZip(zip: JSZip, path: string, blob: Blob) {
-  zip.file(path, await blob.arrayBuffer());
+  zip.file(
+    path,
+    JSZip.support.blob && typeof FileReader !== 'undefined' ? blob : await blob.arrayBuffer(),
+    { compression: 'STORE' },
+  );
 }
 
 /** STORE compression for already-compressed PNG/MP4 payloads. */
 export async function addBlobToZipStore(zip: JSZip, path: string, blob: Blob) {
-  zip.file(path, await blob.arrayBuffer(), { compression: 'STORE' });
+  zip.file(
+    path,
+    JSZip.support.blob && typeof FileReader !== 'undefined' ? blob : await blob.arrayBuffer(),
+    { compression: 'STORE' },
+  );
 }
 
 export async function addProjectAssetToZip(zip: JSZip, path: string, asset: ProjectAsset) {
   if (asset.storageKey) {
     const blob = await getProjectAssetBlob(asset.storageKey);
     if (!blob) throw new Error(`Local asset ${asset.name} is missing.`);
-    zip.file(path, await blob.arrayBuffer());
+    await addBlobToZipStore(zip, path, blob);
     return;
   }
   await addBinaryToZip(zip, path, asset.uri);
@@ -247,7 +278,7 @@ export async function addBinaryToZip(zip: JSZip, path: string, uri: string) {
   if (uri.startsWith('blob:')) {
     const response = await fetch(uri);
     if (!response.ok) throw new Error(`Could not read local binary asset for ${path}.`);
-    zip.file(path, await response.arrayBuffer());
+    await addBlobToZipStore(zip, path, await response.blob());
     return;
   }
   // Opaque non-local URIs are not expected for in-app assets; retain the path for diagnostics.

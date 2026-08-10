@@ -134,6 +134,8 @@ export async function downloadAgentArtifact(input: {
   artifactId: string;
   /** When true (default), trigger a browser download. */
   download?: boolean;
+  /** Legacy compatibility path; Blob is the default response. */
+  includeDataUrl?: boolean;
 }): Promise<AgentArtifactDownloadResult> {
   const stored = registry.get(input.artifactId);
   if (!stored) {
@@ -146,7 +148,7 @@ export async function downloadAgentArtifact(input: {
   touchArtifact(stored);
 
   if (input.download !== false) downloadBlob(stored.blob, stored.fileName);
-  const dataUrl = await blobToDataUrl(stored.blob);
+  const dataUrl = input.includeDataUrl ? await blobToDataUrl(stored.blob) : undefined;
   return {
     ok: true,
     status: 'completed',
@@ -157,7 +159,8 @@ export async function downloadAgentArtifact(input: {
       byteLength: stored.blob.size,
       revisionId: stored.revisionId,
     },
-    dataUrl,
+    blob: stored.blob,
+    ...(dataUrl ? { dataUrl } : {}),
     diagnostics: [],
   };
 }

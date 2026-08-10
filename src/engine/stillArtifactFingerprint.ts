@@ -1,6 +1,5 @@
 import type { LocationProject, Shot } from '../domain/types';
 import { normalizeShotDepthSettings } from '../domain/defaults';
-import { getSortedCameraKeyframes } from './cameraKeyframes';
 import { resolveProjectedProjectorAssets } from './multiOriginProjection';
 import {
   assetContentIdentity,
@@ -56,6 +55,20 @@ function relevantObjectsForStill(
   });
 }
 
+function stillObjectRenderDependency(project: LocationProject, object: LocationProject['scene']['objects'][number]) {
+  // The shared dependency helper also serves editor caches and therefore
+  // includes fields such as `locked` and the full metadata bag. Those do not
+  // change pixels for still rendering; only the attachment relationship is
+  // render-relevant metadata for characters-only passes.
+  const { locked: _locked, metadata: _metadata, ...dependency } = buildObjectRenderDependency(project, object);
+  return {
+    ...dependency,
+    characterOwnerId: typeof object.metadata?.characterOwnerId === 'string'
+      ? object.metadata.characterOwnerId
+      : null,
+  };
+}
+
 export function computeStillArtifactFingerprint(
   project: LocationProject,
   shot: Shot | string,
@@ -84,10 +97,16 @@ export function computeStillArtifactFingerprint(
   const usesProjection = appearance === 'projected';
   const usesDepth = appearance === 'depth';
 
-  const dependencyIds = new Set<string>([
-    `shot:${resolvedShot.id}`,
-    `timeline:${fingerprintShotTimeline(resolvedShot)}`,
-  ]);
+  // A current viewport/character still renders the shot's landed camera and
+  // overrides, not the entire camera-move timeline. Reference-frame stills are
+  // sampled from the timeline and therefore retain the timeline dependency.
+  const samplesTimeline = timeSeconds !== undefined || frameRole !== undefined;
+  // Compute the immutable timeline digest once per fingerprint. Materialize
+  // batches can call this function repeatedly for the same shot, while the
+  // timeline helper itself walks every camera/object keyframe.
+  const timelineFingerprint = samplesTimeline ? fingerprintShotTimeline(resolvedShot) : undefined;
+  const dependencyIds = new Set<string>([`shot:${resolvedShot.id}`]);
+  if (timelineFingerprint) dependencyIds.add(`timeline:${timelineFingerprint}`);
 
   const effectiveSceneObjects = relevantObjectsForStill(project, resolvedShot, specification)
     .map((object) => {
@@ -100,7 +119,7 @@ export function computeStillArtifactFingerprint(
         const dep = assetDependency(project, object.poseableCharacter.assetId, 'pose-asset');
         if (dep) dependencyIds.add(dep);
       }
-      return buildObjectRenderDependency(project, object);
+      return stillObjectRenderDependency(project, object);
     });
 
   const linkedPano = usesProjection
@@ -136,17 +155,12 @@ export function computeStillArtifactFingerprint(
 
   const shotCameras = timeSeconds !== undefined
     ? [{ timeSeconds, camera: resolvedShot.camera }]
-    : (() => {
-      const keyframes = getSortedCameraKeyframes(resolvedShot.cameraKeyframes);
-      return keyframes.length
-        ? keyframes.map((keyframe) => ({ timeSeconds: keyframe.timeSeconds, camera: keyframe.camera }))
-        : [{ timeSeconds: 0, camera: resolvedShot.camera }];
-    })();
+    : [{ timeSeconds: 0, camera: resolvedShot.camera }];
 
   const content = stableSerialize({
     cacheVersion: VIDEO_PERFORMANCE_CACHE_VERSION,
     rendererVersion: STILL_ARTIFACT_RENDERER_VERSION,
-    effectiveShotTimeline: fingerprintShotTimeline(resolvedShot),
+    effectiveShotTimeline: timelineFingerprint ?? null,
     shotId: resolvedShot.id,
     linkedPanoId: usesProjection ? (resolvedShot.linkedPanoId ?? null) : null,
     linkedPano: usesProjection && linkedPano
@@ -160,6 +174,7 @@ export function computeStillArtifactFingerprint(
       }
       : null,
     effectiveSceneObjects,
+    currentShotObjectOverrides: samplesTimeline ? null : resolvedShot.objectOverrides ?? {},
     projectedSources,
     projectionSettings,
     scenePanoOrigin: usesProjection ? project.scene.panoOrigin : null,

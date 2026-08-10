@@ -97,7 +97,9 @@ interface InflightVideoJob {
 const inflightJobs = new Map<string, InflightVideoJob>();
 
 function cancellationError(): Error {
-  return new Error('MP4 export was cancelled.');
+  const error = new Error('MP4 export was cancelled.');
+  error.name = 'AbortError';
+  return error;
 }
 
 function throwIfCancelled(signal?: AbortSignal): void {

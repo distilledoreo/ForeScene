@@ -153,4 +153,36 @@ describe('prepared-media final commit concurrency', () => {
     expect(live.shots[0]!.materializedMedia?.stills[stillArtifactKey(specification)]).toBeUndefined();
     expect(await listProjectAssetBlobKeys()).toEqual(keysBefore);
   });
+
+  it('batch materialization removes newly written assets rejected at the live merge boundary', async () => {
+    let live = createDefaultProject();
+    const shotId = live.shots[0]!.id;
+    const keysBefore = await listProjectAssetBlobKeys();
+    let injected = false;
+    let commitCalls = 0;
+
+    const result = await materializeShotStills({
+      project: live,
+      shotId,
+      reason: 'capture',
+      scope: 'all-configured',
+      batchCommit: true,
+      render: renderMock(),
+      getLiveProject: () => live,
+      commitLiveProject: (updater) => {
+        commitCalls += 1;
+        if (commitCalls > 1 && !injected) {
+          injected = true;
+          live = bumpShotCamera(live, shotId);
+        }
+        live = updater(live);
+        return live;
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.artifacts.some((artifact) => artifact.status === 'failed')).toBe(true);
+    expect(live.shots[0]!.materializedMedia?.stills).toBeUndefined();
+    expect(await listProjectAssetBlobKeys()).toEqual(keysBefore);
+  });
 });

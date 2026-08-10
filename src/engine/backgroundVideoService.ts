@@ -19,21 +19,48 @@ let visibilityHandler: (() => void) | undefined;
 let visibilityBound = false;
 const shotStatuses = new Map<string, BackgroundVideoRuntimeStatus>();
 const runtimeListeners = new Set<() => void>();
+const shotRuntimeListeners = new Map<string, Set<() => void>>();
+const shotRuntimeVersions = new Map<string, number>();
+let runtimeVersion = 0;
 
-function notifyRuntimeListeners(): void {
+function notifyRuntimeListeners(shotId?: string): void {
+  runtimeVersion += 1;
+  if (shotId) shotRuntimeVersions.set(shotId, (shotRuntimeVersions.get(shotId) ?? 0) + 1);
   for (const listener of runtimeListeners) listener();
+  if (shotId) {
+    for (const listener of shotRuntimeListeners.get(shotId) ?? []) listener();
+  }
 }
 
 /** Subscribe to per-shot background-video runtime transitions. */
-export function subscribeBackgroundVideoRuntime(listener: () => void): () => void {
-  runtimeListeners.add(listener);
-  return () => runtimeListeners.delete(listener);
+export function subscribeBackgroundVideoRuntime(listener: () => void): () => void;
+export function subscribeBackgroundVideoRuntime(shotId: string, listener: () => void): () => void;
+export function subscribeBackgroundVideoRuntime(
+  shotIdOrListener: string | (() => void),
+  maybeListener?: () => void,
+): () => void {
+  if (typeof shotIdOrListener === 'function') {
+    runtimeListeners.add(shotIdOrListener);
+    return () => runtimeListeners.delete(shotIdOrListener);
+  }
+  const listeners = shotRuntimeListeners.get(shotIdOrListener) ?? new Set<() => void>();
+  const listener = maybeListener ?? (() => undefined);
+  listeners.add(listener);
+  shotRuntimeListeners.set(shotIdOrListener, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) shotRuntimeListeners.delete(shotIdOrListener);
+  };
+}
+
+export function getBackgroundVideoRuntimeVersion(shotId?: string): number {
+  return shotId ? (shotRuntimeVersions.get(shotId) ?? 0) : runtimeVersion;
 }
 
 function setShotStatus(shotId: string, status: BackgroundVideoRuntimeStatus): void {
   if (shotStatuses.get(shotId) === status) return;
   shotStatuses.set(shotId, status);
-  notifyRuntimeListeners();
+  notifyRuntimeListeners(shotId);
 }
 
 export function bindBackgroundVideoService(options: {
@@ -130,6 +157,7 @@ export function forgetBackgroundVideosForShot(shotId: string): void {
 
 export function disposeBackgroundVideoService(): void {
   const hadRuntimeState = Boolean(scheduler) || shotStatuses.size > 0;
+  const affectedShotIds = [...shotStatuses.keys()];
   scheduler?.dispose();
   scheduler = undefined;
   boundGetProject = undefined;
@@ -140,6 +168,7 @@ export function disposeBackgroundVideoService(): void {
   visibilityHandler = undefined;
   visibilityBound = false;
   if (hadRuntimeState) notifyRuntimeListeners();
+  for (const shotId of affectedShotIds) notifyRuntimeListeners(shotId);
 }
 
 export function resetBackgroundVideoServiceForTests(): void {

@@ -133,9 +133,12 @@ Video render, package export, and project backup register blobs in-memory:
 
 ```ts
 const video = await foreScene.renderShotVideo({ shotId, download: false });
-const bytes = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const downloaded = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const blob = downloaded.blob;
 const backup = await foreScene.exportProjectBackup({ download: false });
 ```
+
+`downloadArtifact` returns a Blob by default. Use `includeDataUrl: true` only for legacy consumers that still require base64 data URLs.
 
 ### Discovery
 
@@ -265,12 +268,19 @@ await foreScene.retryFailedShotStills({ shotId });
 foreScene.cancelShotStillPreparation({ shotId });
 ```
 
-`captureShotThumbnail` is the compatibility path for a quick, time-sampled
-preview. `captureShotPreparedMedia` is the durable path for package/export
-workflows and returns the declared `AgentShotMaterializationResult` fields:
+`captureShotThumbnail` is the compatibility-named durable materialization path;
+when `timeSeconds` is provided, the requested sample time is carried into the
+prepared still fingerprints and artifacts. `captureShotPreparedMedia` is the
+explicit durable path for package/export workflows and returns the declared
+`AgentShotMaterializationResult` fields:
 `revisionId`, `primaryStillAssetId`, `artifacts`, and `warnings`. Prepared-media
 work is included in `getStatus()` / `waitForIdle()` so an agent cannot proceed
 while still or background-video GPU work is active.
+
+`cancelShotStillPreparation({ shotId })` cancels queued or in-flight capture,
+regeneration, and retry work for that shot. Already committed artifacts remain
+attached; the cancelled call rejects with an `AbortError` rather than reporting
+a render failure.
 
 ## Existing-project refinement
 

@@ -50,6 +50,7 @@ import {
   createProgressTracker,
   isPackageExportCancelled,
   normalizeCameraMoveProgress,
+  runPackageTasksWithConcurrency,
   ShotPackageError,
   throwIfAborted,
   type PackageExportOptions,
@@ -96,6 +97,7 @@ import {
   shouldExportViewportDepth,
 } from './depthRender';
 import { prepareVideoArtifact } from './prepareVideoArtifact';
+import { renderWorkCoordinator } from './renderWorkCoordinator';
 import {
   createEmptyPackageVideoPerformanceStats,
   resolveProjectVideoPerformance,
@@ -135,31 +137,39 @@ async function prepareV2CameraMoveVideo(params: {
   onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
 }) {
   const startedAt = performance.now();
-  const result = await prepareVideoArtifact({
-    project: params.project,
-    shotId: params.shotId,
-    specification: {
-      appearance: params.appearance,
-      peopleVariant: params.peopleVariant,
-      contentMode: params.contentMode,
-      mode: 'render',
-      resolutionPreset: params.performance.resolutionPreset,
-      frameRate: params.performance.frameRate,
-      encoderMode: params.performance.encoderMode,
-      occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
-      depthRange: params.depthRange,
-      depthInvert: params.depthInvert,
-      backgroundColor: params.backgroundColor,
-      includeCharacterAttachments: params.includeCharacterAttachments,
-      transparent: params.transparent,
+  const result = await renderWorkCoordinator.schedule(
+    'foreground-export-video',
+    () => prepareVideoArtifact({
+      project: params.project,
+      shotId: params.shotId,
+      specification: {
+        appearance: params.appearance,
+        peopleVariant: params.peopleVariant,
+        contentMode: params.contentMode,
+        mode: 'render',
+        resolutionPreset: params.performance.resolutionPreset,
+        frameRate: params.performance.frameRate,
+        encoderMode: params.performance.encoderMode,
+        occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
+        depthRange: params.depthRange,
+        depthInvert: params.depthInvert,
+        backgroundColor: params.backgroundColor,
+        includeCharacterAttachments: params.includeCharacterAttachments,
+        transparent: params.transparent,
+      },
+      performance: params.performance,
+      priority: 'foreground',
+      signal: params.signal,
+      onProgress: params.onProgress,
+      onFrameRendered: params.onFrameRendered,
+      stats: params.stats,
+    }),
+    {
+      ownerId: params.shotId,
+      jobId: `package-video:${params.shotId}:${params.appearance}:${params.peopleVariant}:${params.contentMode ?? 'full_scene'}`,
+      signal: params.signal,
     },
-    performance: params.performance,
-    priority: 'foreground',
-    signal: params.signal,
-    onProgress: params.onProgress,
-    onFrameRendered: params.onFrameRendered,
-    stats: params.stats,
-  });
+  );
   recordPreparedMediaMetric('exportVideoWaitMs', Math.round(performance.now() - startedAt));
   if (result.cacheStatus === 'hit') recordPreparedMediaMetric('videoCacheHits');
   else if (result.cacheStatus === 'joined') recordPreparedMediaMetric('videoJobsJoined');
@@ -227,17 +237,28 @@ async function writeSharedPreparedPano(
   );
   let exportUrl = sharedMedia.preparedPanos.get(panoKey);
   if (exportUrl === undefined) {
-    exportUrl = await preparePanoExportDataUrl(
-      args.asset.uri,
-      args.pano.width,
-      args.pano.height,
-      {
-        letterboxEnabled: project.settings.panoLetterboxExports169,
-        targetWidth: project.settings.defaultShotWidth,
-        targetHeight: project.settings.defaultShotHeight,
-      },
-    );
-    sharedMedia.preparedPanos.set(panoKey, exportUrl);
+    let pending = sharedMedia.pendingPreparedPanos.get(panoKey);
+    if (!pending) {
+      pending = preparePanoExportDataUrl(
+        args.asset.uri,
+        args.pano.width,
+        args.pano.height,
+        {
+          letterboxEnabled: project.settings.panoLetterboxExports169,
+          targetWidth: project.settings.defaultShotWidth,
+          targetHeight: project.settings.defaultShotHeight,
+        },
+      );
+      sharedMedia.pendingPreparedPanos.set(panoKey, pending);
+    }
+    try {
+      exportUrl = await pending;
+      sharedMedia.preparedPanos.set(panoKey, exportUrl);
+    } finally {
+      if (sharedMedia.pendingPreparedPanos.get(panoKey) === pending) {
+        sharedMedia.pendingPreparedPanos.delete(panoKey);
+      }
+    }
   }
   if (exportUrl === args.asset.uri) {
     await addProjectAssetToZip(zip, args.path, args.asset);
@@ -368,9 +389,18 @@ async function appendShotPackageToZipV2(
     tracker: ProgressTracker;
     signal?: AbortSignal;
     videoPerformanceStats?: PackageVideoPerformanceStats;
+    getLiveProject?: PackageExportOptions['getLiveProject'];
+    commitLiveProject?: PackageExportOptions['commitLiveProject'];
   },
 ): Promise<string[]> {
-  const { shotIndex, tracker, signal, videoPerformanceStats } = args;
+  const {
+    shotIndex,
+    tracker,
+    signal,
+    videoPerformanceStats,
+    getLiveProject,
+    commitLiveProject,
+  } = args;
   const rootFolder = shotPlan.rootFolder;
   /** Remap a legacy-style `${rootFolder}/...` path (same strings the legacy writer uses) to its v2 archive path. */
   const v2 = (legacyPath: string) => remapLegacyShotPathToV2(rootFolder, legacyPath);
@@ -411,6 +441,8 @@ async function appendShotPackageToZipV2(
       shotId: shot.id,
       specification,
       signal,
+      getLiveProject,
+      commitLiveProject,
     });
     frozenProjectForPacking = ensured.frozenProject;
     if (ensured.temporaryAssetId) temporaryExportAssetIds.push(ensured.temporaryAssetId);
@@ -535,9 +567,10 @@ async function appendShotPackageToZipV2(
               });
             },
           });
-          zip.file(
+          await addBlobToZipStore(
+            zip,
             v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_clay_motion.mp4`, variant, peopleMode)),
-            await video.blob.arrayBuffer(),
+            video.blob,
           );
           finishUnit(
             'encoding',
@@ -594,9 +627,10 @@ async function appendShotPackageToZipV2(
             });
           },
         });
-        zip.file(
+        await addBlobToZipStore(
+          zip,
           v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_projected_motion.mp4`, variant, peopleMode)),
-          await video.blob.arrayBuffer(),
+          video.blob,
         );
         finishUnit(
           'encoding',
@@ -639,9 +673,10 @@ async function appendShotPackageToZipV2(
             });
           },
         });
-        zip.file(
+        await addBlobToZipStore(
+          zip,
           v2(getPeopleVariantPath(`${rootFolder}/inputs/viewport_depth_motion.mp4`, variant, peopleMode)),
-          await video.blob.arrayBuffer(),
+          video.blob,
         );
         finishUnit(
           'encoding',
@@ -1032,18 +1067,23 @@ export async function buildForeSceneV2Package(
 
   await writeSharedArtifactsV2(zip, project, shots, plan, sharedMedia, { tracker, signal: options.signal });
 
-  for (let shotIndex = 0; shotIndex < shots.length; shotIndex += 1) {
-    const shot = shots[shotIndex];
-    throwIfAborted(options.signal);
-    const shotPlan = getPlannedShot(plan, shot.id);
-    if (!shotPlan) continue;
-    await appendShotPackageToZipV2(zip, project, shot, shotPlan, {
-      shotIndex,
-      tracker,
-      signal: options.signal,
-      videoPerformanceStats,
-    });
-  }
+  await runPackageTasksWithConcurrency(
+    shots,
+    options.packageConcurrency ?? 2,
+    async (shot, shotIndex) => {
+      throwIfAborted(options.signal);
+      const shotPlan = getPlannedShot(plan, shot.id);
+      if (!shotPlan) return;
+      await appendShotPackageToZipV2(zip, project, shot, shotPlan, {
+        shotIndex,
+        tracker,
+        signal: options.signal,
+        videoPerformanceStats,
+        getLiveProject: options.getLiveProject,
+        commitLiveProject: options.commitLiveProject,
+      });
+    },
+  );
 
   throwIfAborted(options.signal);
   writeRootManifestAndStartHere(zip, plan, project, shots, tracker);

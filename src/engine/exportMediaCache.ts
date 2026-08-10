@@ -10,12 +10,17 @@ export type SharedCubemapCacheEntry = {
 export type SharedExportMediaCache = {
   preparedPanos: Map<string, string>;
   cubemaps: Map<string, SharedCubemapCacheEntry>;
+  /** In-flight promises prevent duplicate GPU work when shot packaging overlaps. */
+  pendingCubemaps: Map<string, Promise<SharedCubemapCacheEntry>>;
+  pendingPreparedPanos: Map<string, Promise<string>>;
 };
 
 export function createSharedExportMediaCache(): SharedExportMediaCache {
   return {
     preparedPanos: new Map(),
     cubemaps: new Map(),
+    pendingCubemaps: new Map(),
+    pendingPreparedPanos: new Map(),
   };
 }
 

@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { LocationProject, Shot } from '../domain/types';
+import { LocationProject, PanoReference, ProjectAsset, Shot } from '../domain/types';
 import { normalizeCharacterPassExportSettings } from '../domain/defaults';
 import { getCameraMoveReferenceFrames, hasRenderableCameraMove } from './cameraKeyframes';
 import {
@@ -29,6 +29,7 @@ import {
   createProgressTracker,
   isPackageExportCancelled,
   normalizeCameraMoveProgress,
+  runPackageTasksWithConcurrency,
   ShotPackageError,
   throwIfAborted,
   type PackageExportOptions,
@@ -84,6 +85,7 @@ import {
   shouldExportViewportDepth,
 } from './depthRender';
 import { prepareVideoArtifact } from './prepareVideoArtifact';
+import { renderWorkCoordinator } from './renderWorkCoordinator';
 import {
   createEmptyPackageVideoPerformanceStats,
   resolveProjectVideoPerformance,
@@ -141,31 +143,39 @@ export async function preparePackageCameraMoveVideo(params: {
   onFrameRendered?: Parameters<typeof prepareVideoArtifact>[0]['onFrameRendered'];
 }) {
   const startedAt = performance.now();
-  const result = await prepareVideoArtifact({
-    project: params.project,
-    shotId: params.shotId,
-    specification: {
-      appearance: params.appearance,
-      peopleVariant: params.peopleVariant,
-      contentMode: params.contentMode,
-      mode: 'render',
-      resolutionPreset: params.performance.resolutionPreset,
-      frameRate: params.performance.frameRate,
-      encoderMode: params.performance.encoderMode,
-      occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
-      depthRange: params.depthRange,
-      depthInvert: params.depthInvert,
-      backgroundColor: params.backgroundColor,
-      includeCharacterAttachments: params.includeCharacterAttachments,
-      transparent: params.transparent,
+  const result = await renderWorkCoordinator.schedule(
+    'foreground-export-video',
+    () => prepareVideoArtifact({
+      project: params.project,
+      shotId: params.shotId,
+      specification: {
+        appearance: params.appearance,
+        peopleVariant: params.peopleVariant,
+        contentMode: params.contentMode,
+        mode: 'render',
+        resolutionPreset: params.performance.resolutionPreset,
+        frameRate: params.performance.frameRate,
+        encoderMode: params.performance.encoderMode,
+        occlusionFilter: params.appearance === 'projected' ? 'fast' : undefined,
+        depthRange: params.depthRange,
+        depthInvert: params.depthInvert,
+        backgroundColor: params.backgroundColor,
+        includeCharacterAttachments: params.includeCharacterAttachments,
+        transparent: params.transparent,
+      },
+      performance: params.performance,
+      priority: 'foreground',
+      signal: params.signal,
+      onProgress: params.onProgress,
+      onFrameRendered: params.onFrameRendered,
+      stats: params.stats,
+    }),
+    {
+      ownerId: params.shotId,
+      jobId: `package-video:${params.shotId}:${params.appearance}:${params.peopleVariant}:${params.contentMode ?? 'full_scene'}`,
+      signal: params.signal,
     },
-    performance: params.performance,
-    priority: 'foreground',
-    signal: params.signal,
-    onProgress: params.onProgress,
-    onFrameRendered: params.onFrameRendered,
-    stats: params.stats,
-  });
+  );
   recordPreparedMediaMetric('exportVideoWaitMs', Math.round(performance.now() - startedAt));
   if (result.cacheStatus === 'hit') recordPreparedMediaMetric('videoCacheHits');
   else if (result.cacheStatus === 'joined') recordPreparedMediaMetric('videoJobsJoined');
@@ -336,21 +346,24 @@ export async function buildLegacyMultiShotPackage(
   const folderByShotId = new Map(
     plan.shots.map((shotPlan) => [shotPlan.shotId, shotPlan.rootFolder]),
   );
-  for (let shotIndex = 0; shotIndex < shots.length; shotIndex += 1) {
-    const shot = shots[shotIndex];
-    throwIfAborted(options.signal);
-    const paths = await appendShotPackageToZip(zip, project, shot, {
-      shotIndex,
-      tracker,
-      signal: options.signal,
-      rootFolder: folderByShotId.get(shot.id),
-      sharedMedia,
-      videoPerformanceStats,
-      getLiveProject: options.getLiveProject,
-      commitLiveProject: options.commitLiveProject,
-    });
-    manifestPaths.push(...paths);
-  }
+  const shotPaths = await runPackageTasksWithConcurrency(
+    shots,
+    options.packageConcurrency ?? 2,
+    async (shot, shotIndex) => {
+      throwIfAborted(options.signal);
+      return appendShotPackageToZip(zip, project, shot, {
+        shotIndex,
+        tracker,
+        signal: options.signal,
+        rootFolder: folderByShotId.get(shot.id),
+        sharedMedia,
+        videoPerformanceStats,
+        getLiveProject: options.getLiveProject,
+        commitLiveProject: options.commitLiveProject,
+      });
+    },
+  );
+  for (const paths of shotPaths) manifestPaths.push(...paths);
 
   const blob = await compressZip(zip, {
     tracker,
@@ -432,6 +445,47 @@ async function appendShotPackageToZip(
   const finishUnit = (phase: PackageExportPhase, message: string) => {
     tracker.advance(1);
     emit(phase, message);
+  };
+  const prepareSharedPano = async (
+    asset: ProjectAsset,
+    pano: PanoReference,
+  ): Promise<{ exportUrl: string; produced: boolean }> => {
+    const panoKey = preparedPanoCacheKey(
+      asset.id,
+      pano.width,
+      pano.height,
+      project.settings.panoLetterboxExports169,
+      project.settings.defaultShotWidth,
+      project.settings.defaultShotHeight,
+    );
+    const cached = sharedMedia.preparedPanos.get(panoKey);
+    if (cached !== undefined) return { exportUrl: cached, produced: false };
+
+    let pending = sharedMedia.pendingPreparedPanos.get(panoKey);
+    let produced = false;
+    if (!pending) {
+      produced = true;
+      pending = preparePanoExportDataUrl(
+        asset.uri,
+        pano.width,
+        pano.height,
+        {
+          letterboxEnabled: project.settings.panoLetterboxExports169,
+          targetWidth: project.settings.defaultShotWidth,
+          targetHeight: project.settings.defaultShotHeight,
+        },
+      );
+      sharedMedia.pendingPreparedPanos.set(panoKey, pending);
+    }
+    try {
+      const exportUrl = await pending;
+      sharedMedia.preparedPanos.set(panoKey, exportUrl);
+      return { exportUrl, produced };
+    } finally {
+      if (sharedMedia.pendingPreparedPanos.get(panoKey) === pending) {
+        sharedMedia.pendingPreparedPanos.delete(panoKey);
+      }
+    }
   };
   const packageStill = async (
     specification: StillArtifactSpecification,
@@ -580,9 +634,10 @@ async function appendShotPackageToZip(
               });
             },
           });
-          zip.file(
+          await addBlobToZipStore(
+            zip,
             getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_clay_motion.mp4`, variant, peopleMode),
-            await video.blob.arrayBuffer(),
+            video.blob,
           );
           finishUnit(
             'encoding',
@@ -640,9 +695,10 @@ async function appendShotPackageToZip(
             });
           },
         });
-        zip.file(
+        await addBlobToZipStore(
+          zip,
           getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_projected_motion.mp4`, variant, peopleMode),
-          await video.blob.arrayBuffer(),
+          video.blob,
         );
         finishUnit(
           'encoding',
@@ -688,9 +744,10 @@ async function appendShotPackageToZip(
             });
           },
         });
-        zip.file(
+        await addBlobToZipStore(
+          zip,
           getPeopleVariantPath(`${resolvedRootFolder}/inputs/viewport_depth_motion.mp4`, variant, peopleMode),
-          await video.blob.arrayBuffer(),
+          video.blob,
         );
         finishUnit(
           'encoding',
@@ -841,30 +898,38 @@ async function appendShotPackageToZip(
     );
     let cached = sharedMedia.cubemaps.get(cacheKey);
     if (!cached) {
-      emit('rendering', 'Rendering cubemap faces…', { indeterminate: true });
-      const cubemap = await renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri, {
-        faceSize,
-        panoRotation: cubemapSourcePano.pano.rotation,
-        onFaceRendered: async (face, rendered) => {
-          throwIfAborted(signal);
-          await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, rendered.blob);
-          const faceIndex = CAMERA_MOVE_CUBEMAP_FACES.indexOf(face);
-          finishUnit(
-            'rendering',
-            `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`,
-          );
-        },
-      });
-      emit('packaging', 'Stitching cubemap…', { indeterminate: true });
-      const stitchedCubemap = await stitchCubemapFaceBlobsCrossAsync(cubemap.faces, cubemap.faceSize);
-      await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, stitchedCubemap.blob);
+      let pending = sharedMedia.pendingCubemaps.get(cacheKey);
+      if (!pending) {
+        emit('rendering', 'Rendering cubemap faces…', { indeterminate: true });
+        pending = (async () => {
+          const cubemap = await renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri, {
+            faceSize,
+            panoRotation: cubemapSourcePano.pano.rotation,
+          });
+          emit('packaging', 'Stitching cubemap…', { indeterminate: true });
+          const stitchedCubemap = await stitchCubemapFaceBlobsCrossAsync(cubemap.faces, cubemap.faceSize);
+          return {
+            faceSize: cubemap.faceSize,
+            faces: cubemap.faces,
+            stitched: stitchedCubemap.blob,
+          };
+        })();
+        sharedMedia.pendingCubemaps.set(cacheKey, pending);
+      }
+      try {
+        cached = await pending;
+        sharedMedia.cubemaps.set(cacheKey, cached);
+      } finally {
+        if (sharedMedia.pendingCubemaps.get(cacheKey) === pending) sharedMedia.pendingCubemaps.delete(cacheKey);
+      }
+      for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
+        throwIfAborted(signal);
+        await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/${face}.png`, cached.faces[face].blob);
+        const faceIndex = CAMERA_MOVE_CUBEMAP_FACES.indexOf(face);
+        finishUnit('rendering', `Cubemap face ${faceIndex + 1} of ${CAMERA_MOVE_CUBEMAP_FACES.length}`);
+      }
+      await addBlobToZip(zip, `${resolvedRootFolder}/inputs/cubemap/cubemap_stitched.png`, cached.stitched);
       finishUnit('packaging', 'Cubemap stitch ready');
-      cached = {
-        faceSize: cubemap.faceSize,
-        faces: cubemap.faces,
-        stitched: stitchedCubemap.blob,
-      };
-      sharedMedia.cubemaps.set(cacheKey, cached);
     } else {
       emit('packaging', 'Reusing shared cubemap…', { indeterminate: true });
       for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
@@ -888,78 +953,30 @@ async function appendShotPackageToZip(
   if (shot.exportSettings.includeFullPano && canonicalAsset && canonicalPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing styled reference panorama…', { indeterminate: true });
-    const panoKey = preparedPanoCacheKey(
-      canonicalAsset.id,
-      canonicalPano.width,
-      canonicalPano.height,
-      project.settings.panoLetterboxExports169,
-      project.settings.defaultShotWidth,
-      project.settings.defaultShotHeight,
-    );
-    let exportUrl = sharedMedia.preparedPanos.get(panoKey);
-    if (exportUrl === undefined) {
-      exportUrl = await preparePanoExportDataUrl(
-        canonicalAsset.uri,
-        canonicalPano.width,
-        canonicalPano.height,
-        {
-          letterboxEnabled: project.settings.panoLetterboxExports169,
-          targetWidth: project.settings.defaultShotWidth,
-          targetHeight: project.settings.defaultShotHeight,
-        },
-      );
-      sharedMedia.preparedPanos.set(panoKey, exportUrl);
-      if (exportUrl === canonicalAsset.uri) {
-        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
-      } else {
-        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
-      }
-      finishUnit('packaging', 'Styled reference panorama added');
+    const prepared = await prepareSharedPano(canonicalAsset, canonicalPano);
+    const exportUrl = prepared.exportUrl;
+    if (exportUrl === canonicalAsset.uri) {
+      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
     } else {
-      if (exportUrl === canonicalAsset.uri) {
-        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_reference.png`, canonicalAsset);
-      } else {
-        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
-      }
+      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_reference.png`, exportUrl);
+    }
+    if (prepared.produced) {
+      finishUnit('packaging', 'Styled reference panorama added');
     }
   }
 
   if (shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing graybox panorama…', { indeterminate: true });
-    const panoKey = preparedPanoCacheKey(
-      grayboxAsset.id,
-      grayboxPano.width,
-      grayboxPano.height,
-      project.settings.panoLetterboxExports169,
-      project.settings.defaultShotWidth,
-      project.settings.defaultShotHeight,
-    );
-    let exportUrl = sharedMedia.preparedPanos.get(panoKey);
-    if (exportUrl === undefined) {
-      exportUrl = await preparePanoExportDataUrl(
-        grayboxAsset.uri,
-        grayboxPano.width,
-        grayboxPano.height,
-        {
-          letterboxEnabled: project.settings.panoLetterboxExports169,
-          targetWidth: project.settings.defaultShotWidth,
-          targetHeight: project.settings.defaultShotHeight,
-        },
-      );
-      sharedMedia.preparedPanos.set(panoKey, exportUrl);
-      if (exportUrl === grayboxAsset.uri) {
-        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
-      } else {
-        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
-      }
-      finishUnit('packaging', 'Graybox panorama added');
+    const prepared = await prepareSharedPano(grayboxAsset, grayboxPano);
+    const exportUrl = prepared.exportUrl;
+    if (exportUrl === grayboxAsset.uri) {
+      await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
     } else {
-      if (exportUrl === grayboxAsset.uri) {
-        await addProjectAssetToZip(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, grayboxAsset);
-      } else {
-        addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
-      }
+      addDataUrl(zip, `${resolvedRootFolder}/inputs/global_graybox.png`, exportUrl);
+    }
+    if (prepared.produced) {
+      finishUnit('packaging', 'Graybox panorama added');
     }
   }
 
@@ -1214,4 +1231,3 @@ async function appendShotPackageToZip(
   return manifest.files.map((file) => file.path);
   } // appendShotPackageToZipBody
 }
-

@@ -14,6 +14,9 @@ import { createId } from '../utils/ids';
 import {
   createProjectAssetStorageKey,
   deleteProjectAssetBlob,
+  PROJECT_ASSET_URI_PREFIX,
+  putProjectAssetBlobs,
+  resolveProjectAssetUri,
   storeProjectAssetBlobDurable,
 } from './projectAssetStore';
 import { pruneUnreferencedProjectAssets } from './projectAssets';
@@ -47,6 +50,32 @@ export type CommitPreparedStillResult =
     ok: false;
     reason: 'stale' | 'shot-missing' | 'missing-blob' | 'persistence-failed';
     project: LocationProject;
+    error?: string;
+  };
+
+export interface PreparedStillBatchEntry {
+  specification: StillArtifactSpecification;
+  expectedFingerprint: string;
+  prepared: PreparedStillArtifact;
+}
+
+export type CommitPreparedStillBatchResult =
+  | {
+    ok: true;
+    project: LocationProject;
+    commits: Array<{
+      key: string;
+      artifact: MaterializedStillArtifact;
+      asset: ProjectAsset;
+      assetId: string;
+      supersededAssetId?: string;
+    }>;
+  }
+  | {
+    ok: false;
+    reason: 'stale' | 'shot-missing' | 'missing-blob' | 'persistence-failed';
+    project: LocationProject;
+    staleKeys?: string[];
     error?: string;
   };
 
@@ -195,6 +224,173 @@ export async function commitPreparedStillArtifact(
     assetId: asset.id,
     supersededAssetId,
   };
+}
+
+/**
+ * Commit a prepared shot batch with one durable asset transaction. Rendering
+ * remains outside this function; the caller supplies already-rendered blobs.
+ * Fingerprints are revalidated before the transaction and the returned project
+ * snapshot is pruned without deleting bytes that a later live merge may still
+ * reference.
+ */
+export async function commitPreparedStillArtifacts(
+  params: {
+    project: LocationProject;
+    shotId: string;
+    entries: readonly PreparedStillBatchEntry[];
+  },
+): Promise<CommitPreparedStillBatchResult> {
+  const shot = resolveShot(params.project, params.shotId);
+  if (!shot) return { ok: false, reason: 'shot-missing', project: params.project };
+
+  const pendingWrites: Array<{ key: string; blob: Blob }> = [];
+  const preparedCommits: Array<{
+    key: string;
+    artifact: MaterializedStillArtifact;
+    asset: ProjectAsset;
+    assetId: string;
+    supersededAssetId?: string;
+  }> = [];
+  const staleKeys: string[] = [];
+  const missingKeys: string[] = [];
+
+  for (const entry of params.entries) {
+    const key = stillArtifactKey(entry.specification);
+    const fingerprint = computeStillArtifactFingerprint(params.project, shot, entry.specification);
+    if (fingerprint.key !== entry.expectedFingerprint || fingerprint.key !== entry.prepared.fingerprint.key) {
+      staleKeys.push(key);
+      continue;
+    }
+    const previous = shot.materializedMedia?.stills[key];
+    let assetId: string;
+    let asset: ProjectAsset | undefined;
+    if (entry.prepared.cacheStatus === 'current' && entry.prepared.existingAssetId) {
+      assetId = entry.prepared.existingAssetId;
+      asset = params.project.assets.assets[assetId];
+      if (!asset) {
+        missingKeys.push(key);
+        continue;
+      }
+    } else {
+      if (!entry.prepared.blob) {
+        missingKeys.push(key);
+        continue;
+      }
+      assetId = createId('asset');
+      const storageKey = createProjectAssetStorageKey(params.project.id, assetId);
+      asset = {
+        id: assetId,
+        type: 'image',
+        name: `${shot.shotNumber}_${key}.png`,
+        uri: PROJECT_ASSET_URI_PREFIX + storageKey,
+        storageKey,
+        mimeType: 'image/png',
+        width: entry.prepared.width,
+        height: entry.prepared.height,
+        createdAt: new Date().toISOString(),
+        metadata: {
+          provenance: 'forescene-derived-still',
+          ownerShotId: params.shotId,
+          artifactKey: key,
+          fingerprint: entry.expectedFingerprint,
+        },
+      };
+      pendingWrites.push({ key: storageKey, blob: entry.prepared.blob });
+    }
+
+    const artifact: MaterializedStillArtifact = {
+      id: previous?.id ?? createId('still-artifact'),
+      key,
+      kind: entry.specification.kind,
+      assetId,
+      fingerprint: entry.expectedFingerprint,
+      dependencyIds: fingerprint.dependencyIds,
+      width: entry.prepared.width,
+      height: entry.prepared.height,
+      mimeType: 'image/png',
+      peopleVariant: entry.specification.peopleVariant,
+      appearance: entry.specification.appearance,
+      timeSeconds: entry.specification.timeSeconds,
+      frameRole: entry.specification.frameRole,
+      createdAt: previous?.createdAt ?? new Date().toISOString(),
+    };
+    preparedCommits.push({
+      key,
+      artifact,
+      asset,
+      assetId,
+      supersededAssetId: previous && previous.assetId !== assetId ? previous.assetId : undefined,
+    });
+  }
+
+  if (missingKeys.length > 0) {
+    return {
+      ok: false,
+      reason: 'missing-blob',
+      project: params.project,
+      staleKeys: [...staleKeys, ...missingKeys],
+    };
+  }
+  if (preparedCommits.length === 0) {
+    return {
+      ok: false,
+      reason: 'stale',
+      project: params.project,
+      staleKeys,
+    };
+  }
+
+  try {
+    if (pendingWrites.length > 0) await putProjectAssetBlobs(pendingWrites);
+    for (const commit of preparedCommits) {
+      if (!commit.asset.storageKey) continue;
+      const uri = await resolveProjectAssetUri({
+        storageKey: commit.asset.storageKey,
+        uri: commit.asset.uri,
+      });
+      commit.asset = { ...commit.asset, uri: uri ?? commit.asset.uri };
+    }
+  } catch (error) {
+    for (const entry of pendingWrites) {
+      await deleteProjectAssetBlob(entry.key).catch(() => undefined);
+    }
+    return {
+      ok: false,
+      reason: 'persistence-failed',
+      project: params.project,
+      staleKeys,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const nextStills = { ...(shot.materializedMedia?.stills ?? {}) };
+  let nextAssets = { ...params.project.assets.assets };
+  for (const commit of preparedCommits) {
+    nextStills[commit.key] = commit.artifact;
+    nextAssets[commit.assetId] = commit.asset;
+  }
+  let nextProject: LocationProject = {
+    ...params.project,
+    assets: { ...params.project.assets, assets: nextAssets },
+    shots: params.project.shots.map((item) => {
+      if (item.id !== params.shotId) return item;
+      let assets = item.assets;
+      for (const commit of preparedCommits) {
+        assets = mapLegacyViewportSlot(assets, commit.artifact, commit.assetId);
+      }
+      return {
+        ...item,
+        materializedMedia: { stills: nextStills },
+        assets,
+        updatedAt: new Date().toISOString(),
+      };
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+  if (preparedCommits.some((commit) => commit.supersededAssetId)) {
+    nextProject = pruneUnreferencedProjectAssets(nextProject);
+  }
+  return { ok: true, project: nextProject, commits: preparedCommits };
 }
 
 function mapLegacyViewportSlot(

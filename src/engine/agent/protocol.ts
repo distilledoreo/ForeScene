@@ -678,6 +678,9 @@ export interface AgentArtifactDownloadResult {
   ok: boolean;
   status: AgentOperationStatus;
   artifact?: AgentArtifactHandle;
+  /** Blob-native payload; callers can persist or stream it without base64 expansion. */
+  blob?: Blob;
+  /** Legacy compatibility only; request explicitly with includeDataUrl. */
   dataUrl?: string;
   diagnostics: AgentDiagnostic[];
 }
@@ -1706,7 +1709,7 @@ export interface ForeSceneBrowserApi {
 
   setShotPanorama(input: { shotId: string; panoId: string | null }): Promise<AgentShotPanoramaResult>;
   refreshRevision(): Promise<AgentRevisionRefreshResult>;
-  downloadArtifact(input: { artifactId: string; download?: boolean }): Promise<AgentArtifactDownloadResult>;
+  downloadArtifact(input: { artifactId: string; download?: boolean; includeDataUrl?: boolean }): Promise<AgentArtifactDownloadResult>;
   exportProjectBackup(input?: { download?: boolean }): Promise<AgentProjectBackupResult>;
 
   snapObjectToFloor(input: AgentSnapObjectToFloorInput): Promise<AgentSnapObjectToFloorResult>;
@@ -1891,8 +1894,8 @@ export interface ForeSceneBrowserApi {
 
   // Project-wide batch APIs
   inspectShotsDiagnostics(input: { shots: Array<{ shotId: string; timeSeconds?: number; subjectIds?: string[] }> }): AgentShotDiagnostics[];
-  frameSubjectsBatch(input: { shots: Array<AgentFrameSubjectsInput> }): Promise<AgentFrameSubjectsResult[]>;
-  renderShotBatch(input: { jobs: Array<AgentRenderShotFrameInput> }): Promise<AgentRenderShotFrameResult[]>;
+  frameSubjectsBatch(input: { shots: Array<AgentFrameSubjectsInput>; concurrency?: number }): Promise<AgentFrameSubjectsResult[]>;
+  renderShotBatch(input: { jobs: Array<AgentRenderShotFrameInput>; concurrency?: number }): Promise<AgentRenderShotFrameResult[]>;
   renderPassMatrix(input: { shotIds: string[]; passes: string[]; concurrency?: number }): Promise<AgentSubmitJobResult>;
   createContactSheets(input: { artifactIds: string[]; grouping?: string }): Promise<AgentSubmitJobResult>;
 }

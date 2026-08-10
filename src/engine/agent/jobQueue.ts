@@ -14,6 +14,8 @@ import type {
 } from './protocol';
 
 interface StoredJob extends AgentJobProgress {
+  createdAt: number;
+  finishedAt?: number;
   revisionIdAtStart?: string;
   input: AgentSubmitJobInput;
   listeners: Set<(progress: AgentJobProgress) => void>;
@@ -26,6 +28,7 @@ interface StoredJob extends AgentJobProgress {
 
 const jobs = new Map<string, StoredJob>();
 const MAX_RETAINED_JOBS = 100;
+const TERMINAL_JOB_TTL_MS = 30 * 60 * 1000;
 let jobCounter = 0;
 
 function updateJobCheckpoint(job: StoredJob) {
@@ -75,6 +78,12 @@ function isTerminalStatus(status: AgentJobStatus): boolean {
 }
 
 function pruneRetainedJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (!isTerminalStatus(job.status) || job.listeners.size > 0) continue;
+    const finishedAt = job.finishedAt ?? job.createdAt;
+    if (now - finishedAt >= TERMINAL_JOB_TTL_MS) jobs.delete(id);
+  }
   if (jobs.size < MAX_RETAINED_JOBS) return;
   for (const [id, job] of jobs) {
     if (jobs.size < MAX_RETAINED_JOBS) break;
@@ -90,32 +99,76 @@ function isJobWaitComplete(progress: AgentJobProgress): boolean {
 async function runHandlerWithoutOrphaning(
   runHandler: () => Promise<void>,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    const error = new Error('Job item cancelled.');
+    error.name = 'AbortError';
+    throw error;
+  }
   if (!timeoutMs) {
-    await runHandler();
+    const handlerPromise = runHandler();
+    if (!signal) {
+      await handlerPromise;
+      return;
+    }
+    let removeAbortListener: (() => void) | undefined;
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      const onAbort = () => {
+        const error = new Error('Job item cancelled.');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    });
+    try {
+      await Promise.race([handlerPromise, abortPromise]);
+    } catch (error) {
+      if (signal.aborted) await handlerPromise.catch(() => undefined);
+      throw error;
+    } finally {
+      removeAbortListener?.();
+    }
     return;
   }
 
   const handlerPromise = runHandler();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  let removeAbortListener: (() => void) | undefined;
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
       reject(new Error('Job item timed out.'));
     }, timeoutMs);
   });
+  const abortPromise = signal
+    ? new Promise<never>((_resolve, reject) => {
+      const onAbort = () => {
+        const error = new Error('Job item cancelled.');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    })
+    : undefined;
 
   try {
-    await Promise.race([handlerPromise, timeoutPromise]);
+    await Promise.race(
+      abortPromise ? [handlerPromise, timeoutPromise, abortPromise] : [handlerPromise, timeoutPromise],
+    );
   } catch (error) {
     // Legacy handlers do not all accept AbortSignal yet. If timeout wins, wait for
     // the already-started handler to settle before releasing the worker so a
-    // second GPU render can never begin concurrently behind an orphaned timeout.
-    if (timedOut) await handlerPromise.catch(() => undefined);
+    // second GPU render can never begin concurrently behind an orphaned timeout
+    // or cancellation.
+    if (timedOut || signal?.aborted) await handlerPromise.catch(() => undefined);
     throw error;
   } finally {
     if (timer) clearTimeout(timer);
+    removeAbortListener?.();
   }
 }
 
@@ -161,11 +214,16 @@ async function runJob(job: StoredJob): Promise<void> {
     const runHandler = () => handler(item, index, {
       jobId: job.jobId,
       revisionIdAtStart: job.revisionIdAtStart,
+      signal: job.abortController!.signal,
       registerArtifact,
     });
 
     try {
-      await runHandlerWithoutOrphaning(runHandler, job.input.timeoutMsPerItem);
+      await runHandlerWithoutOrphaning(
+        runHandler,
+        job.input.timeoutMsPerItem,
+        job.abortController?.signal,
+      );
     } catch (error) {
       // Cancel/pause owns the final state. A late handler rejection after either
       // must not become an error or mark the item settled.
@@ -221,12 +279,14 @@ async function runJob(job: StoredJob): Promise<void> {
     job.progress = 1;
     job.message = hasErrors ? 'Job completed with warnings.' : 'Job completed.';
     job.revisionId = useProjectSafetyStore.getState().activeRevisionId;
+    job.finishedAt = Date.now();
     notify(job);
   } catch {
     if (job.runGeneration !== runGeneration) return;
     if (job.status === 'running') {
       job.status = 'failed';
       job.message = 'Job failed.';
+      job.finishedAt = Date.now();
       notify(job);
     }
   }
@@ -252,6 +312,7 @@ export function submitAgentJob(input: AgentSubmitJobInput): AgentSubmitJobResult
   const jobId = nextJobId();
   const job: StoredJob = {
     jobId,
+    createdAt: Date.now(),
     type: input.type,
     status: 'pending',
     progress: 0,
@@ -284,6 +345,7 @@ export function cancelAgentJob(jobId: string): AgentSubmitJobResult {
   job.abortController?.abort();
   job.status = 'cancelled';
   job.message = 'Job cancelled.';
+  job.finishedAt = Date.now();
   notify(job);
   return { ok: true, jobId, status: 'cancelled', diagnostics: [] };
 }
@@ -350,6 +412,7 @@ export function pauseAgentJob(jobId: string): void {
   job.abortController?.abort();
   job.status = 'paused';
   job.message = 'Job paused.';
+  job.finishedAt = Date.now();
   notify(job);
 }
 

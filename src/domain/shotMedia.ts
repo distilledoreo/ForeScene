@@ -1,4 +1,5 @@
 import { CameraKeyframe, LocationProject, MaterializedStillArtifact, ProjectAsset, Shot } from './types';
+import { resolvePrimaryStillPreviewAssetId } from '../engine/stillArtifactRuntime';
 
 export type ShotMediaSource =
   | 'camera_move'
@@ -134,6 +135,22 @@ export function resolveShotMediaPoster(
   project: LocationProject,
   shot: Shot,
 ): ShotMediaItem | undefined {
+  // The prepared-media planner may choose a projected still as primary. Resolve
+  // that same choice before the legacy media priority so cards, camera-roll
+  // thumbnails, and the shot thumbnail component never disagree.
+  const preparedPrimary = resolvePrimaryStillPreviewAssetId(project, shot);
+  if (preparedPrimary.assetId && preparedPrimary.source === 'materialized') {
+    const asset = project.assets.assets[preparedPrimary.assetId];
+    if (asset) {
+      return {
+        id: `${shot.id}:prepared-primary`,
+        asset,
+        kind: asset.type === 'video' ? 'video' : 'image',
+        label: 'Prepared still',
+        source: 'prepared_reference',
+      };
+    }
+  }
   const items = resolveShotMedia(project, shot);
   for (const source of posterMediaPriority) {
     const item = items.find((candidate) => candidate.source === source);

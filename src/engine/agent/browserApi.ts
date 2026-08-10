@@ -19,6 +19,8 @@ import {
   type RenderPixelStats,
 } from '../previs/renderPixelStats';
 import { buildContactSheetSpec } from '../previs/contactSheet';
+import { ensureBackgroundVideoService, queueBackgroundVideosForShot } from '../backgroundVideoService';
+import { renderWorkCoordinator } from '../renderWorkCoordinator';
 import {
   clearPoseApplicationReports,
   ensurePoseableCharactersForProject,
@@ -53,6 +55,7 @@ import { collectAgentBusyDiagnostics } from './busy';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
+  agentWarning,
   notImplementedDiagnostic,
 } from './diagnostics';
 import {
@@ -95,6 +98,7 @@ import type {
   AgentRenderShotFrameInput,
   AgentRenderShotFrameResult,
   AgentResetProjectRequest,
+  AgentShotMaterializationResult,
   AgentShotInspection,
   AgentShotTimeSample,
   AgentShotTimelineInspection,
@@ -374,6 +378,19 @@ function refinementWriteDiagnostics(operation: string): AgentRefinementCheckpoin
   return busy.length > 0 ? busy : null;
 }
 
+function preparedMediaDiagnostics(
+  result: Pick<AgentShotMaterializationResult, 'status' | 'warnings'>,
+) {
+  if (result.warnings.length === 0) {
+    return result.status === 'failed'
+      ? [agentError(AGENT_DIAGNOSTIC_CODES.preparedMediaFailed, 'Prepared-media materialization failed.')]
+      : [];
+  }
+  return result.warnings.map((message) => result.status === 'failed'
+    ? agentError(AGENT_DIAGNOSTIC_CODES.preparedMediaFailed, message)
+    : agentWarning(AGENT_DIAGNOSTIC_CODES.preparedMediaWarning, message));
+}
+
 export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
   const projectState = useProjectStore.getState();
   const safety = useProjectSafetyStore.getState();
@@ -413,6 +430,9 @@ export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
 }
 
 export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
+  // Agent-only sessions do not mount the Shots workspace, so bind the same
+  // background-preparation lifecycle that the UI capture controller uses.
+  ensureBackgroundVideoService(() => useProjectStore.getState().project);
   const api: ForeSceneBrowserApi = {
     apiVersion: FORESCENE_AGENT_API_VERSION,
 
@@ -1119,9 +1139,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         };
       }
 
-      // Agent/API default: await-all configured stills via the shared materializer.
-      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
-      if (!runDestructive) {
+      // Render outside the protected persistence transaction. Each accepted
+      // artifact is merged against the latest live project; the verified save
+      // barrier happens once after the batch completes.
+      const flushProject = useProjectSafetyStore.getState().flushProject;
+      if (!flushProject) {
         return {
           ok: false,
           status: 'failed' as const,
@@ -1136,26 +1158,25 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       }
 
       try {
-        const { materializeShotAfterCapture } = await import('../materializeShotStills');
-        let materialization: Awaited<ReturnType<typeof materializeShotAfterCapture>> | undefined;
-        await runDestructive('Materialize shot stills', async () => {
-          const project = useProjectStore.getState().project;
-          materialization = await materializeShotAfterCapture({
-            project,
-            shotId: input.shotId,
-            mode: 'await-all',
-            getLiveProject: () => useProjectStore.getState().project,
-            commitLiveProject: (updater) => {
-              useProjectStore.setState((current) => ({
-                project: updater(current.project),
-              }));
-              return useProjectStore.getState().project;
-            },
-          });
+        const { captureShotStillPreparation } = await import('../shotStillActions');
+        const project = useProjectStore.getState().project;
+        const materialization = await captureShotStillPreparation({
+          project,
+          shotId: input.shotId,
+          mode: 'await-all',
+          timeSeconds: input.timeSeconds,
+          getLiveProject: () => useProjectStore.getState().project,
+          commitLiveProject: (updater) => {
+            useProjectStore.setState((current) => ({
+              project: updater(current.project),
+            }));
+            return useProjectStore.getState().project;
+          },
         });
-
-        const result = materialization!;
+        const result = materialization;
         const primaryId = result.primaryStillAssetId;
+        await flushProject('Persist materialized shot stills');
+
         const asset = primaryId
           ? useProjectStore.getState().project.assets.assets[primaryId]
           : undefined;
@@ -1168,28 +1189,6 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
         // Primary failure must never report ready — keep previous preview if present.
         if (result.status === 'failed') {
-          // Best-effort legacy preview preserve for UI; status remains failed for the agent.
-          if (!primaryId) {
-            try {
-              const rendered = await api.renderShotFrame({
-                shotId: input.shotId,
-                timeSeconds: input.timeSeconds,
-                appearance: 'clay',
-              });
-              if (rendered.ok && rendered.pngDataUrl) {
-                await runDestructive('Attach shot thumbnail', () => {
-                  useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
-                    name: `shot_${input.shotId}_thumbnail.png`,
-                    dataUrl: rendered.pngDataUrl!,
-                    width: rendered.width,
-                    height: rendered.height,
-                  });
-                });
-              }
-            } catch {
-              // Ignore fallback preview errors; failure is already reported.
-            }
-          }
           return {
             ok: false,
             status: 'failed' as const,
@@ -1201,47 +1200,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             width: asset?.width ?? 0,
             height: asset?.height ?? 0,
             pngDataUrl: asset?.uri?.startsWith('data:') ? asset.uri : undefined,
-            diagnostics: [
-              agentError(
-                'thumbnail_attach_failed',
-                result.warnings[0] ?? 'Primary still materialization failed.',
-              ),
-              ...result.warnings.slice(1).map((message) =>
-                agentError('thumbnail_attach_failed', message)
-              ),
-            ],
+            diagnostics: preparedMediaDiagnostics(result),
           };
         }
 
-        if (primaryId && asset) {
-          if (asset.uri.startsWith('data:')) {
-            await runDestructive('Attach shot thumbnail', () => {
-              useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
-                name: `shot_${input.shotId}_thumbnail.png`,
-                dataUrl: asset.uri,
-                width: asset.width ?? 0,
-                height: asset.height ?? 0,
-              });
-            });
-          } else {
-            useProjectStore.setState((current) => ({
-              project: {
-                ...current.project,
-                shots: current.project.shots.map((shot) =>
-                  shot.id === input.shotId
-                    ? {
-                      ...shot,
-                      assets: {
-                        ...shot.assets,
-                        viewportRenderAssetId: primaryId,
-                      },
-                    }
-                    : shot
-                ),
-              },
-            }));
-          }
-        }
+        void queueBackgroundVideosForShot(input.shotId);
 
         return {
           ok: true,
@@ -1254,11 +1217,10 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           width: asset?.width ?? 0,
           height: asset?.height ?? 0,
           pngDataUrl: asset?.uri?.startsWith('data:') ? asset.uri : undefined,
-          diagnostics: result.warnings.map((message) =>
-            agentError('thumbnail_attach_failed', message)
-          ),
+          diagnostics: preparedMediaDiagnostics(result),
         };
       } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') throw error;
         return {
           ok: false,
           status: 'failed' as const,
@@ -1269,7 +1231,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           artifacts: [],
           warnings: [],
           diagnostics: [agentError(
-            'thumbnail_attach_failed',
+            AGENT_DIAGNOSTIC_CODES.preparedMediaFailed,
             error instanceof Error ? error.message : 'Could not materialize shot stills.',
           )],
         };
@@ -1305,6 +1267,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           return useProjectStore.getState().project;
         },
       });
+      void queueBackgroundVideosForShot(input.shotId);
       return {
         ok: result.status !== 'failed',
         status: result.status,
@@ -1319,9 +1282,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         warnings: result.warnings,
         width: 0,
         height: 0,
-        diagnostics: result.warnings.map((message) =>
-          agentError('thumbnail_attach_failed', message)
-        ),
+        diagnostics: preparedMediaDiagnostics(result),
       };
     },
 
@@ -1350,6 +1311,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           return useProjectStore.getState().project;
         },
       });
+      void queueBackgroundVideosForShot(input.shotId);
       return {
         ok: result.status !== 'failed',
         status: result.status,
@@ -1364,9 +1326,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         warnings: result.warnings,
         width: 0,
         height: 0,
-        diagnostics: result.warnings.map((message) =>
-          agentError('thumbnail_attach_failed', message)
-        ),
+        diagnostics: preparedMediaDiagnostics(result),
       };
     },
 
@@ -1794,11 +1754,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
 
     async frameSubjectsBatch(input) {
-      return frameAgentSubjectsBatch(input.shots);
+      return frameAgentSubjectsBatch(input.shots, input.concurrency ?? 1);
     },
 
     async renderShotBatch(input) {
-      return renderAgentShotBatch(input.jobs, 1);
+      return renderAgentShotBatch(input.jobs, input.concurrency ?? 1);
     },
 
     renderPassMatrix(input) {
@@ -2329,6 +2289,15 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
     },
   };
 
+  // Route every public still-frame entry point through the same coordinator.
+  // Batch callers use this late-bound method too, so they cannot bypass a live
+  // background video or interactive capture job.
+  const renderShotFrameUncoordinated = api.renderShotFrame.bind(api);
+  api.renderShotFrame = (input) => renderWorkCoordinator.schedule(
+    'capture-primary-still',
+    () => renderShotFrameUncoordinated(input),
+    { ownerId: input.shotId, jobId: `agent-frame:${input.shotId}` },
+  );
   setAgentRenderShotFrameImpl((input) => api.renderShotFrame(input));
 
   return api;
