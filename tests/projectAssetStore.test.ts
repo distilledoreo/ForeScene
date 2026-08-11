@@ -161,4 +161,43 @@ describe('local-first raster and video assets', () => {
       await expect(getProjectAssetBlob(first.storageKey!)).resolves.toBeInstanceOf(Blob);
     }
   });
+
+  it('evicts least-recently-used durable payloads under a byte budget', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      flushProjectAssetStoreOperationsForTests,
+      getProjectAssetBlob,
+      listProjectAssetBlobKeys,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetMemoryActiveProject(undefined);
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 50, maxEntries: 10 });
+
+    const first = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'first.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    const second = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'second.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    await getProjectAssetBlob(first.storageKey!);
+    const third = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'third.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    await flushProjectAssetStoreOperationsForTests();
+
+    const keys = await listProjectAssetBlobKeys();
+    expect(keys).toContain(first.storageKey);
+    expect(keys).toContain(third.storageKey);
+    expect(keys).not.toContain(second.storageKey);
+    await expect(getProjectAssetBlob(second.storageKey!)).resolves.toBeUndefined();
+  });
 });

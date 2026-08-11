@@ -3,7 +3,10 @@ import type { ProjectAsset } from '../domain/types';
 /** Legacy PanoRef database name preserved so existing local binary assets keep opening. */
 const LEGACY_DATABASE_NAME = 'panoref-project-assets';
 const STORE_NAME = 'binary-assets';
-const DATABASE_VERSION = 1;
+const METADATA_STORE_NAME = 'binary-assets-metadata';
+const LAST_ACCESSED_INDEX = 'lastAccessedAt';
+/** Schema v2 adds durable LRU metadata separate from blob payloads. */
+const DATABASE_VERSION = 2;
 
 /**
  * Portable manifest references for locally stored image and video payloads.
@@ -29,10 +32,18 @@ let assetDatabasePromise: Promise<IDBDatabase | undefined> | undefined;
 /** Working-set guard for decoded image/video Blobs and their object URLs. */
 export const DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES = 256 * 1024 * 1024;
 export const DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES = 256;
+/** Persistent IndexedDB budget for prepared stills and other local raster/video payloads. */
+export const DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_BYTES = 1024 * 1024 * 1024;
+export const DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_ENTRIES = 2048;
 let memoryLimits = {
   maxBytes: DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES,
   maxEntries: DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES,
 };
+let persistentLimits = {
+  maxBytes: DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_BYTES,
+  maxEntries: DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_ENTRIES,
+};
+let estimatedPersistentBudgetPromise: Promise<typeof persistentLimits> | undefined;
 
 export interface ProjectAssetBlobWrite {
   key: string;
@@ -49,15 +60,69 @@ interface StoredProjectAssetRecord {
   type: string;
 }
 
+interface StoredProjectAssetMetadata {
+  key: string;
+  byteSize: number;
+  type: string;
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function startEstimatedPersistentBudgetOnce(): Promise<typeof persistentLimits> {
+  if (!estimatedPersistentBudgetPromise) {
+    estimatedPersistentBudgetPromise = applyEstimatedProjectAssetBudget();
+  }
+  return estimatedPersistentBudgetPromise;
+}
+
 function openDatabase(): Promise<IDBDatabase | undefined> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(undefined);
+  void startEstimatedPersistentBudgetOnce();
   if (assetDatabasePromise) return assetDatabasePromise;
 
   let connectionPromise: Promise<IDBDatabase | undefined>;
   connectionPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(LEGACY_DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
+    request.onupgradeneeded = (event) => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(METADATA_STORE_NAME)) {
+        db.createObjectStore(METADATA_STORE_NAME, { keyPath: 'key' });
+      }
+      const upgradeTransaction = request.transaction;
+      if (!upgradeTransaction) return;
+      const metadata = upgradeTransaction.objectStore(METADATA_STORE_NAME);
+      if (!metadata.indexNames.contains(LAST_ACCESSED_INDEX)) {
+        metadata.createIndex(LAST_ACCESSED_INDEX, 'lastAccessedAt', { unique: false });
+      }
+
+      if (event.oldVersion < 2) {
+        const blobs = upgradeTransaction.objectStore(STORE_NAME);
+        const cursorRequest = blobs.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const key = typeof cursor.key === 'string' ? cursor.key : undefined;
+          const blob = readStoredProjectAsset(cursor.value);
+          if (key && blob) {
+            const stamp = nowIso();
+            metadata.put({
+              key,
+              byteSize: blob.size,
+              type: blob.type,
+              createdAt: stamp,
+              lastAccessedAt: stamp,
+            } satisfies StoredProjectAssetMetadata);
+          }
+          cursor.continue();
+        };
+      }
     };
     request.onsuccess = () => {
       const database = request.result;
@@ -147,6 +212,122 @@ export function setProjectAssetMemoryActiveProject(projectId: string | undefined
 function isPinnedMemoryKey(key: string): boolean {
   if (!activeProjectId) return false;
   return key.startsWith(`project/${activeProjectId}/`) || key.startsWith(`import/${activeProjectId}/`);
+}
+
+function isPinnedPersistentKey(key: string): boolean {
+  return isPinnedMemoryKey(key);
+}
+
+async function listStoredMetadata(): Promise<StoredProjectAssetMetadata[]> {
+  const db = await openDatabase();
+  if (!db) return [];
+  return new Promise<StoredProjectAssetMetadata[]>((resolve, reject) => {
+    const request = db.transaction(METADATA_STORE_NAME, 'readonly').objectStore(METADATA_STORE_NAME).getAll();
+    request.onsuccess = () => {
+      const rows = (request.result as StoredProjectAssetMetadata[]).filter((row) => (
+        row && typeof row.key === 'string' && typeof row.byteSize === 'number'
+      ));
+      resolve(rows);
+    };
+    request.onerror = () => reject(request.error ?? new Error('Could not list local project asset metadata.'));
+  });
+}
+
+async function deleteStoredKeys(keys: readonly string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const db = await openDatabase();
+  if (!db) return;
+  for (const key of keys) {
+    removeMemoryBlob(key);
+    memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
+    memoryBlobWrittenAt.delete(key);
+    revokeObjectUrlForKey(key);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
+    const blobs = transaction.objectStore(STORE_NAME);
+    const metadata = transaction.objectStore(METADATA_STORE_NAME);
+    for (const key of keys) {
+      blobs.delete(key);
+      metadata.delete(key);
+    }
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete local project assets.'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset deletion was cancelled.'));
+  });
+}
+
+async function touchStoredMetadata(key: string, lastAccessedAt = nowIso()): Promise<void> {
+  const db = await openDatabase();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const transaction = db.transaction(METADATA_STORE_NAME, 'readwrite');
+    const metadata = transaction.objectStore(METADATA_STORE_NAME);
+    const getRequest = metadata.get(key);
+    getRequest.onsuccess = () => {
+      const value = getRequest.result as StoredProjectAssetMetadata | undefined;
+      if (value) metadata.put({ ...value, lastAccessedAt });
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => resolve();
+    transaction.onabort = () => resolve();
+  });
+}
+
+async function evictPersistentIfNeeded(protectedKey?: string): Promise<void> {
+  await startEstimatedPersistentBudgetOnce();
+  const all = await listStoredMetadata();
+  all.sort((a, b) => (Date.parse(a.lastAccessedAt) || 0) - (Date.parse(b.lastAccessedAt) || 0));
+  let totalBytes = all.reduce((sum, row) => sum + row.byteSize, 0);
+  const toDelete: string[] = [];
+  const isProtected = (key: string) => (
+    key === protectedKey
+    || isPinnedPersistentKey(key)
+    || toDelete.includes(key)
+  );
+
+  while (
+    (all.length - toDelete.length > persistentLimits.maxEntries)
+    || (totalBytes > persistentLimits.maxBytes)
+  ) {
+    const candidate = all.find((row) => !isProtected(row.key));
+    if (!candidate) break;
+    toDelete.push(candidate.key);
+    totalBytes -= candidate.byteSize;
+  }
+
+  if (toDelete.length > 0) await deleteStoredKeys(toDelete);
+}
+
+async function writeStoredMetadata(
+  key: string,
+  blob: Blob,
+  options: { replace: boolean },
+): Promise<void> {
+  const db = await openDatabase();
+  if (!db) return;
+  const stamp = nowIso();
+  const existing = options.replace
+    ? undefined
+    : await new Promise<StoredProjectAssetMetadata | undefined>((resolve, reject) => {
+      const request = db.transaction(METADATA_STORE_NAME, 'readonly').objectStore(METADATA_STORE_NAME).get(key);
+      request.onsuccess = () => resolve(request.result as StoredProjectAssetMetadata | undefined);
+      request.onerror = () => reject(request.error ?? new Error('Could not read local project asset metadata.'));
+    });
+  const metadata: StoredProjectAssetMetadata = {
+    key,
+    byteSize: blob.size,
+    type: blob.type,
+    createdAt: existing?.createdAt ?? stamp,
+    lastAccessedAt: stamp,
+  };
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(METADATA_STORE_NAME, 'readwrite');
+    transaction.objectStore(METADATA_STORE_NAME).put(metadata);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error('Could not store local project asset metadata.'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset metadata write was cancelled.'));
+  });
 }
 
 function touchMemoryBlob(key: string): void {
@@ -306,11 +487,18 @@ async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]
   }
   const storedEntries: Array<{ key: string; value: StoredProjectAssetRecord }> = [];
   for (const entry of entries) {
+    if (entry.blob.size > persistentLimits.maxBytes) {
+      await deleteStoredKeys([entry.key]);
+      continue;
+    }
     storedEntries.push({
       key: entry.key,
       value: { bytes: await entry.blob.arrayBuffer(), type: entry.blob.type },
     });
   }
+  if (storedEntries.length === 0) return;
+
+  await startEstimatedPersistentBudgetOnce();
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
@@ -319,7 +507,13 @@ async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]
     transaction.onerror = () => reject(transaction.error ?? new Error('Could not store local project assets.'));
     transaction.onabort = () => reject(transaction.error ?? new Error('Local project asset storage was cancelled.'));
   });
-  for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
+  for (const entry of storedEntries) {
+    const source = entries.find((candidate) => candidate.key === entry.key);
+    if (!source) continue;
+    await writeStoredMetadata(entry.key, source.blob, { replace: true });
+    cacheProjectAssetBlob(entry.key, source.blob, true);
+    await evictPersistentIfNeeded(entry.key);
+  }
 }
 
 function readStoredProjectAsset(value: unknown): Blob | undefined {
@@ -349,12 +543,14 @@ export async function getProjectAssetBlob(key: string): Promise<Blob | undefined
   const cached = memoryBlobs.get(key);
   if (cached) {
     touchMemoryBlob(key);
+    void enqueueAssetDatabaseOperation(() => touchStoredMetadata(key));
     return cached;
   }
   return enqueueAssetDatabaseOperation(async () => {
     const cachedAfterQueue = memoryBlobs.get(key);
     if (cachedAfterQueue) {
       touchMemoryBlob(key);
+      void touchStoredMetadata(key);
       return cachedAfterQueue;
     }
     const db = await openDatabase();
@@ -364,7 +560,10 @@ export async function getProjectAssetBlob(key: string): Promise<Blob | undefined
       request.onsuccess = () => resolve(readStoredProjectAsset(request.result));
       request.onerror = () => reject(request.error ?? new Error('Could not read local project asset.'));
     });
-    if (blob) cacheProjectAssetBlob(key, blob, false);
+    if (blob) {
+      cacheProjectAssetBlob(key, blob, false);
+      await touchStoredMetadata(key);
+    }
     return blob;
   });
 }
@@ -372,6 +571,8 @@ export async function getProjectAssetBlob(key: string): Promise<Blob | undefined
 /** List local keys for diagnostics and deferred, revision-aware cleanup. */
 export async function listProjectAssetBlobKeys(): Promise<string[]> {
   return enqueueAssetDatabaseOperation(async () => {
+    const metadata = await listStoredMetadata();
+    if (metadata.length > 0) return metadata.map((row) => row.key);
     const db = await openDatabase();
     if (!db) return [...memoryBlobs.keys()];
     return new Promise<string[]>((resolve, reject) => {
@@ -398,18 +599,7 @@ export async function resolveProjectAssetUri(asset: Pick<ProjectAsset, 'uri' | '
 
 export async function deleteProjectAssetBlob(key: string): Promise<void> {
   return enqueueAssetDatabaseOperation(async () => {
-    removeMemoryBlob(key);
-    memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
-    memoryBlobWrittenAt.delete(key);
-    revokeObjectUrlForKey(key);
-    const db = await openDatabase();
-    if (!db) return;
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      transaction.objectStore(STORE_NAME).delete(key);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete local project asset.'));
-    });
+    await deleteStoredKeys([key]);
   });
 }
 
@@ -434,7 +624,57 @@ export function resetProjectAssetStoreForTests() {
     maxBytes: DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES,
     maxEntries: DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES,
   };
+  persistentLimits = {
+    maxBytes: DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_BYTES,
+    maxEntries: DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_ENTRIES,
+  };
+  estimatedPersistentBudgetPromise = undefined;
   assetOperationQueue = Promise.resolve();
+}
+
+export function getProjectAssetPersistentLimits(): typeof persistentLimits {
+  return { ...persistentLimits };
+}
+
+export function setProjectAssetPersistentLimitsForTests(limits: {
+  maxBytes?: number;
+  maxEntries?: number;
+}): void {
+  if (typeof limits.maxBytes === 'number' && Number.isFinite(limits.maxBytes) && limits.maxBytes > 0) {
+    persistentLimits.maxBytes = Math.floor(limits.maxBytes);
+  }
+  if (typeof limits.maxEntries === 'number' && Number.isFinite(limits.maxEntries) && limits.maxEntries >= 1) {
+    persistentLimits.maxEntries = Math.floor(limits.maxEntries);
+  }
+}
+
+/** Wait for queued durable asset operations scheduled before this call. */
+export async function flushProjectAssetStoreOperationsForTests(): Promise<void> {
+  await assetOperationQueue;
+}
+
+/**
+ * Prefer a free-quota-based persistent budget when the Storage API is available.
+ * The in-memory working set remains fixed and conservative.
+ */
+export async function applyEstimatedProjectAssetBudget(): Promise<typeof persistentLimits> {
+  const minimumTarget = 128 * 1024 * 1024; // 128 MiB
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+      const estimate = await navigator.storage.estimate();
+      const quota = estimate.quota ?? 0;
+      const usage = estimate.usage ?? 0;
+      const free = Math.max(0, quota - usage);
+      if (free > 0) {
+        const target = Math.max(minimumTarget, Math.floor(free * 0.2));
+        const budget = Math.min(DEFAULT_PROJECT_ASSET_PERSISTENT_MAX_BYTES, target, free);
+        if (budget > 0) persistentLimits.maxBytes = budget;
+      }
+    }
+  } catch {
+    // Keep defaults.
+  }
+  return getProjectAssetPersistentLimits();
 }
 
 export function setProjectAssetMemoryLimitsForTests(limits: {

@@ -60,7 +60,11 @@ describe('installed ForeScene agent facade', () => {
       height: 36,
       diagnostics: [],
     };
-    const renderShotFrame = vi.fn(async () => ({
+    const renderShotFrame = vi.fn(async (_input: {
+      shotId: string;
+      timeSeconds?: number;
+      appearance?: string;
+    }) => ({
       ok: true,
       status: 'ready' as const,
       shotId: shot.id,
