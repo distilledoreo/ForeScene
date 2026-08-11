@@ -154,68 +154,79 @@ export function generateProjectorOcclusionMap(
   const faceSize = options.faceSize ?? DEFAULT_OCCLUSION_FACE_SIZE;
   const nearMeters = options.nearMeters ?? DEFAULT_OCCLUSION_NEAR;
   const occluderScene = buildOccluderScene(project, options.hiddenObjectTypes);
-  const farMeters = computeProjectorFarPlane(occluderScene, origin, nearMeters);
-  const target = new THREE.WebGLCubeRenderTarget(faceSize, {
-    type: THREE.UnsignedByteType,
-    generateMipmaps: false,
-    minFilter: THREE.NearestFilter,
-    magFilter: THREE.NearestFilter,
-    depthBuffer: true,
-  });
-  target.texture.colorSpace = THREE.NoColorSpace;
-  target.texture.generateMipmaps = false;
-  target.texture.minFilter = THREE.NearestFilter;
-  target.texture.magFilter = THREE.NearestFilter;
-  (target.texture as THREE.CubeTexture).mapping = THREE.CubeReflectionMapping;
-
-  const depthMaterial = createRadialDepthMaterial(origin, nearMeters, farMeters);
-  occluderScene.traverse((child) => {
-    const mesh = child as THREE.Mesh;
-    if (mesh.isMesh) mesh.material = depthMaterial;
-  });
-
-  const previousClearColor = new THREE.Color();
-  const previousClearAlpha = renderer.getClearAlpha();
-  const previousAutoClear = renderer.autoClear;
-  const previousToneMapping = renderer.toneMapping;
-  const previousOutputColorSpace = renderer.outputColorSpace;
-  renderer.getClearColor(previousClearColor);
-
-  const cubeCamera = new THREE.CubeCamera(nearMeters, farMeters, target);
-  cubeCamera.position.set(origin[0], origin[1], origin[2]);
-  let rendered = false;
-
+  let target: THREE.WebGLCubeRenderTarget | undefined;
+  let depthMaterial: THREE.ShaderMaterial | undefined;
+  let sceneDisposed = false;
   try {
-    renderer.toneMapping = THREE.NoToneMapping;
-    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    renderer.autoClear = true;
-    renderer.setClearColor(NO_HIT_CLEAR, 1);
-    cubeCamera.update(renderer, occluderScene);
-    rendered = true;
-  } finally {
-    renderer.setClearColor(previousClearColor, previousClearAlpha);
-    renderer.autoClear = previousAutoClear;
-    renderer.toneMapping = previousToneMapping;
-    renderer.outputColorSpace = previousOutputColorSpace;
-    disposeOccluderScene(occluderScene);
-    depthMaterial.dispose();
-    // On failure the caller never receives the target, so release it here.
-    if (!rendered) target.dispose();
-  }
+    const farMeters = computeProjectorFarPlane(occluderScene, origin, nearMeters);
+    target = new THREE.WebGLCubeRenderTarget(faceSize, {
+      type: THREE.UnsignedByteType,
+      generateMipmaps: false,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: true,
+    });
+    target.texture.colorSpace = THREE.NoColorSpace;
+    target.texture.generateMipmaps = false;
+    target.texture.minFilter = THREE.NearestFilter;
+    target.texture.magFilter = THREE.NearestFilter;
+    (target.texture as THREE.CubeTexture).mapping = THREE.CubeReflectionMapping;
 
-  const key = computeProjectorOcclusionKey(project, origin);
-  return {
-    target,
-    texture: cloneAsCubeTexture(target),
-    origin: [...origin] as Vec3,
-    nearMeters,
-    farMeters,
-    faceSize,
-    key,
-    dispose() {
-      target.dispose();
-    },
-  };
+    const material = createRadialDepthMaterial(origin, nearMeters, farMeters);
+    depthMaterial = material;
+    occluderScene.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh) mesh.material = material;
+    });
+
+    const previousClearColor = new THREE.Color();
+    const previousClearAlpha = renderer.getClearAlpha();
+    const previousAutoClear = renderer.autoClear;
+    const previousToneMapping = renderer.toneMapping;
+    const previousOutputColorSpace = renderer.outputColorSpace;
+    renderer.getClearColor(previousClearColor);
+
+    const cubeCamera = new THREE.CubeCamera(nearMeters, farMeters, target);
+    cubeCamera.position.set(origin[0], origin[1], origin[2]);
+    try {
+      renderer.toneMapping = THREE.NoToneMapping;
+      renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+      renderer.autoClear = true;
+      renderer.setClearColor(NO_HIT_CLEAR, 1);
+      cubeCamera.update(renderer, occluderScene);
+    } finally {
+      renderer.setClearColor(previousClearColor, previousClearAlpha);
+      renderer.autoClear = previousAutoClear;
+      renderer.toneMapping = previousToneMapping;
+      renderer.outputColorSpace = previousOutputColorSpace;
+    }
+
+    disposeOccluderScene(occluderScene);
+    sceneDisposed = true;
+    depthMaterial.dispose();
+    depthMaterial = undefined;
+
+    const key = computeProjectorOcclusionKey(project, origin);
+    const completedTarget = target;
+    target = undefined;
+    return {
+      target: completedTarget,
+      texture: cloneAsCubeTexture(completedTarget),
+      origin: [...origin] as Vec3,
+      nearMeters,
+      farMeters,
+      faceSize,
+      key,
+      dispose() {
+        completedTarget.dispose();
+      },
+    };
+  } catch (error) {
+    if (!sceneDisposed) disposeOccluderScene(occluderScene);
+    depthMaterial?.dispose();
+    target?.dispose();
+    throw error;
+  }
 }
 
 function fnv1aHash(input: string): string {

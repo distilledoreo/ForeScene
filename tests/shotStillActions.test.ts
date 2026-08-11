@@ -9,6 +9,7 @@ import { resetPrepareStillArtifactInflightForTests } from '../src/engine/prepare
 import { renderWorkCoordinator } from '../src/engine/renderWorkCoordinator';
 import {
   cancelShotStillPreparation,
+  captureShotStillPreparation,
   regenerateShotStills,
   resetShotStillActionsForTests,
   retryFailedShotStills,
@@ -168,6 +169,29 @@ describe('shot still actions + stale thumbnails', () => {
     }
     const cancelled = cancelShotStillPreparation(shotId);
     expect(cancelled.cancelledShotIds).toContain(shotId);
+    await expect(promise).rejects.toThrow(/cancelled/i);
+  });
+
+  it('capture-time preparation participates in the same cancellation registry', async () => {
+    const project = minimalProject();
+    const shotId = project.shots[0]!.id;
+    let started = false;
+    const render = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      started = true;
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(Object.assign(new Error('capture cancelled'), { name: 'AbortError' }));
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener('abort', onAbort, { once: true });
+        setTimeout(resolve, 5_000);
+      });
+      return { blob: new Blob(['x'], { type: 'image/png' }), width: 8, height: 8, mimeType: 'image/png' as const };
+    });
+
+    const promise = captureShotStillPreparation({ project, shotId, render });
+    for (let i = 0; i < 50 && !started; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(cancelShotStillPreparation(shotId).cancelledShotIds).toContain(shotId);
     await expect(promise).rejects.toThrow(/cancelled/i);
   });
 

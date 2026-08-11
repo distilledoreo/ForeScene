@@ -23,6 +23,8 @@ export interface DepthRangeMeters {
 
 export interface DepthRenderResult {
   dataUrl: string;
+  /** Binary PNG when the caller opts out of the legacy data-URL path. */
+  blob?: Blob;
   width: number;
   height: number;
   nearMeters: number;
@@ -165,44 +167,45 @@ export async function renderViewportDepth(
     depth?: ShotDepthSettings;
     /** Cameras used for the shared auto range (defaults to this frame only). */
     rangeCameras?: readonly CameraData[];
+    output?: 'data-url' | 'blob';
   } = {},
 ): Promise<DepthRenderResult> {
   const depth = normalizeShotDepthSettings(options.depth ?? defaultShotDepthSettings);
   await ensureHumanMannequinForProject(project);
 
   const renderer = createDepthRenderer(width, height);
-  const scene = buildScene(project, createFinalRenderSceneOptions());
-  scene.background = new THREE.Color(0x000000);
-  scene.fog = null;
-
-  const rangeCameras = options.rangeCameras && options.rangeCameras.length > 0
-    ? options.rangeCameras
-    : [cameraData];
-  const clipping = computeCameraMoveClippingRange({
-    scene,
-    keyframeCameras: rangeCameras,
-    nearMeters: cameraData.near,
-  });
-  const range = depth.rangeMode === 'manual'
-    ? clampDepthRange(depth.nearMeters ?? clipping.near, depth.farMeters ?? clipping.far)
-    : { nearMeters: clipping.near, farMeters: clipping.far };
-
-  const camera = new THREE.PerspectiveCamera(
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-  applyFlyCameraToPerspectiveCamera(
-    camera,
-    flyCameraFromCamera(cameraData),
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-
+  let scene: THREE.Scene | undefined;
   try {
+    scene = buildScene(project, createFinalRenderSceneOptions());
+    scene.background = new THREE.Color(0x000000);
+    scene.fog = null;
+
+    const rangeCameras = options.rangeCameras && options.rangeCameras.length > 0
+      ? options.rangeCameras
+      : [cameraData];
+    const clipping = computeCameraMoveClippingRange({
+      scene,
+      keyframeCameras: rangeCameras,
+      nearMeters: cameraData.near,
+    });
+    const range = depth.rangeMode === 'manual'
+      ? clampDepthRange(depth.nearMeters ?? clipping.near, depth.farMeters ?? clipping.far)
+      : { nearMeters: clipping.near, farMeters: clipping.far };
+
+    const camera = new THREE.PerspectiveCamera(
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    applyFlyCameraToPerspectiveCamera(
+      camera,
+      flyCameraFromCamera(cameraData),
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
     renderDepthGrayscale(renderer, scene, camera, {
       nearMeters: range.nearMeters,
       farMeters: range.farMeters,
@@ -210,9 +213,11 @@ export async function renderViewportDepth(
       cameraNear: clipping.near,
       cameraFar: clipping.far,
     });
-    const dataUrl = renderer.domElement.toDataURL('image/png');
+    const encoded = options.output === 'blob'
+      ? { dataUrl: '', blob: await canvasToBlob(renderer.domElement, 'image/png') }
+      : { dataUrl: renderer.domElement.toDataURL('image/png') };
     return {
-      dataUrl,
+      ...encoded,
       width,
       height,
       nearMeters: range.nearMeters,
@@ -221,7 +226,7 @@ export async function renderViewportDepth(
       encoding: 'linear-camera-depth',
     };
   } finally {
-    disposeScene(scene);
+    if (scene) disposeScene(scene);
     disposeDepthRenderer(renderer);
   }
 }
@@ -233,6 +238,7 @@ export async function renderShotDepthFrame(
     peopleVariant?: PeopleRenderVariant;
     /** Shared shot-wide range; when omitted, auto/manual is resolved from this variant's scene. */
     depthRange?: DepthRangeMeters;
+    output?: 'data-url' | 'blob';
   } = {},
 ): Promise<DepthRenderResult> {
   const depth = resolveShotDepthSettings(shot);
@@ -252,7 +258,7 @@ export async function renderShotDepthFrame(
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
-    { depth: depthForRender, rangeCameras },
+    { depth: depthForRender, rangeCameras, output: options.output },
   );
 }
 
@@ -522,4 +528,13 @@ function disposeDepthRenderer(renderer: THREE.WebGLRenderer) {
   if (canvas.parentElement) {
     canvas.parentElement.removeChild(canvas);
   }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not encode rendered image.'));
+    }, type);
+  });
 }

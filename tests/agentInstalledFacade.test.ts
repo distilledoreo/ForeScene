@@ -60,41 +60,28 @@ describe('installed ForeScene agent facade', () => {
       height: 36,
       diagnostics: [],
     };
-    const renderShotFrame = vi.fn(async () => ({
-      ok: true,
-      status: 'completed',
-      shotId: shot.id,
-      width: 64,
-      height: 36,
-      pngDataUrl: 'data:image/png;base64,AAAA',
-      diagnostics: [],
-    }));
+    const renderShotFrame = vi.fn();
     const api = {
       getStatus: vi.fn(() => idleStatus()),
       waitForIdle: vi.fn(async () => idleStatus()),
       renderShotFrame,
       captureShotThumbnail: vi.fn(async () => preparedResult),
+      captureShotPreparedMedia: vi.fn(async () => preparedResult),
     } as unknown as ForeSceneBrowserApi;
 
     const installed = applyForeSceneAgentApiFacade(api);
     const result = await installed.captureShotThumbnail({ shotId: shot.id, timeSeconds: 1.5 });
 
-    expect(renderShotFrame).toHaveBeenCalledWith({
-      shotId: shot.id,
-      timeSeconds: 1.5,
-      appearance: 'clay',
-    });
+    expect(renderShotFrame).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.status).toBe('ready');
-    expect(result.revisionId).toBe('revision-test');
+    expect(result.revisionId).toBe('revision-prepared');
     expect(result.primaryStillAssetId).toBeTruthy();
     expect(result.artifacts).toHaveLength(1);
-    expect(result.artifacts[0]!.key).toBe('sampled-clay-thumbnail@1.5');
+    expect(result.artifacts[0]!.key).toBe('prepared');
     expect(result.warnings).toEqual([]);
 
-    const prepared = await (installed as ForeSceneBrowserApi & {
-      captureShotPreparedMedia?: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
-    }).captureShotPreparedMedia?.({ shotId: shot.id });
+    const prepared = await installed.captureShotPreparedMedia({ shotId: shot.id });
     expect(prepared).toEqual(preparedResult);
 
     useProjectSafetyStore.setState({
@@ -133,5 +120,33 @@ describe('installed ForeScene agent facade', () => {
     await active;
     const finalStatus = await waiting;
     expect(finalStatus.busy.videoRender).toBe(false);
+  });
+
+  it('does not report idle while prepared-media work is queued', async () => {
+    const api = {
+      getStatus: vi.fn(() => idleStatus()),
+      waitForIdle: vi.fn(async () => idleStatus()),
+      captureShotThumbnail: vi.fn(),
+      renderShotFrame: vi.fn(),
+    } as unknown as ForeSceneBrowserApi;
+    const installed = applyForeSceneAgentApiFacade(api);
+
+    let release!: () => void;
+    const active = renderWorkCoordinator.schedule(
+      'background-video',
+      () => new Promise<void>((resolve) => { release = resolve; }),
+      { ownerId: 'shot-active' },
+    );
+    await Promise.resolve();
+    const queued = renderWorkCoordinator.schedule(
+      'capture-primary-still',
+      async () => undefined,
+      { ownerId: 'shot-queued' },
+    );
+
+    expect(installed.getStatus().busy.videoRender).toBe(true);
+    release();
+    await active;
+    await queued;
   });
 });

@@ -29,6 +29,10 @@ import {
   type SceneContentMode,
 } from './shotSceneState';
 import type { StillArtifactSpecification } from './stillArtifactTypes';
+import {
+  recordPreparedMediaMetric,
+  recordStillRenderTiming,
+} from './preparedMediaMetrics';
 
 export interface RenderedStillArtifact {
   blob: Blob;
@@ -134,15 +138,18 @@ export async function renderStillArtifact(
 
   const width = specification.width;
   const height = specification.height;
-
-  switch (specification.kind) {
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  try {
+    switch (specification.kind) {
     case 'clay-viewport': {
       const frame = await renderShotFrame(project, shot, {
         peopleVariant: specification.peopleVariant,
+        output: 'blob',
+        includePixelStats: false,
       });
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -151,10 +158,11 @@ export async function renderStillArtifact(
     case 'projected-viewport': {
       const frame = await renderShotProjectedFrame(project, shot, {
         peopleVariant: specification.peopleVariant,
+        output: 'blob',
       });
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -166,10 +174,11 @@ export async function renderStillArtifact(
       const frame = await renderShotDepthFrame(project, shot, {
         peopleVariant: specification.peopleVariant,
         depthRange,
+        output: 'blob',
       });
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -196,10 +205,11 @@ export async function renderStillArtifact(
         resolved.shot.camera,
         width,
         height,
+        { output: 'blob', includePixelStats: false },
       );
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -212,10 +222,11 @@ export async function renderStillArtifact(
         resolved.shot.camera,
         width,
         height,
+        { output: 'blob' },
       );
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -243,11 +254,12 @@ export async function renderStillArtifact(
             farMeters: depthRange.farMeters,
           },
           rangeCameras,
+          output: 'blob',
         },
       );
       throwIfCancelled(signal);
       return {
-        blob: dataUrlToBlob(frame.dataUrl),
+        blob: frame.blob ?? dataUrlToBlob(frame.dataUrl),
         width: frame.width,
         height: frame.height,
         mimeType: 'image/png',
@@ -257,5 +269,14 @@ export async function renderStillArtifact(
       const exhaustive: never = specification.kind;
       throw new Error(`Unsupported still artifact kind: ${String(exhaustive)}`);
     }
+    }
+  } finally {
+    const elapsedMs = Math.max(
+      0,
+      Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
+    );
+    recordPreparedMediaMetric('stillRenderCount');
+    recordPreparedMediaMetric('stillRenderMs', elapsedMs);
+    recordStillRenderTiming(specification.kind, elapsedMs);
   }
 }

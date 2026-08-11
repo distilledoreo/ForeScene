@@ -12,8 +12,10 @@ import type { VideoRenderTiming } from './videoRenderTiming';
 
 const DATABASE_NAME = 'forescene-video-artifacts';
 const STORE_NAME = 'mp4-blobs';
-/** Schema v2 stores Blob directly + lastAccessedAt for LRU. */
-const DATABASE_VERSION = 2;
+const METADATA_STORE_NAME = 'mp4-metadata';
+const LAST_ACCESSED_INDEX = 'lastAccessedAt';
+/** Schema v3 separates LRU metadata from the Blob-bearing store. */
+const DATABASE_VERSION = 3;
 
 /** Persistent cache default: enough for a large package of motion clips. */
 export const DEFAULT_VIDEO_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
@@ -54,7 +56,7 @@ export interface VideoArtifactCacheRecord {
 /** IndexedDB value — stores Blob directly (no ArrayBuffer copy). */
 interface StoredVideoArtifactRecord {
   key: string;
-  blob: Blob;
+  blob?: Blob;
   mimeType: string;
   width: number;
   height: number;
@@ -72,6 +74,15 @@ interface StoredVideoArtifactRecord {
   byteSize: number;
   timing?: VideoRenderTiming;
   /** Legacy v1 field; migrated on read. */
+  bytes?: ArrayBuffer;
+}
+
+type StoredVideoArtifactMetadata = Omit<StoredVideoArtifactRecord, 'blob' | 'bytes'>;
+
+interface StoredVideoBlobRecord {
+  key: string;
+  blob?: Blob;
+  /** Legacy v1 field. */
   bytes?: ArrayBuffer;
 }
 
@@ -109,10 +120,35 @@ function openDatabase(): Promise<IDBDatabase | undefined> {
   let connectionPromise: Promise<IDBDatabase | undefined>;
   connectionPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(METADATA_STORE_NAME)) {
+        db.createObjectStore(METADATA_STORE_NAME, { keyPath: 'key' });
+      }
+      const upgradeTransaction = request.transaction;
+      if (!upgradeTransaction) return;
+      const metadata = upgradeTransaction.objectStore(METADATA_STORE_NAME);
+      if (!metadata.indexNames.contains(LAST_ACCESSED_INDEX)) {
+        metadata.createIndex(LAST_ACCESSED_INDEX, 'lastAccessedAt', { unique: false });
+      }
+
+      // Seed the metadata store while upgrading existing v1/v2 rows. The old
+      // Blob-bearing rows are intentionally left readable as a migration
+      // fallback; new writes use the split stores below.
+      if (event.oldVersion < 3) {
+        const blobs = upgradeTransaction.objectStore(STORE_NAME);
+        const cursorRequest = blobs.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const raw = cursor.value as StoredVideoArtifactRecord;
+          const blob = readStoredVideoBlob(raw);
+          if (blob) metadata.put(toStoredMetadataFromRaw(raw, blob));
+          cursor.continue();
+        };
       }
     };
     request.onsuccess = () => {
@@ -176,16 +212,49 @@ function rememberInMemory(record: VideoArtifactCacheRecord): void {
   evictMemoryIfNeeded();
 }
 
-function normalizeStored(raw: StoredVideoArtifactRecord): VideoArtifactCacheRecord | undefined {
-  let blob = raw.blob;
-  if (!(blob instanceof Blob)) {
-    // Migrate legacy ArrayBuffer rows.
-    if (raw.bytes) {
-      blob = new Blob([raw.bytes], { type: raw.mimeType || 'video/mp4' });
-    } else {
-      return undefined;
-    }
+function readStoredVideoBlob(raw: StoredVideoArtifactRecord | StoredVideoBlobRecord | unknown): Blob | undefined {
+  if (typeof Blob !== 'undefined' && raw instanceof Blob) return raw;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as { blob?: unknown; bytes?: unknown; mimeType?: unknown };
+  if (typeof Blob !== 'undefined' && value.blob instanceof Blob) return value.blob;
+  if (value.bytes instanceof ArrayBuffer) {
+    return new Blob([value.bytes], { type: typeof value.mimeType === 'string' ? value.mimeType : 'video/mp4' });
   }
+  return undefined;
+}
+
+function toStoredMetadataFromRaw(
+  raw: StoredVideoArtifactRecord,
+  blob: Blob,
+): StoredVideoArtifactMetadata {
+  const createdAt = raw.createdAt || nowIso();
+  return {
+    key: raw.key,
+    mimeType: raw.mimeType || blob.type || 'video/mp4',
+    width: raw.width,
+    height: raw.height,
+    durationSeconds: raw.durationSeconds,
+    frameRate: raw.frameRate,
+    frameCount: raw.frameCount,
+    codecString: raw.codecString,
+    encodeMode: raw.encodeMode,
+    actualEncoderMode: raw.actualEncoderMode,
+    encoderModeFallback: raw.encoderModeFallback === true,
+    dependencyIds: raw.dependencyIds ?? [],
+    shotId: raw.shotId,
+    createdAt,
+    lastAccessedAt: raw.lastAccessedAt || createdAt,
+    byteSize: raw.byteSize || blob.size,
+    timing: raw.timing,
+  };
+}
+
+function normalizeStored(
+  raw: StoredVideoArtifactRecord | StoredVideoArtifactMetadata,
+  blobOverride?: Blob,
+): VideoArtifactCacheRecord | undefined {
+  const blob = blobOverride ?? readStoredVideoBlob(raw);
+  if (!blob) return undefined;
   const createdAt = raw.createdAt || nowIso();
   return {
     key: raw.key,
@@ -209,10 +278,9 @@ function normalizeStored(raw: StoredVideoArtifactRecord): VideoArtifactCacheReco
   };
 }
 
-function toStored(record: VideoArtifactCacheRecord): StoredVideoArtifactRecord {
+function toStoredMetadata(record: VideoArtifactCacheRecord): StoredVideoArtifactMetadata {
   return {
     key: record.key,
-    blob: record.blob,
     mimeType: record.mimeType,
     width: record.width,
     height: record.height,
@@ -232,21 +300,64 @@ function toStored(record: VideoArtifactCacheRecord): StoredVideoArtifactRecord {
   };
 }
 
+function toStoredBlob(record: VideoArtifactCacheRecord): StoredVideoBlobRecord {
+  return { key: record.key, blob: record.blob };
+}
+
 async function readStored(key: string): Promise<VideoArtifactCacheRecord | undefined> {
   const db = await openDatabase();
   if (!db) return undefined;
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readonly');
-    const request = transaction.objectStore(STORE_NAME).get(key);
-    request.onsuccess = () => {
-      const value = request.result as StoredVideoArtifactRecord | undefined;
-      resolve(value ? normalizeStored(value) : undefined);
+    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readonly');
+    const blobRequest = transaction.objectStore(STORE_NAME).get(key);
+    const metadataRequest = transaction.objectStore(METADATA_STORE_NAME).get(key);
+    transaction.oncomplete = () => {
+      const metadata = metadataRequest.result as StoredVideoArtifactMetadata | undefined;
+      const blobRow = blobRequest.result as StoredVideoBlobRecord | StoredVideoArtifactRecord | undefined;
+      if (metadata) {
+        resolve(normalizeStored(metadata, readStoredVideoBlob(blobRow)));
+      } else {
+        // Compatibility with rows written before the v3 upgrade completed.
+        resolve(blobRow && 'mimeType' in blobRow
+          ? normalizeStored(blobRow as StoredVideoArtifactRecord)
+          : undefined);
+      }
     };
-    request.onerror = () => reject(request.error ?? new Error('Video cache read failed.'));
+    transaction.onerror = () => reject(transaction.error ?? new Error('Video cache read failed.'));
   });
 }
 
-async function listStored(): Promise<VideoArtifactCacheRecord[]> {
+async function listStoredMetadata(): Promise<Array<Pick<VideoArtifactCacheRecord, 'key' | 'lastAccessedAt' | 'byteSize'>>> {
+  const db = await openDatabase();
+  if (!db) return [];
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(METADATA_STORE_NAME, 'readonly');
+    const store = transaction.objectStore(METADATA_STORE_NAME);
+    const source = store.indexNames.contains(LAST_ACCESSED_INDEX)
+      ? store.index(LAST_ACCESSED_INDEX)
+      : store;
+    const rows: Array<Pick<VideoArtifactCacheRecord, 'key' | 'lastAccessedAt' | 'byteSize'>> = [];
+    const cursorRequest = source.openCursor();
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (!cursor) return;
+      const row = cursor.value as StoredVideoArtifactMetadata;
+      rows.push({ key: row.key, lastAccessedAt: row.lastAccessedAt, byteSize: row.byteSize });
+      cursor.continue();
+    };
+    transaction.oncomplete = () => {
+      if (rows.length > 0) {
+        resolve(rows);
+        return;
+      }
+      // Defensive fallback for a database interrupted during the v3 upgrade.
+      void listLegacyStoredMetadata().then(resolve, reject);
+    };
+    transaction.onerror = () => reject(transaction.error ?? new Error('Video cache metadata list failed.'));
+  });
+}
+
+async function listLegacyStoredMetadata(): Promise<Array<Pick<VideoArtifactCacheRecord, 'key' | 'lastAccessedAt' | 'byteSize'>>> {
   const db = await openDatabase();
   if (!db) return [];
   return new Promise((resolve, reject) => {
@@ -254,9 +365,16 @@ async function listStored(): Promise<VideoArtifactCacheRecord[]> {
     const request = transaction.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => {
       const rows = (request.result as StoredVideoArtifactRecord[] | undefined) ?? [];
-      resolve(rows.map(normalizeStored).filter((row): row is VideoArtifactCacheRecord => Boolean(row)));
+      resolve(rows.map((raw) => {
+        const blob = readStoredVideoBlob(raw);
+        return blob ? toStoredMetadataFromRaw(raw, blob) : undefined;
+      }).filter((row): row is StoredVideoArtifactMetadata => Boolean(row)).map((row) => ({
+        key: row.key,
+        lastAccessedAt: row.lastAccessedAt,
+        byteSize: row.byteSize,
+      })));
     };
-    request.onerror = () => reject(request.error ?? new Error('Video cache list failed.'));
+    request.onerror = () => reject(request.error ?? new Error('Video cache legacy metadata list failed.'));
   });
 }
 
@@ -265,9 +383,13 @@ async function deleteStored(keys: string[]): Promise<void> {
   const db = await openDatabase();
   if (!db) return;
   await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    for (const key of keys) store.delete(key);
+    const metadata = transaction.objectStore(METADATA_STORE_NAME);
+    for (const key of keys) {
+      store.delete(key);
+      metadata.delete(key);
+    }
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error('Video cache delete failed.'));
     transaction.onabort = () => reject(transaction.error ?? new Error('Video cache delete aborted.'));
@@ -288,15 +410,16 @@ async function writeStored(record: VideoArtifactCacheRecord): Promise<void> {
   }
 
   await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    transaction.objectStore(STORE_NAME).put(toStored(record));
+    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
+    transaction.objectStore(STORE_NAME).put(toStoredBlob(record));
+    transaction.objectStore(METADATA_STORE_NAME).put(toStoredMetadata(record));
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error('Video cache write failed.'));
     transaction.onabort = () => reject(transaction.error ?? new Error('Video cache write aborted.'));
   });
 
   // Persistent LRU eviction by lastAccessedAt under byte + entry budgets.
-  const all = await listStored();
+  const all = await listStoredMetadata();
   all.sort((a, b) => (Date.parse(a.lastAccessedAt) || 0) - (Date.parse(b.lastAccessedAt) || 0));
   let totalBytes = all.reduce((sum, row) => sum + row.byteSize, 0);
   const toDelete: string[] = [];
@@ -316,22 +439,23 @@ async function touchStored(key: string, lastAccessedAt: string): Promise<void> {
   const db = await openDatabase();
   if (!db) return;
   await new Promise<void>((resolve) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    const getRequest = store.get(key);
+    const metadata = transaction.objectStore(METADATA_STORE_NAME);
+    const getRequest = metadata.get(key);
     getRequest.onsuccess = () => {
-      const value = getRequest.result as StoredVideoArtifactRecord | undefined;
-      if (!value) {
-        resolve();
+      const value = getRequest.result as StoredVideoArtifactMetadata | undefined;
+      if (value) {
+        metadata.put({ ...value, lastAccessedAt });
         return;
       }
-      const normalized = normalizeStored(value);
-      if (!normalized) {
-        resolve();
-        return;
-      }
-      normalized.lastAccessedAt = lastAccessedAt;
-      store.put(toStored(normalized));
+      // Lazily migrate a legacy row that was not visible during upgrade.
+      const legacyRequest = store.get(key);
+      legacyRequest.onsuccess = () => {
+        const legacy = legacyRequest.result as StoredVideoArtifactRecord | undefined;
+        const blob = legacy ? readStoredVideoBlob(legacy) : undefined;
+        if (legacy && blob) metadata.put({ ...toStoredMetadataFromRaw(legacy, blob), lastAccessedAt });
+      };
     };
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => resolve();
@@ -494,8 +618,9 @@ export async function clearVideoArtifactCache(): Promise<void> {
     const db = await openDatabase();
     if (!db) return;
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
       transaction.objectStore(STORE_NAME).clear();
+      transaction.objectStore(METADATA_STORE_NAME).clear();
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('Video cache clear failed.'));
       transaction.onabort = () => reject(transaction.error ?? new Error('Video cache clear aborted.'));

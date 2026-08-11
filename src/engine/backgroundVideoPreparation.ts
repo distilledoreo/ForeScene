@@ -223,7 +223,12 @@ export function createBackgroundVideoScheduler(options: BackgroundVideoScheduler
               priority: 'background',
               signal: job.controller.signal,
             }),
-            { ownerId: job.candidate.shotId, jobId: `video:${key}` },
+            {
+              ownerId: job.candidate.shotId,
+              jobId: `video:${key}`,
+              abort: () => job.controller.abort(),
+              signal: job.controller.signal,
+            },
           );
 
           clearFailure(job.candidate.shotId, key);

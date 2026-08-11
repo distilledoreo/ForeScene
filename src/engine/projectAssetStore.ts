@@ -15,12 +15,24 @@ export const PROJECT_ASSET_URI_PREFIX = 'panoref-asset:';
 const memoryBlobs = new Map<string, Blob>();
 const memoryBlobVersions = new Map<string, number>();
 const memoryBlobWrittenAt = new Map<string, number>();
+const memoryBlobLastAccessed = new Map<string, number>();
 const objectUrls = new Map<string, string>();
 const persistenceFailureListeners = new Set<(event: ProjectAssetPersistenceFailure) => void>();
 let nextBlobWriteFailureForTests: Error | undefined;
+let memoryBlobBytes = 0;
+let memoryAccessCounter = 0;
+let activeProjectId: string | undefined;
 /** Serialize all asset-database operations — WebKit is sensitive to contention between connections and transactions. */
 let assetOperationQueue: Promise<void> = Promise.resolve();
 let assetDatabasePromise: Promise<IDBDatabase | undefined> | undefined;
+
+/** Working-set guard for decoded image/video Blobs and their object URLs. */
+export const DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES = 256 * 1024 * 1024;
+export const DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES = 256;
+let memoryLimits = {
+  maxBytes: DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES,
+  maxEntries: DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES,
+};
 
 export interface ProjectAssetBlobWrite {
   key: string;
@@ -68,6 +80,7 @@ function openDatabase(): Promise<IDBDatabase | undefined> {
 }
 
 function makeObjectUrl(key: string, blob: Blob): string {
+  touchMemoryBlob(key);
   const existing = objectUrls.get(key);
   if (existing && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
     URL.revokeObjectURL(existing);
@@ -94,6 +107,7 @@ export function getManagedProjectAssetBlobKeyForUri(uri: string): string | undef
 }
 
 export function hasResidentProjectAssetBlob(key: string): boolean {
+  touchMemoryBlob(key);
   return memoryBlobs.has(key) || objectUrls.has(key);
 }
 
@@ -111,7 +125,7 @@ export function releaseProjectAssetMemoryForProject(projectId: string): void {
   const matches = (key: string) => prefixes.some((prefix) => key.startsWith(prefix));
   for (const key of [...memoryBlobs.keys()]) {
     if (!matches(key)) continue;
-    memoryBlobs.delete(key);
+    removeMemoryBlob(key);
     memoryBlobVersions.delete(key);
     memoryBlobWrittenAt.delete(key);
   }
@@ -121,6 +135,69 @@ export function releaseProjectAssetMemoryForProject(projectId: string): void {
       URL.revokeObjectURL(url);
     }
     objectUrls.delete(key);
+  }
+}
+
+/** Mark the project whose decoded media must remain immediately available. */
+export function setProjectAssetMemoryActiveProject(projectId: string | undefined): void {
+  activeProjectId = projectId;
+  evictMemoryIfNeeded();
+}
+
+function isPinnedMemoryKey(key: string): boolean {
+  if (!activeProjectId) return false;
+  return key.startsWith(`project/${activeProjectId}/`) || key.startsWith(`import/${activeProjectId}/`);
+}
+
+function touchMemoryBlob(key: string): void {
+  if (!memoryBlobs.has(key)) return;
+  memoryAccessCounter += 1;
+  memoryBlobLastAccessed.set(key, memoryAccessCounter);
+}
+
+function removeMemoryBlob(key: string): void {
+  const previous = memoryBlobs.get(key);
+  if (!previous) return;
+  memoryBlobBytes = Math.max(0, memoryBlobBytes - previous.size);
+  memoryBlobs.delete(key);
+  memoryBlobLastAccessed.delete(key);
+}
+
+function revokeObjectUrlForKey(key: string): void {
+  const url = objectUrls.get(key);
+  if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(url);
+  }
+  objectUrls.delete(key);
+}
+
+function oldestEvictableMemoryKey(): string | undefined {
+  let oldestKey: string | undefined;
+  let oldestAccess = Number.POSITIVE_INFINITY;
+  for (const [key, accessed] of memoryBlobLastAccessed) {
+    if (isPinnedMemoryKey(key)) continue;
+    if (accessed < oldestAccess) {
+      oldestAccess = accessed;
+      oldestKey = key;
+    }
+  }
+  return oldestKey;
+}
+
+function evictMemoryIfNeeded(): void {
+  while (
+    memoryBlobs.size > memoryLimits.maxEntries
+    || memoryBlobBytes > memoryLimits.maxBytes
+  ) {
+    // Keep one oversized entry available for the current operation. It can
+    // still be released on project switch or explicit deletion.
+    if (memoryBlobs.size <= 1) break;
+    const key = oldestEvictableMemoryKey();
+    if (!key) break;
+    removeMemoryBlob(key);
+    // A revoked URL can be recreated from the durable row on demand. Keeping
+    // it alive would retain the Blob even after the memory entry was evicted.
+    revokeObjectUrlForKey(key);
   }
 }
 
@@ -181,14 +258,10 @@ export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
   try {
     await putProjectAssetBlobs([{ key: storageKey, blob }]);
   } catch (error) {
-    memoryBlobs.delete(storageKey);
+    removeMemoryBlob(storageKey);
     memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);
     memoryBlobWrittenAt.delete(storageKey);
-    const url = objectUrls.get(storageKey);
-    if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-      URL.revokeObjectURL(url);
-    }
-    objectUrls.delete(storageKey);
+    revokeObjectUrlForKey(storageKey);
     throw error;
   }
   const uri = makeObjectUrl(storageKey, blob);
@@ -203,11 +276,16 @@ export function registerProjectAssetBlob(key: string, blob: Blob): string {
 }
 
 function cacheProjectAssetBlob(key: string, blob: Blob, replace: boolean): void {
+  const previous = memoryBlobs.get(key);
+  if (previous) memoryBlobBytes = Math.max(0, memoryBlobBytes - previous.size);
   memoryBlobs.set(key, blob);
+  memoryBlobBytes += blob.size;
+  touchMemoryBlob(key);
   if (replace) {
     memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
     memoryBlobWrittenAt.set(key, Date.now());
   }
+  evictMemoryIfNeeded();
 }
 
 /** Changes whenever a local raster/video key is explicitly replaced or removed. */
@@ -269,10 +347,16 @@ export function putProjectAssetBlobs(entries: readonly ProjectAssetBlobWrite[]):
 
 export async function getProjectAssetBlob(key: string): Promise<Blob | undefined> {
   const cached = memoryBlobs.get(key);
-  if (cached) return cached;
+  if (cached) {
+    touchMemoryBlob(key);
+    return cached;
+  }
   return enqueueAssetDatabaseOperation(async () => {
     const cachedAfterQueue = memoryBlobs.get(key);
-    if (cachedAfterQueue) return cachedAfterQueue;
+    if (cachedAfterQueue) {
+      touchMemoryBlob(key);
+      return cachedAfterQueue;
+    }
     const db = await openDatabase();
     if (!db) return undefined;
     const blob = await new Promise<Blob | undefined>((resolve, reject) => {
@@ -304,19 +388,20 @@ export async function resolveProjectAssetUri(asset: Pick<ProjectAsset, 'uri' | '
     : undefined);
   if (!key) return asset.uri;
   const existing = objectUrls.get(key);
-  if (existing) return existing;
+  if (existing) {
+    touchMemoryBlob(key);
+    return existing;
+  }
   const blob = await getProjectAssetBlob(key);
   return blob ? makeObjectUrl(key, blob) : undefined;
 }
 
 export async function deleteProjectAssetBlob(key: string): Promise<void> {
   return enqueueAssetDatabaseOperation(async () => {
-    memoryBlobs.delete(key);
+    removeMemoryBlob(key);
     memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
     memoryBlobWrittenAt.delete(key);
-    const url = objectUrls.get(key);
-    if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
-    objectUrls.delete(key);
+    revokeObjectUrlForKey(key);
     const db = await openDatabase();
     if (!db) return;
     await new Promise<void>((resolve, reject) => {
@@ -336,12 +421,43 @@ export function resetProjectAssetStoreForTests() {
     for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }
   memoryBlobs.clear();
+  memoryBlobBytes = 0;
+  memoryBlobLastAccessed.clear();
+  memoryAccessCounter = 0;
   memoryBlobVersions.clear();
   memoryBlobWrittenAt.clear();
   objectUrls.clear();
   persistenceFailureListeners.clear();
   nextBlobWriteFailureForTests = undefined;
+  activeProjectId = undefined;
+  memoryLimits = {
+    maxBytes: DEFAULT_PROJECT_ASSET_MEMORY_MAX_BYTES,
+    maxEntries: DEFAULT_PROJECT_ASSET_MEMORY_MAX_ENTRIES,
+  };
   assetOperationQueue = Promise.resolve();
+}
+
+export function setProjectAssetMemoryLimitsForTests(limits: {
+  maxBytes?: number;
+  maxEntries?: number;
+}): void {
+  memoryLimits = {
+    maxBytes: Math.max(1, limits.maxBytes ?? memoryLimits.maxBytes),
+    maxEntries: Math.max(1, Math.floor(limits.maxEntries ?? memoryLimits.maxEntries)),
+  };
+  evictMemoryIfNeeded();
+}
+
+export function inspectProjectAssetMemoryForTests(): {
+  bytes: number;
+  keys: string[];
+  activeProjectId?: string;
+} {
+  return {
+    bytes: memoryBlobBytes,
+    keys: [...memoryBlobs.keys()],
+    activeProjectId,
+  };
 }
 
 /** Deterministically exercise a durable binary-write failure in regression tests. */

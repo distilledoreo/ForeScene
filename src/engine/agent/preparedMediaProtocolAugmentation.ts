@@ -1,13 +1,12 @@
 import type { AgentShotMaterializationResult } from './protocol';
 
 /**
- * Additive prepared-media API installed by useForeSceneAgentApi.
- * Optional on the base interface so createForeSceneBrowserApi remains usable in
- * non-window/test contexts before the runtime facade augments it.
+ * Compatibility declaration retained for older imports. The prepared-media
+ * method is now part of the canonical browser API contract.
  */
 declare module './protocol' {
   interface ForeSceneBrowserApi {
-    captureShotPreparedMedia?: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
+    captureShotPreparedMedia: (input: { shotId: string }) => Promise<AgentShotMaterializationResult>;
   }
 }
 

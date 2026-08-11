@@ -40,21 +40,59 @@ export interface ShotStillRuntimeStatus {
   label: string;
 }
 
+/** A shot has entered prepared-media lifecycle when it has a materialized or legacy prepared still. */
+export function shotHasPreparedMediaLifecycle(shot: Shot): boolean {
+  if (Object.keys(shot.materializedMedia?.stills ?? {}).length > 0) return true;
+  return Boolean(
+    shot.assets.viewportRenderAssetId
+    || shot.assets.viewportCleanPlateAssetId
+    || shot.assets.viewportProjectedAssetId
+    || shot.assets.viewportProjectedCleanPlateAssetId,
+  );
+}
+
 /** Per-shot ephemeral job/error state (not written into project JSON). */
 const shotRuntime = new Map<string, {
   jobs: Map<string, PreparedArtifactRuntimeStatus>;
   errors: Map<string, string>;
 }>();
 const runtimeListeners = new Set<() => void>();
+const shotRuntimeListeners = new Map<string, Set<() => void>>();
+const shotRuntimeVersions = new Map<string, number>();
+let runtimeVersion = 0;
 
-function notifyRuntimeListeners(): void {
+function notifyRuntimeListeners(shotId?: string): void {
+  runtimeVersion += 1;
+  if (shotId) shotRuntimeVersions.set(shotId, (shotRuntimeVersions.get(shotId) ?? 0) + 1);
   for (const listener of runtimeListeners) listener();
+  if (shotId) {
+    for (const listener of shotRuntimeListeners.get(shotId) ?? []) listener();
+  }
 }
 
 /** Subscribe to actual prepared-still runtime transitions; no polling required. */
-export function subscribeStillArtifactRuntime(listener: () => void): () => void {
-  runtimeListeners.add(listener);
-  return () => runtimeListeners.delete(listener);
+export function subscribeStillArtifactRuntime(listener: () => void): () => void;
+export function subscribeStillArtifactRuntime(shotId: string, listener: () => void): () => void;
+export function subscribeStillArtifactRuntime(
+  shotIdOrListener: string | (() => void),
+  maybeListener?: () => void,
+): () => void {
+  if (typeof shotIdOrListener === 'function') {
+    runtimeListeners.add(shotIdOrListener);
+    return () => runtimeListeners.delete(shotIdOrListener);
+  }
+  const listeners = shotRuntimeListeners.get(shotIdOrListener) ?? new Set<() => void>();
+  listeners.add(maybeListener ?? (() => undefined));
+  shotRuntimeListeners.set(shotIdOrListener, listeners);
+  const listener = maybeListener;
+  return () => {
+    if (listener) listeners.delete(listener);
+    if (listeners.size === 0) shotRuntimeListeners.delete(shotIdOrListener);
+  };
+}
+
+export function getStillArtifactRuntimeVersion(shotId?: string): number {
+  return shotId ? (shotRuntimeVersions.get(shotId) ?? 0) : runtimeVersion;
 }
 
 export function setStillArtifactJobStatus(
@@ -79,7 +117,7 @@ export function setStillArtifactJobStatus(
   if (entry.jobs.size === 0 && entry.errors.size === 0) {
     shotRuntime.delete(shotId);
   }
-  notifyRuntimeListeners();
+  notifyRuntimeListeners(shotId);
 }
 
 export function setStillArtifactError(
@@ -104,17 +142,19 @@ export function setStillArtifactError(
   if (entry.jobs.size === 0 && entry.errors.size === 0) {
     shotRuntime.delete(shotId);
   }
-  notifyRuntimeListeners();
+  notifyRuntimeListeners(shotId);
 }
 
 export function clearStillArtifactRuntime(shotId?: string): void {
   if (shotId) {
     if (!shotRuntime.delete(shotId)) return;
+    notifyRuntimeListeners(shotId);
   } else {
     if (shotRuntime.size === 0) return;
+    const affected = [...shotRuntime.keys()];
     shotRuntime.clear();
+    for (const id of affected) notifyRuntimeListeners(id);
   }
-  notifyRuntimeListeners();
 }
 
 export function resetStillArtifactRuntimeForTests(): void {
@@ -122,6 +162,12 @@ export function resetStillArtifactRuntimeForTests(): void {
   shotRuntime.clear();
   if (changed) notifyRuntimeListeners();
 }
+
+const statusCache = new WeakMap<object, Map<string, {
+  shot: Shot;
+  version: number;
+  status: ShotStillRuntimeStatus;
+}>>();
 
 function deriveEntryStatus(
   project: LocationProject,
@@ -195,6 +241,11 @@ export function inspectShotStillRuntime(
     };
   }
 
+  const version = getStillArtifactRuntimeVersion(resolvedShot.id);
+  const cachedForProject = statusCache.get(project);
+  const cached = cachedForProject?.get(resolvedShot.id);
+  if (cached && cached.shot === resolvedShot && cached.version === version) return cached.status;
+
   const specs = buildStillArtifactSpecificationsForShot({
     project,
     shot: resolvedShot,
@@ -236,7 +287,7 @@ export function inspectShotStillRuntime(
 
   const label = buildStatusLabel(overall, readyCount, totalCount, primaryEntry);
 
-  return {
+  const status: ShotStillRuntimeStatus = {
     shotId: resolvedShot.id,
     overall,
     primary: primaryEntry,
@@ -245,6 +296,10 @@ export function inspectShotStillRuntime(
     totalCount,
     label,
   };
+  const projectCache = cachedForProject ?? new Map();
+  projectCache.set(resolvedShot.id, { shot: resolvedShot, version, status });
+  statusCache.set(project, projectCache);
+  return status;
 }
 
 function buildStatusLabel(

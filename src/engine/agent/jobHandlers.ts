@@ -11,6 +11,8 @@ import { buildContactSheetSpec } from '../previs/contactSheet';
 export interface JobHandlerContext {
   jobId: string;
   revisionIdAtStart?: string;
+  /** The owning job's signal; handlers must stop between expensive units. */
+  signal: AbortSignal;
   registerArtifact: (artifactId: string) => void;
 }
 
@@ -21,6 +23,13 @@ export type JobHandler = (
 ) => Promise<void>;
 
 const APPEARANCE_PASSES = new Set(['clay', 'projected', 'depth']);
+
+function throwIfJobCancelled(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  const error = new Error('Job item cancelled.');
+  error.name = 'AbortError';
+  throw error;
+}
 
 function parseRenderJob(item: unknown): AgentRenderShotFrameInput {
   if (!item || typeof item !== 'object') {
@@ -46,8 +55,10 @@ function parseRenderJob(item: unknown): AgentRenderShotFrameInput {
 }
 
 async function runShotRenderItem(item: unknown, _index: number, ctx: JobHandlerContext): Promise<void> {
+  throwIfJobCancelled(ctx.signal);
   const input = parseRenderJob(item);
   const result = await getAgentRenderShotFrameImpl()(input);
+  throwIfJobCancelled(ctx.signal);
   if (!result.ok || !result.artifact) {
     throw new Error(result.diagnostics[0]?.message ?? 'Shot render failed.');
   }
@@ -66,6 +77,7 @@ async function runShotRenderItem(item: unknown, _index: number, ctx: JobHandlerC
 }
 
 async function runPassMatrixItem(item: unknown, _index: number, ctx: JobHandlerContext): Promise<void> {
+  throwIfJobCancelled(ctx.signal);
   if (!item || typeof item !== 'object') {
     throw new Error('Pass matrix item must be { shotId, pass }.');
   }
@@ -78,9 +90,11 @@ async function runPassMatrixItem(item: unknown, _index: number, ctx: JobHandlerC
 }
 
 async function runContactSheetItem(item: unknown, _index: number, ctx: JobHandlerContext): Promise<void> {
+  throwIfJobCancelled(ctx.signal);
   const artifactIds = Array.isArray(item) ? item : [item];
   const images: Array<{ id: string; blob: Blob }> = [];
   for (const artifactId of artifactIds) {
+    throwIfJobCancelled(ctx.signal);
     if (typeof artifactId !== 'string') continue;
     const blob = getAgentArtifactBlob(artifactId);
     if (!blob) {
@@ -104,7 +118,8 @@ async function runContactSheetItem(item: unknown, _index: number, ctx: JobHandle
     })),
   });
 
-  const blob = await composeContactSheetPng(spec, images);
+  const blob = await composeContactSheetPng(spec, images, ctx.signal);
+  throwIfJobCancelled(ctx.signal);
   const handle = registerAgentArtifact({
     blob,
     mimeType: 'image/png',
@@ -123,6 +138,7 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 async function composeContactSheetPng(
   spec: ReturnType<typeof buildContactSheetSpec>,
   images: Array<{ id: string; blob: Blob }>,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const columns = spec.columns;
   const rows = Math.ceil(images.length / columns);
@@ -138,6 +154,11 @@ async function composeContactSheetPng(
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   for (let i = 0; i < images.length; i += 1) {
+    if (signal?.aborted) {
+      const error = new Error('Job item cancelled.');
+      error.name = 'AbortError';
+      throw error;
+    }
     const col = i % columns;
     const row = Math.floor(i / columns);
     const x = col * cellW;

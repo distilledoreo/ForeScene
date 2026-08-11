@@ -25,6 +25,9 @@ export const AGENT_DIAGNOSTIC_CODES = {
   invalidArgument: 'invalid_argument',
   busy: 'busy',
   staleRevision: 'stale_revision',
+  preparedMediaFailed: 'prepared_media_failed',
+  preparedMediaWarning: 'prepared_media_warning',
+  preparedMediaCancelled: 'prepared_media_cancelled',
 } as const;
 
 export type AgentDiagnosticCode =

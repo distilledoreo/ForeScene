@@ -68,6 +68,8 @@ Encode availability depends on WebCodecs / browser support. When Render MP4 is u
 | Topic | Figure | Classification |
 | --- | --- | --- |
 | IndexedDB / storage quota | Varies by browser, device, and origin eviction policy | Measured baseline |
+| Decoded project-asset working set | 256 MiB or 256 entries for evictable in-memory Blob/object-URL payloads; the active project is pinned | Hard-enforced limit (evictable working set) |
+| Agent artifact registry | 64 artifacts or 512 MiB, least-recently-used entries reclaimed first | Hard-enforced limit |
 | Failed saves | Surfaced as errors; the app must not report a successful save when persistence failed | Hard-enforced limit (behavior) |
 | WebGL context | One context per `SceneViewport`; released on unmount | Measured baseline |
 | Free GPU memory | Not reliably queryable; budgets use conservative heap estimates | Measured baseline |

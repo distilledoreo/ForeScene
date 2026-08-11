@@ -42,10 +42,7 @@ export async function renderAgentShotBatch(
 
 export async function frameAgentSubjectsBatch(
   shots: AgentFrameSubjectsInput[],
+  concurrency = 1,
 ): Promise<AgentFrameSubjectsResult[]> {
-  const results: AgentFrameSubjectsResult[] = [];
-  for (const shotInput of shots) {
-    results.push(await frameAgentSubjects(shotInput));
-  }
-  return results;
+  return runWithConcurrency(shots, concurrency, (shotInput) => frameAgentSubjects(shotInput));
 }

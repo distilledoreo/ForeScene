@@ -4,7 +4,9 @@
 
 import type { LocationProject, Shot } from '../domain/types';
 import {
+  materializeShotAfterCapture,
   materializeShotStills,
+  type ShotCaptureMaterializationMode,
   type ShotStillMaterializationResult,
 } from './materializeShotStills';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
@@ -36,6 +38,11 @@ export interface ShotStillActionParams {
   ) => LocationProject;
   onProjectCommit?: (project: LocationProject) => LocationProject;
   render?: StillActionRender;
+}
+
+export interface ShotCapturePreparationParams extends ShotStillActionParams {
+  mode?: ShotCaptureMaterializationMode;
+  timeSeconds?: number;
 }
 
 function bindController(shotId: string): AbortController {
@@ -78,8 +85,14 @@ export function cancelShotStillPreparation(shotId?: string): {
     shotControllers.clear();
   }
 
+  const stillPriorities = [
+    'capture-primary-still',
+    'capture-secondary-still',
+    'edit-primary-still',
+    'edit-secondary-still',
+  ] as const;
   const cancelledQueueItems = shotId
-    ? renderWorkCoordinator.cancelByOwner(shotId)
+    ? renderWorkCoordinator.cancelByOwner(shotId, stillPriorities)
     : renderWorkCoordinator.cancelQueued((entry) => (
       entry.priority === 'capture-primary-still'
       || entry.priority === 'capture-secondary-still'
@@ -179,4 +192,26 @@ export function inspectShotStillActionsForTests() {
 export function resetShotStillActionsForTests(): void {
   for (const controller of shotControllers.values()) controller.abort();
   shotControllers.clear();
+}
+
+/** Capture-time materialization with the same cancellable controller as manual actions. */
+export async function captureShotStillPreparation(
+  params: ShotCapturePreparationParams,
+): Promise<ShotStillMaterializationResult> {
+  const controller = bindController(params.shotId);
+  try {
+    return await materializeShotAfterCapture({
+      project: params.project,
+      shotId: params.shotId,
+      mode: params.mode ?? 'await-all',
+      timeSeconds: params.timeSeconds,
+      signal: controller.signal,
+      getLiveProject: params.getLiveProject,
+      commitLiveProject: params.commitLiveProject,
+      onProjectCommit: params.onProjectCommit,
+      render: params.render,
+    });
+  } finally {
+    releaseController(params.shotId, controller);
+  }
 }

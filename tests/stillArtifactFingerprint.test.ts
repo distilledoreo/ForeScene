@@ -174,6 +174,30 @@ describe('computeStillArtifactFingerprint', () => {
     expect(computeStillArtifactFingerprint(project, shot, spec).key).not.toBe(before);
   });
 
+  it('ignores editor-only lock and unrelated metadata changes', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const spec = stillSpec('clay-viewport', 'clay', { peopleVariant: 'with_people' });
+    const before = computeStillArtifactFingerprint(project, shot, spec).key;
+    project.scene.objects[0]!.locked = !project.scene.objects[0]!.locked;
+    project.scene.objects[0]!.metadata = { editorNote: 'not rendered' };
+    expect(computeStillArtifactFingerprint(project, shot, spec).key).toBe(before);
+  });
+
+  it('keeps character attachment metadata render-relevant', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const attached = project.scene.objects[0]!;
+    attached.metadata = { characterOwnerId: 'character-a' };
+    const spec = stillSpec('character-still', 'clay', {
+      contentMode: 'characters_only',
+      includeCharacterAttachments: true,
+    });
+    const before = computeStillArtifactFingerprint(project, shot, spec).key;
+    attached.metadata = { characterOwnerId: 'character-b' };
+    expect(computeStillArtifactFingerprint(project, shot, spec).key).not.toBe(before);
+  });
+
   it('excludes person objects from clean-plate dependency selection', () => {
     const project = createDefaultProject();
     const prop = createSceneObject('box', 1, [0, 1, 0]);
@@ -405,4 +429,3 @@ describe('background video candidates', () => {
     expect(candidates.some((c) => c.specification.appearance === 'projected')).toBe(false);
   });
 });
-

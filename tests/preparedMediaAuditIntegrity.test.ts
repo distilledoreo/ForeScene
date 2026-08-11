@@ -263,4 +263,29 @@ describe('prepared-media audit integrity regressions', () => {
     releaseActive();
     await active;
   });
+
+  it('propagates an AbortSignal to active coordinator work and settles its promise', async () => {
+    const controller = new AbortController();
+    let releaseActive!: () => void;
+    let abortHookCalled = false;
+    const active = renderWorkCoordinator.schedule(
+      'background-video',
+      () => new Promise<void>((resolve) => { releaseActive = resolve; }),
+      {
+        ownerId: 'shot-abort-signal',
+        signal: controller.signal,
+        abort: () => { abortHookCalled = true; },
+      },
+    );
+    await Promise.resolve();
+
+    controller.abort();
+    await expect(active).rejects.toMatchObject({ name: 'AbortError' });
+    expect(abortHookCalled).toBe(true);
+
+    // The renderer is cooperative, so let the active task unwind and free the
+    // coordinator slot even though its public promise already settled.
+    releaseActive();
+    await Promise.resolve();
+  });
 });

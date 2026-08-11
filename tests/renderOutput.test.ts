@@ -167,8 +167,7 @@ describe('rendered shot output', () => {
     expect(source).toContain('renderPanoCubemapFacesAsBlobs(cubemapSourcePano.asset.uri');
     expect(source).toContain('panoRotation: cubemapSourcePano.pano.rotation');
     expect(source).toContain('inputs/cubemap/');
-    expect(source).toContain('onFaceRendered: async (face, rendered) =>');
-    expect(source).toContain('rendered.blob');
+    expect(source).toContain('cached.faces[face].blob');
     expect(source).toContain('stitchCubemapFaceBlobsCrossAsync');
     expect(source).not.toContain('stitchCubemapVisibleFacesAsync');
     expect(source).not.toContain('cubemap_visible');

@@ -149,7 +149,7 @@ export async function ensureStillArtifactForExport(
       force: true,
       render: params.render,
     }),
-    { ownerId: shotId, jobId: `export-still:${key}` },
+    { ownerId: shotId, jobId: `export-still:${key}`, signal },
   );
 
   if (!prepared.blob) throw new Error(`Still recovery for ${key} produced no blob.`);

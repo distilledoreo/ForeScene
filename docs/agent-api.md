@@ -133,9 +133,12 @@ Video render, package export, and project backup register blobs in-memory:
 
 ```ts
 const video = await foreScene.renderShotVideo({ shotId, download: false });
-const bytes = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const downloaded = await foreScene.downloadArtifact({ artifactId: video.artifact!.artifactId });
+const blob = downloaded.blob;
 const backup = await foreScene.exportProjectBackup({ download: false });
 ```
+
+`downloadArtifact` returns a Blob by default. Use `includeDataUrl: true` only for legacy consumers that still require base64 data URLs.
 
 ### Discovery
 
@@ -246,6 +249,38 @@ listed by the manifest. Renderable shots include `temporal.motion` and must
 pass it; non-renderable shots do not receive that criterion. Every still and
 temporal artifact must also appear in `reviewedArtifacts` with its matching
 SHA-256.
+
+## Prepared-media capture
+
+The installed API exposes two intentionally different capture paths:
+
+```ts
+// Fast sampled thumbnail. Writes the legacy viewport slot and honors timeSeconds.
+await foreScene.captureShotThumbnail({ shotId, timeSeconds: 1.5 });
+
+// Full configured still set. Awaits the prepared-media coordinator and returns
+// the materialized artifact records; it does not create a second base64 copy.
+await foreScene.captureShotPreparedMedia({ shotId });
+
+await foreScene.inspectShotPreparedMedia({ shotId });
+await foreScene.regenerateShotStills({ shotId });
+await foreScene.retryFailedShotStills({ shotId });
+foreScene.cancelShotStillPreparation({ shotId });
+```
+
+`captureShotThumbnail` is the compatibility-named durable materialization path;
+when `timeSeconds` is provided, the requested sample time is carried into the
+prepared still fingerprints and artifacts. `captureShotPreparedMedia` is the
+explicit durable path for package/export workflows and returns the declared
+`AgentShotMaterializationResult` fields:
+`revisionId`, `primaryStillAssetId`, `artifacts`, and `warnings`. Prepared-media
+work is included in `getStatus()` / `waitForIdle()` so an agent cannot proceed
+while still or background-video GPU work is active.
+
+`cancelShotStillPreparation({ shotId })` cancels queued or in-flight capture,
+regeneration, and retry work for that shot. Already committed artifacts remain
+attached; the cancelled call rejects with an `AbortError` rather than reporting
+a render failure.
 
 ## Existing-project refinement
 

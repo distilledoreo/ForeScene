@@ -179,7 +179,9 @@ export async function renderAgentShotVideo(
         project,
         shotId: shot.id,
         priority: 'foreground',
-        includeDataUrl: attachToShot,
+        // Attachment and download paths consume the prepared Blob directly.
+        // Keeping this false avoids a base64 expansion and a second Blob copy.
+        includeDataUrl: false,
         signal: controller.signal,
         specification: {
           mode: input.mode ?? 'render',
@@ -191,12 +193,16 @@ export async function renderAgentShotVideo(
         },
         onProgress: (progress) => { latestProgress = toProgress(shot.id, progress); },
       }),
-      { ownerId: shot.id, jobId: `agent-video:${shot.id}`, abort: () => controller.abort() },
+      {
+        ownerId: shot.id,
+        jobId: `agent-video:${shot.id}`,
+        abort: () => controller.abort(),
+        signal: controller.signal,
+      },
     );
 
     let assetId: string | undefined;
     if (attachToShot) {
-      if (!video.dataUrl) throw new Error('Rendered video did not provide attachable data.');
       const currentProject = useProjectStore.getState().project;
       const currentShot = currentProject.shots.find((candidate) => candidate.id === shot.id);
       if (!currentShot || fingerprintShotTimeline(currentShot) !== timelineFingerprintAtStart) {
@@ -238,9 +244,9 @@ export async function renderAgentShotVideo(
         : undefined;
 
       latestProgress = { phase: 'saving', progress: 0.98, shotId: shot.id, message: 'Attaching rendered video to shot.' };
-      const asset = useProjectStore.getState().attachCameraMoveVideoToShot(shot.id, {
+      const asset = await useProjectStore.getState().attachCameraMoveVideoBlobToShot(shot.id, {
         name: renderName(shot),
-        dataUrl: video.dataUrl,
+        blob: video.blob,
         mimeType: video.mimeType,
         width: video.width,
         height: video.height,

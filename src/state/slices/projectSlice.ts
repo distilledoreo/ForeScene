@@ -61,7 +61,11 @@ import {
   multiplyScalar,
 } from '../../engine/sync';
 import { pruneUnreferencedProjectAssets } from '../../engine/projectAssets';
-import { storeProjectAssetBlob, storeProjectAssetDataUrl } from '../../engine/projectAssetStore';
+import {
+  storeProjectAssetBlob,
+  storeProjectAssetBlobDurable,
+  storeProjectAssetDataUrl,
+} from '../../engine/projectAssetStore';
 import {
   clearBuildHistory,
   vec3NearlyEqual,
@@ -1157,6 +1161,53 @@ export const createProjectSlice: StateCreator<
                 ...item.assets,
                 cameraMoveVideoAssetId: asset.id,
               },
+              updatedAt: new Date().toISOString(),
+            }
+          : item),
+      })),
+    }));
+    return asset;
+  },
+
+  attachCameraMoveVideoBlobToShot: async (shotId, params) => {
+    const initialProject = get().project;
+    const initialShot = initialProject.shots.find((item) => item.id === shotId);
+    if (!initialShot) throw new Error('Select a shot before attaching a camera move MP4.');
+    const baseAsset = createVideoAsset({
+      name: params.name || `shot_${initialShot.shotNumber}_camera_move.mp4`,
+      uri: '',
+      mimeType: params.mimeType,
+      width: params.width,
+      height: params.height,
+      metadata: {
+        source: 'graybox_camera_keyframes',
+        shotId,
+        durationSeconds: params.durationSeconds,
+        frameRate: params.frameRate,
+        ...(params.encodeMode ? { encodeMode: params.encodeMode } : {}),
+        ...(params.codecString ? { codecString: params.codecString } : {}),
+        ...(params.frameCount !== undefined ? { frameCount: params.frameCount } : {}),
+        ...(params.resolutionPreset ? { resolutionPreset: params.resolutionPreset } : {}),
+        ...(params.validated !== undefined ? { validated: params.validated } : {}),
+      },
+    });
+    const asset = await storeProjectAssetBlobDurable(initialProject.id, baseAsset, params.blob);
+    const current = get().project;
+    const currentShot = current.shots.find((item) => item.id === shotId);
+    if (!currentShot) throw new Error('Shot was removed while attaching the camera move MP4.');
+    set((state) => ({
+      project: touchProject(pruneUnreferencedProjectAssets({
+        ...state.project,
+        assets: {
+          assets: {
+            ...state.project.assets.assets,
+            [asset.id]: asset,
+          },
+        },
+        shots: state.project.shots.map((item) => item.id === shotId
+          ? {
+              ...item,
+              assets: { ...item.assets, cameraMoveVideoAssetId: asset.id },
               updatedAt: new Date().toISOString(),
             }
           : item),

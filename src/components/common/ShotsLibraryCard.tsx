@@ -10,7 +10,7 @@ import {
   regenerateShotStills,
   retryFailedShotStills,
 } from '../../engine/shotStillActions';
-import { inspectShotStillRuntime } from '../../engine/stillArtifactRuntime';
+import { inspectShotStillRuntime, shotHasPreparedMediaLifecycle } from '../../engine/stillArtifactRuntime';
 import { usePreparedMediaRuntimeTick } from '../../hooks/usePreparedMediaRuntimeTick';
 import { useProjectStore } from '../../state/useProjectStore';
 import { AnchoredMenuPopover } from './AnchoredMenuPopover';
@@ -49,17 +49,22 @@ export function ShotsLibraryCard({
   const primaryLabel = getShotPrimaryLabel(shot);
   const customTitle = hasCustomShotTitle(shot);
 
-  usePreparedMediaRuntimeTick();
-  const preparedStatus = inspectShotStillRuntime(project, shot);
-  const preparedUpdating = preparedStatus.artifacts.some(
+  usePreparedMediaRuntimeTick(shot.id);
+  const preparedLifecycle = shotHasPreparedMediaLifecycle(shot);
+  const preparedStatus = preparedLifecycle
+    ? inspectShotStillRuntime(project, shot)
+    : undefined;
+  const preparedUpdating = preparedStatus?.artifacts.some(
     (artifact) => artifact.status === 'queued' || artifact.status === 'rendering',
-  );
-  const preparedNeedsAttention = preparedStatus.artifacts.some(
+  ) ?? false;
+  const preparedNeedsAttention = preparedStatus?.artifacts.some(
     (artifact) => artifact.status === 'failed'
       || artifact.status === 'missing'
       || artifact.status === 'stale',
-  );
-  const videoStatus = getBackgroundVideoShotStatus(project, shot.id);
+  ) ?? false;
+  const videoStatus = preparedLifecycle
+    ? getBackgroundVideoShotStatus(project, shot.id)
+    : 'not-requested' as const;
   const videoLabel = videoStatus === 'not-requested'
     ? undefined
     : videoStatus === 'pending'
@@ -218,13 +223,15 @@ export function ShotsLibraryCard({
               </div>
               <Pencil className="mt-0.5 h-3 w-3 shrink-0 text-white/35 opacity-0 transition group-hover:opacity-100" />
             </button>
-            <p
-              className={`truncate text-[9px] ${preparedStatus.overall === 'failed' ? 'text-red-300' : preparedUpdating ? 'text-amber-200' : preparedStatus.overall === 'ready' ? 'text-emerald-300' : 'text-white/55'}`}
-              title={preparedStatus.label}
-              data-prepared-media-status
-            >
-              {preparedStatus.label}
-            </p>
+            {preparedStatus && (
+              <p
+                className={`truncate text-[9px] ${preparedStatus.overall === 'failed' ? 'text-red-300' : preparedUpdating ? 'text-amber-200' : preparedStatus.overall === 'ready' ? 'text-emerald-300' : 'text-white/55'}`}
+                title={preparedStatus.label}
+                data-prepared-media-status
+              >
+                {preparedStatus.label}
+              </p>
+            )}
             {videoLabel && (
               <p
                 className={`truncate text-[9px] ${videoStatus === 'failed' ? 'text-red-300' : videoStatus === 'ready' ? 'text-emerald-300' : videoStatus === 'encoding' || videoStatus === 'queued' ? 'text-sky-300' : 'text-white/55'}`}

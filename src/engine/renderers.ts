@@ -39,7 +39,6 @@ import {
   DEFAULT_OCCLUSION_NEAR,
   generateProjectorOcclusionMap,
   type ProjectorOcclusionMap,
-  type ProjectorOcclusionSet,
 } from './projectorOcclusion';
 import { degreesToRadians, flyCameraFromCamera } from './sync';
 import { computeGrayboxPanoFarPlane } from './sceneBounds';
@@ -95,9 +94,13 @@ export interface ImageRenderResult {
   dataUrl: string;
   width: number;
   height: number;
+  /** Binary PNG when the caller opts out of the legacy data-URL path. */
+  blob?: Blob;
   /** Present when the render path computed canvas pixel sanity stats. */
   pixelStats?: RenderPixelStats;
 }
+
+export type RasterRenderOutput = 'data-url' | 'blob';
 
 export interface ProjectedHealthRenderResult extends ImageRenderResult {
   projectionHealth: ProjectionHealthMetrics;
@@ -425,7 +428,11 @@ export async function renderGrayboxEquirectangularPano(
 export async function renderShotFrame(
   project: LocationProject,
   shot: Shot,
-  options: { peopleVariant?: PeopleRenderVariant } = {},
+  options: {
+    peopleVariant?: PeopleRenderVariant;
+    output?: RasterRenderOutput;
+    includePixelStats?: boolean;
+  } = {},
 ): Promise<ImageRenderResult> {
   return renderViewportClay(
     resolveProjectForShot(project, shot, {
@@ -434,6 +441,10 @@ export async function renderShotFrame(
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
+    {
+      output: options.output,
+      includePixelStats: options.includePixelStats,
+    },
   );
 }
 
@@ -1220,50 +1231,61 @@ export async function renderViewportClay(
   cameraData: CameraData,
   width: number,
   height: number,
+  options: {
+    output?: RasterRenderOutput;
+    includePixelStats?: boolean;
+  } = {},
 ): Promise<ImageRenderResult> {
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
-  const scene = buildScene(project, createFinalRenderSceneOptions());
-  const clipping = computeCameraMoveClippingRange({
-    scene,
-    keyframeCameras: [cameraData],
-    nearMeters: cameraData.near,
-  });
-  const camera = new THREE.PerspectiveCamera(
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-  applyFlyCameraToPerspectiveCamera(
-    camera,
-    flyCameraFromCamera(cameraData),
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-  renderer.render(scene, camera);
-
-  // Pixel stats from the clean canvas before PNG encode (shared by package + agent).
-  let pixelStats: RenderPixelStats | undefined;
+  let scene: THREE.Scene | undefined;
   try {
-    const gl = renderer.getContext();
-    if (gl && width > 0 && height > 0) {
-      const pixels = new Uint8Array(width * height * 4);
-      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      pixelStats = computeRenderPixelStats(pixels, width, height);
+    scene = buildScene(project, createFinalRenderSceneOptions());
+    const clipping = computeCameraMoveClippingRange({
+      scene,
+      keyframeCameras: [cameraData],
+      nearMeters: cameraData.near,
+    });
+    const camera = new THREE.PerspectiveCamera(
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    applyFlyCameraToPerspectiveCamera(
+      camera,
+      flyCameraFromCamera(cameraData),
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    renderer.render(scene, camera);
+
+    // Pixel stats are expensive at 4K. Materialized stills opt out because
+    // validation consumes the encoded PNG, while legacy callers keep them.
+    let pixelStats: RenderPixelStats | undefined;
+    if (options.includePixelStats !== false) {
+      try {
+        const gl = renderer.getContext();
+        if (gl && width > 0 && height > 0) {
+          const pixels = new Uint8Array(width * height * 4);
+          gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          pixelStats = computeRenderPixelStats(pixels, width, height);
+        }
+      } catch {
+        pixelStats = undefined;
+      }
     }
-  } catch {
-    pixelStats = undefined;
+
+    const encoded = options.output === 'blob'
+      ? { dataUrl: '', blob: await canvasToBlob(renderer.domElement, 'image/png') }
+      : { dataUrl: renderer.domElement.toDataURL('image/png') };
+    return { ...encoded, width, height, pixelStats };
+  } finally {
+    if (scene) disposeScene(scene);
+    disposeRenderer(renderer);
   }
-
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-
-  disposeScene(scene);
-  disposeRenderer(renderer);
-
-  return { dataUrl, width, height, pixelStats };
 }
 
 export interface ProjectedSceneResources {
@@ -1301,78 +1323,91 @@ export async function loadProjectedSceneResources(
   const texture = await acquireProjectedStyleTexture(imageUrl);
   if (!texture) return undefined;
 
-  // Optional secondary projector.
-  let secondaryPano = assets.secondary;
+  // Optional secondary projector. Every acquired resource is released if a
+  // later texture, scene, or occlusion allocation fails.
+  const secondaryPano = assets.secondary;
   let secondaryTexture: THREE.Texture | null = null;
   let secondaryUrl: string | undefined;
-  if (secondaryPano && assets.secondaryUrl) {
-    secondaryUrl = assets.secondaryUrl;
-    secondaryTexture = await acquireProjectedStyleTexture(secondaryUrl);
-  }
-
-  const occlusionSet: ProjectorOcclusionSet = { dispose() { /* populated below */ } };
   let primaryOcclusion: ProjectorOcclusionMap | undefined;
   let secondaryOcclusion: ProjectorOcclusionMap | undefined;
 
-  if (settings.occlusionEnabled && renderer) {
-    try {
-      primaryOcclusion = generateProjectorOcclusionMap(renderer, project, pano.origin, {
-        faceSize: DEFAULT_OCCLUSION_FACE_SIZE,
-        nearMeters: DEFAULT_OCCLUSION_NEAR,
-      });
-      // Reuse a single map when both origins are identical.
-      const sameOrigin = secondaryPcclusionSameOrigin(pano.origin, secondaryPano?.origin);
-      if (secondaryPano && secondaryTexture && !sameOrigin) {
-        secondaryOcclusion = generateProjectorOcclusionMap(renderer, project, secondaryPano.origin, {
+  const disposeOcclusion = () => {
+    primaryOcclusion?.dispose();
+    if (secondaryOcclusion && secondaryOcclusion !== primaryOcclusion) secondaryOcclusion.dispose();
+    primaryOcclusion = undefined;
+    secondaryOcclusion = undefined;
+  };
+  const releaseTextures = () => {
+    releaseProjectedStyleTexture(imageUrl);
+    if (secondaryUrl && secondaryTexture) releaseProjectedStyleTexture(secondaryUrl);
+  };
+
+  try {
+    if (secondaryPano && assets.secondaryUrl) {
+      secondaryUrl = assets.secondaryUrl;
+      secondaryTexture = await acquireProjectedStyleTexture(secondaryUrl);
+    }
+
+    if (settings.occlusionEnabled && renderer) {
+      try {
+        primaryOcclusion = generateProjectorOcclusionMap(renderer, project, pano.origin, {
           faceSize: DEFAULT_OCCLUSION_FACE_SIZE,
           nearMeters: DEFAULT_OCCLUSION_NEAR,
         });
-      } else if (secondaryPano && secondaryTexture && sameOrigin) {
-        secondaryOcclusion = primaryOcclusion;
+        // Reuse a single map when both origins are identical.
+        const sameOrigin = secondaryPcclusionSameOrigin(pano.origin, secondaryPano?.origin);
+        if (secondaryPano && secondaryTexture && !sameOrigin) {
+          secondaryOcclusion = generateProjectorOcclusionMap(renderer, project, secondaryPano.origin, {
+            faceSize: DEFAULT_OCCLUSION_FACE_SIZE,
+            nearMeters: DEFAULT_OCCLUSION_NEAR,
+          });
+        } else if (secondaryPano && secondaryTexture && sameOrigin) {
+          secondaryOcclusion = primaryOcclusion;
+        }
+      } catch (error) {
+        disposeOcclusion();
+        console.error('[projected-occlusion] generation failed; using legacy projection:', error);
       }
-      occlusionSet.dispose = () => {
-        primaryOcclusion?.dispose();
-        if (secondaryOcclusion && secondaryOcclusion !== primaryOcclusion) secondaryOcclusion.dispose();
-      };
-    } catch (error) {
-      console.error('[projected-occlusion] generation failed; using legacy projection:', error);
-      primaryOcclusion = undefined;
-      secondaryOcclusion = undefined;
-      occlusionSet.dispose = () => {};
     }
+
+    const options: ProjectedSceneOptions = {
+      texture,
+      origin: pano.origin,
+      rotation: pano.rotation,
+      panoramaWidth: pano.width,
+      panoramaHeight: pano.height,
+      settings,
+      disposableMaterials: true,
+      occlusionTexture: primaryOcclusion?.texture,
+      occlusionNearMeters: primaryOcclusion?.nearMeters,
+      occlusionFarMeters: primaryOcclusion?.farMeters,
+      occlusionFaceSize: primaryOcclusion?.faceSize,
+      secondaryTexture: secondaryTexture ?? undefined,
+      secondaryOrigin: secondaryPano?.origin,
+      secondaryRotation: secondaryPano?.rotation,
+      secondaryPanoramaWidth: secondaryPano?.width,
+      secondaryPanoramaHeight: secondaryPano?.height,
+      secondaryOcclusionTexture: secondaryOcclusion?.texture,
+      secondaryOcclusionNearMeters: secondaryOcclusion?.nearMeters,
+      secondaryOcclusionFarMeters: secondaryOcclusion?.farMeters,
+      secondaryOcclusionFaceSize: secondaryOcclusion?.faceSize,
+    };
+
+    let disposed = false;
+    return {
+      options,
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        disposeOcclusion();
+        releaseTextures();
+      },
+    };
+  } catch (error) {
+    disposeOcclusion();
+    releaseTextures();
+    throw error;
   }
-
-  const options: ProjectedSceneOptions = {
-    texture,
-    origin: pano.origin,
-    rotation: pano.rotation,
-    panoramaWidth: pano.width,
-    panoramaHeight: pano.height,
-    settings,
-    disposableMaterials: true,
-    occlusionTexture: primaryOcclusion?.texture,
-    occlusionNearMeters: primaryOcclusion?.nearMeters,
-    occlusionFarMeters: primaryOcclusion?.farMeters,
-    occlusionFaceSize: primaryOcclusion?.faceSize,
-    secondaryTexture: secondaryTexture ?? undefined,
-    secondaryOrigin: secondaryPano?.origin,
-    secondaryRotation: secondaryPano?.rotation,
-    secondaryPanoramaWidth: secondaryPano?.width,
-    secondaryPanoramaHeight: secondaryPano?.height,
-    secondaryOcclusionTexture: secondaryOcclusion?.texture,
-    secondaryOcclusionNearMeters: secondaryOcclusion?.nearMeters,
-    secondaryOcclusionFarMeters: secondaryOcclusion?.farMeters,
-    secondaryOcclusionFaceSize: secondaryOcclusion?.faceSize,
-  };
-
-  return {
-    options,
-    dispose() {
-      occlusionSet.dispose();
-      releaseProjectedStyleTexture(imageUrl);
-      if (secondaryUrl) releaseProjectedStyleTexture(secondaryUrl);
-    },
-  };
 }
 
 function secondaryPcclusionSameOrigin(
@@ -1396,28 +1431,31 @@ export async function renderProjectedEquirectangularPano(
 ): Promise<ImageRenderResult> {
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
-  const resources = await loadProjectedSceneResources(renderer, project);
-  if (!resources) {
+  let resources: ProjectedSceneResources | undefined;
+  let scene: THREE.Scene | undefined;
+  try {
+    resources = await loadProjectedSceneResources(renderer, project);
+    if (!resources) {
+      throw new Error(
+        'Projected 360 export requires an importable styled panorama with a valid image asset.',
+      );
+    }
+    scene = buildScene(project, {
+      showHelpers: false,
+      showGrid: false,
+      hiddenObjectTypes: ['sun_marker'],
+      theme,
+      fog: false,
+      appearance: 'projected',
+      projected: resources.options,
+    });
+    const dataUrl = await blobToDataUrl(await captureEquirectangularFromOrigin(renderer, scene, project, width, height));
+    return { dataUrl, width, height };
+  } finally {
+    if (scene) disposeScene(scene);
+    resources?.dispose();
     disposeRenderer(renderer);
-    throw new Error(
-      'Projected 360 export requires an importable styled panorama with a valid image asset.',
-    );
   }
-
-  const scene = buildScene(project, {
-    showHelpers: false,
-    showGrid: false,
-    hiddenObjectTypes: ['sun_marker'],
-    theme,
-    fog: false,
-    appearance: 'projected',
-    projected: resources.options,
-  });
-  const dataUrl = await blobToDataUrl(await captureEquirectangularFromOrigin(renderer, scene, project, width, height));
-  disposeScene(scene);
-  resources.dispose();
-  disposeRenderer(renderer);
-  return { dataUrl, width, height };
 }
 
 /**
@@ -1429,8 +1467,9 @@ export async function renderViewportProjected(
   cameraData: CameraData,
   width: number,
   height: number,
+  options: { output?: RasterRenderOutput } = {},
 ): Promise<ImageRenderResult> {
-  return renderViewportProjectedInternal(project, cameraData, width, height, false);
+  return renderViewportProjectedInternal(project, cameraData, width, height, false, options.output);
 }
 
 /**
@@ -1445,7 +1484,7 @@ export async function renderViewportProjectedWithHealth(
   width: number,
   height: number,
 ): Promise<ProjectedHealthRenderResult> {
-  return renderViewportProjectedInternal(project, cameraData, width, height, true) as Promise<ProjectedHealthRenderResult>;
+  return renderViewportProjectedInternal(project, cameraData, width, height, true, 'data-url') as Promise<ProjectedHealthRenderResult>;
 }
 
 async function renderViewportProjectedInternal(
@@ -1454,103 +1493,109 @@ async function renderViewportProjectedInternal(
   width: number,
   height: number,
   includeHealth: boolean,
+  output: RasterRenderOutput = 'data-url',
 ): Promise<ImageRenderResult & { projectionHealth?: ProjectionHealthMetrics }> {
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
-  const resources = await loadProjectedSceneResources(renderer, project);
-  if (!resources) {
-    disposeRenderer(renderer);
-    throw new Error(
-      'Projected viewport export requires an importable styled panorama with a valid image asset.',
-    );
-  }
-
-  const scene = buildScene(project, {
-    ...createFinalRenderSceneOptions(),
-    appearance: 'projected',
-    projected: resources.options,
-  });
-  let projectedMaterialCount = 0;
-  scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) return;
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    projectedMaterialCount += materials.filter((material) => isProjectedStyleMaterial(material)).length;
-  });
-  const clipping = computeCameraMoveClippingRange({
-    scene,
-    keyframeCameras: [cameraData],
-    nearMeters: cameraData.near,
-  });
-  const camera = new THREE.PerspectiveCamera(
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-  applyFlyCameraToPerspectiveCamera(
-    camera,
-    flyCameraFromCamera(cameraData),
-    cameraData.fovDegrees,
-    width / height,
-    clipping.near,
-    clipping.far,
-  );
-  renderer.render(scene, camera);
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-
-  let projectionHealth: ProjectionHealthMetrics | undefined;
-  if (includeHealth) {
-    const debugScene = buildScene(project, {
+  let resources: ProjectedSceneResources | undefined;
+  let scene: THREE.Scene | undefined;
+  let debugScene: THREE.Scene | undefined;
+  try {
+    resources = await loadProjectedSceneResources(renderer, project);
+    if (!resources) {
+      throw new Error(
+        'Projected viewport export requires an importable styled panorama with a valid image asset.',
+      );
+    }
+    scene = buildScene(project, {
       ...createFinalRenderSceneOptions(),
       appearance: 'projected',
-      projected: {
-        ...resources.options,
-        settings: {
-          ...resources.options.settings,
-          occlusionDebugMode: 'coverage',
-        },
-      },
+      projected: resources.options,
     });
-    renderer.render(debugScene, camera);
-    const pixels = new Uint8Array(Math.max(0, width * height * 4));
-    let analyzed = analyzeProjectionDebugPixels(pixels, width, height);
-    try {
-      const gl = renderer.getContext();
-      if (gl && width > 0 && height > 0) {
-        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-        analyzed = analyzeProjectionDebugPixels(pixels, width, height);
+    let projectedMaterialCount = 0;
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      projectedMaterialCount += materials.filter((material) => isProjectedStyleMaterial(material)).length;
+    });
+    const clipping = computeCameraMoveClippingRange({
+      scene,
+      keyframeCameras: [cameraData],
+      nearMeters: cameraData.near,
+    });
+    const camera = new THREE.PerspectiveCamera(
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    applyFlyCameraToPerspectiveCamera(
+      camera,
+      flyCameraFromCamera(cameraData),
+      cameraData.fovDegrees,
+      width / height,
+      clipping.near,
+      clipping.far,
+    );
+    renderer.render(scene, camera);
+    const encoded = output === 'blob'
+      ? { dataUrl: '', blob: await canvasToBlob(renderer.domElement, 'image/png') }
+      : { dataUrl: renderer.domElement.toDataURL('image/png') };
+
+    let projectionHealth: ProjectionHealthMetrics | undefined;
+    if (includeHealth) {
+      debugScene = buildScene(project, {
+        ...createFinalRenderSceneOptions(),
+        appearance: 'projected',
+        projected: {
+          ...resources.options,
+          settings: {
+            ...resources.options.settings,
+            occlusionDebugMode: 'coverage',
+          },
+        },
+      });
+      renderer.render(debugScene, camera);
+      const pixels = new Uint8Array(Math.max(0, width * height * 4));
+      let analyzed = analyzeProjectionDebugPixels(pixels, width, height);
+      try {
+        const gl = renderer.getContext();
+        if (gl && width > 0 && height > 0) {
+          gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          analyzed = analyzeProjectionDebugPixels(pixels, width, height);
+        }
+      } catch {
+        // Keep zeroed metrics; the Agent result will expose the failed coverage
+        // rather than pretending a linked panorama proves projection health.
       }
-    } catch {
-      // Keep zeroed metrics; the Agent result will expose the failed coverage
-      // rather than pretending a linked panorama proves projection health.
+      projectionHealth = {
+        projectedTextureAvailable: true,
+        occlusionMapAvailable: Boolean(
+          resources.options.occlusionTexture || resources.options.secondaryOcclusionTexture,
+        ),
+        projectedMaterialCount,
+        ...analyzed,
+      };
     }
-    projectionHealth = {
-      projectedTextureAvailable: true,
-      occlusionMapAvailable: Boolean(
-        resources.options.occlusionTexture || resources.options.secondaryOcclusionTexture,
-      ),
-      projectedMaterialCount,
-      ...analyzed,
+
+    return {
+      ...encoded,
+      width,
+      height,
+      ...(projectionHealth ? { projectionHealth } : {}),
     };
-    disposeScene(debugScene);
+  } finally {
+    if (debugScene) disposeScene(debugScene);
+    if (scene) disposeScene(scene);
+    resources?.dispose();
+    disposeRenderer(renderer);
   }
-
-  disposeScene(scene);
-  resources.dispose();
-  disposeRenderer(renderer);
-
-  return {
-    dataUrl,
-    width,
-    height,
-    ...(projectionHealth ? { projectionHealth } : {}),
-  };
 }
 
 export async function renderShotProjectedFrame(
   project: LocationProject,
   shot: Shot,
-  options: { peopleVariant?: PeopleRenderVariant } = {},
+  options: { peopleVariant?: PeopleRenderVariant; output?: RasterRenderOutput } = {},
 ): Promise<ImageRenderResult> {
   return renderViewportProjected(
     resolveProjectForShot(project, shot, {
@@ -1559,6 +1604,7 @@ export async function renderShotProjectedFrame(
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
+    { output: options.output },
   );
 }
 

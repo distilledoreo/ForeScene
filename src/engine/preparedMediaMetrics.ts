@@ -2,9 +2,17 @@
  * In-process prepared-media counters (no external analytics).
  */
 
+import type { StillArtifactKind } from '../domain/types';
+
+export type StillRenderTimingByKind = Record<StillArtifactKind, number>;
+
 export interface PreparedMediaMetrics {
   captureStillRequests: number;
   captureStillRenders: number;
+  /** Number and wall time of canonical still renders, including encoding. */
+  stillRenderCount: number;
+  stillRenderMs: number;
+  stillRenderMsByKind: StillRenderTimingByKind;
   stillReuseCount: number;
   editStillRenders: number;
   staleResultsDiscarded: number;
@@ -18,10 +26,23 @@ export interface PreparedMediaMetrics {
   zipAssemblyMs: number;
 }
 
+type NumericPreparedMediaMetric = Exclude<keyof PreparedMediaMetrics, 'stillRenderMsByKind'>;
+
 function emptyMetrics(): PreparedMediaMetrics {
   return {
     captureStillRequests: 0,
     captureStillRenders: 0,
+    stillRenderCount: 0,
+    stillRenderMs: 0,
+    stillRenderMsByKind: {
+      'clay-viewport': 0,
+      'projected-viewport': 0,
+      'depth-viewport': 0,
+      'character-still': 0,
+      'clay-reference-frame': 0,
+      'projected-reference-frame': 0,
+      'depth-reference-frame': 0,
+    },
     stillReuseCount: 0,
     editStillRenders: 0,
     staleResultsDiscarded: 0,
@@ -47,8 +68,12 @@ export function resetPreparedMediaMetrics(): void {
 }
 
 export function recordPreparedMediaMetric(
-  key: keyof PreparedMediaMetrics,
+  key: NumericPreparedMediaMetric,
   delta = 1,
 ): void {
   metrics[key] += delta;
+}
+
+export function recordStillRenderTiming(kind: StillArtifactKind, elapsedMs: number): void {
+  metrics.stillRenderMsByKind[kind] += Math.max(0, elapsedMs);
 }
