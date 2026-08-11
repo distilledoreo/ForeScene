@@ -15,6 +15,7 @@ async function runWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   worker: (item: T, index: number) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   if (items.length === 0) return [];
   const results: R[] = new Array(items.length);
@@ -22,6 +23,11 @@ async function runWithConcurrency<T, R>(
   const limit = Math.max(1, Math.min(concurrency, items.length));
   const workers = Array.from({ length: limit }, async () => {
     while (cursor < items.length) {
+      if (signal?.aborted) {
+        const error = new Error('Batch render was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       const index = cursor;
       cursor += 1;
       if (index >= items.length) break;
@@ -35,9 +41,10 @@ async function runWithConcurrency<T, R>(
 export async function renderAgentShotBatch(
   jobs: AgentRenderShotFrameInput[],
   concurrency = 1,
+  signal?: AbortSignal,
 ): Promise<AgentRenderShotFrameResult[]> {
   const render = getAgentRenderShotFrameImpl();
-  return runWithConcurrency(jobs, concurrency, (job) => render(job));
+  return runWithConcurrency(jobs, concurrency, (job) => render(job), signal);
 }
 
 export async function frameAgentSubjectsBatch(

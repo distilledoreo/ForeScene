@@ -268,10 +268,10 @@ await foreScene.retryFailedShotStills({ shotId });
 foreScene.cancelShotStillPreparation({ shotId });
 ```
 
-`captureShotThumbnail` is the compatibility-named durable materialization path;
-when `timeSeconds` is provided, the requested sample time is carried into the
-prepared still fingerprints and artifacts. `captureShotPreparedMedia` is the
-explicit durable path for package/export workflows and returns the declared
+`captureShotThumbnail` renders one sampled clay frame, attaches it to the shot's
+legacy viewport thumbnail slot, and honors `timeSeconds` when provided.
+`captureShotPreparedMedia` is the explicit durable path for package/export
+workflows and returns the declared
 `AgentShotMaterializationResult` fields:
 `revisionId`, `primaryStillAssetId`, `artifacts`, and `warnings`. Prepared-media
 work is included in `getStatus()` / `waitForIdle()` so an agent cannot proceed

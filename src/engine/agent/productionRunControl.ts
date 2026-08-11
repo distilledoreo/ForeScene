@@ -3,6 +3,7 @@
 import type { LocationProject } from '../../domain/types';
 import { useProjectStore } from '../../state/useProjectStore';
 import { applyAgentProductionCompile } from './productionManifestControl';
+import { renderWorkCoordinator } from '../renderWorkCoordinator';
 import { getAgentRenderShotFrameImpl } from './renderCallbackRegistry';
 import { registerAgentArtifact, getAgentArtifactBlob } from './artifactRegistry';
 import { agentError, type AgentDiagnostic } from './diagnostics';
@@ -89,9 +90,15 @@ function beginRunGeneration(runId: string): number {
 function assertRunStillActive(runId: string, generation: number, signal?: AbortSignal): void {
   const controller = runControllers.get(runId);
   if (!controller || controller.generation !== generation) throw new StaleProductionRunError();
-  if (signal?.aborted) throw new StaleProductionRunError();
+  if (signal?.aborted) {
+    renderWorkCoordinator.cancelAll();
+    throw new StaleProductionRunError();
+  }
   const state = runs.get(runId);
-  if (!state || state.status === 'cancelled') throw new StaleProductionRunError();
+  if (!state || state.status === 'cancelled') {
+    renderWorkCoordinator.cancelAll();
+    throw new StaleProductionRunError();
+  }
 }
 
 function assertRunProjectContext(state: AgentProductionRunState): AgentDiagnostic[] {
@@ -292,8 +299,16 @@ async function runFullStillSequence(state: AgentProductionRunState): Promise<Age
           height: RAPID_REVIEW_PROFILE.height,
         });
       } catch (error) {
+        if (signal?.aborted) {
+          renderWorkCoordinator.cancelByOwner(shot.id);
+          throw error;
+        }
         failures.push(agentError('production_still_render_failed', error instanceof Error ? error.message : 'Still render failed.'));
         continue;
+      }
+      if (signal?.aborted) {
+        renderWorkCoordinator.cancelByOwner(shot.id);
+        throw new StaleProductionRunError();
       }
       assertRunStillActive(current.runId, generation, signal);
       if (!result.ok) {
@@ -459,6 +474,7 @@ export function cancelAgentProductionRun(runId: string): AgentProductionRunResul
   const state = getAgentProductionRun(runId);
   if (!state) return { ok: false, status: 'failed', runId, diagnostics: [agentError('production_run_not_found', `No production run "${runId}" exists.`)] };
   markProductionRunCancelled(runId);
+  renderWorkCoordinator.cancelAll();
   const controller = runControllers.get(runId);
   const generation = (controller?.generation ?? 0) + 1;
   if (controller) {

@@ -284,7 +284,7 @@ async function ensureProjectAssetResource(asset: ProjectAsset): Promise<ProjectR
   if (existing) {
     await verifyProjectAssetResource(asset, resourceKey, resource);
   } else {
-    await putProjectAssetBlobs([{ key: resourceKey, blob }]);
+    await putProjectAssetBlobs([{ key: resourceKey, blob, evictable: false }]);
     await verifyProjectAssetResource(asset, resourceKey, resource);
   }
   projectAssetResourceCache.set(blob, resource);

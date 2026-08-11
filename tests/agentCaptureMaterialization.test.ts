@@ -70,23 +70,24 @@ describe('agent capture materialization contract', () => {
     });
   });
 
-  it('drives the installed API and preserves the declared await-all result shape', async () => {
+  it('drives captureShotPreparedMedia and preserves the declared await-all result shape', async () => {
     const project = useProjectStore.getState().project;
     const prepared = materializationResult(project, 'ready');
     shotStillActionMocks.captureShotStillPreparation.mockResolvedValue(prepared);
 
     const api: ForeSceneBrowserApi = createForeSceneBrowserApi();
-    const result = await api.captureShotThumbnail({
+    const result = await api.captureShotPreparedMedia({
       shotId: project.shots[0]!.id,
-      timeSeconds: 1.5,
     });
 
     expect(shotStillActionMocks.captureShotStillPreparation).toHaveBeenCalledWith(
       expect.objectContaining({
         shotId: project.shots[0]!.id,
         mode: 'await-all',
-        timeSeconds: 1.5,
       }),
+    );
+    expect(shotStillActionMocks.captureShotStillPreparation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ timeSeconds: expect.anything() }),
     );
     expect(useProjectSafetyStore.getState().flushProject).toHaveBeenCalledWith(
       'Persist materialized shot stills',
@@ -106,7 +107,7 @@ describe('agent capture materialization contract', () => {
       materializationResult(project, 'failed', ['Primary render failed.']),
     );
 
-    const result = await createForeSceneBrowserApi().captureShotThumbnail({
+    const result = await createForeSceneBrowserApi().captureShotPreparedMedia({
       shotId: project.shots[0]!.id,
     });
 

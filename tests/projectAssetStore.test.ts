@@ -146,11 +146,13 @@ describe('local-first raster and video assets', () => {
       project.id,
       createPanoAsset({ name: 'first.png', uri: '', width: 1, height: 1 }),
       new Blob(['one'], { type: 'image/png' }),
+      { evictable: true },
     );
     const second = await storeProjectAssetBlobDurable(
       project.id,
       createPanoAsset({ name: 'second.png', uri: '', width: 1, height: 1 }),
       new Blob(['two'], { type: 'image/png' }),
+      { evictable: true },
     );
 
     const memory = inspectProjectAssetMemoryForTests();
@@ -160,5 +162,151 @@ describe('local-first raster and video assets', () => {
     if (typeof indexedDB !== 'undefined') {
       await expect(getProjectAssetBlob(first.storageKey!)).resolves.toBeInstanceOf(Blob);
     }
+  });
+
+  it('evicts least-recently-used durable payloads under a byte budget', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      flushProjectAssetStoreOperationsForTests,
+      getProjectAssetBlob,
+      listProjectAssetBlobKeys,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetMemoryActiveProject(undefined);
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 50, maxEntries: 10 });
+
+    const first = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'first.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    const second = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'second.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await getProjectAssetBlob(first.storageKey!);
+    const third = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'third.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await flushProjectAssetStoreOperationsForTests();
+
+    const keys = await listProjectAssetBlobKeys();
+    expect(keys).toContain(first.storageKey);
+    expect(keys).toContain(third.storageKey);
+    expect(keys).not.toContain(second.storageKey);
+    await expect(getProjectAssetBlob(second.storageKey!)).resolves.toBeUndefined();
+  });
+
+  it('never LRU-evicts authoritative project media when evictable cache overflows', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      flushProjectAssetStoreOperationsForTests,
+      getProjectAssetBlob,
+      listProjectAssetBlobKeys,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+      storeProjectAssetDataUrl,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetMemoryActiveProject(undefined);
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 50, maxEntries: 10 });
+
+    const authoritative = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'retained.png',
+      uri: 'data:image/png;base64,aGVsbG8=',
+      width: 1,
+      height: 1,
+      metadata: { retainInProject: true },
+    }));
+    await flushProjectAssetStoreOperationsForTests();
+
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-a.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-b.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-c.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await flushProjectAssetStoreOperationsForTests();
+
+    const keys = await listProjectAssetBlobKeys();
+    expect(keys).toContain(authoritative.storageKey);
+    await expect(getProjectAssetBlob(authoritative.storageKey!)).resolves.toBeInstanceOf(Blob);
+  });
+
+  it('rejects oversized durable writes instead of reporting success', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      ProjectAssetStorageQuotaError,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 16, maxEntries: 10 });
+
+    await expect(storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'too-large.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(32)], { type: 'image/png' }),
+      { evictable: true },
+    )).rejects.toBeInstanceOf(ProjectAssetStorageQuotaError);
+  });
+
+  it('forces retainInProject durable writes to stay authoritative even when evictable is requested', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      flushProjectAssetStoreOperationsForTests,
+      listProjectAssetBlobKeys,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 24, maxEntries: 10 });
+
+    const retained = await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({
+        name: 'retained.png',
+        uri: '',
+        width: 1,
+        height: 1,
+        metadata: { retainInProject: true },
+      }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+      { evictable: true },
+    );
+    await flushProjectAssetStoreOperationsForTests();
+
+    const keys = await listProjectAssetBlobKeys();
+    expect(keys).toContain(retained.storageKey);
   });
 });

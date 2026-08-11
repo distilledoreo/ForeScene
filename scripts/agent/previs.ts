@@ -72,6 +72,7 @@ import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
+import { createCliAbortScope, installCliAbortBridge } from './cliAbort';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -843,6 +844,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
+  let triggerBrowserAbort: (() => void) | undefined;
+  const abortScope = createCliAbortScope({
+    onAbort: () => {
+      triggerBrowserAbort?.();
+      void session.page.evaluate(() => {
+        const api = window.foreScene;
+        if (!api) return;
+        api.cancelPackageExport?.();
+        api.cancelShotVideoRender?.();
+        api.cancelShotStillPreparation?.();
+        api.cancelRenderWork?.();
+      }).catch(() => undefined);
+    },
+  });
   const session = await openAgentBrowser({
     url: options.url,
     headless: options.headless,
@@ -850,6 +865,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     persistWrite: options.persistWrite,
     profileDir: options.profileDir,
   });
+  triggerBrowserAbort = await installCliAbortBridge(session.page);
 
   let framesRendered = 0;
   let cacheHits = 0;
@@ -1402,7 +1418,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       if (pendingJobs.length > 0) {
         cacheMisses += pendingJobs.length;
         timeBudget?.assertWithinBudget('render_review_frames');
-        const batch = await renderSession.renderBatch(pendingJobs, { locationOrder });
+        const batch = await renderSession.renderBatch(pendingJobs, {
+          locationOrder,
+          signal: abortScope.signal,
+        });
         for (const frame of batch.results) {
           const shotState = state.shots[frame.shotNumber];
           let renderAttempts = (shotState?.renderAttempts ?? shotState?.attempts ?? 0) + 1;
@@ -2088,6 +2107,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
     throw error;
   } finally {
+    abortScope.dispose();
     await session.close();
   }
 }

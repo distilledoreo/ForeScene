@@ -1236,8 +1236,27 @@ export async function renderViewportClay(
     includePixelStats?: boolean;
   } = {},
 ): Promise<ImageRenderResult> {
-  await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
+  try {
+    return await renderViewportClayOnRenderer(renderer, project, cameraData, width, height, options);
+  } finally {
+    disposeRenderer(renderer);
+  }
+}
+
+/** Render clay into an existing renderer. Caller owns renderer lifetime (shot render sessions). */
+export async function renderViewportClayOnRenderer(
+  renderer: THREE.WebGLRenderer,
+  project: LocationProject,
+  cameraData: CameraData,
+  width: number,
+  height: number,
+  options: {
+    output?: RasterRenderOutput;
+    includePixelStats?: boolean;
+  } = {},
+): Promise<ImageRenderResult> {
+  await ensureHumanMannequinForProject(project);
   let scene: THREE.Scene | undefined;
   try {
     scene = buildScene(project, createFinalRenderSceneOptions());
@@ -1262,8 +1281,6 @@ export async function renderViewportClay(
     );
     renderer.render(scene, camera);
 
-    // Pixel stats are expensive at 4K. Materialized stills opt out because
-    // validation consumes the encoded PNG, while legacy callers keep them.
     let pixelStats: RenderPixelStats | undefined;
     if (options.includePixelStats !== false) {
       try {
@@ -1284,7 +1301,6 @@ export async function renderViewportClay(
     return { ...encoded, width, height, pixelStats };
   } finally {
     if (scene) disposeScene(scene);
-    disposeRenderer(renderer);
   }
 }
 
@@ -2217,6 +2233,18 @@ async function renderPanoCubemapFaceBlob(
 
 interface RendererCreationOptions {
   alpha?: boolean;
+}
+
+export function createViewportRenderer(
+  width: number,
+  height: number,
+  options: RendererCreationOptions = {},
+): THREE.WebGLRenderer {
+  return createRenderer(width, height, options);
+}
+
+export function disposeViewportRenderer(renderer: THREE.WebGLRenderer) {
+  disposeRenderer(renderer);
 }
 
 function createRenderer(

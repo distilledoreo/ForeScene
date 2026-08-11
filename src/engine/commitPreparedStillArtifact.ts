@@ -153,7 +153,7 @@ export async function commitPreparedStillArtifact(
       },
     };
     try {
-      asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob);
+      asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob, { evictable: true });
     } catch (error) {
       return {
         ok: false,
@@ -243,7 +243,7 @@ export async function commitPreparedStillArtifacts(
   const shot = resolveShot(params.project, params.shotId);
   if (!shot) return { ok: false, reason: 'shot-missing', project: params.project };
 
-  const pendingWrites: Array<{ key: string; blob: Blob }> = [];
+  const pendingWrites: Array<{ key: string; blob: Blob; evictable?: boolean }> = [];
   const preparedCommits: Array<{
     key: string;
     artifact: MaterializedStillArtifact;
@@ -295,7 +295,7 @@ export async function commitPreparedStillArtifacts(
           fingerprint: entry.expectedFingerprint,
         },
       };
-      pendingWrites.push({ key: storageKey, blob: entry.prepared.blob });
+      pendingWrites.push({ key: storageKey, blob: entry.prepared.blob, evictable: true });
     }
 
     const artifact: MaterializedStillArtifact = {

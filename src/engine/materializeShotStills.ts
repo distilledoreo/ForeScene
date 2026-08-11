@@ -37,6 +37,7 @@ import {
   renderWorkCoordinator,
   type RenderWorkPriority,
 } from './renderWorkCoordinator';
+import { ShotStillRenderSession } from './shotStillRenderSession';
 import {
   setStillArtifactError,
   setStillArtifactJobStatus,
@@ -206,7 +207,9 @@ export async function materializeShotStills(
   let primaryStillAssetId: string | undefined;
   let primaryFailed = false;
   const pendingBatchCommits: Array<PreparedStillBatchEntry & { key: string; isPrimary: boolean }> = [];
+  const renderSession = specs.length > 1 ? new ShotStillRenderSession() : undefined;
 
+  try {
   for (const spec of specs) {
     if (signal?.aborted) {
       const error = new Error('Still materialization was cancelled.');
@@ -249,7 +252,14 @@ export async function materializeShotStills(
           signal,
           depthRange: sharedDepthRange,
           force: params.force,
-          render: params.render,
+          render: params.render ?? (renderSession
+            ? ({ project, shot, specification, signal: renderSignal, depthRange }) => (
+              renderSession.renderSpecification(project, shot, specification, {
+                signal: renderSignal,
+                depthRange,
+              })
+            )
+            : undefined),
         }),
         { ownerId: shotId, jobId: `${shotId}:${key}`, signal },
       );
@@ -416,6 +426,9 @@ export async function materializeShotStills(
         if (prev) primaryStillAssetId = prev.assetId;
       }
     }
+  }
+  } finally {
+    renderSession?.dispose();
   }
 
   if (pendingBatchCommits.length > 0) {

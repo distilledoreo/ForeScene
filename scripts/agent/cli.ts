@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
+import { createCliAbortScope, installCliAbortBridge, type CliAbortScope } from './cliAbort';
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { runContactSheetCli, runPrevisCli, runRenderStillsCli } from './previs';
@@ -786,7 +787,7 @@ async function withSession<T>(
     persistWrite: boolean;
     profile?: string;
   },
-  run: (session: AgentBrowserSession) => Promise<T>,
+  run: (session: AgentBrowserSession, abort: CliAbortScope) => Promise<T>,
 ): Promise<T> {
   const session = await openAgentBrowser({
     url: options.url,
@@ -795,9 +796,38 @@ async function withSession<T>(
     persistWrite: options.persistWrite,
     profileDir: options.profile,
   });
+  let cancelBrowserPromise: Promise<void> | undefined;
+  let triggerBrowserAbort: (() => void) | undefined;
+  const abortScope = createCliAbortScope({
+    onAbort: () => {
+      triggerBrowserAbort?.();
+      cancelBrowserPromise = session.page.evaluate(() => {
+        const api = window.foreScene;
+        if (!api) return;
+        api.cancelPackageExport?.();
+        api.cancelShotVideoRender?.();
+        api.cancelShotStillPreparation?.();
+        api.cancelRenderWork?.();
+      }).catch(() => undefined);
+    },
+  });
+  triggerBrowserAbort = await installCliAbortBridge(session.page);
   try {
-    return await run(session);
+    return await Promise.race([
+      run(session, abortScope),
+      new Promise<T>((_resolve, reject) => {
+        if (abortScope.signal.aborted) {
+          reject(Object.assign(new Error('Agent CLI run was cancelled.'), { name: 'AbortError' }));
+          return;
+        }
+        abortScope.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('Agent CLI run was cancelled.'), { name: 'AbortError' }));
+        }, { once: true });
+      }),
+    ]);
   } finally {
+    if (cancelBrowserPromise) await cancelBrowserPromise;
+    abortScope.dispose();
     await session.close();
   }
 }
