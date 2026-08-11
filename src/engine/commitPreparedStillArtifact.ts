@@ -153,7 +153,7 @@ export async function commitPreparedStillArtifact(
       },
     };
     try {
-      asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob);
+      asset = await storeProjectAssetBlobDurable(project.id, base, prepared.blob, { evictable: true });
     } catch (error) {
       return {
         ok: false,

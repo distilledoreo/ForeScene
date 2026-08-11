@@ -463,8 +463,8 @@ function evictMemoryIfNeeded(): void {
   }
 }
 
-function persistProjectAssetBlob(key: string, blob: Blob, evictable = false) {
-  void putProjectAssetBlobs([{ key, blob, evictable }]).catch((error) => {
+function persistProjectAssetBlob(key: string, blob: Blob) {
+  void putProjectAssetBlobs([{ key, blob, evictable: false }]).catch((error) => {
     for (const listener of persistenceFailureListeners) listener({ key, error });
   });
 }
@@ -510,15 +510,30 @@ export function storeProjectAssetBlob<T extends ProjectAsset>(projectId: string,
  * Use for prepared-media commits where the project must not reference unpersisted bytes.
  * On failure, removes the in-memory/object-URL registration so callers stay clean.
  */
+export interface StoreProjectAssetBlobDurableOptions {
+  /** When true, the payload may participate in the evictable LRU budget. Defaults to false. */
+  evictable?: boolean;
+}
+
+export function resolveProjectAssetDurableEvictable(
+  asset: Pick<ProjectAsset, 'metadata'>,
+  options?: StoreProjectAssetBlobDurableOptions,
+): boolean {
+  if (asset.metadata?.retainInProject === true) return false;
+  return options?.evictable === true;
+}
+
 export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
   projectId: string,
   asset: T,
   blob: Blob,
+  options?: StoreProjectAssetBlobDurableOptions,
 ): Promise<T> {
   const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
+  const evictable = resolveProjectAssetDurableEvictable(asset, options);
   cacheProjectAssetBlob(storageKey, blob, true);
   try {
-    await putProjectAssetBlobs([{ key: storageKey, blob, evictable: true }]);
+    await putProjectAssetBlobs([{ key: storageKey, blob, evictable }]);
   } catch (error) {
     removeMemoryBlob(storageKey);
     memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);

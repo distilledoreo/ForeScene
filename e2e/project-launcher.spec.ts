@@ -59,7 +59,7 @@ async function expectDialogueDemoActive(page: Page) {
 async function expectRetainedContactSheetResolves(page: Page) {
   await expect.poll(async () => page.evaluate(async () => {
     const open = (name: string) => new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(name, 1);
+      const request = indexedDB.open(name);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error ?? new Error(`Could not open ${name}.`));
     });
