@@ -221,6 +221,16 @@ export const renderWorkCoordinator = {
     return cancelled;
   },
 
+  cancelAll(): number {
+    let cancelled = removeQueued(() => true);
+    for (const item of active.values()) {
+      if (item.cancelled) continue;
+      cancelEntry(item, 'Render work was cancelled.', true);
+      cancelled += 1;
+    }
+    return cancelled;
+  },
+
   getStatus() {
     return {
       queueLength: queue.length,

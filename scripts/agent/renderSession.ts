@@ -204,7 +204,15 @@ export class PersistentRenderSession {
     return frame;
   }
 
-  private async renderLocationGroup(jobs: RenderSessionShotJob[]): Promise<RenderSessionFrameResult[]> {
+  private async renderLocationGroup(
+    jobs: RenderSessionShotJob[],
+    signal?: AbortSignal,
+  ): Promise<RenderSessionFrameResult[]> {
+    if (signal?.aborted) {
+      const error = new Error('Render batch was cancelled.');
+      error.name = 'AbortError';
+      throw error;
+    }
     if (jobs.length === 0) return [];
     if (jobs.length === 1) {
       return [await this.renderShot(jobs[0]!)];
@@ -212,9 +220,14 @@ export class PersistentRenderSession {
 
     const inputs = jobs.map((job) => buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds));
     const batch = await this.page.evaluate(async (payload) => {
+      if (payload.signalAborted) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
       return window.foreScene!.renderShotBatch({ jobs: payload.inputs });
-    }, { inputs });
+    }, { inputs, signalAborted: signal?.aborted ?? false });
 
     const results: RenderSessionFrameResult[] = [];
     for (let index = 0; index < jobs.length; index += 1) {
@@ -254,7 +267,7 @@ export class PersistentRenderSession {
 
   async renderBatch(
     jobs: RenderSessionShotJob[],
-    options?: { locationOrder?: string[] },
+    options?: { locationOrder?: string[]; signal?: AbortSignal },
   ): Promise<RenderSessionBatchResult> {
     this.assertOpen();
     await this.ensureProjectLoaded();
@@ -262,7 +275,12 @@ export class PersistentRenderSession {
     const groups = groupJobsByLocation(jobs, options?.locationOrder);
     const results: RenderSessionFrameResult[] = [];
     for (const group of groups) {
-      results.push(...await this.renderLocationGroup(group.jobs));
+      if (options?.signal?.aborted) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
+      results.push(...await this.renderLocationGroup(group.jobs, options?.signal));
     }
 
     return {

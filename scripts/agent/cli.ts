@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
+import { createCliAbortScope } from './cliAbort';
 import { inspectViaBrowser } from './inspect';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { runContactSheetCli, runPrevisCli, runRenderStillsCli } from './previs';
@@ -788,6 +789,7 @@ async function withSession<T>(
   },
   run: (session: AgentBrowserSession) => Promise<T>,
 ): Promise<T> {
+  const abortScope = createCliAbortScope();
   const session = await openAgentBrowser({
     url: options.url,
     headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
@@ -797,7 +799,11 @@ async function withSession<T>(
   });
   try {
     return await run(session);
+  } catch (error) {
+    await abortScope.cancelBrowserWork((fn) => session.page.evaluate(fn));
+    throw error;
   } finally {
+    abortScope.dispose();
     await session.close();
   }
 }

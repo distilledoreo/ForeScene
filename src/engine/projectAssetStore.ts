@@ -236,20 +236,25 @@ async function listStoredMetadata(): Promise<StoredProjectAssetMetadata[]> {
 async function deleteStoredKeys(keys: readonly string[]): Promise<void> {
   if (keys.length === 0) return;
   const db = await openDatabase();
-  if (!db) return;
   for (const key of keys) {
     removeMemoryBlob(key);
     memoryBlobVersions.set(key, (memoryBlobVersions.get(key) ?? 0) + 1);
     memoryBlobWrittenAt.delete(key);
     revokeObjectUrlForKey(key);
   }
+  if (!db) return;
+  const storeNames = db.objectStoreNames.contains(METADATA_STORE_NAME)
+    ? [STORE_NAME, METADATA_STORE_NAME]
+    : [STORE_NAME];
   await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME, METADATA_STORE_NAME], 'readwrite');
+    const transaction = db.transaction(storeNames, 'readwrite');
     const blobs = transaction.objectStore(STORE_NAME);
-    const metadata = transaction.objectStore(METADATA_STORE_NAME);
+    const metadata = storeNames.length > 1
+      ? transaction.objectStore(METADATA_STORE_NAME)
+      : undefined;
     for (const key of keys) {
       blobs.delete(key);
-      metadata.delete(key);
+      metadata?.delete(key);
     }
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error('Could not delete local project assets.'));

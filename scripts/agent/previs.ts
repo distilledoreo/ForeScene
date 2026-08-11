@@ -72,6 +72,7 @@ import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
+import { createCliAbortScope } from './cliAbort';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -843,6 +844,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
+  const abortScope = createCliAbortScope();
   const session = await openAgentBrowser({
     url: options.url,
     headless: options.headless,
@@ -1402,7 +1404,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       if (pendingJobs.length > 0) {
         cacheMisses += pendingJobs.length;
         timeBudget?.assertWithinBudget('render_review_frames');
-        const batch = await renderSession.renderBatch(pendingJobs, { locationOrder });
+        const batch = await renderSession.renderBatch(pendingJobs, {
+          locationOrder,
+          signal: abortScope.signal,
+        });
         for (const frame of batch.results) {
           const shotState = state.shots[frame.shotNumber];
           let renderAttempts = (shotState?.renderAttempts ?? shotState?.attempts ?? 0) + 1;
@@ -2064,6 +2069,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(path.join(outputDir, 'render-session.json'), descriptor);
     }
   } catch (error) {
+    await abortScope.cancelBrowserWork((fn) => session.page.evaluate(fn));
     timing.totalMs = Date.now() - runStartedAt;
     if (error instanceof ProductionTimeBudgetExceededError) {
       await writeJson(runStatePath, state);
@@ -2088,6 +2094,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
     throw error;
   } finally {
+    abortScope.dispose();
     await session.close();
   }
 }

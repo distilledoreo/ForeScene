@@ -1415,6 +1415,13 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return { ok: true, cancelledShotIds: result.cancelledShotIds };
     },
 
+    cancelRenderWork(input) {
+      const cancelledCount = input?.shotId
+        ? renderWorkCoordinator.cancelByOwner(input.shotId)
+        : renderWorkCoordinator.cancelAll();
+      return { ok: true, cancelledCount };
+    },
+
     listShotMedia(input) {
       return listAgentShotMedia(input);
     },
@@ -2373,11 +2380,19 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
   // Batch callers use this late-bound method too, so they cannot bypass a live
   // background video or interactive capture job.
   const renderShotFrameUncoordinated = api.renderShotFrame.bind(api);
-  api.renderShotFrame = (input) => renderWorkCoordinator.schedule(
-    'capture-primary-still',
-    () => renderShotFrameUncoordinated(input),
-    { ownerId: input.shotId, jobId: `agent-frame:${input.shotId}` },
-  );
+  api.renderShotFrame = (input) => {
+    const controller = new AbortController();
+    return renderWorkCoordinator.schedule(
+      'capture-primary-still',
+      () => renderShotFrameUncoordinated(input),
+      {
+        ownerId: input.shotId,
+        jobId: `agent-frame:${input.shotId}`,
+        signal: controller.signal,
+        abort: () => controller.abort(),
+      },
+    );
+  };
   setAgentRenderShotFrameImpl((input) => api.renderShotFrame(input));
 
   return api;

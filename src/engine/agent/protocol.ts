@@ -1814,6 +1814,8 @@ export interface ForeSceneBrowserApi {
   retryFailedShotStills(input: { shotId: string }): Promise<AgentShotMaterializationResult>;
   /** Cancel queued/in-flight still preparation for a shot (or all when shotId omitted). */
   cancelShotStillPreparation(input?: { shotId?: string }): { ok: boolean; cancelledShotIds: string[] };
+  /** Cancel queued or active coordinator-backed render work, optionally scoped to one shot. */
+  cancelRenderWork(input?: { shotId?: string }): { ok: boolean; cancelledCount: number };
   listShotMedia(input: { shotId: string }): AgentShotMediaItem[];
   compareAdjacentShots(input: { shotId: string }): AgentSequenceContinuityDelta;
   inspectSequenceContinuity(input: { shotIds: string[] }): AgentSequenceContinuityDelta[];
