@@ -10,6 +10,9 @@ import { goToWorkspace, workspaceTab } from './workspace-navigation';
 async function openProjectMenu(page: Page) {
   await dismissOverlays(page);
 
+  const backdrop = page.getByRole('button', { name: 'Close dialog backdrop' });
+  await expect(backdrop).toBeHidden({ timeout: 10_000 });
+
   const trigger = page.locator('[data-brand-menu-trigger]');
   await expect(trigger).toBeVisible();
   // Menu may already be open from a prior step.
@@ -222,10 +225,17 @@ test.describe('@smoke first-project launcher', () => {
     const resetItem = page.locator('[data-project-reset-sample]');
     await expect(resetItem).toBeVisible({ timeout: 10_000 });
     await resetItem.click();
+
+    await expectDialogueDemoActive(page);
+    await expect(page.locator('[data-project-save-status]')).toHaveAttribute(
+      'data-project-save-status',
+      'saved',
+      { timeout: 30_000 },
+    );
+
     await dismissOverlays(page);
 
     await expectProjectName(page, /Dialogue Demo/i);
     await expectRetainedContactSheetResolves(page);
-    await dismissOverlays(page);
   });
 });
