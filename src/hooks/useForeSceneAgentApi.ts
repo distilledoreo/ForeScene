@@ -2,7 +2,9 @@
  * Registers `window.foreScene` idempotently.
  * Identity check matters under React Strict Mode double-mount.
  *
- * The installed surface preserves the full declared materialization contract.
+ * captureShotThumbnail keeps the legacy sampled-render behavior (including
+ * timeSeconds) but returns the declared materialization-shaped fields as well.
+ * Full await-all prepared-media capture is exposed separately.
  */
 
 import { useEffect } from 'react';
@@ -24,16 +26,7 @@ function statusIsBusy(status: ForeSceneAgentStatus): boolean {
  */
 export function applyForeSceneAgentApiFacade(api: ForeSceneBrowserApi): ForeSceneBrowserApi {
   const baseGetStatus = api.getStatus.bind(api);
-  const baseCapturePreparedMedia = typeof api.captureShotPreparedMedia === 'function'
-    ? api.captureShotPreparedMedia.bind(api)
-    : (input: { shotId: string }) => api.captureShotThumbnail({ shotId: input.shotId });
   const mutableApi = api as ForeSceneBrowserApi;
-
-  // Keep the installed surface identical to the declared browser API. The base
-  // implementation already performs await-all materialization and owns the
-  // artifact/legacy-slot merge; wrapping it with the old sampled-thumbnail
-  // renderer would silently change the return contract again.
-  mutableApi.captureShotPreparedMedia = (input) => baseCapturePreparedMedia(input);
 
   // The v1 busy schema has no separate prepared-media field. Fold coordinator
   // activity into the existing render-busy bit on the installed surface so CLI

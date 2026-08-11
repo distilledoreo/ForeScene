@@ -1139,6 +1139,91 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         };
       }
 
+      const rendered = await this.renderShotFrame({
+        shotId: input.shotId,
+        timeSeconds: input.timeSeconds,
+        appearance: 'clay',
+      });
+      const baseResult = {
+        ...rendered,
+        shotId: input.shotId,
+        revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+        primaryStillAssetId: undefined as string | undefined,
+        artifacts: [] as AgentShotMaterializationResult['artifacts'],
+        warnings: [] as string[],
+      };
+
+      if (!rendered.ok || !rendered.pngDataUrl) {
+        return {
+          ...baseResult,
+          ok: false,
+          status: 'failed' as const,
+          warnings: ['Sampled thumbnail render did not produce attachable PNG data.'],
+        };
+      }
+
+      const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+      if (!runDestructive) {
+        return {
+          ...baseResult,
+          ok: false,
+          status: 'failed' as const,
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.busy, 'Project persistence is not ready.')],
+          warnings: ['Project persistence is not ready.'],
+        };
+      }
+
+      let attachedAssetId: string | undefined;
+      try {
+        await runDestructive('Attach shot thumbnail', () => {
+          const asset = useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+            name: `shot_${input.shotId}_thumbnail.png`,
+            dataUrl: rendered.pngDataUrl!,
+            width: rendered.width,
+            height: rendered.height,
+          });
+          attachedAssetId = asset.id;
+        });
+        return {
+          ...baseResult,
+          ok: true,
+          status: 'ready' as const,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? baseResult.revisionId,
+          primaryStillAssetId: attachedAssetId,
+          artifacts: attachedAssetId ? [{
+            key: `sampled-clay-thumbnail@${input.timeSeconds ?? 0}`,
+            status: 'rendered',
+            assetId: attachedAssetId,
+          }] : [],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not attach shot thumbnail.';
+        return {
+          ...baseResult,
+          ok: false,
+          status: 'failed' as const,
+          diagnostics: [{ code: 'thumbnail_attach_failed', message, severity: 'error' }],
+          warnings: [message],
+        };
+      }
+    },
+
+    async captureShotPreparedMedia(input) {
+      const blocked = refinementWriteDiagnostics('captureShotPreparedMedia');
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId,
+          revisionId: useProjectSafetyStore.getState().activeRevisionId ?? '',
+          width: 0,
+          height: 0,
+          artifacts: [],
+          warnings: [],
+          diagnostics: blocked,
+        };
+      }
+
       // Render outside the protected persistence transaction. Each accepted
       // artifact is merged against the latest live project; the verified save
       // barrier happens once after the batch completes.
@@ -1164,7 +1249,6 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           project,
           shotId: input.shotId,
           mode: 'await-all',
-          timeSeconds: input.timeSeconds,
           getLiveProject: () => useProjectStore.getState().project,
           commitLiveProject: (updater) => {
             useProjectStore.setState((current) => ({
@@ -1236,10 +1320,6 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           )],
         };
       }
-    },
-
-    captureShotPreparedMedia(input) {
-      return this.captureShotThumbnail({ shotId: input.shotId });
     },
 
     async regenerateShotStills(input) {

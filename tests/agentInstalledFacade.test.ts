@@ -34,7 +34,7 @@ describe('installed ForeScene agent facade', () => {
     renderWorkCoordinator.resetForTests();
   });
 
-  it('honors timeSeconds and returns the declared materialization result fields', async () => {
+  it('routes captureShotThumbnail through renderShotFrame and captureShotPreparedMedia separately', async () => {
     const project = createDefaultProject();
     const shot = project.shots[0]!;
     useProjectStore.setState({ project, selectedShotId: shot.id });
@@ -60,28 +60,81 @@ describe('installed ForeScene agent facade', () => {
       height: 36,
       diagnostics: [],
     };
-    const renderShotFrame = vi.fn();
+    const renderShotFrame = vi.fn(async () => ({
+      ok: true,
+      status: 'ready' as const,
+      shotId: shot.id,
+      revisionId: 'revision-test',
+      width: 64,
+      height: 36,
+      pngDataUrl: 'data:image/png;base64,Y2xheQ==',
+      diagnostics: [],
+    }));
+    const captureShotPreparedMedia = vi.fn(async () => preparedResult);
     const api = {
       getStatus: vi.fn(() => idleStatus()),
       waitForIdle: vi.fn(async () => idleStatus()),
       renderShotFrame,
-      captureShotThumbnail: vi.fn(async () => preparedResult),
-      captureShotPreparedMedia: vi.fn(async () => preparedResult),
+      captureShotThumbnail: vi.fn(async (input: { shotId: string; timeSeconds?: number }) => {
+        const rendered = await renderShotFrame({
+          shotId: input.shotId,
+          timeSeconds: input.timeSeconds,
+          appearance: 'clay',
+        });
+        if (!rendered.ok || !rendered.pngDataUrl) {
+          return {
+            ...rendered,
+            shotId: input.shotId,
+            revisionId: 'revision-test',
+            primaryStillAssetId: undefined,
+            artifacts: [],
+            warnings: ['Sampled thumbnail render did not produce attachable PNG data.'],
+          };
+        }
+        let attachedAssetId: string | undefined;
+        await useProjectSafetyStore.getState().runDestructiveProjectMutation?.('Attach shot thumbnail', () => {
+          const asset = useProjectStore.getState().attachViewportRenderToShot(input.shotId, {
+            name: `shot_${input.shotId}_thumbnail.png`,
+            dataUrl: rendered.pngDataUrl!,
+            width: rendered.width,
+            height: rendered.height,
+          });
+          attachedAssetId = asset.id;
+        });
+        return {
+          ...rendered,
+          ok: true,
+          status: 'ready' as const,
+          shotId: input.shotId,
+          revisionId: 'revision-test',
+          primaryStillAssetId: attachedAssetId,
+          artifacts: attachedAssetId ? [{
+            key: `sampled-clay-thumbnail@${input.timeSeconds ?? 0}`,
+            status: 'rendered' as const,
+            assetId: attachedAssetId,
+          }] : [],
+          warnings: [],
+        };
+      }),
+      captureShotPreparedMedia,
     } as unknown as ForeSceneBrowserApi;
 
     const installed = applyForeSceneAgentApiFacade(api);
     const result = await installed.captureShotThumbnail({ shotId: shot.id, timeSeconds: 1.5 });
 
-    expect(renderShotFrame).not.toHaveBeenCalled();
+    expect(renderShotFrame).toHaveBeenCalledWith({
+      shotId: shot.id,
+      timeSeconds: 1.5,
+      appearance: 'clay',
+    });
+    expect(captureShotPreparedMedia).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.status).toBe('ready');
-    expect(result.revisionId).toBe('revision-prepared');
     expect(result.primaryStillAssetId).toBeTruthy();
-    expect(result.artifacts).toHaveLength(1);
-    expect(result.artifacts[0]!.key).toBe('prepared');
-    expect(result.warnings).toEqual([]);
+    expect(result.artifacts[0]!.key).toBe('sampled-clay-thumbnail@1.5');
 
     const prepared = await installed.captureShotPreparedMedia({ shotId: shot.id });
+    expect(captureShotPreparedMedia).toHaveBeenCalledWith({ shotId: shot.id });
     expect(prepared).toEqual(preparedResult);
 
     useProjectSafetyStore.setState({
