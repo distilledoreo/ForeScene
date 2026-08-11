@@ -1,12 +1,14 @@
 import type { ProjectAsset } from '../domain/types';
+import { getReferencedProjectAssetIds } from './projectAssets';
+import { listAllProjectRevisions } from './projectRevisionStore';
 
 /** Legacy PanoRef database name preserved so existing local binary assets keep opening. */
 const LEGACY_DATABASE_NAME = 'panoref-project-assets';
 const STORE_NAME = 'binary-assets';
 const METADATA_STORE_NAME = 'binary-assets-metadata';
 const LAST_ACCESSED_INDEX = 'lastAccessedAt';
-/** Schema v2 adds durable LRU metadata separate from blob payloads. */
-const DATABASE_VERSION = 2;
+/** Schema v3 adds evictable vs authoritative classification for durable LRU. */
+const DATABASE_VERSION = 3;
 
 /**
  * Portable manifest references for locally stored image and video payloads.
@@ -48,6 +50,19 @@ let estimatedPersistentBudgetPromise: Promise<typeof persistentLimits> | undefin
 export interface ProjectAssetBlobWrite {
   key: string;
   blob: Blob;
+  /**
+   * When true, the payload may be LRU-evicted under the evictable byte budget.
+   * Authoritative project media (imports, retainInProject, revision-retained)
+   * must remain false.
+   */
+  evictable?: boolean;
+}
+
+export class ProjectAssetStorageQuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProjectAssetStorageQuotaError';
+  }
 }
 
 export interface ProjectAssetPersistenceFailure {
@@ -66,6 +81,8 @@ interface StoredProjectAssetMetadata {
   type: string;
   createdAt: string;
   lastAccessedAt: string;
+  /** False (default) for authoritative project media; true for reconstructable cache rows. */
+  evictable?: boolean;
 }
 
 function nowIso(): string {
@@ -102,6 +119,20 @@ function openDatabase(): Promise<IDBDatabase | undefined> {
         metadata.createIndex(LAST_ACCESSED_INDEX, 'lastAccessedAt', { unique: false });
       }
 
+      if (event.oldVersion < 3) {
+        const metadataStore = upgradeTransaction.objectStore(METADATA_STORE_NAME);
+        const cursorRequest = metadataStore.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const row = cursor.value as StoredProjectAssetMetadata;
+          if (row && row.evictable === undefined) {
+            cursor.update({ ...row, evictable: false });
+          }
+          cursor.continue();
+        };
+      }
+
       if (event.oldVersion < 2) {
         const blobs = upgradeTransaction.objectStore(STORE_NAME);
         const cursorRequest = blobs.openCursor();
@@ -118,6 +149,7 @@ function openDatabase(): Promise<IDBDatabase | undefined> {
               type: blob.type,
               createdAt: stamp,
               lastAccessedAt: stamp,
+              evictable: false,
             } satisfies StoredProjectAssetMetadata);
           }
           cursor.continue();
@@ -214,8 +246,54 @@ function isPinnedMemoryKey(key: string): boolean {
   return key.startsWith(`project/${activeProjectId}/`) || key.startsWith(`import/${activeProjectId}/`);
 }
 
-function isPinnedPersistentKey(key: string): boolean {
-  return isPinnedMemoryKey(key);
+function storageKeyForAsset(asset: Pick<ProjectAsset, 'storageKey' | 'uri'>): string | undefined {
+  if (asset.storageKey) return asset.storageKey;
+  if (asset.uri.startsWith(PROJECT_ASSET_URI_PREFIX)) {
+    return asset.uri.slice(PROJECT_ASSET_URI_PREFIX.length);
+  }
+  return undefined;
+}
+
+/** Mark durable rows as authoritative so LRU eviction cannot delete them. */
+export async function markProjectAssetBlobsAuthoritative(keys: readonly string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const unique = [...new Set(keys)];
+  return enqueueAssetDatabaseOperation(async () => {
+    const db = await openDatabase();
+    if (!db || !db.objectStoreNames.contains(METADATA_STORE_NAME)) return;
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(METADATA_STORE_NAME, 'readwrite');
+      const metadata = transaction.objectStore(METADATA_STORE_NAME);
+      for (const key of unique) {
+        const getRequest = metadata.get(key);
+        getRequest.onsuccess = () => {
+          const value = getRequest.result as StoredProjectAssetMetadata | undefined;
+          if (value) metadata.put({ ...value, evictable: false });
+        };
+      }
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not mark project assets authoritative.'));
+    });
+  });
+}
+
+/** Protect every manifest- and revision-referenced payload from durable LRU eviction. */
+export async function synchronizeAuthoritativeProjectAssetKeys(
+  project: import('../domain/types').LocationProject,
+): Promise<void> {
+  const keys = new Set<string>();
+  for (const assetId of getReferencedProjectAssetIds(project)) {
+    const asset = project.assets.assets[assetId];
+    if (!asset) continue;
+    const key = storageKeyForAsset(asset);
+    if (key) keys.add(key);
+  }
+  const revisions = await listAllProjectRevisions();
+  for (const revision of revisions) {
+    for (const key of revision.resources.projectAssetKeys ?? []) keys.add(key);
+    for (const resource of revision.resources.projectAssets ?? []) keys.add(resource.key);
+  }
+  await markProjectAssetBlobsAuthoritative([...keys]);
 }
 
 async function listStoredMetadata(): Promise<StoredProjectAssetMetadata[]> {
@@ -282,20 +360,17 @@ async function touchStoredMetadata(key: string, lastAccessedAt = nowIso()): Prom
 async function evictPersistentIfNeeded(protectedKey?: string): Promise<void> {
   await startEstimatedPersistentBudgetOnce();
   const all = await listStoredMetadata();
-  all.sort((a, b) => (Date.parse(a.lastAccessedAt) || 0) - (Date.parse(b.lastAccessedAt) || 0));
-  let totalBytes = all.reduce((sum, row) => sum + row.byteSize, 0);
+  const evictable = all.filter((row) => row.evictable === true);
+  evictable.sort((a, b) => (Date.parse(a.lastAccessedAt) || 0) - (Date.parse(b.lastAccessedAt) || 0));
+  let totalBytes = evictable.reduce((sum, row) => sum + row.byteSize, 0);
   const toDelete: string[] = [];
-  const isProtected = (key: string) => (
-    key === protectedKey
-    || isPinnedPersistentKey(key)
-    || toDelete.includes(key)
-  );
+  const isProtected = (key: string) => key === protectedKey || toDelete.includes(key);
 
   while (
-    (all.length - toDelete.length > persistentLimits.maxEntries)
+    (evictable.length - toDelete.length > persistentLimits.maxEntries)
     || (totalBytes > persistentLimits.maxBytes)
   ) {
-    const candidate = all.find((row) => !isProtected(row.key));
+    const candidate = evictable.find((row) => !isProtected(row.key));
     if (!candidate) break;
     toDelete.push(candidate.key);
     totalBytes -= candidate.byteSize;
@@ -307,7 +382,7 @@ async function evictPersistentIfNeeded(protectedKey?: string): Promise<void> {
 async function writeStoredMetadata(
   key: string,
   blob: Blob,
-  options: { replace: boolean },
+  options: { replace: boolean; evictable: boolean },
 ): Promise<void> {
   const db = await openDatabase();
   if (!db) return;
@@ -325,6 +400,7 @@ async function writeStoredMetadata(
     type: blob.type,
     createdAt: existing?.createdAt ?? stamp,
     lastAccessedAt: stamp,
+    evictable: options.evictable,
   };
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(METADATA_STORE_NAME, 'readwrite');
@@ -387,8 +463,8 @@ function evictMemoryIfNeeded(): void {
   }
 }
 
-function persistProjectAssetBlob(key: string, blob: Blob) {
-  void putProjectAssetBlobs([{ key, blob }]).catch((error) => {
+function persistProjectAssetBlob(key: string, blob: Blob, evictable = false) {
+  void putProjectAssetBlobs([{ key, blob, evictable }]).catch((error) => {
     for (const listener of persistenceFailureListeners) listener({ key, error });
   });
 }
@@ -442,7 +518,7 @@ export async function storeProjectAssetBlobDurable<T extends ProjectAsset>(
   const storageKey = asset.storageKey ?? createProjectAssetStorageKey(projectId, asset.id);
   cacheProjectAssetBlob(storageKey, blob, true);
   try {
-    await putProjectAssetBlobs([{ key: storageKey, blob }]);
+    await putProjectAssetBlobs([{ key: storageKey, blob, evictable: true }]);
   } catch (error) {
     removeMemoryBlob(storageKey);
     memoryBlobVersions.set(storageKey, (memoryBlobVersions.get(storageKey) ?? 0) + 1);
@@ -490,15 +566,17 @@ async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]
     for (const entry of entries) cacheProjectAssetBlob(entry.key, entry.blob, true);
     return;
   }
-  const storedEntries: Array<{ key: string; value: StoredProjectAssetRecord }> = [];
+  const storedEntries: Array<{ key: string; value: StoredProjectAssetRecord; evictable: boolean }> = [];
   for (const entry of entries) {
     if (entry.blob.size > persistentLimits.maxBytes) {
-      await deleteStoredKeys([entry.key]);
-      continue;
+      throw new ProjectAssetStorageQuotaError(
+        `Project asset "${entry.key}" (${entry.blob.size} bytes) exceeds the persistent storage limit (${persistentLimits.maxBytes} bytes).`,
+      );
     }
     storedEntries.push({
       key: entry.key,
       value: { bytes: await entry.blob.arrayBuffer(), type: entry.blob.type },
+      evictable: entry.evictable === true,
     });
   }
   if (storedEntries.length === 0) return;
@@ -515,7 +593,7 @@ async function putProjectAssetBlobsNow(entries: readonly ProjectAssetBlobWrite[]
   for (const entry of storedEntries) {
     const source = entries.find((candidate) => candidate.key === entry.key);
     if (!source) continue;
-    await writeStoredMetadata(entry.key, source.blob, { replace: true });
+    await writeStoredMetadata(entry.key, source.blob, { replace: true, evictable: entry.evictable });
     cacheProjectAssetBlob(entry.key, source.blob, true);
     await evictPersistentIfNeeded(entry.key);
   }

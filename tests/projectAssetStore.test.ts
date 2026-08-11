@@ -200,4 +200,68 @@ describe('local-first raster and video assets', () => {
     expect(keys).not.toContain(second.storageKey);
     await expect(getProjectAssetBlob(second.storageKey!)).resolves.toBeUndefined();
   });
+
+  it('never LRU-evicts authoritative project media when evictable cache overflows', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      flushProjectAssetStoreOperationsForTests,
+      getProjectAssetBlob,
+      listProjectAssetBlobKeys,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+      storeProjectAssetDataUrl,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetMemoryActiveProject(undefined);
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 50, maxEntries: 10 });
+
+    const authoritative = storeProjectAssetDataUrl(project.id, createPanoAsset({
+      name: 'retained.png',
+      uri: 'data:image/png;base64,aGVsbG8=',
+      width: 1,
+      height: 1,
+      metadata: { retainInProject: true },
+    }));
+    await flushProjectAssetStoreOperationsForTests();
+
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-a.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-b.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    await storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'cache-c.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(20)], { type: 'image/png' }),
+    );
+    await flushProjectAssetStoreOperationsForTests();
+
+    const keys = await listProjectAssetBlobKeys();
+    expect(keys).toContain(authoritative.storageKey);
+    await expect(getProjectAssetBlob(authoritative.storageKey!)).resolves.toBeInstanceOf(Blob);
+  });
+
+  it('rejects oversized durable writes instead of reporting success', async () => {
+    if (typeof indexedDB === 'undefined') return;
+
+    const {
+      ProjectAssetStorageQuotaError,
+      setProjectAssetPersistentLimitsForTests,
+      storeProjectAssetBlobDurable,
+    } = await import('../src/engine/projectAssetStore');
+    const project = createDefaultProject();
+    setProjectAssetPersistentLimitsForTests({ maxBytes: 16, maxEntries: 10 });
+
+    await expect(storeProjectAssetBlobDurable(
+      project.id,
+      createPanoAsset({ name: 'too-large.png', uri: '', width: 1, height: 1 }),
+      new Blob([new Uint8Array(32)], { type: 'image/png' }),
+    )).rejects.toBeInstanceOf(ProjectAssetStorageQuotaError);
+  });
 });

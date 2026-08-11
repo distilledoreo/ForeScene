@@ -4,6 +4,7 @@ import { bindLiveProjectAccess } from '../engine/liveProjectAccess';
 import {
   releaseProjectAssetMemoryForProject,
   setProjectAssetMemoryActiveProject,
+  synchronizeAuthoritativeProjectAssetKeys,
 } from '../engine/projectAssetStore';
 import { cancelShotStillPreparation } from '../engine/shotStillActions';
 import { clearStillArtifactRuntime } from '../engine/stillArtifactRuntime';
@@ -84,7 +85,12 @@ useProjectStore.subscribe((state, previousState) => {
     rebindStillReconciliation(reconciliationOptions());
     releaseProjectAssetMemoryForProject(previous.id);
     setProjectAssetMemoryActiveProject(next.id);
+    void synchronizeAuthoritativeProjectAssetKeys(next);
     return;
+  }
+
+  if (previous.assets !== next.assets) {
+    void synchronizeAuthoritativeProjectAssetKeys(next);
   }
 
   const nextShotIds = new Set(next.shots.map((shot) => shot.id));
@@ -105,3 +111,4 @@ useProjectStore.subscribe((state, previousState) => {
 // Keep the currently open project's decoded media warm while allowing
 // temporary/imported/agent payloads to be reclaimed by the asset-store LRU.
 setProjectAssetMemoryActiveProject(useProjectStore.getState().project.id);
+void synchronizeAuthoritativeProjectAssetKeys(useProjectStore.getState().project);

@@ -135,26 +135,60 @@ export class PersistentRenderSession {
     };
   }
 
-  private async tryDirectRender(job: RenderSessionShotJob): Promise<BrowserRenderResult> {
+  private async tryDirectRender(
+    job: RenderSessionShotJob,
+    signal?: AbortSignal,
+  ): Promise<BrowserRenderResult> {
     const input = buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds);
     const result = await this.page.evaluate(async (payload) => {
+      const abortRequested = () => {
+        const abortFn = (window as unknown as { __foreSceneCliAbortRequested?: () => boolean }).__foreSceneCliAbortRequested;
+        return payload.signalAborted || (typeof abortFn === 'function' && abortFn());
+      };
+      if (abortRequested()) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
-      return window.foreScene!.renderShotFrame(payload);
-    }, input);
+      if (abortRequested()) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
+      return window.foreScene!.renderShotFrame(payload.input);
+    }, { input, signalAborted: signal?.aborted ?? false });
     if (result.revisionId) this.revisionId = result.revisionId;
     this.lastRenderAt = new Date().toISOString();
     return result;
   }
 
-  private async renderWithViewport(job: RenderSessionShotJob): Promise<BrowserRenderResult> {
+  private async renderWithViewport(
+    job: RenderSessionShotJob,
+    signal?: AbortSignal,
+  ): Promise<BrowserRenderResult> {
     await this.page.evaluate(async (payload) => {
+      const abortRequested = () => {
+        const abortFn = (window as unknown as { __foreSceneCliAbortRequested?: () => boolean }).__foreSceneCliAbortRequested;
+        return payload.signalAborted || (typeof abortFn === 'function' && abortFn());
+      };
+      if (abortRequested()) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      if (abortRequested()) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       await window.foreScene!.applyPlan({
         version: 1,
         planId: `select-${payload.shotId}`,
         commands: [{ op: 'shot.select', shot: { id: payload.shotId } }],
       });
-    }, { shotId: job.shotId });
+    }, { shotId: job.shotId, signalAborted: signal?.aborted ?? false });
 
     await waitForAgentIdle(this.page);
 
@@ -177,16 +211,19 @@ export class PersistentRenderSession {
       await captureSceneScreenshot(this.page, job.debugUiPath).catch(() => undefined);
     }
 
-    return this.tryDirectRender(job);
+    return this.tryDirectRender(job, signal);
   }
 
-  async renderShot(job: RenderSessionShotJob): Promise<RenderSessionFrameResult> {
+  async renderShot(
+    job: RenderSessionShotJob,
+    signal?: AbortSignal,
+  ): Promise<RenderSessionFrameResult> {
     this.assertOpen();
     await this.ensureProjectLoaded();
 
-    let browserResult = await this.tryDirectRender(job);
+    let browserResult = await this.tryDirectRender(job, signal);
     if (!browserResult.ok && needsViewportFallback(browserResult)) {
-      browserResult = await this.renderWithViewport(job);
+      browserResult = await this.renderWithViewport(job, signal);
     }
 
     const frame = this.frameResultFromBrowser(job, browserResult);
@@ -215,17 +252,26 @@ export class PersistentRenderSession {
     }
     if (jobs.length === 0) return [];
     if (jobs.length === 1) {
-      return [await this.renderShot(jobs[0]!)];
+      return [await this.renderShot(jobs[0]!, signal)];
     }
 
     const inputs = jobs.map((job) => buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds));
     const batch = await this.page.evaluate(async (payload) => {
-      if (payload.signalAborted) {
+      const abortRequested = () => {
+        const abortFn = (window as unknown as { __foreSceneCliAbortRequested?: () => boolean }).__foreSceneCliAbortRequested;
+        return payload.signalAborted || (typeof abortFn === 'function' && abortFn());
+      };
+      if (abortRequested()) {
         const error = new Error('Render batch was cancelled.');
         error.name = 'AbortError';
         throw error;
       }
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      if (abortRequested()) {
+        const error = new Error('Render batch was cancelled.');
+        error.name = 'AbortError';
+        throw error;
+      }
       return window.foreScene!.renderShotBatch({ jobs: payload.inputs });
     }, { inputs, signalAborted: signal?.aborted ?? false });
 
@@ -234,7 +280,7 @@ export class PersistentRenderSession {
       const job = jobs[index]!;
       const browserResult = batch[index] as BrowserRenderResult | undefined;
       if (!browserResult) {
-        results.push(await this.renderShot(job));
+        results.push(await this.renderShot(job, signal));
         continue;
       }
 
@@ -243,7 +289,7 @@ export class PersistentRenderSession {
 
       let frame = this.frameResultFromBrowser(job, browserResult);
       if (!frame.ok && needsViewportFallback(browserResult)) {
-        frame = await this.renderShot(job);
+        frame = await this.renderShot(job, signal);
         results.push(frame);
         continue;
       }

@@ -72,7 +72,7 @@ import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
-import { createCliAbortScope } from './cliAbort';
+import { createCliAbortScope, installCliAbortBridge } from './cliAbort';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -844,7 +844,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
-  const abortScope = createCliAbortScope();
+  let triggerBrowserAbort: (() => void) | undefined;
+  const abortScope = createCliAbortScope({
+    onAbort: () => {
+      triggerBrowserAbort?.();
+      void session.page.evaluate(() => {
+        const api = window.foreScene;
+        if (!api) return;
+        api.cancelPackageExport?.();
+        api.cancelShotVideoRender?.();
+        api.cancelShotStillPreparation?.();
+        api.cancelRenderWork?.();
+      }).catch(() => undefined);
+    },
+  });
   const session = await openAgentBrowser({
     url: options.url,
     headless: options.headless,
@@ -852,6 +865,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     persistWrite: options.persistWrite,
     profileDir: options.profileDir,
   });
+  triggerBrowserAbort = await installCliAbortBridge(session.page);
 
   let framesRendered = 0;
   let cacheHits = 0;
@@ -2069,7 +2083,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(path.join(outputDir, 'render-session.json'), descriptor);
     }
   } catch (error) {
-    await abortScope.cancelBrowserWork((fn) => session.page.evaluate(fn));
     timing.totalMs = Date.now() - runStartedAt;
     if (error instanceof ProductionTimeBudgetExceededError) {
       await writeJson(runStatePath, state);
