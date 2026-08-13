@@ -9,10 +9,9 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, writeSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolveForeSceneRepoRoot } from './repoRoot';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = path.resolve(__dirname, '../..');
+export const REPO_ROOT = resolveForeSceneRepoRoot();
 export const AGENT_OPERATIONS_DIR = path.resolve(REPO_ROOT, '.forescene-agent/operations');
 
 export const CLI_OPERATION_STATES = [

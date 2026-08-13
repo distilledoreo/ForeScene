@@ -39,6 +39,10 @@ Long-running commands emit `[agent-op]` JSON heartbeats on stderr every 5 second
 
 `agent:verify` and `agent:visual-preflight` honor `--shot`/`--shots`. An explicit selection that matches nothing fails, and unmatched ids appear in the JSON result and provenance. An empty project with no `--shots` skips the visual gate instead of reporting a vacuous pass. `agent:frame` and `agent:video` accept exactly one shot and reject extra ids before the browser opens. Clay, projected, and depth are `--mode` values on those commands (`--appearance` remains an alias). `agent:asset-contract` accepts one optional `--shot` (API `shotId`) and rejects additional ids.
 
+CLI-only open → inspect → projected frame → video → save → reopen → verify lives in `e2e/agent-cli-parity.spec.ts` (`npm run test:e2e:agent-cli`). Catalog `stable: true` is not proof of that parity. When the working directory is outside this checkout, set `FORESCENE_REPO_ROOT` and invoke `npm --prefix "$FORESCENE_REPO_ROOT" run agent:<command>`.
+
+Live operation reliability (`npm run test:e2e:agent-ops`) records Chromium `agent:soak-saved-rig` 20/20 with zero retries, proves `[agent-op]` heartbeats keep advancing for a >60s video, then `agent:cancel`s that CLI process and runs the next command on the same profile without killing Chromium.
+
 `agent:import-model` takes the same ordinary-model path as **Import 3D scene**.
 Use `--allow-heavy-imports` only after reviewing a returned heavy-import estimate.
 An extreme import additionally requires `--consent-token IMPORT`.
