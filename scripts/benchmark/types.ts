@@ -54,6 +54,7 @@ export interface BenchmarkCandidateBrief {
   forbidSourceInspection: true;
   forbidHarnessScripts: true;
   url?: string;
+  repoRoot: string;
   profileDir: string;
   outputDir: string;
   projectPackage?: string;
