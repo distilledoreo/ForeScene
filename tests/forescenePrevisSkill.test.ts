@@ -57,6 +57,13 @@ describe('ForeScene previs skill contract', () => {
       'agent:save',
       'agent:capabilities',
       'FORESCENE_BENCHMARK_BRIEF',
+      'FORESCENE_REPO_ROOT',
+      'npm --prefix',
+      'writeAuthorized',
+      'resetAuthorized',
+      'repairBudget',
+      'Do not kill Chromium',
+      'if a capability is `true`',
       'agent:analyze-character',
       'agent:import-character',
       'renderControlVideo',
@@ -75,6 +82,7 @@ describe('ForeScene previs skill contract', () => {
     ]) {
       expect(skill, `missing skill contract phrase: ${phrase}`).toContain(phrase);
     }
+    expect(skill).not.toContain('equivalent browser API');
   });
 
   it('defaults an existing project to non-destructive refinement and captures preservation evidence', () => {

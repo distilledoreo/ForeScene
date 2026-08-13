@@ -19,17 +19,29 @@ The output is an editable ForeScene project and an evidence-backed handoff packa
 
 ## Canonical CLI surface
 
-The Agent CLI is the public automation surface. Before authoring, run:
+The Agent CLI is the public automation surface. **Before authoring**, query capabilities. Do not inspect ForeScene source or call `window.foreScene` to discover whether an operation exists.
 
 ```bash
 npm run agent:capabilities
 ```
 
-If a capability is `true`, use the documented command. Do not inspect ForeScene source or call `window.foreScene` for that operation. See `docs/agent-capability-matrix.md`.
+Stdout is one JSON envelope. Read `result.capabilities`: if a capability is `true`, use the documented `npm run agent:*` command for that operation. See `docs/agent-capability-matrix.md`.
+
+Every command writes one envelope to stdout (`ok`, `operation`, `operationId`, `durationMs`, `warnings`, `error`, `result`). Parse that object. Human progress and `[agent-op]` heartbeats are on stderr and are not the machine contract. Exit `0` success, `1` failure, `2` usage error.
+
+If a long-running command hangs, cancel with `npm run agent:cancel -- --operation <id>` (or omit `--operation` for the latest active record). Do not kill Chromium.
 
 ## Benchmark mode
 
-When `FORESCENE_BENCHMARK=1` or `FORESCENE_BENCHMARK_BRIEF` is set, read that JSON brief first. Honor `writeAuthorized`, `resetAuthorized`, and `repairBudget`. Stay `cliOnly`: do not create `run-benchmark.ts`, `open-package.ts`, or `render-stills.ts`, and do not call `window.foreScene`. If ForeScene times out (`character.import` or similar), stop and report an infrastructure failure; do not edit the harness to make the run pass.
+When `FORESCENE_BENCHMARK=1` or `FORESCENE_BENCHMARK_BRIEF` is set, the repository harness owns the experiment. The candidate owns previs only.
+
+1. Read the JSON brief at `FORESCENE_BENCHMARK_BRIEF` first.
+2. Honor `writeAuthorized`. If it is `false`, do not pass `--write`.
+3. Honor `resetAuthorized`. If it is `false`, `--reset-project` and `resetProject` are prohibited.
+4. Honor `repairBudget`: at most that many visual-repair passes after the first authoring pass. When the budget is exhausted, stop and report remaining failures.
+5. Stay `cliOnly`. Do not create `run-benchmark.ts`, `open-package.ts`, or `render-stills.ts`. Do not call `window.foreScene`. Do not inspect ForeScene source when the capability map marks the operation as CLI-supported.
+6. Use `FORESCENE_REPO_ROOT`, `FORESCENE_URL`, `FORESCENE_PROFILE`, and `FORESCENE_OUTPUT` from the environment (and the brief's `repoRoot` / `url` / `profileDir` / `outputDir` when present). The working directory may be outside the ForeScene checkout. Invoke documented commands as `npm --prefix "$FORESCENE_REPO_ROOT" run agent:<command>`. Write required stills and motion files under `FORESCENE_OUTPUT`.
+7. If ForeScene times out (`character.import` or similar), stop and report an infrastructure failure. Do not edit the harness, the skill, or ForeScene source to make the run pass.
 
 ## Operating vs developing
 
@@ -158,8 +170,8 @@ Retain only one capability/binding preflight, one batch persistence record, the 
 ## Production-integrity workflow (opt-in)
 
 For a manifest-backed production explicitly using production-integrity, prefer the gated `agent:production` entry
-point or the equivalent browser API over assembling an unattended sequence of
-lower-level `agent:previs` steps. The production workflow is:
+point over assembling an unattended sequence of
+lower-level `agent:previs` steps. Do not call `window.foreScene` production APIs when `production.orchestrate` is `true`. The production workflow is:
 
 1. Inspect the project and choose Greenfield, Existing-project refinement, or
    Export-only. Never reset a valuable project without explicit authorization.
@@ -181,12 +193,7 @@ lower-level `agent:previs` steps. The production workflow is:
 7. Run motion review and final export only after the still gate. Command
    success, artifact existence, and a linked panorama are not visual approval.
 
-The browser lifecycle is resumable through `runProduction`,
-`getProductionRun`, `listProductionRuns`, `pauseProductionRun`,
-`resumeProductionRun`, `cancelProductionRun`, and
-`subscribeProductionRun`. Preserve the run ID, gate state, recovery revision,
-approved-layout revision, cache keys, artifacts, and blocking diagnostics in
-the handoff record.
+Drive the production lifecycle with `npm run agent:production`. Preserve the run ID from the CLI envelope, plus gate state, recovery revision, approved-layout revision, cache keys, artifacts, and blocking diagnostics in the handoff record. Do not inspect ForeScene source to resume a gated run when the CLI capability is true.
 
 ## Operating mode is a required first decision
 
@@ -344,6 +351,7 @@ npm run agent:visual-preflight
 npm run agent:asset-contract
 npm run agent:run
 npm run agent:previs
+npm run agent:production
 npm run agent:render-stills
 npm run agent:contact-sheet
 npm run agent:package
@@ -406,12 +414,15 @@ For every motion shot, render and inspect `t = 0`, `t = duration / 2`, and `t = 
 
 Useful documented CLI commands when inspecting a live session:
 
+- `npm run agent:capabilities` — boolean map; if `true`, do not inspect source for that operation.
 - `npm run agent:inspect -- --document` — read-only project snapshot for preservation IDs.
+- `npm run agent:open -- --file <package.fsp> --write` / `npm run agent:save -- --output <package.fsp> --write`.
 - `npm run agent:plan-exports` — package plan that must be checked before rendering.
 - `npm run agent:frame -- --shot <id> --mode clay --output <png>` — clean PNG and pixel stats.
 - `npm run agent:verify` — idle/busy plus visual and health gates; not proof that a frame is visually ready.
+- `npm run agent:cancel` / `npm run agent:operations` — stop or list CLI operations without killing Chromium.
 
-Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes.
+Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes. Parse stdout envelopes; do not scrape stderr for success.
 
 ## Rules
 
