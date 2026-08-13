@@ -18,6 +18,10 @@ import {
   recordAgentRenderCacheEntry,
   resetAgentRenderCacheForTests,
 } from '../src/engine/agent/renderCacheControl';
+import {
+  getCacheOperations,
+  resetCacheTelemetryForTests,
+} from '../src/engine/agent/cacheTelemetry';
 
 describe('content-addressed render fingerprints', () => {
   it('changes for camera and relevant staging edits but not unused dynamic objects', () => {
@@ -74,9 +78,13 @@ describe('content-addressed render fingerprints', () => {
       },
     };
 
+    resetCacheTelemetryForTests();
     recordAgentRenderCacheEntry({ projectId, fingerprint, artifactId: 'artifact-1' });
     expect(inspectAgentRenderCache({ projectId }).readyEntries).toBe(1);
     expect(explainAgentRenderCacheHit({ projectId, fingerprint }).hit).toBe(true);
+    const operations = getCacheOperations();
+    expect(operations.some((entry) => entry.operation === 'render.record' && entry.artifactId === 'artifact-1')).toBe(true);
+    expect(operations.some((entry) => entry.operation === 'render.explainHit' && entry.hit)).toBe(true);
 
     invalidateAgentRenderDependencies({ projectId, dependencyIds: ['object:subject-1'] });
     expect(explainAgentRenderCacheHit({ projectId, fingerprint }).hit).toBe(false);

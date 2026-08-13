@@ -886,6 +886,7 @@ export const helpSections: readonly HelpSection[] = [
           { label: '360 and cubemap renders', description: 'High-resolution equirectangular and cubemap work may take time because it is generated in the browser.' },
           { label: 'Storage pressure warnings', description: 'Project Safety warns when browser storage is nearly full or persistent storage was not granted.' },
           { label: 'Performance budgets', description: 'Documented values are measured baselines and recommendations unless explicitly identified as hard safety limits.' },
+          { label: 'Agent artifact registry', description: 'Keeps at most 64 artifacts or 512 MiB. Published, persisted, project-attached, and in-flight handles stay pinned. Unpublished outputs from a paused or cancelled job generation are deleted after that generation drains so they cannot pin memory forever.' },
         ],
       },
       {

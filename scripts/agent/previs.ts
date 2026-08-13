@@ -17,7 +17,12 @@ import {
 import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { chromium } from '@playwright/test';
-import type { CameraData, LocationProject, Shot, Vec3 } from '../../src/domain/types';
+import {
+  saveAgentArtifactToFile,
+  toCliArtifactTransfer,
+  type AgentArtifactTransferTelemetry,
+} from './artifactIo';
+import type { CameraData, LocationProject, Shot } from '../../src/domain/types';
 import {
   assertManifestHashCompatible,
   applyManifestUpdateToRunState,
@@ -73,6 +78,7 @@ import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
 import { createCliAbortScope, installCliAbortBridge } from './cliAbort';
+import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -124,11 +130,13 @@ export interface PrevisCliResult {
   contactSheet?: string;
   reviewArtifacts?: string[];
   package?: string;
+  packageTransfer?: AgentArtifactTransferTelemetry;
   artifactPaths?: string[];
   diagnostics?: unknown[];
   timing?: ProductionRunTiming;
   sourceRevisionId?: string;
   resultRevisionId?: string;
+  provenance?: unknown;
   partial?: boolean;
   budgetExceeded?: boolean;
   error?: string;
@@ -146,14 +154,6 @@ async function pathExists(filePath: string): Promise<boolean> {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-function snapshotCamera(camera: CameraData): CameraData {
-  return {
-    ...camera,
-    position: [...camera.position] as Vec3,
-    target: [...camera.target] as Vec3,
-  };
 }
 
 interface RepairAttemptLogEntry {
@@ -342,10 +342,7 @@ async function renderControlVideo(
   page: Page,
   shotId: string,
   videoPath: string,
-): Promise<{ ok: boolean; assetId?: string; error?: string }> {
-  // The CLI artifact is the same deterministic render that is attached to the
-  // shot. Register the download listener before starting the asynchronous render.
-  const downloadPromise = page.waitForEvent('download', { timeout: 300_000 }).catch(() => undefined);
+): Promise<{ ok: boolean; assetId?: string; error?: string; transfer?: AgentArtifactTransferTelemetry }> {
   const result = await page.evaluate(async (id) => window.foreScene!.renderShotVideo({
     shotId: id,
     mode: 'render',
@@ -353,15 +350,16 @@ async function renderControlVideo(
     appearance: 'clay',
     contentMode: 'full_scene',
     attachToShot: true,
-    download: true,
+    download: false,
   }), shotId);
   if (!result.ok) {
     return { ok: false, error: result.diagnostics?.[0]?.message ?? 'Control video render failed.' };
   }
-  const download = await downloadPromise;
-  if (!download) return { ok: false, error: 'Control video render completed without a download artifact.' };
-  await download.saveAs(videoPath);
-  return { ok: true, assetId: result.assetId };
+  if (!result.artifact?.artifactId) {
+    return { ok: false, error: 'Control video render completed without an artifact handle.' };
+  }
+  const saved = await saveAgentArtifactToFile(page, result.artifact.artifactId, videoPath);
+  return { ok: true, assetId: result.assetId, transfer: toCliArtifactTransfer(saved) };
 }
 
 async function loadOrCreateRunState(params: {
@@ -866,6 +864,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     profileDir: options.profileDir,
   });
   triggerBrowserAbort = await installCliAbortBridge(session.page);
+  await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
+    command: 'previs',
+    profile: options.profileDir,
+  }));
 
   let framesRendered = 0;
   let cacheHits = 0;
@@ -1600,6 +1602,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       });
 
       let repairAttempts = shotState?.repairAttempts ?? 0;
+      if (autoRepair && shotState?.shotId) {
+        await session.page.evaluate(async (shotId) => {
+          window.foreScene!.beginShotRepairSession({ shotId, label: 'baseline' });
+        }, shotState.shotId);
+      }
       while (
         autoRepair
         && finalResult.status !== 'passed'
@@ -1651,7 +1658,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           finalResult,
           definition.camera.subjects[0],
         );
-        const cameraBefore = snapshotCamera(shot.camera);
         const repairLogPath = path.join(outputDir, 'logs', `repairs-${definition.shotNumber}.json`);
         const repairHistory = await readRepairHistory(repairLogPath);
 
@@ -1723,21 +1729,34 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           candidateResult,
           definition.camera.subjects[0],
         );
-        let keptRepair = isValidationRankImproved(rankBefore, rankAfter);
+        const rankImproved = isValidationRankImproved(rankBefore, rankAfter);
+        const visualCandidate = await session.page.evaluate(async (input) => {
+          const evaluated = window.foreScene!.evaluateShotRepairCandidate({
+            shotId: input.shotId,
+            label: input.label,
+            subjectIds: input.subjectIds,
+            accepted: input.accepted,
+            restoreIfWorse: true,
+          });
+          const preflight = window.foreScene!.inspectShotVisualPreflight({
+            shotId: input.shotId,
+            subjectIds: input.subjectIds,
+          });
+          return { evaluated, preflight };
+        }, {
+          shotId: shotState.shotId,
+          label: `repair-${repairAttempts}`,
+          subjectIds: definition.camera.subjects,
+          accepted: rankImproved,
+        });
+        let keptRepair = rankImproved && visualCandidate.evaluated.kept;
         let finalPixelStats = reframe.pixelStats;
         let finalByteSize = byteSize;
 
         if (!keptRepair && repair.commands.length > 0) {
-          await applyPlanOnPage(session.page, {
-            version: 1,
-            planId: `repair-rollback-${definition.shotNumber}-${repairAttempts}`,
-            description: 'Rollback repair — no score improvement',
-            commands: [{
-              op: 'shot.updateCamera',
-              shot: { id: shotState.shotId },
-              camera: cameraBefore,
-            }],
-          });
+          await session.page.evaluate(async (shotId) => {
+            await window.foreScene!.commitBestShotRepairCandidate({ shotId });
+          }, shotState.shotId);
           await waitForAgentIdle(session.page);
           const rollbackFrame = await renderCleanShotFrame(
             session.page,
@@ -1974,21 +1993,24 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     await writeJson(runStatePath, state);
 
     let packagePath: string | undefined;
+    let packageTransfer: AgentArtifactTransferTelemetry | undefined;
     let packageFailed = false;
     if (!skipPackage && !timeBudget?.isExpired()) {
       timeBudget?.assertWithinBudget('finalize');
       state = setPhase(state, 'package', 'in_progress');
-      const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 });
       const pack = await session.page.evaluate(async () => {
         await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
-        return window.foreScene!.exportPackage({ download: true });
+        return window.foreScene!.exportPackage({ download: false });
       });
       await writeJson(path.join(outputDir, 'logs', 'export.json'), pack);
-      if (pack.ok) {
-        const download = await downloadPromise;
+      if (pack.ok && pack.artifact?.artifactId) {
         packagePath = path.join(outputDir, 'package.zip');
-        await download.saveAs(packagePath);
+        const saved = await saveAgentArtifactToFile(session.page, pack.artifact.artifactId, packagePath);
+        packageTransfer = toCliArtifactTransfer(saved);
         state = setPhase(state, 'package', 'complete');
+      } else if (pack.ok) {
+        packageFailed = true;
+        state = setPhase(state, 'package', 'failed');
       } else {
         packageFailed = true;
         state = setPhase(state, 'package', 'failed');
@@ -2059,6 +2081,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       contactSheet: contactSheetPath,
       reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
+      packageTransfer,
       artifactPaths,
       manifestHash,
       runStatePath,
@@ -2066,6 +2089,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       timing,
       sourceRevisionId,
       resultRevisionId,
+      provenance: endStatus.provenance,
       ...(packageFailed ? { error: 'Package export failed.' } : {}),
     };
     await writeJson(path.join(outputDir, 'summary.json'), {

@@ -21,6 +21,9 @@
  *   npm run agent:production -- --manifest examples/previs/minimal-dialogue.json --write --reset-project --mode rapid-review
  *   npm run agent:render-stills -- --output artifacts/previs
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
+ *   npm run agent:visual-preflight -- --shots 01,02
+ *   npm run agent:asset-contract
+ *   npm run agent:verify -- --json
  *
  * Write commands require explicit `--write` (session) or `--persist-write` (profile).
  * Project reset additionally requires `--reset-project`.
@@ -41,6 +44,22 @@ import {
 } from '../../src/engine/agent/proxyReplacement';
 import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
 import { runRefinementCli } from './refinement';
+import {
+  refreshAgentSessionRevision,
+  saveAgentArtifactToFile,
+  toCliArtifactTransfer,
+  type AgentArtifactTransferTelemetry,
+} from './artifactIo';
+import { parseAgentCliArgs } from './cliArgs';
+import { buildAgentCliHelpDocument } from './cliCommands';
+import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
+import {
+  resolveCliCommandShotUsage,
+  toOptionalRequestedShotIds,
+  toVisualCollectionInput,
+} from './cliShotSelection';
+
+let activeCliCommand: string | undefined;
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -51,171 +70,7 @@ function printErr(message: string): void {
 }
 
 function parseArgs(argv: string[]) {
-  const args = {
-    command: argv[0] ?? 'inspect',
-    plan: undefined as string | undefined,
-    manifest: undefined as string | undefined,
-    url: undefined as string | undefined,
-    headless: false,
-    writeAccess: false,
-    persistWrite: false,
-    resetProject: false,
-    updateManifest: false,
-    initializeOnly: false,
-    skipPackage: false,
-    workspace: undefined as string | undefined,
-    output: undefined as string | undefined,
-    packagePath: undefined as string | undefined,
-    screenshot: undefined as string | undefined,
-    input: undefined as string | undefined,
-    file: undefined as string | undefined,
-    rigPackage: undefined as string | undefined,
-    proxy: undefined as string | undefined,
-    replacement: undefined as string | undefined,
-    mapping: undefined as string | undefined,
-    rigMode: 'preserve' as 'preserve' | 'autorig' | 'auto' | 'saved-rig',
-    name: undefined as string | undefined,
-    consentToken: undefined as string | undefined,
-    profile: undefined as string | undefined,
-    shotIds: [] as string[],
-    timeSeconds: undefined as number | undefined,
-    resolution: undefined as string | undefined,
-    appearance: undefined as string | undefined,
-    content: undefined as string | undefined,
-    noAttach: false,
-    noDownload: false,
-    allowHeavyCharacterImports: false,
-    allowHeavyModelImports: false,
-    batch: undefined as string | undefined,
-    approveBatch: undefined as string | undefined,
-    review: undefined as string | undefined,
-    retryBatch: undefined as string | undefined,
-    rollbackBatch: undefined as string | undefined,
-    finalize: false,
-    json: false,
-    mode: undefined as string | undefined,
-    autoRepair: true,
-    noAutoRepair: false,
-    maxRepairPasses: undefined as number | undefined,
-    timeBudgetSeconds: undefined as number | undefined,
-  };
-
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index]!;
-    if (token === '--plan') {
-      args.plan = argv[++index];
-    } else if (token === '--manifest') {
-      args.manifest = argv[++index];
-    } else if (token === '--url') {
-      args.url = argv[++index];
-    } else if (token === '--headless') {
-      args.headless = true;
-    } else if (token === '--write') {
-      args.writeAccess = true;
-    } else if (token === '--persist-write') {
-      args.persistWrite = true;
-      args.writeAccess = true;
-    } else if (token === '--reset-project') {
-      args.resetProject = true;
-    } else if (token === '--update-manifest') {
-      args.updateManifest = true;
-    } else if (token === '--allow-heavy-character-imports') {
-      args.allowHeavyCharacterImports = true;
-    } else if (token === '--allow-heavy-imports') {
-      args.allowHeavyModelImports = true;
-    } else if (token === '--initialize-only') {
-      args.initializeOnly = true;
-    } else if (token === '--skip-package') {
-      args.skipPackage = true;
-    } else if (token === '--workspace') {
-      args.workspace = argv[++index];
-    } else if (token === '--output') {
-      args.output = argv[++index];
-    } else if (token === '--package') {
-      args.packagePath = argv[++index];
-    } else if (token === '--screenshot') {
-      args.screenshot = argv[++index];
-    } else if (token === '--input') {
-      args.input = argv[++index];
-    } else if (token === '--file') {
-      args.file = argv[++index];
-    } else if (token === '--rig-package') {
-      args.rigPackage = argv[++index];
-    } else if (token === '--proxy') {
-      args.proxy = argv[++index];
-    } else if (token === '--replacement') {
-      args.replacement = argv[++index];
-    } else if (token === '--mapping') {
-      args.mapping = argv[++index];
-    } else if (token === '--rig-mode') {
-      const mode = argv[++index];
-      if (mode !== 'preserve' && mode !== 'autorig' && mode !== 'auto' && mode !== 'saved-rig') {
-        throw new Error('--rig-mode must be preserve, autorig, auto, or saved-rig');
-      }
-      args.rigMode = mode;
-    } else if (token === '--name') {
-      args.name = argv[++index];
-    } else if (token === '--consent-token') {
-      args.consentToken = argv[++index];
-    } else if (token === '--profile') {
-      args.profile = argv[++index];
-    } else if (token === '--batch') {
-      args.batch = argv[++index];
-    } else if (token === '--approve') {
-      args.approveBatch = argv[++index];
-    } else if (token === '--review') {
-      args.review = argv[++index];
-    } else if (token === '--retry') {
-      args.retryBatch = argv[++index];
-    } else if (token === '--rollback') {
-      args.rollbackBatch = argv[++index];
-    } else if (token === '--json') {
-      args.json = true;
-    } else if (token === '--finalize') {
-      args.finalize = true;
-    } else if (token === '--shot') {
-      const shotId = argv[++index];
-      if (shotId) args.shotIds.push(shotId);
-    } else if (token === '--shots') {
-      const shotList = argv[++index];
-      if (shotList) args.shotIds.push(...shotList.split(',').map((item) => item.trim()).filter(Boolean));
-    } else if (token === '--time') {
-      const value = Number(argv[++index]);
-      if (!Number.isFinite(value)) throw new Error('--time must be a finite number');
-      args.timeSeconds = value;
-    } else if (token === '--resolution') {
-      args.resolution = argv[++index];
-    } else if (token === '--appearance') {
-      args.appearance = argv[++index];
-    } else if (token === '--content') {
-      args.content = argv[++index];
-    } else if (token === '--no-attach') {
-      args.noAttach = true;
-    } else if (token === '--no-download') {
-      args.noDownload = true;
-    } else if (token === '--mode') {
-      args.mode = argv[++index];
-    } else if (token === '--no-auto-repair') {
-      args.noAutoRepair = true;
-      args.autoRepair = false;
-    } else if (token === '--max-repair-passes') {
-      const value = Number(argv[++index]);
-      if (!Number.isFinite(value) || value < 0) {
-        throw new Error('--max-repair-passes must be a non-negative number');
-      }
-      args.maxRepairPasses = value;
-    } else if (token === '--time-budget') {
-      const value = Number(argv[++index]);
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error('--time-budget must be a positive number');
-      }
-      args.timeBudgetSeconds = value;
-    } else if (token.startsWith('--')) {
-      throw new Error(`Unknown flag: ${token}`);
-    }
-  }
-
-  return args;
+  return parseAgentCliArgs(argv);
 }
 
 async function runCharacterAnalysis(options: {
@@ -227,6 +82,7 @@ async function runCharacterAnalysis(options: {
   rigPackage?: string;
   rigMode: 'preserve' | 'autorig' | 'auto' | 'saved-rig';
   output?: string;
+  profile?: string;
 }) {
   const target = path.resolve(options.file);
   const rigPackageTarget = options.rigPackage ? path.resolve(options.rigPackage) : undefined;
@@ -271,6 +127,7 @@ async function runCharacterImport(options: {
   name?: string;
   consentToken?: string;
   allowHeavyCharacterImports: boolean;
+  profile?: string;
 }) {
   requireExplicitWrite('agent:import-character', options.writeAccess);
   const target = path.resolve(options.file);
@@ -536,6 +393,7 @@ async function runFrame(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   shotId: string;
   timeSeconds?: number;
   output: string;
@@ -736,6 +594,7 @@ async function runVideo(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   shotId: string;
   output?: string;
   resolution?: string;
@@ -746,9 +605,6 @@ async function runVideo(options: {
 }) {
   await withSession(options, async (session) => {
     const contentMode = options.content === 'full' ? 'full_scene' : options.content;
-    const downloadPromise = options.download && options.output
-      ? session.page.waitForEvent('download', { timeout: 600_000 })
-      : null;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.renderShotVideo({
         shotId: input.shotId,
@@ -756,17 +612,22 @@ async function runVideo(options: {
         appearance: input.appearance as 'clay' | 'projected' | 'depth' | undefined,
         contentMode: input.content as 'full_scene' | 'clean_plate' | 'characters_only' | undefined,
         attachToShot: input.attachToShot,
-        download: input.download,
+        download: false,
       })
     ), { ...options, content: contentMode });
     let savedPath: string | undefined;
-    if (downloadPromise && result.ok) {
-      const download = await downloadPromise;
-      savedPath = path.resolve(options.output!);
-      await mkdir(path.dirname(savedPath), { recursive: true });
-      await download.saveAs(savedPath);
+    let transfer: AgentArtifactTransferTelemetry | undefined;
+    if (options.download && options.output && result.ok && result.artifact?.artifactId) {
+      const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
+      savedPath = saved.savedPath;
+      transfer = toCliArtifactTransfer(saved);
     }
-    printJson({ ...result, savedPath });
+    printJson({
+      ...result,
+      savedPath,
+      transfer,
+      provenance: (await session.page.evaluate(() => window.foreScene!.getStatus())).provenance,
+    });
     if (!result.ok) process.exitCode = 1;
   });
 }
@@ -786,6 +647,7 @@ async function withSession<T>(
     writeAccess: boolean;
     persistWrite: boolean;
     profile?: string;
+    command?: string;
   },
   run: (session: AgentBrowserSession, abort: CliAbortScope) => Promise<T>,
 ): Promise<T> {
@@ -798,6 +660,11 @@ async function withSession<T>(
   });
   let cancelBrowserPromise: Promise<void> | undefined;
   let triggerBrowserAbort: (() => void) | undefined;
+  await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
+    command: options.command ?? activeCliCommand,
+    profile: options.profile,
+  }));
+
   const abortScope = createCliAbortScope({
     onAbort: () => {
       triggerBrowserAbort?.();
@@ -898,9 +765,15 @@ async function runVerify(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   workspace?: string;
   output?: string;
+  shotIds?: string[];
 }) {
+  const visualInput = toVisualCollectionInput({
+    explicit: options.shotIds !== undefined,
+    shotIds: options.shotIds ?? [],
+  });
   await withSession(options, async (session) => {
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
@@ -911,14 +784,51 @@ async function runVerify(options: {
     if (options.output) {
       screenshot = await captureSceneScreenshot(session.page, options.output);
     }
+    const checks = await session.page.evaluate(async (input) => {
+      const api = window.foreScene!;
+      const collected = api.collectVisualPreflightValidation(input);
+      const assetPoseContract = api.inspectAssetPoseContract();
+      const health = await api.inspectProjectHealth();
+      const validation = api.recordRunValidation({
+        source: 'verify',
+        revisionId: api.getStatus().revisionId,
+        ...(collected.visualPreflight !== undefined ? { visualPreflight: collected.visualPreflight } : {}),
+        ...(collected.selection.unmatchedShotIds.length > 0
+          ? { unmatchedVisualShotIds: collected.selection.unmatchedShotIds }
+          : {}),
+        assetPose: assetPoseContract,
+        projectHealth: health,
+      });
+      return {
+        collected,
+        visualPreflight: collected.visualPreflight ?? [],
+        assetPoseContract,
+        health,
+        validation,
+        provenance: api.getStatus().provenance,
+      };
+    }, visualInput);
+    const failedPreflight = checks.visualPreflight.filter((item) => item.gateStatus === 'failed' || (!item.ok && item.gateStatus !== 'warning'));
+    const warningPreflight = checks.visualPreflight.filter((item) => item.gateStatus === 'warning' || (!item.ok && item.gateStatus !== 'failed' && (item.unresolvedVisibleObjectIds?.length ?? 0) > 0));
+    const ok = checks.collected.ok && checks.validation.ok;
     printJson({
-      ok: true,
+      ok,
       project: inspection.project,
       objectCount: (inspection.objects as unknown[]).length,
       shotCount: (inspection.shots as unknown[]).length,
       screenshot,
       status: inspection.status,
+      visualPreflight: checks.visualPreflight,
+      unmatchedShotIds: checks.collected.selection.unmatchedShotIds,
+      diagnostic: checks.collected.selection.diagnostic,
+      assetPoseContract: checks.assetPoseContract,
+      health: checks.health,
+      validation: checks.validation,
+      provenance: checks.provenance,
+      failedShotIds: failedPreflight.map((item) => item.shotId),
+      warningShotIds: warningPreflight.map((item) => item.shotId),
     });
+    if (!ok) process.exitCode = 1;
   });
 }
 
@@ -927,6 +837,7 @@ async function runPipeline(options: {
   headless: boolean;
   writeAccess: boolean;
   persistWrite: boolean;
+  profile?: string;
   plan: string;
   screenshot?: string;
   workspace?: string;
@@ -939,6 +850,7 @@ async function runPipeline(options: {
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
+    profile: options.profile,
   }, async (session) => {
     const inspection = await inspectViaBrowser(session.page);
     const preview = await session.page.evaluate(async (planJson) => (
@@ -992,7 +904,7 @@ async function runPackage(options: {
   persistWrite: boolean;
   profile?: string;
   output?: string;
-  shotIds: string[];
+  shotIds?: string[];
 }) {
   await withSession({
     url: options.url,
@@ -1002,41 +914,107 @@ async function runPackage(options: {
     profile: options.profile,
   }, async (session) => {
     await waitForAgentIdle(session.page);
+    const revision = await refreshAgentSessionRevision(session.page).catch(() => ({ revisionId: undefined }));
     printErr('[agent] starting package export…');
-
-    const downloadPromise = options.output
-      ? session.page.waitForEvent('download', { timeout: 300_000 }).catch(() => null)
-      : null;
 
     const result = await session.page.evaluate(async (input) => {
       await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
       return window.foreScene!.exportPackage({
-        shotIds: input.shotIds.length > 0 ? input.shotIds : undefined,
-        download: true,
+        shotIds: input.shotIds,
+        download: false,
+        expectedRevisionId: input.expectedRevisionId,
       });
-    }, { shotIds: options.shotIds });
+    }, { shotIds: options.shotIds, expectedRevisionId: revision.revisionId });
 
     let savedPath: string | undefined;
-    if (downloadPromise && result.ok) {
-      const download = await downloadPromise;
-      if (!download) throw new Error('Package export reported success but the browser download was not received.');
-      const target = path.resolve(options.output!);
-      await mkdir(path.dirname(target), { recursive: true });
-      await download.saveAs(target);
-      savedPath = target;
-      printErr(`[agent] saved package ${target}`);
+    let transfer: AgentArtifactTransferTelemetry | undefined;
+    if (options.output && result.ok && result.artifact?.artifactId) {
+      const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
+      savedPath = saved.savedPath;
+      transfer = toCliArtifactTransfer(saved);
+      printErr(`[agent] saved package ${savedPath} (${transfer.transferMode}, ${transfer.pageMaterialization}, ${transfer.byteLength} bytes, ${transfer.chunkCount} chunks)`);
+    } else if (options.output && result.ok && !result.artifact?.artifactId) {
+      throw new Error('Package export reported success but no artifact handle was returned.');
     }
 
     printJson({
       ...result,
       savedPath,
+      transfer,
+      provenance: (await session.page.evaluate(() => window.foreScene!.getStatus())).provenance,
     });
     if (!result.ok) process.exitCode = 1;
   });
 }
 
+async function runVisualPreflight(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  shotIds?: string[];
+}) {
+  const visualInput = toVisualCollectionInput({
+    explicit: options.shotIds !== undefined,
+    shotIds: options.shotIds ?? [],
+  });
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate((input) => {
+      const api = window.foreScene!;
+      const collected = api.collectVisualPreflightValidation(input);
+      const validation = api.recordRunValidation({
+        source: 'visual-preflight',
+        revisionId: api.getStatus().revisionId,
+        ...(collected.visualPreflight !== undefined ? { visualPreflight: collected.visualPreflight } : {}),
+        ...(collected.selection.unmatchedShotIds.length > 0
+          ? { unmatchedVisualShotIds: collected.selection.unmatchedShotIds }
+          : {}),
+      });
+      return {
+        ok: collected.ok && validation.ok,
+        unmatchedShotIds: collected.selection.unmatchedShotIds,
+        diagnostic: collected.selection.diagnostic,
+        visualPreflight: collected.visualPreflight ?? [],
+        validation,
+        provenance: api.getStatus().provenance,
+      };
+    }, visualInput);
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
+  });
+}
+
+async function runAssetContract(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  shotId?: string;
+}) {
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate((shotId) => {
+      const api = window.foreScene!;
+      const assetPoseContract = api.inspectAssetPoseContract(shotId ? { shotId } : {});
+      api.recordRunValidation({
+        source: 'asset-contract',
+        revisionId: api.getStatus().revisionId,
+        assetPose: assetPoseContract,
+      });
+      return {
+        ok: true,
+        assetPoseContract,
+        provenance: api.getStatus().provenance,
+      };
+    }, options.shotId);
+    printJson(result);
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  activeCliCommand = args.command;
   printErr(`[agent] command=${args.command}`);
 
   if (args.command === 'analyze-character') {
@@ -1050,6 +1028,7 @@ async function main() {
       rigPackage: args.rigPackage,
       rigMode: args.rigMode,
       output: args.output,
+      profile: args.profile,
     });
     return;
   }
@@ -1068,6 +1047,7 @@ async function main() {
       name: args.name,
       consentToken: args.consentToken,
       allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      profile: args.profile,
     });
     return;
   }
@@ -1091,7 +1071,7 @@ async function main() {
   if (args.command === 'replace-proxy') {
     if (!args.proxy) throw new Error('replace-proxy requires --proxy <object-id>.');
     if (!args.replacement) throw new Error('replace-proxy requires --replacement <object-id>.');
-    if (args.shotIds.length === 0) throw new Error('replace-proxy requires --shots <shot-id-or-number,...>.');
+    if (args.shotSelection.shotIds.length === 0) throw new Error('replace-proxy requires --shots <shot-id-or-number,...>.');
     if (!args.output) throw new Error('replace-proxy requires --output <report.json>.');
     await runProxyReplacement({
       url: args.url,
@@ -1100,7 +1080,7 @@ async function main() {
       persistWrite: args.persistWrite,
       proxyObjectId: args.proxy,
       replacementObjectId: args.replacement,
-      shotIds: args.shotIds,
+      shotIds: args.shotSelection.shotIds,
       output: args.output,
       profile: args.profile,
     });
@@ -1108,28 +1088,15 @@ async function main() {
   }
 
   if (args.command === 'help') {
+    const help = buildAgentCliHelpDocument();
     if (args.json) {
-      printJson({
-        commands: [
-          'inspect', 'preview', 'apply', 'screenshot', 'frame', 'video', 'package',
-          'verify', 'run', 'previs', 'production', 'render-stills', 'contact-sheet', 'help',
-        ],
-        discovery: {
-          describeCapabilities: 'window.foreScene.describeCapabilities()',
-          describeOperation: 'window.foreScene.describeOperation(name)',
-          getAgentSchema: 'window.foreScene.getAgentSchema()',
-        },
-        artifactRetrieval: {
-          renderShotFrame: 'result.artifact (inline dataUrl) + result.status',
-          renderShotVideo: 'result.artifact.artifactId → downloadArtifact({ artifactId })',
-          exportPackage: 'result.artifact.artifactId → downloadArtifact({ artifactId })',
-          exportProjectBackup: 'window.foreScene.exportProjectBackup()',
-        },
-      });
+      printJson(help);
     } else {
       printErr('ForeScene Agent CLI — use --json for machine-readable help.');
+      printErr(`Commands: ${help.commands.join(', ')}`);
       printErr('Discovery: window.foreScene.describeCapabilities()');
       printErr('Schema: window.foreScene.getAgentSchema()');
+      printErr('Checks: visual-preflight, asset-contract, verify (includes both + health + provenance)');
     }
     return;
   }
@@ -1156,7 +1123,7 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       profile: args.profile,
-      shotIds: args.shotIds,
+      shotIds: args.shotSelection.shotIds,
       output: args.output,
     });
     return;
@@ -1170,7 +1137,7 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       profile: args.profile,
-      shotIds: args.shotIds,
+      shotIds: args.shotSelection.shotIds,
       output: args.output,
     });
     return;
@@ -1237,42 +1204,43 @@ async function main() {
   }
 
   if (args.command === 'frame') {
-    const shotId = args.shotIds[0];
-    if (!shotId) throw new Error('--shot is required for frame');
+    const usage = resolveCliCommandShotUsage('frame', args.shotSelection);
     if (!args.output) throw new Error('--output is required for frame');
     await runFrame({
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
-      shotId,
+      shotId: usage.shotId!,
       timeSeconds: args.timeSeconds,
       output: args.output,
+      profile: args.profile,
     });
     return;
   }
 
   if (args.command === 'video') {
-    const shotId = args.shotIds[0];
-    if (!shotId) throw new Error('--shot is required for video');
+    const usage = resolveCliCommandShotUsage('video', args.shotSelection);
     requireExplicitWrite('video', args.writeAccess);
     await runVideo({
       url: args.url,
       headless: args.headless,
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
-      shotId,
+      shotId: usage.shotId!,
       output: args.output,
       resolution: args.resolution,
       appearance: args.appearance,
       content: args.content,
       attachToShot: !args.noAttach,
       download: !args.noDownload,
+      profile: args.profile,
     });
     return;
   }
 
   if (args.command === 'verify') {
+    const usage = resolveCliCommandShotUsage('verify', args.shotSelection);
     await runVerify({
       url: args.url,
       headless: args.headless,
@@ -1280,6 +1248,34 @@ async function main() {
       persistWrite: args.persistWrite,
       workspace: args.workspace,
       output: args.output ?? args.screenshot,
+      profile: args.profile,
+      shotIds: usage.requestedShotIds,
+    });
+    return;
+  }
+
+  if (args.command === 'visual-preflight') {
+    const usage = resolveCliCommandShotUsage('visual-preflight', args.shotSelection);
+    await runVisualPreflight({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      shotIds: usage.requestedShotIds,
+    });
+    return;
+  }
+
+  if (args.command === 'asset-contract') {
+    const usage = resolveCliCommandShotUsage('asset-contract', args.shotSelection);
+    await runAssetContract({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      shotId: usage.shotId,
     });
     return;
   }
@@ -1295,6 +1291,7 @@ async function main() {
       plan: args.plan,
       screenshot: args.screenshot ?? args.output,
       workspace: args.workspace ?? 'shots',
+      profile: args.profile,
     });
     return;
   }
@@ -1308,7 +1305,7 @@ async function main() {
       persistWrite: args.persistWrite,
       profile: args.profile,
       output: args.output,
-      shotIds: args.shotIds,
+      shotIds: toOptionalRequestedShotIds(args.shotSelection),
     });
     return;
   }

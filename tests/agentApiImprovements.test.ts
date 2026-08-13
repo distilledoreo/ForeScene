@@ -3,13 +3,20 @@ import { createDefaultProject, createPanoReference, createSceneObject, createSho
 import type { LocationProject, SceneObject, Shot } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
 import {
+  awaitAllAgentArtifactHashes,
+  beginAgentJobArtifactRun,
+  endAgentJobArtifactRun,
   getAgentArtifactBlob,
   getAgentArtifactHandle,
+  inspectAgentArtifactEviction,
   registerAgentArtifact,
   resetAgentArtifactRegistryForTests,
   setAgentArtifactRegistryLimitsForTests,
+  sweepUnpublishedJobArtifacts,
 } from '../src/engine/agent/artifactRegistry';
-import { deriveOperationOk, deriveOperationStatus } from '../src/engine/agent/renderResult';
+import { buildAgentRunProvenance } from '../src/engine/agent/runProvenance';
+import { deriveOperationOk, deriveOperationStatus, registerRenderedFrameArtifact } from '../src/engine/agent/renderResult';
+import { blobSha256Digest } from '../src/engine/binaryIntegrity';
 import { resetAgentPackageExportControl } from '../src/engine/agent/packageExportControl';
 import { resetAgentShotVideoRenderControl } from '../src/engine/agent/videoRenderControl';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
@@ -173,11 +180,13 @@ describe('agent API improvements', () => {
       blob: new Blob(['first'], { type: 'text/plain' }),
       mimeType: 'text/plain',
       fileName: 'first.txt',
+      evictable: true,
     });
     const second = registerAgentArtifact({
       blob: new Blob(['second'], { type: 'text/plain' }),
       mimeType: 'text/plain',
       fileName: 'second.txt',
+      evictable: true,
     });
 
     // Refresh the first handle before the third registration. The second one
@@ -187,11 +196,190 @@ describe('agent API improvements', () => {
       blob: new Blob(['third'], { type: 'text/plain' }),
       mimeType: 'text/plain',
       fileName: 'third.txt',
+      evictable: true,
     });
 
     expect(getAgentArtifactBlob(first.artifactId)).toBeTruthy();
     expect(getAgentArtifactBlob(third.artifactId)).toBeTruthy();
     expect(getAgentArtifactBlob(second.artifactId)).toBeUndefined();
+  });
+
+  it('does not evict persisted or in-flight artifacts under LRU pressure', () => {
+    setAgentArtifactRegistryLimitsForTests({ maxArtifacts: 1 });
+    const persisted = registerAgentArtifact({
+      blob: new Blob(['keep'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'keep.txt',
+      persisted: true,
+    });
+    const inFlight = registerAgentArtifact({
+      blob: new Blob(['busy'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'busy.txt',
+      inFlight: true,
+    });
+    registerAgentArtifact({
+      blob: new Blob(['temp'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'temp.txt',
+      evictable: true,
+    });
+
+    expect(getAgentArtifactBlob(persisted.artifactId)).toBeTruthy();
+    expect(getAgentArtifactBlob(inFlight.artifactId)).toBeTruthy();
+    const eviction = inspectAgentArtifactEviction();
+    expect(eviction.pinnedCount).toBeGreaterThanOrEqual(2);
+    expect(eviction.retainedOverBudget).toBe(true);
+    expect(eviction.reason).toMatch(/Pinned/);
+  });
+
+  it('does not evict authoritative or project-attached result artifacts before download', () => {
+    setAgentArtifactRegistryLimitsForTests({ maxArtifacts: 1 });
+    const authoritative = registerAgentArtifact({
+      blob: new Blob(['package'], { type: 'application/zip' }),
+      mimeType: 'application/zip',
+      fileName: 'package.zip',
+      authoritative: true,
+    });
+    const attached = registerAgentArtifact({
+      blob: new Blob(['video'], { type: 'video/mp4' }),
+      mimeType: 'video/mp4',
+      fileName: 'shot.mp4',
+      projectAssetId: 'asset_live',
+    });
+    registerAgentArtifact({
+      blob: new Blob(['temp'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'temp.txt',
+      evictable: true,
+    });
+
+    expect(getAgentArtifactHandle(authoritative.artifactId)?.pinned).toBe(true);
+    expect(getAgentArtifactHandle(authoritative.artifactId)?.pinReason).toBe('authoritative');
+    expect(getAgentArtifactHandle(attached.artifactId)?.pinReason).toBe('project-attached');
+    expect(getAgentArtifactBlob(authoritative.artifactId)).toBeTruthy();
+    expect(getAgentArtifactBlob(attached.artifactId)).toBeTruthy();
+    expect(inspectAgentArtifactEviction().retainedOverBudget).toBe(true);
+  });
+
+  it('pins still-frame result handles so they survive LRU pressure before download', () => {
+    setAgentArtifactRegistryLimitsForTests({ maxArtifacts: 1 });
+    const frame = registerRenderedFrameArtifact({
+      dataUrl: 'data:image/png;base64,aGVsbG8=',
+      fileName: 'shot_still.png',
+      shotId: 'shot_exposed',
+    });
+    expect(frame.handle.pinned).toBe(true);
+    expect(frame.handle.pinReason).toBe('authoritative');
+    expect(frame.handle.hashStatus).toBe('unavailable');
+    expect(frame.handle.sha256).toBeUndefined();
+
+    registerAgentArtifact({
+      blob: new Blob(['pressure'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'pressure.txt',
+      evictable: true,
+    });
+
+    expect(getAgentArtifactHandle(frame.handle.artifactId)?.pinned).toBe(true);
+    expect(getAgentArtifactHandle(frame.handle.artifactId)?.pinReason).toBe('authoritative');
+    expect(getAgentArtifactBlob(frame.handle.artifactId)).toBeTruthy();
+    expect(inspectAgentArtifactEviction().evictedArtifactIds.length).toBeGreaterThan(0);
+  });
+
+  it('exposes a real SHA-256 on provenance only after the digest is computed', async () => {
+    const payload = 'fore-scene-artifact-identity';
+    const blob = new Blob([payload], { type: 'text/plain' });
+    const handle = registerAgentArtifact({
+      blob,
+      mimeType: 'text/plain',
+      fileName: 'identity.txt',
+    });
+    const before = buildAgentRunProvenance().artifacts?.find((item) => item.artifactId === handle.artifactId);
+    expect(before).toBeTruthy();
+    expect(before?.sha256).not.toBe(handle.artifactId);
+    if (before?.sha256) {
+      expect(before.sha256).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(before.hashStatus).toBe('computed');
+    } else {
+      expect(before?.hashStatus).toBe('unavailable');
+    }
+
+    await awaitAllAgentArtifactHashes();
+    const after = buildAgentRunProvenance().artifacts?.find((item) => item.artifactId === handle.artifactId);
+    const expected = await blobSha256Digest(blob);
+    expect(after?.hashStatus).toBe('computed');
+    expect(after?.sha256).toBe(`sha256:${expected}`);
+    expect(getAgentArtifactHandle(handle.artifactId)?.sha256).toBe(`sha256:${expected}`);
+  });
+
+  it('sweeps unpublished job outputs without deleting published, durable, or other-generation artifacts', () => {
+    beginAgentJobArtifactRun('job_sweep', 1);
+    const unpublished = registerAgentArtifact({
+      blob: new Blob(['late'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'late.txt',
+      jobId: 'job_sweep',
+      inFlight: true,
+      authoritative: true,
+    });
+    const published = registerAgentArtifact({
+      blob: new Blob(['published'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'published.txt',
+      jobId: 'job_sweep',
+      inFlight: true,
+      authoritative: true,
+    });
+    const persisted = registerAgentArtifact({
+      blob: new Blob(['persisted'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'persisted.txt',
+      jobId: 'job_sweep',
+      inFlight: true,
+      persisted: true,
+    });
+    const attached = registerAgentArtifact({
+      blob: new Blob(['attached'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'attached.txt',
+      jobId: 'job_sweep',
+      inFlight: true,
+      projectAssetId: 'asset_keep',
+    });
+    const otherJob = registerAgentArtifact({
+      blob: new Blob(['other'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'other.txt',
+      jobId: 'job_other',
+      inFlight: true,
+      authoritative: true,
+    });
+    endAgentJobArtifactRun('job_sweep', 1);
+    beginAgentJobArtifactRun('job_sweep', 2);
+    const nextGeneration = registerAgentArtifact({
+      blob: new Blob(['gen2'], { type: 'text/plain' }),
+      mimeType: 'text/plain',
+      fileName: 'gen2.txt',
+      jobId: 'job_sweep',
+      inFlight: true,
+      authoritative: true,
+    });
+
+    const swept = sweepUnpublishedJobArtifacts({
+      jobId: 'job_sweep',
+      publishedArtifactIds: [published.artifactId],
+      runGeneration: 1,
+    });
+
+    expect(swept.deletedArtifactIds).toEqual([unpublished.artifactId]);
+    expect(getAgentArtifactHandle(unpublished.artifactId)).toBeUndefined();
+    expect(getAgentArtifactHandle(published.artifactId)?.pinReason).toBe('in-flight');
+    expect(getAgentArtifactHandle(persisted.artifactId)?.pinReason).toBe('persisted');
+    expect(getAgentArtifactHandle(attached.artifactId)?.pinReason).toBe('project-attached');
+    expect(getAgentArtifactHandle(otherJob.artifactId)?.pinReason).toBe('in-flight');
+    expect(getAgentArtifactHandle(nextGeneration.artifactId)?.pinReason).toBe('in-flight');
+    endAgentJobArtifactRun('job_sweep', 2);
   });
 
   it('clears linked panorama and active pano when unlinking the selected shot', async () => {
@@ -203,7 +391,10 @@ describe('agent API improvements', () => {
     const cleared = await setAgentShotPanorama({ shotId: shot.id, panoId: null });
     expect(cleared.ok).toBe(true);
     expect(useProjectStore.getState().activePanoId).toBeUndefined();
-    expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBeUndefined();
+    expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBeNull();
+
+    useProjectStore.getState().setProject(structuredClone(useProjectStore.getState().project));
+    expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBeNull();
   });
 
   it('grounds objects using the bottom of their effective world bounds', async () => {

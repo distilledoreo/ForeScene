@@ -34,6 +34,8 @@
     "agent:frame": "tsx scripts/agent/cli.ts frame",
     "agent:video": "tsx scripts/agent/cli.ts video",
     "agent:verify": "tsx scripts/agent/cli.ts verify",
+    "agent:visual-preflight": "tsx scripts/agent/cli.ts visual-preflight",
+    "agent:asset-contract": "tsx scripts/agent/cli.ts asset-contract",
     "agent:run": "tsx scripts/agent/cli.ts run",
     "agent:package": "tsx scripts/agent/cli.ts package",
     "agent:previs": "tsx scripts/agent/cli.ts previs",

@@ -15,6 +15,15 @@ vi.mock('../src/engine/renderers', () => ({
   renderShotCameraMoveMp4: vi.fn(),
 }));
 
+const downloadBlob = vi.fn();
+vi.mock('../src/engine/fileTransfers', async () => {
+  const actual = await vi.importActual<typeof import('../src/engine/fileTransfers')>('../src/engine/fileTransfers');
+  return {
+    ...actual,
+    downloadBlob: (...args: unknown[]) => downloadBlob(...args),
+  };
+});
+
 const renderMock = vi.mocked(renderShotCameraMoveMp4);
 
 function projectWithTimeline() {
@@ -56,6 +65,7 @@ describe('agent shot video transactions', () => {
   beforeEach(() => {
     resetAgentShotVideoRenderControl();
     renderMock.mockReset();
+    downloadBlob.mockReset();
     useAgentControlStore.setState({ controlMode: 'read-write' });
     useProjectStore.getState().setProject(projectWithTimeline());
     useProjectSafetyStore.setState({
@@ -64,6 +74,21 @@ describe('agent shot video transactions', () => {
       }) as never),
     });
     renderMock.mockResolvedValue(renderedVideo());
+  });
+
+  it('keeps the artifact handle as the default result and only downloads when asked', async () => {
+    const shotId = useProjectStore.getState().project.shots[0]!.id;
+    const implicit = await renderAgentShotVideo({ shotId, attachToShot: false });
+    expect(implicit.ok).toBe(true);
+    expect(implicit.artifact?.artifactId).toBeTruthy();
+    expect(implicit.artifact?.pinned).toBe(true);
+    expect(implicit.artifact?.pinReason).toBe('authoritative');
+    expect(downloadBlob).not.toHaveBeenCalled();
+
+    const explicit = await renderAgentShotVideo({ shotId, attachToShot: false, download: true });
+    expect(explicit.ok).toBe(true);
+    expect(explicit.artifact?.artifactId).toBeTruthy();
+    expect(downloadBlob).toHaveBeenCalledTimes(1);
   });
 
   it('forwards deterministic mode, appearance, content, and attachment options', async () => {

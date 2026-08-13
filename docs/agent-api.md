@@ -21,7 +21,7 @@ Available now:
 - Inspection, preview, atomic apply/undo
 - Shot staging, landmarks, export configuration patches
 - Package export via API / CLI / Agent Console
-- `npm run agent:screenshot` / `agent:verify` / `agent:run` / `agent:package`
+- `npm run agent:screenshot` / `agent:verify` / `agent:visual-preflight` / `agent:asset-contract` / `agent:run` / `agent:package`
 - Project menu → **Agent Console** (same `window.foreScene` path)
 - Timeline inspection and arbitrary-time sampling without changing the live shot
 - Declarative timeline replacement, keyframe create/update/delete, staging, preview/apply, and undo
@@ -98,6 +98,26 @@ copy exact staging rather than infer it from summary inspection fields.
   "persistence": {
     "ready": true,
     "status": "saved"
+  },
+  "provenance": {
+    "productName": "ForeScene",
+    "productVersion": "0.1.0",
+    "schemaVersion": "1.2",
+    "agentApiVersion": 1,
+    "revisionId": "...",
+    "cli": { "command": "verify", "harness": "forescene-agent-cli", "runId": "cli_…" },
+    "retries": 0,
+    "cancelled": false,
+    "validation": {
+      "revisionId": "...",
+      "activeRevisionId": "...",
+      "revisionBinding": "current",
+      "current": true,
+      "ok": true,
+      "gates": { "visualPreflight": "passed", "assetPose": "passed", "projectHealth": "passed", "revisionBound": "passed" },
+      "visualPreflight": { "shotCount": 1, "passedCount": 1, "failedCount": 0, "warningCount": 0, "failedShotIds": [], "warningShotIds": [], "unresolvedVisibleObjectIds": [], "unresolvedVisibleCount": 0 }
+    },
+    "cache": { "renderEntries": 0, "readyEntries": 0, "invalidatedEntries": 0, "operations": [] }
   }
 }
 ```
@@ -108,10 +128,15 @@ copy exact staging rather than infer it from summary inspection fields.
 
 ```ts
 await foreScene.setShotPanorama({ shotId, panoId: 'pano_…' });
-await foreScene.setShotPanorama({ shotId, panoId: null }); // unlink
+await foreScene.setShotPanorama({ shot: { shotNumber: '02' }, panoId: null }); // durable unlink
 ```
 
 Atomically updates `linkedPanoId`, `panoCrop`, active panorama state, and persistence.
+`panoId: null` writes `linkedPanoId: null` (not a missing field). Hydrate, reopen, and
+export/import preserve that unlink and do **not** reattach the canonical panorama.
+
+Shot targets accept `id`, `ref`, `query`, or `shotNumber` everywhere the plan compiler
+and installed API resolve a shot.
 
 ### Render / export result contract
 
@@ -140,6 +165,10 @@ const backup = await foreScene.exportProjectBackup({ download: false });
 
 `downloadArtifact` returns a Blob by default. Use `includeDataUrl: true` only for legacy consumers that still require base64 data URLs.
 
+Job result handles are pinned as `in-flight` while that generation is running. Published authoritative results stay pinned after the item settles. Pause and cancel may flip public job state immediately, but the previous generation is still drained first.
+
+Unpublished job-scoped outputs from an aborted or stale generation are **deleted after that generation drains** — they are not successful job results and must not remain pinned as orphans. The sweep is owned by the job/generation, not by the handler remembering to call `registerArtifact()`. It never deletes an artifact that was published onto the job, belongs to a still-active generation, or is persisted / project-attached. Durable unpublished artifacts only lose a leftover in-flight pin.
+
 ### Discovery
 
 ```ts
@@ -164,7 +193,54 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 
 ### Shot diagnostics
 
-`inspectShotDiagnostics({ shotId, timeSeconds?, subjectIds? })` returns diagnostics for explicitly requested objects of any type, or infers likely subjects when `subjectIds` is omitted.
+`inspectShotDiagnostics({ shotId, timeSeconds?, subjectIds? })` returns diagnostics for explicitly requested objects of any type, or infers likely subjects when `subjectIds` is omitted. `shotNumber` is accepted as a shot target.
+
+`inspectShotVisualPreflight({ shotId | shot, timeSeconds?, subjectIds?, environmentOnly?, allowUnresolvedSetDressing? })` adds scored quality gates for subject visibility, framing/coverage, ground contact, camera direction, cropping, and motion continuity. Missing requested subjects fail the gate (`ok: false`, `gateStatus: "failed"`). Camera-direction checks use shot-effective transforms. When a shot has camera keyframes, the preflight samples start, mid, and end times and reports `samples[]` with per-sample failures.
+
+`ok` is true only when `gateStatus === "passed"`. A warning or failure is never a fully passed visual gate. `composeAgentValidationEvidence` / `recordRunValidation` use `gateStatus` (not just `!item.ok`) so a warning cannot be reported as `gates.visualPreflight: "passed"`.
+
+Visual-gate presence is distinct from the result:
+
+- Omit `visualPreflight` when the caller did not request the gate → `gates.visualPreflight: "skipped"`.
+- Supply `visualPreflight: []`, or an explicit shot selection that matches nothing → requested-but-empty, `gates.visualPreflight: "failed"`, with `emptySelection` / `unmatchedShotIds` / `diagnostic`. This is never a vacuous pass.
+- `verify` and `visual-preflight` with no `--shots` on a project that has no shots omit the visual gate (skipped). Empty projects are supported; they are not treated as “every selected shot passed”.
+- `collectVisualPreflightValidation({ shotIds })` is the CLI/API composition path. Any unmatched requested id fails the selection (same rule as other CLI shot resolvers).
+
+A legitimate environment-only shot stays supported only through **explicit intent**: `environmentOnly: true`, `shot.metadata.environmentOnly`, or `shot.metadata.shotKind === "environment"`. Those shots report `environmentOnly: true` with `subjectPolicy: "environment_only"` and N/A subject/coverage checks. Empty subject inference never silently classifies ordinary visible content as environment-only.
+
+Set-dressing policy for ordinary shots (`subjectPolicy: "subjects_expected"`):
+
+- Visible non-environment content that is not identified or scored is reported in `unresolvedVisibleObjectIds` and is never dropped from the validation summary.
+- No inferred subjects plus unresolved visible content (imported model, monster, prop, or other renderable) fails `subject_visibility`.
+- Inferred/requested subjects plus additional unresolved visible content **fails** the ordinary visual gate (`ok: false`, `gateStatus: "failed"`). The extra content cannot be silently omitted from the scored subject set while the gate still reports passed.
+- Non-blocking set dressing is an explicit persisted opt-in: `allowUnresolvedSetDressing: true` or `shot.metadata.allowUnresolvedSetDressing === true`. That path uses `subjectPolicy: "set_dressing_allowed"`, keeps the unresolved ids, and reports `gateStatus: "warning"` — never `passed` / `ok: true`.
+- An ordinary shot that still has candidate subjects (humans, poseable characters) but infers none fails.
+- A set-only shot without explicit environment-only intent is a warning (`ok: false`, `gateStatus: "warning"`), not an N/A perfect score.
+- Requesting an object as `subjectIds` identifies it so it is scored instead of treated as unresolved set dressing.
+
+Repair loops should call `beginShotRepairSession`, then `evaluateShotRepairCandidate` after each mutation, then `commitBestShotRepairCandidate` so a later worse repair cannot silently replace a better validated snapshot. Snapshots cover camera, keyframes, object overrides, panorama linkage, and other shot-scoped fields. `agent:previs` uses this loop automatically.
+
+CLI:
+
+```bash
+npm run agent:visual-preflight -- --shots 01,02
+npm run agent:asset-contract
+npm run agent:asset-contract -- --shot <shotId>
+npm run agent:verify
+npm run agent:verify -- --shots 01,02
+```
+
+`verify` and `visual-preflight` pass an explicit `--shot`/`--shots` list to `collectVisualPreflightValidation`. Omitted selection validates every shot (or skips the visual gate on an empty project). An unknown requested id or an explicitly empty selection fails, and the unmatched ids/diagnostic appear in the JSON result and provenance. `frame` and `video` accept exactly one shot and reject extra ids before the browser opens. `asset-contract` accepts one optional `--shot` and rejects additional ids; the API stays `inspectAssetPoseContract({ shotId? })`.
+
+`verify` now reports visual preflight, asset/pose contract, project health, and run provenance. Those already-computed results are also stored as `getStatus().provenance.validation` — a bounded, revision-bound quality summary. `recordRunValidation` never re-renders or re-runs the gates. `gates.visualPreflight` is `passed` only when every recorded shot fully passed; an explicit empty result or unmatched `--shots` selection is `failed`. Unresolved visible content is `failed` by default and `warning` only with the explicit `allowUnresolvedSetDressing` opt-in. A warning gate makes `validation.ok` false — it cannot masquerade as a full pass. Evidence whose `revisionId` does not match the live project revision is preserved as `revisionBinding: "stale"` / `historical: true` and cannot be reported as a valid current summary (`ok: false`, `current: false`, `gates.revisionBound: "failed"`). Matching or omitted-but-active revision ids bind as `current`. Absent revisions on both sides are `unbound`.
+
+Every CLI invocation generates a `runId` and publishes it as `provenance.cli.runId`. Source commit / build identity is included only when the host actually provides `FORESCENE_SOURCE_COMMIT`, `GITHUB_SHA`, `VITE_GIT_COMMIT`, `FORESCENE_BUILD_ID`, or `VITE_BUILD_ID`. `beginRunSession({ runId })` resets retry/cancel/validation counters so one invocation cannot inherit another run's process-wide state.
+
+`retries` increments when `withRevisionRetry` actually retries, when a paused/failed job or production run resumes, or when `retryFailedShotStills` is called. `cancelled` becomes true only when a real in-flight job, package export, video render, production run, character import, still-prep, or render-work cancel happens — idle cancel calls do not set it. Cancelling a job that is already `completed`, `completed_with_warnings`, `failed`, or `cancelled` is a no-op with a `job_already_terminal` diagnostic: status, `finishedAt`, artifacts, and provenance stay as they were. `finishedAt` is set only for those terminal statuses; pause does not stamp it, and resume clears it.
+
+`inspectAssetPoseContract({ shotId?, packageManifestPaths?, producedPackageManifest? })` reports asset resolution, package inclusion, and pose-preset alias mapping (`running` → `walk-contact-left`, `shield-ready` → `elbows-bent`). `includedInPackage` is `true` only when `producedPackageManifest` comes from `extractProducedPackageManifest` on real ZIP bytes (`Blob`, `ArrayBuffer`, or `Uint8Array`) and that archive actually lists the planned entry. Planned-path strings, fabricated proof objects, fabricated `{ files: { plannedPath } }` objects, in-memory JSZip instances, artifact ids, and digest-as-path values stay `not_verified` (or `false` when packaging rules omit the asset). An available model without ZIP proof is `not_verified`, never a false-positive `true`.
+
+CLI `package` and `video` downloads include `transfer` on the command result (`transferMode`, `pageMaterialization`, `byteLength`, `chunkCount`). That names the CLI path (`chunked-base64` with `blob-slice`, or explicit `uint8array-fallback`) and does **not** pretend `downloadArtifact`'s `browser-blob` handle is a streamed file. Previs `summary.json` records `packageTransfer`; refinement writes the same metadata onto the finalization report.
 
 Per-subject fields:
 
@@ -478,11 +554,13 @@ window.foreScene.cancelPackageExport();
 
 Flow matches Export workspace: wait idle → flush verified revision → `createExportPlan` → reject blocking errors → `buildMultiShotPackage` → optional `downloadBlob`. Requires read-write.
 
-`download: false` is build-only: returns the package metadata without downloading and without marking shots exported.
+`download: false` is build-only: returns the package metadata without downloading and without marking shots exported. CLI `agent:package` and `agent:video` persist through the artifact handle (`downloadArtifact`) and do **not** wait for a browser download event. Pass `expectedRevisionId` to refuse a stale flush. Video results include `cacheStatus` and stage timings.
+
+`--profile` is forwarded by inspect, preview/apply, screenshot, frame, video, package, character import/analyze, model import, replace-proxy, render-passes, plan-exports, refine, previs, production, and render-stills.
 
 ```bash
 npm run agent:package -- --write --output artifacts/package.zip
-npm run agent:package -- --write --shot <shotId> --output artifacts/one-shot.zip
+npm run agent:package -- --write --shot <shotId> --output artifacts/one-shot.zip --profile ./browser-profile
 ```
 
 ## Agent Console

@@ -33,6 +33,8 @@ import type {
   AgentPackageExportRequest,
   AgentPackageExportResult,
 } from './protocol';
+import { reconcileAndVerifyRecoveryResources } from '../recoveryResources';
+import { recordProvenanceCancellation } from './cacheTelemetry';
 
 let abortController: AbortController | null = null;
 let latestProgress: AgentPackageExportProgressSnapshot | null = null;
@@ -56,6 +58,7 @@ export function cancelAgentPackageExport(): AgentPackageExportResult {
     };
   }
   abortController.abort();
+  recordProvenanceCancellation();
   latestProgress = {
     phase: 'cancelled',
     progress: latestProgress?.progress ?? 0,
@@ -162,6 +165,27 @@ export async function exportAgentPackage(
   const stillBusy = await awaitAgentNotBusy();
   if (stillBusy) return { ok: false, status: 'busy', diagnostics: stillBusy };
 
+  const liveProject = useProjectStore.getState().project;
+  const recovery = await reconcileAndVerifyRecoveryResources(liveProject);
+  const recoveryDiagnostics: AgentDiagnostic[] = recovery.issues.map((issue) => (
+    issue.currentProject
+      ? agentError(issue.code, issue.message)
+      : { code: issue.code, message: issue.message, severity: 'warning' as const }
+  ));
+  if (!recovery.ok) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: recoveryDiagnostics,
+      recovery: {
+        ok: false,
+        rematerialized: recovery.rematerialized,
+        prunedHistoricalResources: recovery.prunedHistoricalResources,
+        issueCount: recovery.issues.length,
+      },
+    };
+  }
+
   const flushProject = useProjectSafetyStore.getState().flushProject;
   if (!flushProject) {
     return {
@@ -201,6 +225,20 @@ export async function exportAgentPackage(
           'No verified project revision is available for package export.',
         ),
       ],
+    };
+  }
+
+  if (input.expectedRevisionId && input.expectedRevisionId !== verified.revision.id) {
+    return {
+      ok: false,
+      status: 'stale_revision',
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.staleRevision,
+          `Expected revision ${input.expectedRevisionId} but the verified revision is ${verified.revision.id}.`,
+        ),
+      ],
+      revisionId: verified.revision.id,
     };
   }
 
@@ -291,6 +329,7 @@ export async function exportAgentPackage(
       mimeType: 'application/zip',
       fileName: result.fileName,
       revisionId,
+      authoritative: true,
     });
     const status = deriveOperationStatus({ hasArtifact: true, diagnostics: [] });
 
@@ -302,9 +341,15 @@ export async function exportAgentPackage(
       manifestPaths: result.manifestPaths,
       shotIds: shots.map((shot) => shot.id),
       revisionId,
-      diagnostics: [],
+      diagnostics: recoveryDiagnostics,
       warnings: listMissingProjectAssetWarnings(exportProject).map((warning) => warning.message),
       progress: latestProgress,
+      recovery: {
+        ok: recovery.ok,
+        rematerialized: recovery.rematerialized,
+        prunedHistoricalResources: recovery.prunedHistoricalResources,
+        issueCount: recovery.issues.length,
+      },
       ...(result.videoPerformance ? { videoPerformance: result.videoPerformance } : {}),
     };
   } catch (error) {

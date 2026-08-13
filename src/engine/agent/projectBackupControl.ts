@@ -16,6 +16,8 @@ import {
 } from './diagnostics';
 import type { AgentProjectBackupResult } from './protocol';
 import { deriveOperationOk, deriveOperationStatus } from './renderResult';
+import { reconcileAndVerifyRecoveryResources } from '../recoveryResources';
+import { useProjectStore } from '../../state/useProjectStore';
 
 export async function exportAgentProjectBackup(input: {
   download?: boolean;
@@ -31,6 +33,26 @@ export async function exportAgentProjectBackup(input: {
   const busy = await awaitAgentNotBusy();
   if (busy) {
     return { ok: false, status: 'busy', diagnostics: busy };
+  }
+
+  const recovery = await reconcileAndVerifyRecoveryResources(useProjectStore.getState().project);
+  const recoveryDiagnostics = recovery.issues.map((issue) => (
+    issue.currentProject
+      ? agentError(issue.code, issue.message)
+      : { code: issue.code, message: issue.message, severity: 'warning' as const }
+  ));
+  if (!recovery.ok) {
+    return {
+      ok: false,
+      status: 'failed',
+      diagnostics: recoveryDiagnostics,
+      recovery: {
+        ok: false,
+        rematerialized: recovery.rematerialized,
+        prunedHistoricalResources: recovery.prunedHistoricalResources,
+        issueCount: recovery.issues.length,
+      },
+    };
   }
 
   const flushProject = useProjectSafetyStore.getState().flushProject;
@@ -72,6 +94,7 @@ export async function exportAgentProjectBackup(input: {
       mimeType: 'application/zip',
       fileName,
       revisionId: verified.revision.id,
+      authoritative: true,
     });
     if (input.download !== false) {
       downloadBlob(blob, fileName);
@@ -83,7 +106,13 @@ export async function exportAgentProjectBackup(input: {
       artifact,
       fileName,
       revisionId: verified.revision.id,
-      diagnostics: [],
+      diagnostics: recoveryDiagnostics,
+      recovery: {
+        ok: recovery.ok,
+        rematerialized: recovery.rematerialized,
+        prunedHistoricalResources: recovery.prunedHistoricalResources,
+        issueCount: recovery.issues.length,
+      },
     };
   } catch (error) {
     return {

@@ -38,18 +38,34 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
+export const DEFAULT_BATCH_CONCURRENCY = 1;
+export const MAX_BATCH_CONCURRENCY = 4;
+
+export function resolveBatchConcurrency(override?: number): number {
+  if (override !== undefined && Number.isFinite(override) && override > 0) {
+    return Math.max(1, Math.min(MAX_BATCH_CONCURRENCY, Math.floor(override)));
+  }
+  const envValue = typeof process !== 'undefined'
+    ? Number(process.env?.FORESCENE_BATCH_CONCURRENCY)
+    : Number.NaN;
+  if (Number.isFinite(envValue) && envValue > 0) {
+    return Math.max(1, Math.min(MAX_BATCH_CONCURRENCY, Math.floor(envValue)));
+  }
+  return DEFAULT_BATCH_CONCURRENCY;
+}
+
 export async function renderAgentShotBatch(
   jobs: AgentRenderShotFrameInput[],
-  concurrency = 1,
+  concurrency = resolveBatchConcurrency(),
   signal?: AbortSignal,
 ): Promise<AgentRenderShotFrameResult[]> {
   const render = getAgentRenderShotFrameImpl();
-  return runWithConcurrency(jobs, concurrency, (job) => render(job), signal);
+  return runWithConcurrency(jobs, resolveBatchConcurrency(concurrency), (job) => render(job), signal);
 }
 
 export async function frameAgentSubjectsBatch(
   shots: AgentFrameSubjectsInput[],
-  concurrency = 1,
+  concurrency = resolveBatchConcurrency(),
 ): Promise<AgentFrameSubjectsResult[]> {
-  return runWithConcurrency(shots, concurrency, (shotInput) => frameAgentSubjects(shotInput));
+  return runWithConcurrency(shots, resolveBatchConcurrency(concurrency), (shotInput) => frameAgentSubjects(shotInput));
 }

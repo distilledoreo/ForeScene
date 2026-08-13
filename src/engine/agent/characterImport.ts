@@ -25,6 +25,7 @@ import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { detectImportDeviceProfile, estimateModelImportBudget, type ImportGeometryStats } from '../modelImportBudget';
 import { collectAgentBusyDiagnostics } from './busy';
+import { recordProvenanceCancellation } from './cacheTelemetry';
 import type {
   AgentCharacterImportAnalysis,
   AgentCharacterImportConsent,
@@ -602,6 +603,7 @@ export function cancelCharacterImport(): { ok: boolean; cancelled: boolean } {
   if (!activeAbortController) return { ok: true, cancelled: false };
   activeAbortController.abort();
   if (activeAnalysisId) analyses.delete(activeAnalysisId);
+  recordProvenanceCancellation();
   return { ok: true, cancelled: true };
 }
 

@@ -27,6 +27,7 @@ import type {
   AgentShotTimeSample,
   AgentShotTimelineInspection,
 } from './protocol';
+
 import { inspectShotTimeline as inspectTimeline, sampleShotTimeline } from '../shotTimeline';
 import { getAssetInstanceIds, getAssetShotIds, listMissingProjectAssets } from '../projectAssetRecovery';
 
@@ -249,6 +250,18 @@ export function resolveExistingObjectTarget(
   project: LocationProject,
   target: AgentEntityTarget,
 ): ResolveTargetResult {
+  if (!target || typeof target !== 'object') {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'Object target must include id, ref, or query.',
+          { path: 'object' },
+        ),
+      ],
+    };
+  }
   if ('id' in target && typeof target.id === 'string') {
     const found = project.scene.objects.some((object) => object.id === target.id);
     if (!found) {
@@ -327,6 +340,49 @@ export function resolveExistingShotTarget(
   project: LocationProject,
   target: AgentEntityTarget,
 ): ResolveTargetResult {
+  if (!target || typeof target !== 'object') {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'Shot target must include id, ref, query, or shotNumber.',
+          { path: 'shot' },
+        ),
+      ],
+    };
+  }
+  if ('shotNumber' in target && typeof target.shotNumber === 'string') {
+    const exact = project.shots.filter((shot) => shot.shotNumber === target.shotNumber);
+    const matches = exact.length > 0
+      ? exact
+      : project.shots.filter((shot) => shot.shotNumber.replace(/^0+(?=\d)/, '') === target.shotNumber.replace(/^0+(?=\d)/, ''));
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            `No shot with shotNumber "${target.shotNumber}".`,
+            { path: 'shot.shotNumber' },
+          ),
+        ],
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.ambiguousTarget,
+            `shotNumber "${target.shotNumber}" matched ${matches.length} shots; use id.`,
+            { path: 'shot.shotNumber', candidates: matches.map((shot) => shot.id) },
+          ),
+        ],
+      };
+    }
+    return { ok: true, id: matches[0]!.id };
+  }
   if ('id' in target && typeof target.id === 'string') {
     const found = project.shots.some((shot) => shot.id === target.id);
     if (!found) {
@@ -399,7 +455,7 @@ export function resolveExistingShotTarget(
     diagnostics: [
       agentError(
         AGENT_DIAGNOSTIC_CODES.invalidArgument,
-        'Shot target must include id, ref, or query.',
+        'Shot target must include id, ref, query, or shotNumber.',
         { path: 'shot' },
       ),
     ],

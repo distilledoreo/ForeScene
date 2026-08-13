@@ -204,7 +204,7 @@ export function inspectShotEnvironment(
       shotId: shot.id,
       locationId: resolution.locationId,
       expectedPanoId: resolution.expectedPanoId,
-      actualPanoId: shot.linkedPanoId,
+      actualPanoId: shot.linkedPanoId ?? undefined,
     });
   }
 
@@ -212,7 +212,7 @@ export function inspectShotEnvironment(
     ...resolution,
     ok: diagnostics.every((item) => item.severity !== 'error'),
     shotId: shot.id,
-    actualPanoId: shot.linkedPanoId,
+    actualPanoId: shot.linkedPanoId ?? undefined,
     requireProjection: resolution.contract?.requireProjection ?? false,
     minimumProjectionCoverage: resolution.contract?.minimumProjectionCoverage ?? 0.5,
     diagnostics,

@@ -67,4 +67,22 @@ describe('shot-scoped panorama persistence', () => {
     expect(shotPanos(useProjectStore.getState().project as ReturnType<typeof createMinimalPanoramaProject>)).toEqual(expected);
     expect(shotPanos(imported as ReturnType<typeof createMinimalPanoramaProject>)).toEqual(expected);
   });
+
+  it('preserves an explicit panorama unlink through setProject, export, and import', async () => {
+    const source = createMinimalPanoramaProject();
+    source.shots[1] = { ...source.shots[1]!, linkedPanoId: null, panoCrop: undefined };
+    expect(source.shots[1]?.linkedPanoId).toBeNull();
+
+    useProjectStore.getState().setProject(structuredClone(source));
+    expect(useProjectStore.getState().project.shots[1]?.linkedPanoId).toBeNull();
+    expect(useProjectStore.getState().project.shots[0]?.linkedPanoId).toBe(ROMAN_PANO_ID);
+
+    const packageBlob = await createProjectPackage(useProjectStore.getState().project);
+    const imported = await readProjectFile(new File([packageBlob], 'panorama-unlink.fsp'));
+    expect(imported.shots[1]?.linkedPanoId).toBeNull();
+    expect(imported.shots[0]?.linkedPanoId).toBe(ROMAN_PANO_ID);
+
+    useProjectStore.getState().setProject(structuredClone(imported));
+    expect(useProjectStore.getState().project.shots[1]?.linkedPanoId).toBeNull();
+  });
 });

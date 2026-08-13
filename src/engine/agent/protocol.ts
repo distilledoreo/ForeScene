@@ -23,6 +23,7 @@ import type {
   ShotCompositionConstraintSet,
   PoseSubstitutionApproval,
 } from '../../domain/types';
+import type { ProducedPackageManifestProof } from '../projectPackageInclusion';
 import type {
   ExportPackageType,
   ExportPlan,
@@ -82,12 +83,14 @@ export interface AgentTimelineObjectInput {
 export type AgentEntityTarget =
   | { id: string }
   | { ref: string }
+  | { shotNumber: string }
   | {
       query: {
         name?: string;
         type?: SceneObjectType;
         stagingRole?: StagingRole;
         match?: 'exact' | 'contains';
+        shotNumber?: string;
       };
     };
 
@@ -131,6 +134,165 @@ export interface ForeSceneAgentStatus {
   busy: ForeSceneAgentBusyState;
   persistence: ForeSceneAgentPersistenceStatus;
   missingAssetCount?: number;
+  /** Stable per-run identity for benchmark and CLI observability. */
+  provenance?: AgentRunProvenance;
+}
+
+export interface AgentCacheOperationTelemetry {
+  operation: string;
+  hit: boolean;
+  reason: string;
+  fingerprint?: string;
+  artifactId?: string;
+  startedAt?: string;
+  durationMs?: number;
+}
+
+export interface AgentRunProvenance {
+  productName: string;
+  productVersion: string;
+  schemaVersion?: string;
+  agentApiVersion: typeof FORESCENE_AGENT_API_VERSION;
+  projectId?: string;
+  revisionId?: string;
+  projectUpdatedAt?: string;
+  /** Git SHA or other source identifier when the host provides one. */
+  sourceCommit?: string;
+  /** CI/build identifier when the host provides one. */
+  buildId?: string;
+  cli?: {
+    command?: string;
+    harness?: string;
+    profile?: string;
+    runId?: string;
+  };
+  timings?: {
+    provenanceBuiltAt: string;
+    operations?: Array<{ name: string; durationMs: number; startedAt?: string }>;
+  };
+  retries?: number;
+  cancelled?: boolean;
+  /**
+   * Bounded quality-gate snapshot for the revision this run described.
+   * Absent until verify / visual-preflight / asset-contract records one.
+   * Never populated by automatically re-running expensive renders.
+   */
+  validation?: AgentRunValidationEvidence;
+  artifacts?: Array<{
+    artifactId: string;
+    fileName?: string;
+    byteLength?: number;
+    /** Present only after a real content digest is computed. Never derived from the artifact id. */
+    sha256?: string;
+    hashStatus?: 'computed' | 'unavailable';
+    revisionId?: string;
+  }>;
+  /**
+   * Cache inventory and per-operation decisions.
+   * `readyEntries` / `invalidatedEntries` are index totals, not operation hits/misses.
+   */
+  cache?: {
+    renderEntries: number;
+    readyEntries: number;
+    invalidatedEntries: number;
+    operations?: AgentCacheOperationTelemetry[];
+  };
+  jobs?: {
+    videoRenderActive: boolean;
+    packageExportActive: boolean;
+    videoPhase?: string;
+    packagePhase?: string;
+    videoCompletedFrames?: number;
+    videoTotalFrames?: number;
+  };
+}
+
+export type AgentValidationGateStatus = 'passed' | 'warning' | 'failed' | 'skipped';
+
+export interface AgentVisualPreflightSelection {
+  selectedShotIds: string[];
+  unmatchedShotIds: string[];
+  requestedShotIds: string[];
+  emptyProject: boolean;
+  explicitSelection: boolean;
+  diagnostic?: string;
+}
+
+export interface AgentVisualPreflightCollection {
+  /** False when an explicit selection is invalid (unknown / unmatched ids). */
+  ok: boolean;
+  selection: AgentVisualPreflightSelection;
+  /**
+   * Present when the visual gate should be recorded.
+   * Omitted when the caller asked for every shot and the project has none.
+   * An empty array means the gate was requested but produced no results.
+   */
+  visualPreflight?: AgentVisualPreflightResult[];
+}
+
+export type AgentValidationRevisionBinding = 'current' | 'stale' | 'unbound';
+
+export interface AgentRunValidationEvidence {
+  /** Project revision the snapshot describes. Never invented. */
+  revisionId?: string;
+  /** Live project revision when the snapshot was recorded. */
+  activeRevisionId?: string;
+  /**
+   * `current` — evidence revision matches the live project revision.
+   * `stale` — evidence describes a different revision; not a valid current summary.
+   * `unbound` — no revision was available to bind.
+   */
+  revisionBinding: AgentValidationRevisionBinding;
+  /** True only when `revisionBinding` is `current`. */
+  current: boolean;
+  /** Present when the snapshot is preserved but is not current. */
+  historical?: true;
+  capturedAt: string;
+  source?: 'verify' | 'visual-preflight' | 'asset-contract' | 'manual';
+  ok: boolean;
+  gates: {
+    visualPreflight: AgentValidationGateStatus;
+    assetPose: AgentValidationGateStatus;
+    projectHealth: AgentValidationGateStatus;
+    revisionBound: AgentValidationGateStatus;
+  };
+  visualPreflight?: {
+    shotCount: number;
+    passedCount: number;
+    failedCount: number;
+    warningCount: number;
+    failedShotIds: string[];
+    warningShotIds: string[];
+    unresolvedVisibleObjectIds: string[];
+    unresolvedVisibleCount: number;
+    /** True when the visual gate was requested but produced no shot results. */
+    emptySelection?: true;
+    /** Requested shot ids/numbers that did not resolve. */
+    unmatchedShotIds?: string[];
+    diagnostic?: string;
+    scores: Array<{
+      shotId: string;
+      score: number;
+      ok: boolean;
+      gateStatus: Exclude<AgentValidationGateStatus, 'skipped'>;
+      environmentOnly?: boolean;
+      allowUnresolvedSetDressing?: boolean;
+      unresolvedVisibleObjectIds?: string[];
+    }>;
+  };
+  assetPose?: {
+    objectCount: number;
+    missingAssetCount: number;
+    includedCount: number;
+    omittedCount: number;
+    unverifiedCount: number;
+  };
+  projectHealth?: {
+    ok: boolean;
+    issueCount: number;
+    dangerCount: number;
+    codes: string[];
+  };
 }
 
 export interface ForeSceneAgentCapabilities {
@@ -227,7 +389,7 @@ export interface AgentShotSummary {
   fovDegrees: number;
   overrideObjectCount: number;
   keyframeCount: number;
-  linkedPanoId?: string;
+  linkedPanoId?: string | null;
 }
 
 export interface AgentShotInspection extends AgentShotSummary {
@@ -560,6 +722,8 @@ export interface AgentPackageExportRequest {
    * When false, build only — no download and no shot status / workflow updates.
    */
   download?: boolean;
+  /** Refuse to export if the flushed revision is not this id. */
+  expectedRevisionId?: string;
 }
 
 export interface AgentPackageExportProgressSnapshot {
@@ -585,6 +749,12 @@ export interface AgentPackageExportResult {
   diagnostics: AgentDiagnostic[];
   progress?: AgentPackageExportProgressSnapshot;
   warnings?: string[];
+  recovery?: {
+    ok: boolean;
+    rematerialized: number;
+    prunedHistoricalResources: number;
+    issueCount: number;
+  };
   /** Motion-video cache hits/misses and stage timings when available. */
   videoPerformance?: {
     cacheHits: number;
@@ -670,9 +840,25 @@ export interface AgentArtifactHandle {
   fileName: string;
   byteLength: number;
   revisionId?: string;
+  pinned?: boolean;
+  pinReason?: AgentArtifactPinReason;
+  /** Present only after a real SHA-256 digest is computed. */
+  sha256?: string;
+  hashStatus?: 'computed' | 'unavailable';
 }
 
+export type AgentArtifactPinReason =
+  | 'persisted'
+  | 'authoritative'
+  | 'project-attached'
+  | 'in-flight';
+
 export type AgentArtifact = AgentArtifactInline | (AgentArtifactHandle & { kind?: 'handle' });
+
+export type AgentArtifactTransferMode =
+  | 'browser-blob'
+  | 'chunked-base64'
+  | 'uint8array-fallback';
 
 export interface AgentArtifactDownloadResult {
   ok: boolean;
@@ -682,6 +868,8 @@ export interface AgentArtifactDownloadResult {
   blob?: Blob;
   /** Legacy compatibility only; request explicitly with includeDataUrl. */
   dataUrl?: string;
+  /** Browser downloads are always an in-memory Blob; CLI transfer names its own mode. */
+  transferMode?: AgentArtifactTransferMode;
   diagnostics: AgentDiagnostic[];
 }
 
@@ -689,7 +877,7 @@ export interface AgentShotPanoramaResult {
   ok: boolean;
   status: AgentOperationStatus;
   shotId: string;
-  linkedPanoId?: string;
+  linkedPanoId?: string | null;
   revisionId?: string;
   diagnostics: AgentDiagnostic[];
 }
@@ -701,6 +889,12 @@ export interface AgentProjectBackupResult {
   fileName?: string;
   revisionId?: string;
   diagnostics: AgentDiagnostic[];
+  recovery?: {
+    ok: boolean;
+    rematerialized: number;
+    prunedHistoricalResources: number;
+    issueCount: number;
+  };
 }
 
 export interface AgentRevisionRefreshResult {
@@ -738,7 +932,7 @@ export interface AgentShotDiagnostics {
   foregroundOcclusionFraction: number;
   /** True when a linked panorama resolves for the shot (not a render confirmation). */
   linkedPanoramaResolved: boolean;
-  linkedPanoId?: string;
+  linkedPanoId?: string | null;
   /** True when projected panorama pixels are expected to be visible in a projected render. */
   projectedPanoramaVisible?: boolean;
   /** True when the camera position intersects solid geometry. */
@@ -750,6 +944,150 @@ export interface AgentShotDiagnostics {
   /** Expected subject ids that were missing, hidden, or incomplete. */
   expectedSubjectIds?: string[];
   diagnostics: AgentDiagnostic[];
+}
+
+export type AgentVisualPreflightCheckId =
+  | 'subject_visibility'
+  | 'framing_coverage'
+  | 'ground_contact'
+  | 'camera_direction'
+  | 'cropping'
+  | 'motion_continuity';
+
+export interface AgentVisualPreflightCheck {
+  id: AgentVisualPreflightCheckId;
+  status: 'passed' | 'warning' | 'failed';
+  message: string;
+  measured?: Record<string, number | boolean | string | null>;
+}
+
+export interface AgentVisualPreflightSample {
+  timeSeconds: number;
+  ok: boolean;
+  score: number;
+  checks: AgentVisualPreflightCheck[];
+  failedCheckIds: AgentVisualPreflightCheckId[];
+  diagnostics: AgentDiagnostic[];
+}
+
+export type AgentVisualPreflightSubjectPolicy =
+  | 'environment_only'
+  | 'subjects_expected'
+  | 'set_dressing_allowed';
+
+export interface AgentVisualPreflightResult {
+  /** True only when the ordinary visual gate fully passed (no failures or blocking warnings). */
+  ok: boolean;
+  /**
+   * Aggregated gate outcome. `ok` is true only when this is `passed`.
+   * Unresolved visible content on an ordinary shot is `failed` unless the
+   * shot opted into non-blocking set dressing, which reports `warning`.
+   */
+  gateStatus?: Exclude<AgentValidationGateStatus, 'skipped'>;
+  shotId: string;
+  revisionId?: string;
+  sampledTimeSeconds?: number;
+  sampleTimesSeconds?: number[];
+  samples?: AgentVisualPreflightSample[];
+  score: number;
+  checks: AgentVisualPreflightCheck[];
+  diagnostics: AgentDiagnostic[];
+  subjects: AgentShotDiagnosticsSubject[];
+  requestedSubjectIds?: string[];
+  missingSubjectIds?: string[];
+  /**
+   * True only for explicit environment-only intent (`environmentOnly` input,
+   * `shot.metadata.environmentOnly`, or `shot.metadata.shotKind === 'environment'`).
+   * Empty subject inference never makes an ordinary shot environment-only.
+   */
+  environmentOnly?: boolean;
+  subjectPolicy?: AgentVisualPreflightSubjectPolicy;
+  candidateSubjectIds?: string[];
+  /**
+   * Visible non-environment objects that were not identified or scored.
+   * Empty for explicit environment-only shots. Ordinary shots report these
+   * as unresolved set dressing: failure by default, warning only when
+   * `allowUnresolvedSetDressing` is an explicit persisted opt-in.
+   */
+  unresolvedVisibleObjectIds?: string[];
+  /**
+   * True only when non-blocking set dressing was explicitly opted into
+   * (`allowUnresolvedSetDressing` input or `shot.metadata.allowUnresolvedSetDressing`).
+   */
+  allowUnresolvedSetDressing?: boolean;
+}
+
+export interface AgentShotRepairSnapshot {
+  shotId: string;
+  capturedAt: string;
+  label: string;
+  score: number;
+  /** Complete shot clone used for rollback of every shot-scoped field. */
+  shot?: Shot;
+  camera: CameraData;
+  objectOverrides?: ShotObjectOverrides;
+  cameraKeyframes: import('../../domain/types').CameraKeyframe[];
+  linkedPanoId?: string | null;
+  panoCrop?: import('../../domain/types').PanoCropSettings;
+  landmarkIds?: string[];
+  exportSettings?: import('../../domain/types').ShotExportSettings;
+  exportOverrides?: ExportSettingsOverride;
+  promptOverrides?: import('../../domain/types').PromptOverrides;
+  name?: string;
+  description?: string;
+  productionShotId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentRepairCandidateResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId: string;
+  revisionId?: string;
+  kept: boolean;
+  currentScore: number;
+  bestScore: number;
+  bestLabel?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export type AgentPackageInclusion = true | false | 'not_verified';
+
+export interface AgentAssetPoseContractObject {
+  objectId: string;
+  name: string;
+  type: SceneObjectType;
+  modelAssetId?: string;
+  assetStatus?: 'available' | 'missing' | 'corrupt' | 'unsupported' | 'none';
+  /**
+   * `true` only after a produced package manifest lists the planned entry.
+   * Available-but-unverified models are `not_verified`, never a false-positive `true`.
+   */
+  includedInPackage: AgentPackageInclusion;
+  /** Planned backup/package path when the inclusion planner can name one. */
+  packagePath?: string;
+  poseable: boolean;
+  requestedPosePreset?: string;
+  resolvedPosePreset?: string;
+  poseAliased: boolean;
+  poseSource: 'base' | 'shot_override' | 'keyframe' | 'none';
+}
+
+export interface AgentAssetPoseContract {
+  revisionId?: string;
+  objects: AgentAssetPoseContractObject[];
+  shots: Array<{
+    shotId: string;
+    shotNumber: string;
+    linkedPanoId?: string | null;
+    panoramaResolved: boolean;
+    stagedObjectIds: string[];
+    poseOverrides: Array<{
+      objectId: string;
+      requestedPosePreset?: string;
+      resolvedPosePreset?: string;
+    }>;
+  }>;
 }
 
 export type AgentProjectPackageSource =
@@ -897,7 +1235,10 @@ export interface AgentJobProgress {
   message?: string;
   revisionId?: string;
   errors?: AgentDiagnostic[];
+  /** Published result handles only. Late unpublished outputs from an aborted generation are omitted and deleted after drain. */
   artifactIds?: string[];
+  /** Epoch ms when the job reached a terminal status (completed, failed, or cancelled). Not set while paused. */
+  finishedAt?: number;
 }
 
 export interface AgentSubmitJobInput {
@@ -1002,6 +1343,14 @@ export interface AgentProjectHealthResult {
   diagnostics: AgentDiagnostic[];
 }
 
+export interface AgentArtifactEvictionInfo {
+  evictedArtifactIds: string[];
+  pinnedCount: number;
+  evictableCount: number;
+  retainedOverBudget: boolean;
+  reason?: string;
+}
+
 export interface AgentArtifactListItem {
   artifactId: string;
   mimeType: string;
@@ -1010,6 +1359,10 @@ export interface AgentArtifactListItem {
   revisionId?: string;
   createdAt: number;
   persisted?: boolean;
+  pinned?: boolean;
+  pinReason?: AgentArtifactPinReason;
+  sha256?: string;
+  hashStatus?: 'computed' | 'unavailable';
 }
 
 export interface AgentArtifactStatusResult {
@@ -1269,7 +1622,8 @@ export interface AgentProjectSettingsPatch {
 }
 
 export interface AgentSnapObjectToFloorInput {
-  shotId: string;
+  shotId?: string;
+  shot?: AgentEntityTarget;
   object: AgentEntityTarget;
 }
 
@@ -1284,7 +1638,8 @@ export interface AgentSnapObjectToFloorResult {
 }
 
 export interface AgentPlaceObjectNearLandmarkInput {
-  shotId: string;
+  shotId?: string;
+  shot?: AgentEntityTarget;
   object: AgentEntityTarget;
   landmark: AgentEntityTarget;
   offset?: [number, number, number];
@@ -1301,10 +1656,16 @@ export interface AgentPlaceObjectNearLandmarkResult {
   diagnostics: AgentDiagnostic[];
 }
 
+export type AgentOrientTowardTarget =
+  | AgentEntityTarget
+  | { position: [number, number, number] }
+  | [number, number, number];
+
 export interface AgentOrientObjectTowardInput {
-  shotId: string;
+  shotId?: string;
+  shot?: AgentEntityTarget;
   object: AgentEntityTarget;
-  target: AgentEntityTarget;
+  target: AgentOrientTowardTarget;
 }
 
 export interface AgentOrientObjectTowardResult {
@@ -1414,6 +1775,8 @@ export interface AgentRenderShotFrameResult {
   width: number;
   height: number;
   artifact?: AgentArtifactInline;
+  /** Pinned download handle for the same bytes as `artifact` / `pngDataUrl`. */
+  handle?: AgentArtifactHandle;
   pngDataUrl?: string;
   pixelStats?: AgentRenderPixelStats;
   requestedTimeSeconds?: number;
@@ -1505,6 +1868,14 @@ export interface AgentShotVideoRenderResult {
   mimeType?: string;
   encodeMode?: 'render' | 'quickPreview';
   revisionId?: string;
+  cacheStatus?: 'hit' | 'miss' | 'joined' | 'bypass';
+  timing?: {
+    setupMs: number;
+    renderMs: number;
+    encodeMs: number;
+    finalizeMs: number;
+    totalMs: number;
+  };
   diagnostics: AgentDiagnostic[];
   progress?: AgentShotVideoProgress;
 }
@@ -1695,9 +2066,86 @@ export interface ForeSceneBrowserApi {
   /** Desired vs materialized still readiness for a shot (read-only). */
   inspectShotPreparedMedia(target: AgentEntityTarget): Promise<import('../stillArtifactRuntime').ShotStillRuntimeStatus>;
   inspectShotTimeline(target: AgentEntityTarget): AgentShotTimelineInspection;
-  sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample;
+  sampleShotAtTime(input: {
+    shot?: AgentEntityTarget;
+    shotId?: string;
+    shotNumber?: string;
+    timeSeconds: number;
+  }): AgentShotTimeSample;
   sampleShotState(input: { shotId: string; timeSeconds: number }): AgentShotTimeSample;
-  inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number; subjectIds?: string[] }): AgentShotDiagnostics;
+  inspectShotDiagnostics(input: {
+    shotId?: string;
+    shot?: AgentEntityTarget;
+    timeSeconds?: number;
+    subjectIds?: string[];
+  }): AgentShotDiagnostics;
+  inspectShotVisualPreflight(input: {
+    shotId?: string;
+    shot?: AgentEntityTarget;
+    timeSeconds?: number;
+    subjectIds?: string[];
+    /** Explicit environment-only shot; subject/coverage gates become N/A. */
+    environmentOnly?: boolean;
+    /**
+     * Persistable opt-in: unresolved visible set dressing is a warning
+     * (not a fully passed visual gate). Also accepted on `shot.metadata`.
+     */
+    allowUnresolvedSetDressing?: boolean;
+  }): AgentVisualPreflightResult;
+  /**
+   * Select shots, run visual preflight, and report unmatched ids.
+   * Does not record provenance. An explicit selection with unknown ids fails
+   * and returns `visualPreflight: []`. An empty project with no requested
+   * ids omits `visualPreflight` so the visual gate can be skipped.
+   */
+  collectVisualPreflightValidation(input?: {
+    shotIds?: string[];
+  }): AgentVisualPreflightCollection;
+  /**
+   * Bind this browser session to a CLI/API invocation. A new `runId` resets
+   * retry/cancel/validation telemetry so later status reads cannot inherit
+   * another run's counters.
+   */
+  beginRunSession(input?: {
+    command?: string;
+    harness?: string;
+    profile?: string;
+    runId?: string;
+    sourceCommit?: string;
+    buildId?: string;
+  }): ForeSceneAgentStatus;
+  /**
+   * Attach already-computed quality gates to provenance. Does not render or
+   * re-run visual preflight / health / validators.
+   */
+  recordRunValidation(input: {
+    source?: AgentRunValidationEvidence['source'];
+    revisionId?: string;
+    visualPreflight?: AgentVisualPreflightResult[];
+    /** Requested shot ids that did not resolve. Forces a failed visual gate. */
+    unmatchedVisualShotIds?: string[];
+    assetPose?: AgentAssetPoseContract;
+    projectHealth?: AgentProjectHealthResult;
+  }): AgentRunValidationEvidence;
+  inspectAssetPoseContract(input?: {
+    shotId?: string;
+    shot?: AgentEntityTarget;
+    /** Untrusted path strings. Never prove ZIP inclusion by themselves. */
+    packageManifestPaths?: string[];
+    /** Proof from `extractProducedPackageManifest` on real ZIP bytes (Blob/ArrayBuffer/Uint8Array). */
+    producedPackageManifest?: ProducedPackageManifestProof;
+  }): AgentAssetPoseContract;
+  beginShotRepairSession(input: { shotId?: string; shot?: AgentEntityTarget; label?: string }): AgentRepairCandidateResult;
+  evaluateShotRepairCandidate(input: {
+    shotId?: string;
+    shot?: AgentEntityTarget;
+    label?: string;
+    timeSeconds?: number;
+    subjectIds?: string[];
+    restoreIfWorse?: boolean;
+    accepted?: boolean;
+  }): AgentRepairCandidateResult;
+  commitBestShotRepairCandidate(input: { shotId?: string; shot?: AgentEntityTarget }): Promise<AgentRepairCandidateResult>;
   listLandmarks(): AgentLandmarkSummary[];
   createExportPlan(input?: AgentExportPlanRequest): AgentExportPlanResult;
 
@@ -1707,7 +2155,11 @@ export interface ForeSceneBrowserApi {
    */
   disableWrites(): ForeSceneAgentStatus;
 
-  setShotPanorama(input: { shotId: string; panoId: string | null }): Promise<AgentShotPanoramaResult>;
+  setShotPanorama(input: {
+    shotId?: string;
+    shot?: AgentEntityTarget;
+    panoId: string | null;
+  }): Promise<AgentShotPanoramaResult>;
   refreshRevision(): Promise<AgentRevisionRefreshResult>;
   downloadArtifact(input: { artifactId: string; download?: boolean; includeDataUrl?: boolean }): Promise<AgentArtifactDownloadResult>;
   exportProjectBackup(input?: { download?: boolean }): Promise<AgentProjectBackupResult>;

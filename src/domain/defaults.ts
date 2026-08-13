@@ -476,7 +476,7 @@ export function createOriginShot(
 export function createShot(params: {
   index: number;
   camera: CameraData;
-  linkedPanoId?: string;
+  linkedPanoId?: string | null;
   panoCrop?: PanoCropSettings;
   /** Scene export defaults to inherit; new shots start with empty overrides. */
   exportDefaults?: ShotExportSettings;

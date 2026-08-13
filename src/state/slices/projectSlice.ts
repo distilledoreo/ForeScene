@@ -55,6 +55,7 @@ import {
   linkAllShotsToCanonicalPano,
   panoViewFromCamera,
   preserveShotPanoLinks,
+  relinkCanonicalFollowers,
   withShotPanoLink,
   yawPitchToDirection,
   add,
@@ -684,12 +685,18 @@ export const createProjectSlice: StateCreator<
             pano.isCanonical ? { ...existing, isCanonical: false } : existing
           ));
 
+        const previousCanonicalId = getCanonicalPano(current.project)?.id;
+        const nextProject = {
+          ...current.project,
+          assets: { assets: nextAssets },
+          panoRefs: [...remainingPanos, pano],
+        };
         return {
-          project: touchProject(linkAllShotsToCanonicalPano({
-            ...current.project,
-            assets: { assets: nextAssets },
-            panoRefs: [...remainingPanos, pano],
-          })),
+          project: touchProject(
+            pano.isCanonical
+              ? relinkCanonicalFollowers(nextProject, previousCanonicalId)
+              : linkAllShotsToCanonicalPano(nextProject),
+          ),
           activePanoId: pano.isCanonical ? pano.id : current.activePanoId,
         };
       });
@@ -721,7 +728,8 @@ export const createProjectSlice: StateCreator<
       sourcePanoId: graybox?.id,
       notes: params.importNote ?? 'Imported styled reference pano.',
     });
-    const linkedProject = linkAllShotsToCanonicalPano({
+    const previousCanonicalId = getCanonicalPano(state.project)?.id;
+    const linkedProject = relinkCanonicalFollowers({
       ...state.project,
       assets: { assets: { ...state.project.assets.assets, [asset.id]: asset } },
       panoRefs: [...state.project.panoRefs.map((existing) => ({ ...existing, isCanonical: false })), pano],
@@ -729,7 +737,7 @@ export const createProjectSlice: StateCreator<
         ...state.project.workflow,
         referenceAlignmentAcceptedForPanoId: undefined,
       },
-    });
+    }, previousCanonicalId);
     return {
       project: touchProject(linkedProject),
       activePanoId: pano.id,

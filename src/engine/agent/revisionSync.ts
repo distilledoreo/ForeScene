@@ -12,6 +12,7 @@ import {
   agentInfo,
   type AgentDiagnostic,
 } from './diagnostics';
+import { recordProvenanceRetry } from './cacheTelemetry';
 
 export function readActiveRevisionId(): string {
   return useProjectSafetyStore.getState().activeRevisionId ?? '';
@@ -84,8 +85,11 @@ export async function withRevisionRetry<T extends { ok: boolean; diagnostics?: A
 
   let lastResult: T | undefined;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (attempt > 0 && refreshOnStale) {
-      await refreshAgentRevision('Agent stale-revision retry');
+    if (attempt > 0) {
+      recordProvenanceRetry();
+      if (refreshOnStale) {
+        await refreshAgentRevision('Agent stale-revision retry');
+      }
     }
     lastResult = await operation();
     if (!isStale(lastResult)) {

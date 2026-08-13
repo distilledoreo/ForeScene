@@ -1,6 +1,13 @@
 /**
  * In-memory artifact registry for Agent API exports and renders.
  * Artifacts are stable handles agents can retrieve without browser download events.
+ *
+ * Job-owned unpublished outputs are deleted after that job generation drains.
+ * Pause/cancel may flip public job state immediately, but the orphan sweep
+ * waits until the generation's handlers have settled. Published job results,
+ * persisted artifacts, and project-attached artifacts are never deleted by
+ * that sweep. A leftover in-flight pin on a retained durable artifact is
+ * cleared so an aborted generation cannot pin the registry forever.
  */
 
 import type { ProjectAsset } from '../../domain/types';
@@ -8,11 +15,17 @@ import { touchProject } from '../../state/slices/touchProject';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
+import { blobSha256Digest } from '../binaryIntegrity';
 import { downloadBlob } from '../fileTransfers';
 import { storeProjectAssetBlob, createProjectAssetStorageKey } from '../projectAssetStore';
 import { createId } from '../../utils/ids';
 import { writeAccessRequiredDiagnostic } from './diagnostics';
-import type { AgentArtifactHandle, AgentArtifactDownloadResult } from './protocol';
+import type {
+  AgentArtifactDownloadResult,
+  AgentArtifactEvictionInfo,
+  AgentArtifactHandle,
+  AgentArtifactPinReason,
+} from './protocol';
 
 interface StoredArtifact {
   id: string;
@@ -22,11 +35,53 @@ interface StoredArtifact {
   revisionId?: string;
   createdAt: number;
   jobId?: string;
+  /** Job-queue generation that owned this artifact when it was claimed. */
+  runGeneration?: number;
   shotId?: string;
   persisted?: boolean;
   persistedKey?: string;
   projectAssetId?: string;
+  authoritative?: boolean;
+  inFlight?: boolean;
+  sha256?: string;
+  hashStatus: 'computed' | 'unavailable';
   lastAccessOrder: number;
+}
+
+const activeJobArtifactRuns = new Map<string, number>();
+
+let lastEviction: AgentArtifactEvictionInfo = {
+  evictedArtifactIds: [],
+  pinnedCount: 0,
+  evictableCount: 0,
+  retainedOverBudget: false,
+};
+
+function pinReasonFor(stored: StoredArtifact): AgentArtifactPinReason | undefined {
+  if (stored.inFlight) return 'in-flight';
+  if (stored.persisted || stored.persistedKey) return 'persisted';
+  if (stored.projectAssetId) return 'project-attached';
+  if (stored.authoritative) return 'authoritative';
+  return undefined;
+}
+
+function isPinned(stored: StoredArtifact): boolean {
+  return pinReasonFor(stored) !== undefined;
+}
+
+function toHandle(stored: StoredArtifact): AgentArtifactHandle {
+  const pinReason = pinReasonFor(stored);
+  const hashComputed = stored.hashStatus === 'computed' && Boolean(stored.sha256);
+  return {
+    artifactId: stored.id,
+    mimeType: stored.mimeType,
+    fileName: stored.fileName,
+    byteLength: stored.blob.size,
+    revisionId: stored.revisionId,
+    hashStatus: hashComputed ? 'computed' : 'unavailable',
+    ...(hashComputed ? { sha256: stored.sha256 } : {}),
+    ...(pinReason ? { pinned: true, pinReason } : {}),
+  };
 }
 
 const registry = new Map<string, StoredArtifact>();
@@ -36,10 +91,114 @@ let maxRetainedArtifacts = DEFAULT_MAX_RETAINED_ARTIFACTS;
 let maxRetainedArtifactBytes = DEFAULT_MAX_RETAINED_ARTIFACT_BYTES;
 let artifactCounter = 0;
 let artifactAccessOrder = 0;
+const hashTasks = new Map<string, Promise<void>>();
+
+function queueArtifactHash(stored: StoredArtifact): void {
+  stored.hashStatus = 'unavailable';
+  const task = blobSha256Digest(stored.blob)
+    .then((digest) => {
+      if (!registry.has(stored.id)) return;
+      stored.sha256 = `sha256:${digest}`;
+      stored.hashStatus = 'computed';
+    })
+    .catch(() => {
+      if (!registry.has(stored.id)) return;
+      stored.sha256 = undefined;
+      stored.hashStatus = 'unavailable';
+    });
+  hashTasks.set(stored.id, task);
+}
+
+export async function awaitAgentArtifactHash(artifactId: string): Promise<string | undefined> {
+  await hashTasks.get(artifactId);
+  const stored = registry.get(artifactId);
+  return stored?.hashStatus === 'computed' ? stored.sha256 : undefined;
+}
+
+export async function awaitAllAgentArtifactHashes(): Promise<void> {
+  await Promise.all([...hashTasks.values()]);
+}
 
 function nextArtifactId(): string {
   artifactCounter += 1;
   return `artifact_${Date.now().toString(36)}_${artifactCounter.toString(36)}`;
+}
+
+function isDurableArtifact(stored: StoredArtifact): boolean {
+  return Boolean(stored.persisted || stored.persistedKey || stored.projectAssetId);
+}
+
+function claimJobArtifactOwnership(stored: StoredArtifact, jobId: string): void {
+  stored.jobId = jobId;
+  if (stored.runGeneration !== undefined) return;
+  const generation = activeJobArtifactRuns.get(jobId);
+  if (generation !== undefined) stored.runGeneration = generation;
+}
+
+/** Mark the live job generation so later `jobId` registrations inherit ownership. */
+export function beginAgentJobArtifactRun(jobId: string, generation: number): void {
+  activeJobArtifactRuns.set(jobId, generation);
+}
+
+/** Drop ownership only for the generation that is actually ending. */
+export function endAgentJobArtifactRun(jobId: string, generation: number): void {
+  if (activeJobArtifactRuns.get(jobId) === generation) {
+    activeJobArtifactRuns.delete(jobId);
+  }
+}
+
+export function clearAgentJobArtifactRunsForTests(): void {
+  activeJobArtifactRuns.clear();
+}
+
+/**
+ * Delete unpublished job outputs after a generation drains.
+ *
+ * Orphan policy: a job-scoped artifact that was never published onto the job
+ * result is not a successful result. After the owning generation's handlers
+ * have settled it is removed so an ignored late `registerArtifact()` cannot
+ * pin the registry forever. This does not require the handler to remember
+ * `ctx.registerArtifact()`.
+ *
+ * Never deletes:
+ * - artifacts listed in `publishedArtifactIds` (current or earlier published results)
+ * - artifacts tagged with a different still-live `runGeneration`
+ * - persisted or project-attached artifacts (in-flight is cleared instead)
+ */
+export function sweepUnpublishedJobArtifacts(params: {
+  jobId: string;
+  publishedArtifactIds?: Iterable<string>;
+  runGeneration?: number;
+}): { deletedArtifactIds: string[]; retainedArtifactIds: string[] } {
+  const published = new Set(params.publishedArtifactIds ?? []);
+  const deletedArtifactIds: string[] = [];
+  const retainedArtifactIds: string[] = [];
+
+  for (const stored of [...registry.values()]) {
+    if (stored.jobId !== params.jobId) continue;
+    if (published.has(stored.id)) {
+      retainedArtifactIds.push(stored.id);
+      continue;
+    }
+    if (
+      params.runGeneration !== undefined
+      && stored.runGeneration !== undefined
+      && stored.runGeneration !== params.runGeneration
+    ) {
+      retainedArtifactIds.push(stored.id);
+      continue;
+    }
+    if (isDurableArtifact(stored)) {
+      stored.inFlight = false;
+      retainedArtifactIds.push(stored.id);
+      continue;
+    }
+    registry.delete(stored.id);
+    hashTasks.delete(stored.id);
+    deletedArtifactIds.push(stored.id);
+  }
+
+  return { deletedArtifactIds, retainedArtifactIds };
 }
 
 function touchArtifact(stored: StoredArtifact): void {
@@ -47,18 +206,38 @@ function touchArtifact(stored: StoredArtifact): void {
   stored.lastAccessOrder = artifactAccessOrder;
 }
 
-function pruneArtifactRegistry(): void {
+function pruneArtifactRegistry(): AgentArtifactEvictionInfo {
+  const evictedArtifactIds: string[] = [];
   let bytes = [...registry.values()].reduce((total, artifact) => total + artifact.blob.size, 0);
   while (
-    registry.size > 1
+    registry.size > 0
     && (registry.size > maxRetainedArtifacts || bytes > maxRetainedArtifactBytes)
   ) {
-    const oldest = [...registry.values()]
-      .sort((a, b) => a.lastAccessOrder - b.lastAccessOrder || a.createdAt - b.createdAt)[0];
+    const evictable = [...registry.values()]
+      .filter((artifact) => !isPinned(artifact))
+      .sort((a, b) => a.lastAccessOrder - b.lastAccessOrder || a.createdAt - b.createdAt);
+    const oldest = evictable[0];
     if (!oldest) break;
     registry.delete(oldest.id);
+    hashTasks.delete(oldest.id);
+    evictedArtifactIds.push(oldest.id);
     bytes -= oldest.blob.size;
   }
+  const pinnedCount = [...registry.values()].filter(isPinned).length;
+  const evictableCount = registry.size - pinnedCount;
+  const retainedOverBudget = registry.size > maxRetainedArtifacts || bytes > maxRetainedArtifactBytes;
+  lastEviction = {
+    evictedArtifactIds,
+    pinnedCount,
+    evictableCount,
+    retainedOverBudget,
+    reason: retainedOverBudget
+      ? 'Pinned persisted, authoritative, project-attached, or in-flight artifacts prevented further LRU eviction.'
+      : evictedArtifactIds.length > 0
+        ? `Evicted ${evictedArtifactIds.length} unpinned artifact(s) under the registry budget.`
+        : undefined,
+  };
+  return lastEviction;
 }
 
 function assetTypeFromMime(mimeType: string): ProjectAsset['type'] {
@@ -76,6 +255,13 @@ export function registerAgentArtifact(params: {
   revisionId?: string;
   jobId?: string;
   shotId?: string;
+  persisted?: boolean;
+  /** Result handles default to pinned. Pass false (or evictable) for cache/temp entries. */
+  authoritative?: boolean;
+  /** When true, the handle is eligible for LRU eviction unless another pin applies. */
+  evictable?: boolean;
+  inFlight?: boolean;
+  projectAssetId?: string;
 }): AgentArtifactHandle {
   const id = nextArtifactId();
   const stored: StoredArtifact = {
@@ -86,19 +272,41 @@ export function registerAgentArtifact(params: {
     revisionId: params.revisionId,
     jobId: params.jobId,
     shotId: params.shotId,
+    persisted: params.persisted,
+    authoritative: params.evictable === true
+      ? params.authoritative === true
+      : params.authoritative !== false,
+    inFlight: params.inFlight,
+    projectAssetId: params.projectAssetId,
+    hashStatus: 'unavailable',
     createdAt: Date.now(),
     lastAccessOrder: 0,
   };
+  if (params.jobId) claimJobArtifactOwnership(stored, params.jobId);
   touchArtifact(stored);
   registry.set(id, stored);
+  queueArtifactHash(stored);
   pruneArtifactRegistry();
-  return {
-    artifactId: id,
-    mimeType: params.mimeType,
-    fileName: params.fileName,
-    byteLength: params.blob.size,
-    revisionId: params.revisionId,
-  };
+  return toHandle(stored);
+}
+
+export function attachAgentArtifactContext(
+  artifactId: string,
+  patch: {
+    jobId?: string;
+    shotId?: string;
+    inFlight?: boolean;
+    authoritative?: boolean;
+  },
+): AgentArtifactHandle | undefined {
+  const stored = registry.get(artifactId);
+  if (!stored) return undefined;
+  if (patch.jobId !== undefined) claimJobArtifactOwnership(stored, patch.jobId);
+  if (patch.shotId !== undefined) stored.shotId = patch.shotId;
+  if (patch.inFlight !== undefined) stored.inFlight = patch.inFlight;
+  if (patch.authoritative !== undefined) stored.authoritative = patch.authoritative;
+  touchArtifact(stored);
+  return toHandle(stored);
 }
 
 export function getAgentArtifactBlob(artifactId: string): Blob | undefined {
@@ -112,13 +320,7 @@ export function getAgentArtifactHandle(artifactId: string): AgentArtifactHandle 
   const stored = registry.get(artifactId);
   if (!stored) return undefined;
   touchArtifact(stored);
-  return {
-    artifactId: stored.id,
-    mimeType: stored.mimeType,
-    fileName: stored.fileName,
-    byteLength: stored.blob.size,
-    revisionId: stored.revisionId,
-  };
+  return toHandle(stored);
 }
 
 export async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -152,14 +354,9 @@ export async function downloadAgentArtifact(input: {
   return {
     ok: true,
     status: 'completed',
-    artifact: {
-      artifactId: stored.id,
-      mimeType: stored.mimeType,
-      fileName: stored.fileName,
-      byteLength: stored.blob.size,
-      revisionId: stored.revisionId,
-    },
+    artifact: toHandle(stored),
     blob: stored.blob,
+    transferMode: 'browser-blob',
     ...(dataUrl ? { dataUrl } : {}),
     diagnostics: [],
   };
@@ -167,10 +364,18 @@ export async function downloadAgentArtifact(input: {
 
 export function resetAgentArtifactRegistryForTests(): void {
   registry.clear();
+  hashTasks.clear();
   artifactCounter = 0;
   artifactAccessOrder = 0;
+  clearAgentJobArtifactRunsForTests();
   maxRetainedArtifacts = DEFAULT_MAX_RETAINED_ARTIFACTS;
   maxRetainedArtifactBytes = DEFAULT_MAX_RETAINED_ARTIFACT_BYTES;
+  lastEviction = {
+    evictedArtifactIds: [],
+    pinnedCount: 0,
+    evictableCount: 0,
+    retainedOverBudget: false,
+  };
 }
 
 export function setAgentArtifactRegistryLimitsForTests(params: {
@@ -186,12 +391,41 @@ export function inspectAgentArtifactRegistryForTests(): Array<{
   artifactId: string;
   lastAccessOrder: number;
   byteLength: number;
+  pinned?: boolean;
+  pinReason?: AgentArtifactPinReason;
+  jobId?: string;
+  runGeneration?: number;
 }> {
   return [...registry.values()].map((stored) => ({
     artifactId: stored.id,
     lastAccessOrder: stored.lastAccessOrder,
     byteLength: stored.blob.size,
+    pinned: isPinned(stored),
+    pinReason: pinReasonFor(stored),
+    jobId: stored.jobId,
+    runGeneration: stored.runGeneration,
   }));
+}
+
+export function inspectAgentArtifactEviction(): AgentArtifactEvictionInfo {
+  const pinnedCount = [...registry.values()].filter(isPinned).length;
+  return {
+    ...lastEviction,
+    pinnedCount,
+    evictableCount: registry.size - pinnedCount,
+  };
+}
+
+export function markAgentArtifactInFlight(artifactId: string, inFlight: boolean): void {
+  const stored = registry.get(artifactId);
+  if (!stored) return;
+  stored.inFlight = inFlight;
+}
+
+export function markAgentArtifactAuthoritative(artifactId: string, authoritative = true): void {
+  const stored = registry.get(artifactId);
+  if (!stored) return;
+  stored.authoritative = authoritative;
 }
 
 export function listAgentArtifacts(filter: {
@@ -205,15 +439,22 @@ export function listAgentArtifacts(filter: {
       && (!filter.revisionId || stored.revisionId === filter.revisionId)
       && (!filter.shotId || stored.shotId === filter.shotId)
     ))
-    .map((stored) => ({
-      artifactId: stored.id,
-      mimeType: stored.mimeType,
-      fileName: stored.fileName,
-      byteLength: stored.blob.size,
-      revisionId: stored.revisionId,
-      createdAt: stored.createdAt,
-      persisted: stored.persisted,
-    }));
+    .map((stored) => {
+      const hashComputed = stored.hashStatus === 'computed' && Boolean(stored.sha256);
+      return {
+        artifactId: stored.id,
+        mimeType: stored.mimeType,
+        fileName: stored.fileName,
+        byteLength: stored.blob.size,
+        revisionId: stored.revisionId,
+        createdAt: stored.createdAt,
+        persisted: stored.persisted,
+        pinned: isPinned(stored),
+        pinReason: pinReasonFor(stored),
+        hashStatus: hashComputed ? 'computed' as const : 'unavailable' as const,
+        ...(hashComputed ? { sha256: stored.sha256 } : {}),
+      };
+    });
 }
 
 export async function persistAgentArtifact(artifactId: string): Promise<import('./protocol').AgentArtifactStatusResult> {
@@ -262,13 +503,7 @@ export async function persistAgentArtifact(artifactId: string): Promise<import('
 
     return {
       ok: true,
-      artifact: {
-        artifactId: stored.id,
-        mimeType: stored.mimeType,
-        fileName: stored.fileName,
-        byteLength: stored.blob.size,
-        revisionId: stored.revisionId,
-      },
+      artifact: toHandle(stored),
       persisted: true,
       diagnostics: [],
     };
@@ -302,7 +537,9 @@ export async function deleteAgentArtifact(artifactId: string): Promise<{ ok: boo
     });
   }
 
-  return { ok: registry.delete(artifactId) };
+  const removed = registry.delete(artifactId);
+  if (removed) hashTasks.delete(artifactId);
+  return { ok: removed };
 }
 
 export function getAgentArtifactStatus(artifactId: string): import('./protocol').AgentArtifactStatusResult {
@@ -313,13 +550,7 @@ export function getAgentArtifactStatus(artifactId: string): import('./protocol')
   touchArtifact(stored);
   return {
     ok: true,
-    artifact: {
-      artifactId: stored.id,
-      mimeType: stored.mimeType,
-      fileName: stored.fileName,
-      byteLength: stored.blob.size,
-      revisionId: stored.revisionId,
-    },
+    artifact: toHandle(stored),
     persisted: stored.persisted,
     diagnostics: [],
   };

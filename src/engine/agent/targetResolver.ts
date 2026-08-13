@@ -17,6 +17,27 @@ export type ResolveTargetResult =
   | { ok: true; id: string; fromRef?: string }
   | { ok: false; diagnostics: AgentDiagnostic[] };
 
+export function coerceShotTarget(input?: {
+  shotId?: string;
+  shotNumber?: string;
+  shot?: AgentEntityTarget | null;
+} | AgentEntityTarget | null): AgentEntityTarget | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  if ('op' in input) return undefined;
+  if ('id' in input || 'ref' in input || 'query' in input || 'shotNumber' in input) {
+    if (!('shotId' in input) && !('shot' in input)) {
+      return input as AgentEntityTarget;
+    }
+  }
+  const record = input as { shotId?: string; shotNumber?: string; shot?: AgentEntityTarget | null };
+  if (record.shot && typeof record.shot === 'object') return record.shot;
+  if (typeof record.shotId === 'string' && record.shotId.trim()) return { id: record.shotId };
+  if (typeof record.shotNumber === 'string' && record.shotNumber.trim()) {
+    return { shotNumber: record.shotNumber };
+  }
+  return undefined;
+}
+
 function nameMatches(
   candidate: string,
   query: string,
@@ -31,6 +52,18 @@ export function resolveObjectTarget(
   target: AgentEntityTarget,
   refs: Record<string, AgentEntityReference>,
 ): ResolveTargetResult {
+  if ('shotNumber' in target) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'Object target does not accept shotNumber; use id, ref, or query.',
+          { path: 'object.shotNumber' },
+        ),
+      ],
+    };
+  }
   if ('id' in target && typeof target.id === 'string') {
     const found = project.scene.objects.some((object) => object.id === target.id);
     if (!found) {
@@ -109,11 +142,50 @@ export function resolveObjectTarget(
   };
 }
 
+function normalizeShotNumber(value: string): string {
+  return value.trim().replace(/^0+(?=\d)/, '');
+}
+
+export function matchShotsByNumber(project: LocationProject, shotNumber: string) {
+  const exact = project.shots.filter((shot) => shot.shotNumber === shotNumber);
+  if (exact.length > 0) return exact;
+  const normalized = normalizeShotNumber(shotNumber);
+  return project.shots.filter((shot) => normalizeShotNumber(shot.shotNumber) === normalized);
+}
+
 export function resolveShotTarget(
   project: LocationProject,
   target: AgentEntityTarget,
   refs: Record<string, AgentEntityReference>,
 ): ResolveTargetResult {
+  if ('shotNumber' in target && typeof target.shotNumber === 'string') {
+    const matches = matchShotsByNumber(project, target.shotNumber);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.targetNotFound,
+            `No shot with shotNumber "${target.shotNumber}".`,
+            { path: 'shot.shotNumber' },
+          ),
+        ],
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.ambiguousTarget,
+            `shotNumber "${target.shotNumber}" matched ${matches.length} shots; use id.`,
+            { path: 'shot.shotNumber', candidates: matches.map((shot) => shot.id) },
+          ),
+        ],
+      };
+    }
+    return { ok: true, id: matches[0]!.id };
+  }
   if ('id' in target && typeof target.id === 'string') {
     const found = project.shots.some((shot) => shot.id === target.id);
     if (!found) {
@@ -151,8 +223,13 @@ export function resolveShotTarget(
   if ('query' in target) {
     const match = target.query.match ?? 'contains';
     const name = target.query.name;
+    const shotNumber = target.query.shotNumber;
     const matches = project.shots.filter((shot) => {
-      if (name === undefined) return true;
+      if (shotNumber !== undefined && shot.shotNumber !== shotNumber
+        && normalizeShotNumber(shot.shotNumber) !== normalizeShotNumber(shotNumber)) {
+        return false;
+      }
+      if (name === undefined) return shotNumber !== undefined;
       return nameMatches(shot.name, name, match);
     });
     if (matches.length === 0) {
@@ -190,7 +267,7 @@ export function resolveShotTarget(
     diagnostics: [
       agentError(
         AGENT_DIAGNOSTIC_CODES.invalidArgument,
-        'Shot target must include id, ref, or query.',
+        'Shot target must include id, ref, query, or shotNumber.',
         { path: 'shot' },
       ),
     ],

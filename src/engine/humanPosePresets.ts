@@ -216,12 +216,36 @@ export const HUMAN_POSE_PRESETS: readonly HumanPosePreset[] = [
   },
 ];
 
+/** Architecture-doc / previs semantic aliases used by plans and the pose API. */
+export const HUMAN_POSE_PRESET_ALIASES: Record<string, string> = {
+  guard: 'elbows-bent',
+  defensive: 'elbows-bent',
+  reach: 'reaching-right',
+  'sword-raised': 'pointing',
+  'standing-neutral': 'neutral',
+  'standing-alert': 'standing-relaxed',
+  'standing-defensive': 'elbows-bent',
+  running: 'walk-contact-left',
+  kneeling: 'crouching',
+  seated: 'sitting',
+  reaching: 'reaching-right',
+  'holding-object': 'holding-waist',
+  'shield-ready': 'elbows-bent',
+  'sword-ready': 'pointing',
+  injured: 'crouching',
+};
+
+export function resolveHumanPosePresetId(id: string): { requestedId: string; resolvedId: string; aliased: boolean } {
+  const resolvedId = HUMAN_POSE_PRESET_ALIASES[id] ?? id;
+  return { requestedId: id, resolvedId, aliased: resolvedId !== id };
+}
+
 export function getHumanPosePreset(id: string): HumanPosePreset | undefined {
   return HUMAN_POSE_PRESETS.find((preset) => preset.id === id);
 }
 
 export function applyHumanPosePreset(presetId: string): HumanPose {
-  const preset = getHumanPosePreset(presetId);
+  const preset = getHumanPosePreset(resolveHumanPosePresetId(presetId).resolvedId);
   if (!preset) return createEmptyHumanPose();
   return {
     version: 1,

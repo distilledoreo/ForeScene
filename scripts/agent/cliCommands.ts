@@ -1,0 +1,75 @@
+/**
+ * Shared Agent CLI command inventory for help, discovery, and tests.
+ */
+
+export const AGENT_CLI_COMMANDS = [
+  'inspect',
+  'preview',
+  'apply',
+  'screenshot',
+  'frame',
+  'video',
+  'package',
+  'verify',
+  'visual-preflight',
+  'asset-contract',
+  'run',
+  'previs',
+  'production',
+  'render-stills',
+  'contact-sheet',
+  'render-passes',
+  'plan-exports',
+  'verify-package',
+  'refine',
+  'analyze-character',
+  'import-character',
+  'import-model',
+  'replace-proxy',
+  'help',
+] as const;
+
+export type AgentCliCommand = (typeof AGENT_CLI_COMMANDS)[number];
+
+export function isAgentCliCommand(value: string): value is AgentCliCommand {
+  return (AGENT_CLI_COMMANDS as readonly string[]).includes(value);
+}
+
+export function buildAgentCliHelpDocument() {
+  return {
+    commands: [...AGENT_CLI_COMMANDS],
+    checks: {
+      visualPreflight: 'collectVisualPreflightValidation via `visual-preflight` or `verify`. Omitted --shots validates every shot. Explicit --shot/--shots is passed through; unknown or empty explicit selection fails, and unmatched ids appear in the JSON result and provenance. visualPreflight: [] is never a passed gate. Empty projects omit the visual gate (skipped).',
+      assetPoseContract: 'inspectAssetPoseContract via `asset-contract` or `verify`. `asset-contract` accepts one optional --shot (API shotId); omit the flag for the whole project. Multiple ids are rejected.',
+      repairCandidates: 'begin/evaluate/commitBestShotRepairCandidate inside `previs` repair',
+      provenance: 'getStatus().provenance on verify, package, previs, and video (per-invocation runId, retries, cancelled, revision-bound validation)',
+      resumeCancel: 'Ctrl+C / SIGINT cancels package, video, and still jobs; previs resumes from run-state.json',
+      recoveryResources: '`package` and `exportProjectBackup` reconcile recovery binaries before export',
+    },
+    discovery: {
+      describeCapabilities: 'window.foreScene.describeCapabilities()',
+      describeOperation: 'window.foreScene.describeOperation(name)',
+      getAgentSchema: 'window.foreScene.getAgentSchema()',
+    },
+    runIdentity: {
+      runId: 'Generated per CLI invocation and published as getStatus().provenance.cli.runId',
+      sourceCommit: 'Included only when FORESCENE_SOURCE_COMMIT / GITHUB_SHA / VITE_GIT_COMMIT is set',
+      buildId: 'Included only when FORESCENE_BUILD_ID / VITE_BUILD_ID is set',
+    },
+    shotSelection: {
+      verify: 'Optional --shot/--shots. Omitted validates every shot (empty projects skip the visual gate). Explicit unknown or empty selection fails collectVisualPreflightValidation; unmatched ids appear in the JSON result and provenance.',
+      visualPreflight: 'Same --shot/--shots contract as verify.',
+      frame: 'Exactly one --shot (or a single --shots value). Additional ids are rejected before the browser opens.',
+      video: 'Exactly one --shot (or a single --shots value). Additional ids are rejected before the browser opens.',
+      assetContract: 'Optional single --shot. Omit the flag for the whole project. Multiple ids are rejected. The API remains inspectAssetPoseContract({ shotId? }).',
+      package: 'Optional --shot/--shots. Omitted packages every shot. An explicit empty selection is rejected by the export API.',
+    },
+    artifactRetrieval: {
+      renderShotFrame: 'result.handle (pinned artifactId) + result.artifact (inline dataUrl) + result.status',
+      renderShotVideo: 'result.artifact.artifactId → downloadArtifact({ artifactId }); download:true is explicit',
+      exportPackage: 'result.artifact.artifactId → downloadArtifact({ artifactId })',
+      exportProjectBackup: 'window.foreScene.exportProjectBackup({ download: false })',
+      transfer: 'CLI download reports transfer.transferMode (chunked-base64 | uint8array-fallback), pageMaterialization (blob-slice | full-uint8array), byteLength, and chunkCount. Browser downloadArtifact is browser-blob (in-memory handle), not a streamed file.',
+    },
+  };
+}
