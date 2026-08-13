@@ -26,6 +26,7 @@ export interface AgentCliWarning {
 export interface AgentCliEnvelope {
   ok: boolean;
   operation: string;
+  operationId?: string;
   durationMs: number;
   projectId?: string;
   revisionId?: string;
@@ -33,12 +34,15 @@ export interface AgentCliEnvelope {
   affectedShotIds?: string[];
   warnings: AgentCliWarning[];
   error?: AgentCliErrorObject;
+  profileRecovery?: unknown;
   result: unknown;
 }
 
 export interface CliStdoutContext {
   operation: string;
+  operationId?: string;
   startedAt: number;
+  profileRecovery?: unknown;
 }
 
 export class AgentCliUsageError extends Error {
@@ -177,6 +181,8 @@ export function wrapAgentCliStdout(context: CliStdoutContext, value: unknown): A
     warnings: extractWarnings(payload),
     result: value,
   };
+  if (context.operationId) envelope.operationId = context.operationId;
+  if (context.profileRecovery) envelope.profileRecovery = context.profileRecovery;
   const projectId = extractProjectId(payload);
   const revisionId = extractRevisionId(payload);
   const affectedObjectIds = extractAffectedObjectIds(payload);
@@ -201,6 +207,7 @@ export function envelopeFromError(
     envelope: {
       ok: false,
       operation: context.operation,
+      operationId: context.operationId,
       durationMs: Math.max(0, Date.now() - context.startedAt),
       warnings: [],
       error: {

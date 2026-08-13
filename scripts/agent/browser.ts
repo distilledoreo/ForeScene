@@ -6,6 +6,11 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from '@playwright/test';
+import {
+  isChromiumProfileLockError,
+  recoverChromiumProfileLocks,
+  type BrowserProfileRecovery,
+} from './browserProfile';
 import { resolveForeSceneRepoRoot } from './repoRoot';
 
 export const REPO_ROOT = resolveForeSceneRepoRoot();
@@ -27,6 +32,8 @@ export interface AgentBrowserSession {
   context: BrowserContext;
   page: Page;
   url: string;
+  profileDir: string;
+  profileRecovery: BrowserProfileRecovery;
   close: () => Promise<void>;
 }
 
@@ -109,11 +116,34 @@ export async function openAgentBrowser(
     : AGENT_PROFILE_DIR;
 
   await mkdir(profileDir, { recursive: true });
+  let profileRecovery = await recoverChromiumProfileLocks(profileDir);
+  if (profileRecovery.blocked) {
+    throw new Error(profileRecovery.message);
+  }
+  if (profileRecovery.recovered) {
+    process.stderr.write(`[agent] ${profileRecovery.message}\n`);
+  }
 
-  const context = await chromium.launchPersistentContext(profileDir, {
-    headless,
-    viewport,
-  });
+  let context: BrowserContext;
+  try {
+    context = await chromium.launchPersistentContext(profileDir, {
+      headless,
+      viewport,
+    });
+  } catch (error) {
+    if (!isChromiumProfileLockError(error)) throw error;
+    profileRecovery = await recoverChromiumProfileLocks(profileDir);
+    if (profileRecovery.blocked) {
+      throw new Error(profileRecovery.message);
+    }
+    if (profileRecovery.recovered) {
+      process.stderr.write(`[agent] ${profileRecovery.message}\n`);
+    }
+    context = await chromium.launchPersistentContext(profileDir, {
+      headless,
+      viewport,
+    });
+  }
 
   await context.addInitScript(
     ({ splash, write, persist }) => {
@@ -158,6 +188,8 @@ export async function openAgentBrowser(
     context,
     page,
     url,
+    profileDir,
+    profileRecovery,
     close: async () => {
       await context.close();
     },

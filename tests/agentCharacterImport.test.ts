@@ -204,4 +204,55 @@ describe('agent character import busy protection', () => {
     expect(changedSource.importFingerprint).not.toBe(first.importFingerprint);
     expect(changedSource.objectId).not.toBe(first.objectId);
   });
+
+  it('completes 20 consecutive saved-rig imports with identical rig semantics', async () => {
+    const sourceFile = new File([unriggedHumanoidGlb()], 'joseph.glb', { type: 'model/gltf-binary' });
+    const rigPackageFile = new File([await savedRigFsrig()], 'joseph.fsrig', { type: 'application/zip' });
+    const fingerprints = new Set<string>();
+    for (let index = 0; index < 20; index += 1) {
+      resetCharacterImportAgentStateForTests();
+      useProjectStore.setState({
+        project: createDefaultProject(),
+        isExportingPackage: false,
+        isRenderingGraybox: false,
+      });
+      const result = await importSavedRigCharacter({
+        sourceFile,
+        rigPackageFile,
+        name: `Joseph soak ${index + 1}`,
+      });
+      expect(result.ok, `iteration ${index + 1}: ${JSON.stringify(result)}`).toBe(true);
+      expect(result.reused).toBeFalsy();
+      expect(result.poseable).toBe(true);
+      expect(result.appliedSavedRig).toBe(true);
+      expect(result.topologyVerified).toBe(true);
+      expect(result.importFingerprint).toMatch(/^sha256:/);
+      fingerprints.add(result.importFingerprint!);
+      expect(result.objectId).toBeTruthy();
+    }
+    expect(fingerprints.size).toBe(1);
+  }, 60_000);
+
+  it('keeps saved-rig imports stable across 10 inspect-and-import cycles', async () => {
+    const sourceFile = new File([unriggedHumanoidGlb()], 'joseph.glb', { type: 'model/gltf-binary' });
+    const rigPackageFile = new File([await savedRigFsrig()], 'joseph.fsrig', { type: 'application/zip' });
+    for (let index = 0; index < 10; index += 1) {
+      resetCharacterImportAgentStateForTests();
+      useProjectStore.setState({
+        project: createDefaultProject(),
+        isExportingPackage: false,
+        isRenderingGraybox: false,
+      });
+      const imported = await importSavedRigCharacter({
+        sourceFile,
+        rigPackageFile,
+        name: `Joseph inspect ${index + 1}`,
+      });
+      expect(imported.ok, JSON.stringify(imported)).toBe(true);
+      const project = useProjectStore.getState().project;
+      expect(project.shots.length).toBeGreaterThan(0);
+      expect(project.scene.objects.some((item) => item.id === imported.objectId)).toBe(true);
+      expect(imported.appliedSavedRig).toBe(true);
+    }
+  }, 60_000);
 });

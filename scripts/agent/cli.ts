@@ -69,6 +69,14 @@ import {
   wrapAgentCliStdout,
   type CliStdoutContext,
 } from './cliResult';
+import {
+  beginCliOperation,
+  characterImportPhaseProgress,
+  heartbeatIntervalMs,
+  latestActiveCliOperation,
+  listCliOperationRecords,
+  requestCliOperationCancel,
+} from './cliOperation';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
 import {
   resolveCliCommandShotUsage,
@@ -77,6 +85,7 @@ import {
 } from './cliShotSelection';
 
 let activeCliCommand: string | undefined;
+let activeCliOperation: ReturnType<typeof beginCliOperation> | undefined;
 const cliStdout: CliStdoutContext = {
   operation: 'cli.inspect',
   startedAt: Date.now(),
@@ -88,6 +97,29 @@ function printJson(value: unknown): void {
 
 function printErr(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+async function watchBrowserProgress<T>(
+  session: AgentBrowserSession,
+  work: () => Promise<T>,
+): Promise<T> {
+  const poll = setInterval(() => {
+    void session.page.evaluate(() => window.foreScene?.getCharacterImportProgress?.() ?? null)
+      .then((progress) => {
+        if (!progress || !activeCliOperation) return;
+        return activeCliOperation.progress({
+          progress: characterImportPhaseProgress(progress.phase),
+          message: progress.message ?? progress.phase ?? 'Character import running',
+        });
+      })
+      .catch(() => undefined);
+  }, Math.min(2_000, heartbeatIntervalMs()));
+  poll.unref?.();
+  try {
+    return await work();
+  } finally {
+    clearInterval(poll);
+  }
 }
 
 function resolveRenderAppearance(command: string, appearance?: string, mode?: string): AgentRenderAppearance {
@@ -195,7 +227,7 @@ async function runCharacterImport(options: {
     if (rigPackageTarget) {
       await session.page.locator('[data-agent-character-rig-package-input]').setInputFiles(rigPackageTarget);
     }
-    const result = await session.page.evaluate(async (input) => {
+    const result = await watchBrowserProgress(session, () => session.page.evaluate(async (input) => {
       const fileInput = document.querySelector('[data-agent-character-import-input]') as HTMLInputElement | null;
       const file = fileInput?.files?.[0];
       if (!file) throw new Error('Character file was not staged in the browser.');
@@ -233,7 +265,7 @@ async function runCharacterImport(options: {
       mappingOverrides,
       characterName: options.name,
       consentToken: options.consentToken ?? (options.allowHeavyCharacterImports ? 'allow-heavy-character-imports' : undefined),
-    });
+    }));
     printJson(result);
     if (!result.ok) process.exitCode = 1;
   });
@@ -787,36 +819,52 @@ async function withSession<T>(
   },
   run: (session: AgentBrowserSession, abort: CliAbortScope) => Promise<T>,
 ): Promise<T> {
-  const session = await openAgentBrowser({
-    url: options.url,
-    headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
-    writeAccess: options.writeAccess,
-    persistWrite: options.persistWrite,
-    profileDir: options.profile,
+  let abortScope!: CliAbortScope;
+  const operation = beginCliOperation({
+    type: options.command ? commandToOperationName(options.command) : cliStdout.operation,
+    profile: options.profile,
+    onCancel: () => abortScope.dispose(),
   });
+  cliStdout.operationId = operation.record.operationId;
+  let session: AgentBrowserSession | undefined;
   let cancelBrowserPromise: Promise<void> | undefined;
   let triggerBrowserAbort: (() => void) | undefined;
-  await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
-    command: options.command ?? activeCliCommand,
-    profile: options.profile,
-  }));
 
-  const abortScope = createCliAbortScope({
+  abortScope = createCliAbortScope({
     onAbort: () => {
       triggerBrowserAbort?.();
-      cancelBrowserPromise = session.page.evaluate(() => {
-        const api = window.foreScene;
-        if (!api) return;
-        api.cancelPackageExport?.();
-        api.cancelShotVideoRender?.();
-        api.cancelShotStillPreparation?.();
-        api.cancelRenderWork?.();
-      }).catch(() => undefined);
+      if (session) {
+        cancelBrowserPromise = session.page.evaluate(() => {
+          const api = window.foreScene;
+          if (!api) return;
+          api.cancelPackageExport?.();
+          api.cancelShotVideoRender?.();
+          api.cancelShotStillPreparation?.();
+          api.cancelRenderWork?.();
+          api.cancelCharacterImport?.();
+        }).catch(() => undefined);
+      }
+      void operation.cancel('Agent CLI run was cancelled.');
     },
   });
-  triggerBrowserAbort = await installCliAbortBridge(session.page);
+
+  await operation.start(`Starting ${operation.record.type}`);
   try {
-    return await Promise.race([
+    session = await openAgentBrowser({
+      url: options.url,
+      headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+      writeAccess: options.writeAccess,
+      persistWrite: options.persistWrite,
+      profileDir: options.profile,
+    });
+    cliStdout.profileRecovery = session.profileRecovery;
+    await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
+      command: options.command ?? activeCliCommand,
+      profile: options.profile,
+    }));
+    triggerBrowserAbort = await installCliAbortBridge(session.page);
+    activeCliOperation = operation;
+    const result = await Promise.race([
       run(session, abortScope),
       new Promise<T>((_resolve, reject) => {
         if (abortScope.signal.aborted) {
@@ -828,10 +876,20 @@ async function withSession<T>(
         }, { once: true });
       }),
     ]);
+    await operation.complete();
+    return result;
+  } catch (error) {
+    const cancelled = abortScope.signal.aborted
+      || (error instanceof Error && error.name === 'AbortError');
+    if (cancelled) await operation.cancel(error instanceof Error ? error.message : 'Cancelled.');
+    else await operation.fail(error instanceof Error ? error.message : String(error));
+    throw error;
   } finally {
+    activeCliOperation = undefined;
+    operation.dispose();
     if (cancelBrowserPromise) await cancelBrowserPromise;
     abortScope.dispose();
-    await session.close();
+    await session?.close();
   }
 }
 
@@ -1156,6 +1214,27 @@ async function main() {
 
   if (args.command === 'capabilities') {
     printJson(buildAgentCliCapabilitiesDocument());
+    return;
+  }
+
+  if (args.command === 'operations') {
+    const records = await listCliOperationRecords();
+    printJson({
+      ok: true,
+      operations: records,
+      active: records.filter((record) => record.state === 'running' || record.state === 'progress' || record.state === 'accepted' || record.state === 'requested'),
+    });
+    return;
+  }
+
+  if (args.command === 'cancel') {
+    const targetId = args.operation ?? (await latestActiveCliOperation())?.operationId;
+    if (!targetId) {
+      throw new AgentCliUsageError('cancel requires --operation <id>, or an active CLI operation to cancel.');
+    }
+    const result = await requestCliOperationCancel(targetId);
+    printJson(result);
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
     return;
   }
 

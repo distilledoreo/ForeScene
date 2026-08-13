@@ -33,6 +33,8 @@ implementation.
 | Inspect project | `project.inspect` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Open .fsp / project package | `project.open` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Save / export project backup | `project.save` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cancel a running CLI operation | `operation.cancel` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| List CLI operations | `operation.list` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Preview mutation plan | `project.previewPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Apply plan | `project.applyPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Analyze character | `character.analyze` | ✅ | ✅ | ✅ | ✅ | ✅ |
