@@ -434,7 +434,3 @@ export function summarizeBenchmarkTiming(phases: BenchmarkTimingPhase[]): Benchm
     },
   };
 }
-
-export function unusedKind(_kind: BenchmarkTimingKind): void {
-  // Keep the exported kind union referenced for API consumers.
-}

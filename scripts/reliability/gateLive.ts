@@ -193,7 +193,7 @@ export async function runGateC(input: {
     const output = path.join(workDir, `${mode}-${index + 1}.png`);
     const frame = await runDocumentedAgentCommand({
       command: 'frame',
-      args: ['--shot', shotId, '--mode', mode, '--output', output],
+      args: ['--shot', shotId as string, '--mode', mode, '--output', output],
       url: input.url,
       profile: input.profileDir,
       timeoutMs: 180_000,
@@ -237,7 +237,7 @@ export async function runGateC(input: {
     const output = path.join(workDir, `video-${index + 1}.mp4`);
     const video = await runDocumentedAgentCommand({
       command: 'video',
-      args: ['--shot', shotId, '--mode', 'clay', '--write', '--no-attach', '--output', output],
+      args: ['--shot', shotId as string, '--mode', 'clay', '--write', '--no-attach', '--output', output],
       url: input.url,
       profile: input.profileDir,
       timeoutMs: 240_000,
