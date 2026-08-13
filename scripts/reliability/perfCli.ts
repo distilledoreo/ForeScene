@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { summarizeSoakTiming } from './perf';
+import { summarizeReliabilityPerf } from './perf';
 import { runReliabilitySoak } from './soak';
 import type { SoakReport } from './types';
 
@@ -25,11 +25,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const report: SoakReport = args.report
     ? JSON.parse(await readFile(path.resolve(args.report), 'utf8')) as SoakReport
     : await runReliabilitySoak({});
-  const timing = summarizeSoakTiming(report);
+  const timing = await summarizeReliabilityPerf(report);
   process.stdout.write(`${JSON.stringify(timing, null, 2)}\n`);
   if (!timing.ok) {
-    process.stderr.write('Soak timings include retries. Do not treat a retried pass as a performance win.\n');
+    process.stderr.write('Timings include retries. Do not treat a retried pass as a performance win.\n');
     return 1;
+  }
+  if (timing.benchmarkRuns.length === 0) {
+    process.stderr.write(`${timing.message}\n`);
   }
   return report.ok ? 0 : 1;
 }

@@ -40,7 +40,7 @@ See `docs/previs-production-manifest.md` for the manifest reference.
 ### Running (see `package.json` scripts / `README.md` for the canonical list)
 - Dev server: `npm run dev` → serves on port **3000** (`--host=0.0.0.0`). This is the whole app.
 - Build: `npm run build` (Vite; does not type-check). Preview built output: `npm run preview` (port 4173).
-- Reliability soak: `npm run reliability:soak` (offline Gates A/D/E/F; add `--url` for live B/C). Timing: `npm run reliability:perf`. See `docs/reliability-soak.md`.
+- Reliability soak: `npm run reliability:soak` (offline A and D; live `--url` required for B/C/E/F). See `docs/reliability-soak.md`. `stabilizationExit` needs a full live soak with every required gate passed and retries 0. End-to-end benchmark phase timing: `npm run reliability:perf`.
 
 ### Validation levels (do not overvalidate)
 
@@ -76,6 +76,8 @@ Run once after the implementation is stable:
 - `npm run test` (fast unit suite; no Chromium)
 - `npm run test:browser` when renderer / projection / WebGL code changed
 - `npm run test:e2e:smoke` (Chromium desktop smoke)
+- `npm run test:e2e:agent-cli` when Agent CLI open/inspect/frame/video/save parity changed
+- `npm run test:e2e:agent-ops` when CLI heartbeats, cancel, or saved-rig soak changed
 - Any feature-specific E2E you added
 
 Leave tablet/phone responsive, WebKit, screenshot baselines, and heavy workflows to path-conditional CI or the full-regression workflow (main / nightly / manual).

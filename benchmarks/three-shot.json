@@ -8,6 +8,10 @@
   "writeAuthorized": true,
   "resetAuthorized": true,
   "repairBudget": 2,
+  "semanticSubjectBindings": [
+    { "semanticId": "lead", "name": "Lead" },
+    { "semanticId": "partner", "name": "Partner" }
+  ],
   "requiredCliCapabilities": [
     "project.inspect",
     "project.open",

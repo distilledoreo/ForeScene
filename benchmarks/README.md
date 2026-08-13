@@ -53,3 +53,18 @@ Visual quality is a separate later layer and must not hard-code camera
 coordinates. The visual grader consumes `agent:visual-preflight` metrics
 (subject, camera direction, environment/visibility, motion continuity). A
 technical pass is not visual approval.
+
+## Phase timing
+
+`timing.json` and `report.timingSummary` record wall time for the actual
+benchmark, not soak-gate aggregates. Phases include prepare / git-verify /
+profile, candidate invocation, classified Agent CLI operations (open, inspect,
+imports, apply, stills by appearance, visual-preflight, repair passes, video,
+save/package), collect/forbidden/technical validation, cold-open / incremental /
+recovery, and visual grade.
+
+`candidateWallMs` is the candidate process. `foresceneToolMs` is the sum of CLI
+envelope durations. `candidateMinusToolMs` is leftover candidate wall time
+(orchestration / model). Missing cache telemetry is `cache.present: false`, not
+an implicit hit. Chromium launches are counted from `[agent] chromium-launch`
+when present. Retries stay 0; do not optimize by retrying.

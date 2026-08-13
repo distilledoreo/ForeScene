@@ -4,9 +4,9 @@
  *   npm run reliability:soak
  *   npm run reliability:soak -- --url http://127.0.0.1:3000
  *
- * Offline (default) runs A, D, E-locks, F-grader. Live gates B/C and live
- * inspect/visual-preflight require a running ForeScene app. Do not retry a
- * failed iteration to make a gate pass. Do not kill Chromium.
+ * Offline (default) runs A and D, and records B/C/E/F as skipped. Skipped
+ * required live gates are not reliability evidence. Live `--url` is required
+ * for stabilization exit. Do not retry a failed iteration. Do not kill Chromium.
  */
 
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -39,14 +39,18 @@ function summarize(gates: SoakGateResult[], startedAt: Date, live: boolean): Soa
   const endedAt = new Date();
   const retriesTotal = gates.reduce((sum, gate) => sum + gate.retries, 0);
   const executedFailed = gates.some((gate) => gate.status === 'failed');
+  const skippedRequired = gates.some((gate) => gate.requiredLive && gate.status === 'skipped');
+  const allPassed = gates.every((gate) => gate.status === 'passed');
   const report: SoakReport = {
     ok: !executedFailed && retriesTotal === 0,
     live,
+    stabilizationExit: live && allPassed && retriesTotal === 0 && !skippedRequired,
     retriesTotal,
     policy: {
       retriesMustRemainZero: true,
       doNotKillChromium: true,
       infrastructureStopsTheRun: true,
+      skippedLiveGatesAreNotReliabilityEvidence: true,
     },
     gates,
     startedAt: startedAt.toISOString(),
@@ -69,7 +73,7 @@ export async function runReliabilitySoak(input: {
   gates.push(await runGateA());
   gates.push(await runGateB({ url: input.url }));
   gates.push(await runGateC({ url: input.url, profileDir }));
-  gates.push(await runGateD());
+  gates.push(await runGateD({ url: input.url }));
   gates.push(await runGateE({ url: input.url, profileDir }));
   gates.push(await runGateF({ url: input.url, profileDir }));
 

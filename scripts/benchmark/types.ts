@@ -27,6 +27,13 @@ export interface BenchmarkShotSpec {
   motionArtifacts?: string[];
 }
 
+export interface SemanticSubjectBinding {
+  semanticId: string;
+  objectId?: string;
+  name?: string;
+  stagingRole?: string;
+}
+
 export interface BenchmarkSpecV1 {
   version: typeof BENCHMARK_SPEC_VERSION;
   id: string;
@@ -38,6 +45,7 @@ export interface BenchmarkSpecV1 {
   resetAuthorized: boolean;
   repairBudget: number;
   shots: BenchmarkShotSpec[];
+  semanticSubjectBindings?: SemanticSubjectBinding[];
   requiredCliCapabilities: string[];
   basePackage?: string;
   assets?: Array<{ id: string; path: string; kind: 'glb' | 'fsrig' | 'panorama' | 'other' }>;
@@ -54,6 +62,7 @@ export interface BenchmarkCandidateBrief {
   forbidSourceInspection: true;
   forbidHarnessScripts: true;
   url?: string;
+  repoRoot: string;
   profileDir: string;
   outputDir: string;
   projectPackage?: string;
@@ -67,13 +76,53 @@ export interface BenchmarkFailure {
   details?: unknown;
 }
 
+export type BenchmarkTimingOwner = 'harness' | 'candidate' | 'forescene';
+
+export type BenchmarkTimingKind = 'span' | 'operation';
+
 export interface BenchmarkTimingPhase {
   id: string;
   startedAt: string;
   endedAt?: string;
   durationMs?: number;
   retries?: number;
-  owner: 'harness' | 'candidate' | 'forescene';
+  owner: BenchmarkTimingOwner;
+  kind?: BenchmarkTimingKind;
+  parentId?: string;
+  operation?: string;
+  command?: string;
+  appearance?: 'clay' | 'projected' | 'depth';
+  chromiumLaunches?: number;
+  cacheHits?: number;
+  cacheMisses?: number;
+  encodeMs?: number;
+  notes?: string;
+}
+
+export interface BenchmarkCacheTiming {
+  present: boolean;
+  hits: number;
+  misses: number;
+}
+
+export interface BenchmarkTimingSummary {
+  wallMs: number;
+  harnessWallMs: number;
+  candidateWallMs: number;
+  foresceneToolMs: number;
+  candidateMinusToolMs: number;
+  operationCount: number;
+  chromiumLaunches: number;
+  chromiumLaunchSource: 'logged' | 'inferred-cli-ops' | 'none';
+  retries: number;
+  cache: BenchmarkCacheTiming;
+  byPhaseId: Record<string, { count: number; durationMs: number }>;
+  phases: BenchmarkTimingPhase[];
+  policy: {
+    measureBeforeOptimize: true;
+    retriesMustRemainZero: true;
+    soakGateTotalsAreNotE2EPhases: true;
+  };
 }
 
 export const FORBIDDEN_CANDIDATE_FILENAMES = [

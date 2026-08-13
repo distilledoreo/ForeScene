@@ -42,12 +42,23 @@ export async function runGateA(): Promise<SoakGateResult> {
   checks.push('three-shot required capabilities are CLI-true');
 
   const skill = await readFile(path.join(root, 'skills/forescene-previs/SKILL.md'), 'utf8');
-  for (const phrase of ['agent:capabilities', 'agent:frame', 'agent:open', 'agent:save', 'Do not kill Chromium']) {
+  for (const phrase of ['agent:capabilities', 'agent:frame', 'agent:open', 'agent:save', 'Do not kill Chromium', 'FORESCENE_REPO_ROOT']) {
     if (!skill.includes(phrase)) {
       return failA(started, `Skill is missing contract phrase: ${phrase}`);
     }
   }
   checks.push('skill documents CLI-first operation');
+
+  const paritySpec = await readFile(path.join(root, 'e2e/agent-cli-parity.spec.ts'), 'utf8');
+  for (const phrase of ['runDocumentedAgentCommand', 'projected', 'import-panorama', 'profile-reopen']) {
+    if (!paritySpec.includes(phrase)) {
+      return failA(started, `CLI parity E2E is missing ${phrase}.`);
+    }
+  }
+  if (!packageJson.scripts?.['test:e2e:agent-cli']) {
+    return failA(started, 'Missing package.json script test:e2e:agent-cli.');
+  }
+  checks.push('CLI-only E2E from PR #119 is present');
 
   const undocumented = AGENT_CLI_CAPABILITY_RECORDS.filter((record) => record.cli && !record.skillDocumented);
   if (undocumented.length > 0) {

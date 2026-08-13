@@ -1,5 +1,6 @@
 import type { BenchmarkCandidateBrief, BenchmarkSpecV1 } from './types';
 import type { BenchmarkRunLayout } from './layout';
+import { repoRoot } from './layout';
 
 export function buildCandidateBrief(input: {
   spec: BenchmarkSpecV1;
@@ -18,6 +19,7 @@ export function buildCandidateBrief(input: {
     forbidSourceInspection: true,
     forbidHarnessScripts: true,
     url: input.url,
+    repoRoot: repoRoot(),
     profileDir: input.layout.profileDir,
     outputDir: input.layout.artifactDir,
     projectPackage: input.projectPackage,

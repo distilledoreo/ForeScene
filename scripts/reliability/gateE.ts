@@ -6,8 +6,8 @@ import {
   recoverChromiumProfileLocks,
   writeChromiumSingletonLock,
 } from '../agent/browserProfile';
-import { invokeAgentCli } from '../benchmark/agentCli';
-import { repoRoot } from '../benchmark/layout';
+import { createBenchmarkRunLayout } from '../benchmark/layout';
+import { runLiveLifecycle } from '../benchmark/lifecycle';
 import { SOAK_GATE_NAMES, type SoakGateResult } from './types';
 
 const DEAD_PID = 2_147_483_646;
@@ -64,31 +64,29 @@ export async function runGateE(input: {
     return {
       id: 'E',
       name: SOAK_GATE_NAMES.E,
-      status: 'passed',
-      requiredLive: false,
-      message: `Recovered ${iterations} stale Chromium profile locks. Live inspect cycles skipped.`,
+      status: 'skipped',
+      requiredLive: true,
+      message: `Stale-lock recovery (${iterations}×) is additional coverage only. Live mutate/save/reopen/recovery requires --url.`,
       durationMs: Date.now() - started,
       retries: 0,
       details: { lockIterations: iterations, inspectIterations: 0 },
     };
   }
 
-  for (let index = 0; index < iterations; index += 1) {
-    const inspect = await invokeAgentCli({
-      repoRoot: repoRoot(),
-      args: ['inspect'],
+  const cycles = Math.min(3, iterations);
+  for (let index = 0; index < cycles; index += 1) {
+    const layout = await createBenchmarkRunLayout(await mkdtemp(path.join(os.tmpdir(), `forescene-soak-life-${index}-`)));
+    const live = await runLiveLifecycle({
+      layout,
       url: input.url,
-      profile: input.profileDir,
     });
-    if (inspect.code !== 0 || inspect.envelope?.ok === false) {
+    if (live.failure || live.records.some((record) => record.status !== 'passed')) {
       return {
         id: 'E',
         name: SOAK_GATE_NAMES.E,
         status: 'failed',
         requiredLive: true,
-        message: inspect.envelope?.error?.message
-          ?? inspect.stderr.slice(-400)
-          ?? `Inspect cycle ${index + 1} failed.`,
+        message: live.failure?.message ?? `Lifecycle cycle ${index + 1} failed.`,
         durationMs: Date.now() - started,
         retries: 0,
       };
@@ -100,9 +98,9 @@ export async function runGateE(input: {
     name: SOAK_GATE_NAMES.E,
     status: 'passed',
     requiredLive: true,
-    message: `Recovered ${iterations} stale locks and completed ${iterations} inspect cycles.`,
+    message: `Recovered ${iterations} stale locks and completed ${cycles} mutate/save/reopen/recovery cycles.`,
     durationMs: Date.now() - started,
     retries: 0,
-    details: { lockIterations: iterations, inspectIterations: iterations },
+    details: { lockIterations: iterations, lifecycleCycles: cycles },
   };
 }
