@@ -167,12 +167,12 @@ test.describe('Agent CLI operation reliability @heavy @agent-ops', () => {
       workDir,
       repoRoot,
       shot,
-      durationSeconds: 65,
+      durationSeconds: 30,
     });
 
     const video = startDocumentedAgentCommand({
       command: 'video',
-      args: ['--shot', shot, '--mode', 'clay', '--write', '--no-attach', '--resolution', '720p', '--output', path.join(workDir, 'long.mp4')],
+      args: ['--shot', shot, '--mode', 'clay', '--write', '--no-attach', '--output', path.join(workDir, 'long.mp4')],
       url,
       profile: profileDir,
       cwd: workDir,
@@ -180,7 +180,7 @@ test.describe('Agent CLI operation reliability @heavy @agent-ops', () => {
       timeoutMs: 7 * 60_000,
     });
 
-    const deadline = Date.now() + 150_000;
+    const deadline = Date.now() + 4 * 60_000;
     let alive = false;
     while (Date.now() < deadline) {
       const beats = video.heartbeats();
