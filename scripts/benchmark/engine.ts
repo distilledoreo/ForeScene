@@ -11,8 +11,19 @@ import {
   type GitIdentityRecord,
 } from './git';
 import { createBenchmarkRunLayout, type BenchmarkRunLayout } from './layout';
+import type { BenchmarkClock } from './timing';
 import type { BenchmarkFailure, BenchmarkSpecV1 } from './types';
 import { validateTechnicalBenchmark, type TechnicalValidation } from './validator';
+
+async function withPhase<T>(
+  clock: BenchmarkClock | undefined,
+  id: string,
+  parentId: string | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (!clock) return work();
+  return clock.measure(id, 'harness', work, parentId ? { parentId } : undefined);
+}
 
 export async function prepareBenchmarkRun(input: {
   spec: BenchmarkSpecV1;
@@ -20,13 +31,14 @@ export async function prepareBenchmarkRun(input: {
   runRoot: string;
   url?: string;
   enforceRepositoryState?: boolean;
+  clock?: BenchmarkClock;
 }): Promise<{ layout: BenchmarkRunLayout; failure?: BenchmarkFailure; git?: GitIdentityRecord }> {
-  const layout = await createBenchmarkRunLayout(input.runRoot);
+  const layout = await withPhase(input.clock, 'profile', 'prepare', () => createBenchmarkRunLayout(input.runRoot));
   await writeFile(layout.specPath, `${JSON.stringify(input.spec, null, 2)}\n`, 'utf8');
   const git = await gitIdentity();
   await writeFile(layout.gitPath, `${JSON.stringify(git, null, 2)}\n`, 'utf8');
   if (input.enforceRepositoryState !== false) {
-    const gitFailure = enforceGitIdentity(git);
+    const gitFailure = await withPhase(input.clock, 'git-verify', 'prepare', async () => enforceGitIdentity(git));
     if (gitFailure) return { layout, git, failure: gitFailure };
   }
 
@@ -59,6 +71,7 @@ export async function collectBenchmarkRun(input: {
   spec: BenchmarkSpecV1;
   layout: BenchmarkRunLayout;
   enforceRepositoryState?: boolean;
+  clock?: BenchmarkClock;
 }): Promise<{ failure?: BenchmarkFailure; validation: TechnicalValidation }> {
   if (input.enforceRepositoryState !== false) {
     const before = JSON.parse(await readFile(input.layout.gitPath, 'utf8')) as GitIdentityRecord;
@@ -72,7 +85,9 @@ export async function collectBenchmarkRun(input: {
     }
   }
 
-  const forbidden = await findForbiddenCandidateFiles(input.layout.workDir);
+  const forbidden = await withPhase(input.clock, 'forbidden-scan', 'collect-artifacts', () => (
+    findForbiddenCandidateFiles(input.layout.workDir)
+  ));
   if (forbidden.length > 0) {
     return {
       failure: modelFailure(
@@ -86,9 +101,13 @@ export async function collectBenchmarkRun(input: {
     };
   }
 
-  const hashes = await hashDirectory(input.layout.artifactDir);
-  await writeFile(input.layout.hashesPath, `${JSON.stringify({ files: hashes }, null, 2)}\n`, 'utf8');
-  const validation = await validateTechnicalBenchmark(input.spec, input.layout);
+  await withPhase(input.clock, 'hashes', 'collect-artifacts', async () => {
+    const hashes = await hashDirectory(input.layout.artifactDir);
+    await writeFile(input.layout.hashesPath, `${JSON.stringify({ files: hashes }, null, 2)}\n`, 'utf8');
+  });
+  const validation = await withPhase(input.clock, 'technical-validation', 'collect-artifacts', () => (
+    validateTechnicalBenchmark(input.spec, input.layout)
+  ));
   await writeFile(input.layout.validationPath, `${JSON.stringify(validation, null, 2)}\n`, 'utf8');
   if (!validation.ok) {
     return {

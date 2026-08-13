@@ -529,6 +529,53 @@ describe('benchmark remediation', () => {
     expect(useProjectStore.getState().project.shots[0]?.camera.position).toEqual(shot.camera.position);
   });
 
+  it('keeps an accepted candidate when keepWhenAccepted is set even if visual score did not rise', async () => {
+    const project = useProjectStore.getState().project;
+    const shot = project.shots[0]!;
+    const started = beginShotRepairSession({ shotId: shot.id, label: 'baseline' });
+    expect(started.ok).toBe(true);
+
+    const worseCamera = {
+      ...shot.camera,
+      position: [80, 40, 80] as [number, number, number],
+      target: [80, 40, 81] as [number, number, number],
+    };
+    useProjectStore.setState((state) => ({
+      project: {
+        ...state.project,
+        shots: state.project.shots.map((item) => (
+          item.id === shot.id ? { ...item, camera: worseCamera } : item
+        )),
+      },
+    }));
+
+    const withoutFlag = evaluateShotRepairCandidate({
+      shotId: shot.id,
+      label: 'worse-visual',
+      restoreIfWorse: true,
+    });
+    expect(withoutFlag.kept).toBe(false);
+    expect(useProjectStore.getState().project.shots[0]?.camera.position).toEqual(shot.camera.position);
+
+    useProjectStore.setState((state) => ({
+      project: {
+        ...state.project,
+        shots: state.project.shots.map((item) => (
+          item.id === shot.id ? { ...item, camera: worseCamera } : item
+        )),
+      },
+    }));
+    const withFlag = evaluateShotRepairCandidate({
+      shotId: shot.id,
+      label: 'geometry-rank-improved',
+      accepted: true,
+      keepWhenAccepted: true,
+      restoreIfWorse: true,
+    });
+    expect(withFlag.kept).toBe(true);
+    expect(useProjectStore.getState().project.shots[0]?.camera.position).toEqual(worseCamera.position);
+  });
+
   it('rejects a worse full-shot repair and restores camera, keyframes, overrides, and pano', async () => {
     const project = useProjectStore.getState().project;
     const shot = project.shots[0]!;

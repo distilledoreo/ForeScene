@@ -18,6 +18,7 @@ import { runGateD } from './gateD';
 import { runGateE } from './gateE';
 import { runGateF } from './gateF';
 import { runGateB, runGateC } from './gateLive';
+import { summarizeSoakTiming } from './perf';
 import { repoRoot } from '../benchmark/layout';
 import type { SoakGateResult, SoakReport } from './types';
 
@@ -25,11 +26,15 @@ function parseArgs(argv: string[]) {
   const args = {
     url: process.env.FORESCENE_URL as string | undefined,
     output: undefined as string | undefined,
+    savedRigSource: process.env.FORESCENE_SAVED_RIG_SOURCE as string | undefined,
+    savedRigPackage: process.env.FORESCENE_SAVED_RIG_PACKAGE as string | undefined,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === '--url') args.url = argv[++index];
     else if (token === '--output') args.output = argv[++index];
+    else if (token === '--saved-rig-source') args.savedRigSource = argv[++index];
+    else if (token === '--saved-rig-package') args.savedRigPackage = argv[++index];
   }
   return args;
 }
@@ -40,7 +45,7 @@ function summarize(gates: SoakGateResult[], startedAt: Date, live: boolean): Soa
   const executedFailed = gates.some((gate) => gate.status === 'failed');
   const skippedRequired = gates.some((gate) => gate.requiredLive && gate.status === 'skipped');
   const allPassed = gates.every((gate) => gate.status === 'passed');
-  return {
+  const report: SoakReport = {
     ok: !executedFailed && retriesTotal === 0,
     live,
     stabilizationExit: live && allPassed && retriesTotal === 0 && !skippedRequired,
@@ -56,19 +61,27 @@ function summarize(gates: SoakGateResult[], startedAt: Date, live: boolean): Soa
     endedAt: endedAt.toISOString(),
     durationMs: endedAt.getTime() - startedAt.getTime(),
   };
+  report.timing = summarizeSoakTiming(report);
+  return report;
 }
 
 export async function runReliabilitySoak(input: {
   url?: string;
   output?: string;
+  savedRigSource?: string;
+  savedRigPackage?: string;
 }): Promise<SoakReport> {
   const startedAt = new Date();
   const live = Boolean(input.url);
   const profileDir = live ? await mkdtemp(path.join(os.tmpdir(), 'forescene-soak-profile-')) : undefined;
 
   const gates: SoakGateResult[] = [];
-  gates.push(await runGateA());
-  gates.push(await runGateB({ url: input.url }));
+  gates.push(await runGateA({ url: input.url }));
+  gates.push(await runGateB({
+    url: input.url,
+    savedRigSource: input.savedRigSource,
+    savedRigPackage: input.savedRigPackage,
+  }));
   gates.push(await runGateC({ url: input.url, profileDir }));
   gates.push(await runGateD({ url: input.url }));
   gates.push(await runGateE({ url: input.url, profileDir }));

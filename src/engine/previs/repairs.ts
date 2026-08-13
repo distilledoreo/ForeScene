@@ -677,8 +677,8 @@ export function applyAnchorSpanCameraRepair(
     updated.position = moveToward(updated.position, updated.target, 1 / step);
     actionType = 'zoom_in_preserve_head';
   } else if (issue.code === 'headroom_excessive') {
-    const partial = 1 + (desiredScale - 1) * 0.55;
-    const step = clamp(partial, 1.03, 1.12);
+    const partial = 1 + (desiredScale - 1) * 0.85;
+    const step = clamp(partial, 1.03, 1.28);
     updated.position = moveToward(updated.position, updated.target, 1 / step);
     actionType = 'zoom_in_preserve_head';
   } else if (issue.code === 'framing_too_tight' || issue.code === 'subject_too_large') {
@@ -690,7 +690,7 @@ export function applyAnchorSpanCameraRepair(
   }
 
   if (issue.code === 'headroom_excessive') {
-    const softTarget = targetHeadY + (headY - targetHeadY) * 0.30;
+    const softTarget = targetHeadY + (headY - targetHeadY) * 0.18;
     updated = applyHeadroomCorrection(updated, headY, softTarget);
   } else {
     updated = applyHeadroomCorrection(updated, headY, targetHeadY);

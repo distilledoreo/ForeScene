@@ -15,6 +15,10 @@ describe('Agent CLI live operation reliability contract', () => {
     expect(soak).toContain("command: 'import-character'");
     expect(soak).toContain('runDocumentedAgentCommand');
     expect(soak).toContain('retries: 0');
+    expect(soak).toContain('humanoid.glb');
+    expect(soak).toContain('--source');
+    expect(soak).toContain('--allow-heavy-character-imports');
+    expect(soak).not.toMatch(/joseph/i);
     expect(soak).not.toMatch(/window\.foreScene/);
     expect(soak).not.toMatch(/kill\(['"]SIGKILL/);
   });

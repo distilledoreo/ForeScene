@@ -145,6 +145,10 @@ export async function openAgentBrowser(
     });
   }
 
+  process.stderr.write(
+    `[agent] chromium-launch profile=${profileDir} recovered=${profileRecovery.recovered ? '1' : '0'}\n`,
+  );
+
   await context.addInitScript(
     ({ splash, write, persist }) => {
       try {

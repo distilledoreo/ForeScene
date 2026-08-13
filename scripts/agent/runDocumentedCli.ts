@@ -55,15 +55,62 @@ export interface LiveDocumentedCliProcess {
   wait: () => Promise<DocumentedCliInvocation>;
 }
 
-export function extractAgentEnvelope(stdout: string): AgentCliEnvelope | undefined {
-  const start = stdout.indexOf('{');
-  if (start < 0) return undefined;
-  try {
-    const parsed = JSON.parse(stdout.slice(start)) as unknown;
-    return isAgentCliEnvelope(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
+function endOfJsonValue(text: string, start: number): number {
+  let index = start;
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  while (index < text.length) {
+    const ch = text[index]!;
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      index += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      index += 1;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      stack.push(ch);
+      index += 1;
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      stack.pop();
+      if (stack.length === 0) return index;
+      index += 1;
+      continue;
+    }
+    index += 1;
   }
+  return -1;
+}
+
+export function extractAgentEnvelopes(text: string): AgentCliEnvelope[] {
+  const envelopes: AgentCliEnvelope[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const start = text.indexOf('{', index);
+    if (start < 0) break;
+    const end = endOfJsonValue(text, start);
+    if (end < 0) break;
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
+      if (isAgentCliEnvelope(parsed)) envelopes.push(parsed);
+    } catch {
+      // Not a complete JSON value; keep scanning.
+    }
+    index = end + 1;
+  }
+  return envelopes;
+}
+
+export function extractAgentEnvelope(stdout: string): AgentCliEnvelope | undefined {
+  return extractAgentEnvelopes(stdout).at(-1);
 }
 
 export function parseAgentOpHeartbeatLine(line: string): AgentOpHeartbeat | undefined {

@@ -1210,7 +1210,11 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
   cliStdout.operation = commandToOperationName(args.command);
-  printErr(`[agent] command=${args.command}`);
+  printErr(
+    `[agent] command=${args.command}`
+    + (args.rigMode ? ` rigMode=${args.rigMode}` : '')
+    + ((args.mode || args.appearance) ? ` appearance=${args.mode ?? args.appearance}` : ''),
+  );
 
   if (args.command === 'capabilities') {
     printJson(buildAgentCliCapabilitiesDocument());

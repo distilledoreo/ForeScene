@@ -2144,6 +2144,7 @@ export interface ForeSceneBrowserApi {
     subjectIds?: string[];
     restoreIfWorse?: boolean;
     accepted?: boolean;
+    keepWhenAccepted?: boolean;
   }): AgentRepairCandidateResult;
   commitBestShotRepairCandidate(input: { shotId?: string; shot?: AgentEntityTarget }): Promise<AgentRepairCandidateResult>;
   listLandmarks(): AgentLandmarkSummary[];

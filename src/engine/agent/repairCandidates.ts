@@ -125,6 +125,8 @@ export function evaluateShotRepairCandidate(input: {
   restoreIfWorse?: boolean;
   /** When false, treat the live shot as rejected even if visual score improved. */
   accepted?: boolean;
+  /** Keep an accepted candidate even when visual-preflight score does not rise. */
+  keepWhenAccepted?: boolean;
 }): AgentRepairCandidateResult {
   const project = useProjectStore.getState().project;
   const shot = project.shots.find((candidate) => candidate.id === input.shotId);
@@ -144,7 +146,7 @@ export function evaluateShotRepairCandidate(input: {
   const snapshot = snapshotShot(shot, input.label ?? `candidate-${Date.now().toString(36)}`, score);
   const callerAccepted = input.accepted !== false;
   const scoreImproved = !existing || score > existing.best.score;
-  if (callerAccepted && scoreImproved) {
+  if (callerAccepted && (scoreImproved || input.keepWhenAccepted === true)) {
     sessions.set(shot.id, { best: snapshot, currentLabel: snapshot.label });
     return {
       ok: true,

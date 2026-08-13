@@ -23,3 +23,14 @@ npm run reliability:soak -- --url http://127.0.0.1:4173
 | **F** | Visual baseline | Fail-closed fixture sanity; live preflight skipped (not evidence) | fail-closed rules + live `agent:visual-preflight` |
 
 `retries` on every gate must stay `0`. `stabilizationExit` is true only when the soak is live and no required gate is skipped or failed.
+
+## Performance instrumentation
+
+Soak gate `durationMs` is **not** an end-to-end benchmark phase breakdown. Prefer `timing.json` / `report.json` from `npm run benchmark:run`, which records harness, candidate, and ForeScene CLI phases. `npm run reliability:perf` rolls those up when Gate D run roots are present:
+
+```bash
+npm run reliability:perf -- --report artifacts/reliability/soak.json
+npm run reliability:perf
+```
+
+Do **not** optimize around retries, extra Chromium launches, or duplicate work. A pass that used retries is not a performance win. Heartbeats stay on stderr (`[agent-op]`) and are not success evidence.

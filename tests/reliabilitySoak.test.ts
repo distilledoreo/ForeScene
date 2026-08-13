@@ -10,6 +10,7 @@ import { runGateE } from '../scripts/reliability/gateE';
 import { runGateF } from '../scripts/reliability/gateF';
 import { runGateB, runGateC } from '../scripts/reliability/gateLive';
 import { runReliabilitySoak } from '../scripts/reliability/soak';
+import { summarizeSoakTiming } from '../scripts/reliability/perf';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -19,6 +20,9 @@ describe('reliability soak gates A–F', () => {
     expect(result.status, result.message).toBe('passed');
     expect(result.retries).toBe(0);
     expect(result.message).toMatch(/CLI-only E2E/);
+    expect(result.message).toMatch(/live execution requires --url/);
+    expect(result.message).not.toMatch(/CLI parity E2E passed/);
+    expect(result.details).toMatchObject({ e2eExecuted: false });
   });
 
   it('skips required live Gates B and C without --url', async () => {
@@ -80,5 +84,47 @@ describe('reliability soak gates A–F', () => {
     expect(report.gates.find((gate) => gate.id === 'A')?.status).toBe('passed');
     expect(report.gates.find((gate) => gate.id === 'D')?.status).toBe('passed');
     expect(report.gates.filter((gate) => gate.status === 'failed')).toEqual([]);
+    expect(report.timing?.ok).toBe(true);
+    expect(report.timing?.retriesTotal).toBe(0);
+    expect(report.timing?.policy.doNotOptimizeByRetrying).toBe(true);
+    const gateD = report.gates.find((gate) => gate.id === 'D');
+    const runRoots = (gateD?.details as { runRoots?: string[] } | undefined)?.runRoots ?? [];
+    expect(runRoots.length).toBeGreaterThan(0);
+    const timingFile = JSON.parse(readFileSync(path.join(runRoots[0]!, 'timing.json'), 'utf8')) as {
+      summary?: { policy?: { soakGateTotalsAreNotE2EPhases?: boolean }; byPhaseId?: Record<string, { count: number }> };
+    };
+    expect(timingFile.summary?.policy?.soakGateTotalsAreNotE2EPhases).toBe(true);
+    expect(timingFile.summary?.byPhaseId?.prepare?.count).toBe(1);
+    expect(timingFile.summary?.byPhaseId?.['invoke-candidate']?.count).toBe(1);
+    expect(timingFile.summary?.byPhaseId?.['collect-artifacts']?.count).toBe(1);
   }, 90_000);
+
+  it('rejects soak timings that used retries', () => {
+    const timing = summarizeSoakTiming({
+      ok: true,
+      live: false,
+      stabilizationExit: false,
+      retriesTotal: 2,
+      policy: {
+        retriesMustRemainZero: true,
+        doNotKillChromium: true,
+        infrastructureStopsTheRun: true,
+        skippedLiveGatesAreNotReliabilityEvidence: true,
+      },
+      gates: [{
+        id: 'A',
+        name: 'CLI completeness',
+        status: 'passed',
+        requiredLive: false,
+        message: 'retried',
+        durationMs: 10,
+        retries: 2,
+      }],
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 10,
+    });
+    expect(timing.ok).toBe(false);
+    expect(timing.policy.measureBeforeOptimize).toBe(true);
+  });
 });

@@ -3,7 +3,7 @@
  * same `npm run agent:*` surface; the harness never calls window.foreScene.
  */
 
-import { extractAgentEnvelope, runDocumentedAgentCommand } from '../agent/runDocumentedCli';
+import { extractAgentEnvelope, extractAgentEnvelopes, runDocumentedAgentCommand } from '../agent/runDocumentedCli';
 import { classifyCliFailure, infrastructureFailure } from './failures';
 import type { BenchmarkFailure } from './types';
 import type { AgentCliEnvelope } from '../agent/cliResult';
@@ -16,7 +16,7 @@ export interface AgentCliInvocation {
   durationMs?: number;
 }
 
-export { extractAgentEnvelope };
+export { extractAgentEnvelope, extractAgentEnvelopes };
 
 export async function invokeAgentCli(input: {
   repoRoot: string;

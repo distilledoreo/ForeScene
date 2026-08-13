@@ -219,6 +219,17 @@ describe('agent CLI public surface', () => {
     expect(open.file).toBe('show.fsp');
     expect(open.writeAccess).toBe(true);
 
+    const sourceAlias = parseAgentCliArgs([
+      'soak-saved-rig',
+      '--source',
+      'character.glb',
+      '--rig-package',
+      'character.fsrig',
+      '--write',
+    ]);
+    expect(sourceAlias.file).toBe('character.glb');
+    expect(sourceAlias.rigPackage).toBe('character.fsrig');
+
     const save = parseAgentCliArgs(['save', '--output', 'show.fsp', '--write']);
     expect(save.command).toBe('save');
     expect(save.output).toBe('show.fsp');

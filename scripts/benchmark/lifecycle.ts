@@ -11,6 +11,7 @@ import { failureFromInvocation, invokeAgentCli } from './agentCli';
 import type { BenchmarkFailure } from './types';
 import type { BenchmarkRunLayout } from './layout';
 import { repoRoot } from './layout';
+import { ingestAgentInvocation, type BenchmarkClock } from './timing';
 
 export interface LifecycleRecord {
   id: 'cold-open' | 'incremental' | 'recovery';
@@ -95,7 +96,15 @@ export async function runLiveLifecycle(input: {
   layout: BenchmarkRunLayout;
   url: string;
   projectPackage?: string;
+  clock?: BenchmarkClock;
 }): Promise<{ records: LifecycleRecord[]; failure?: BenchmarkFailure }> {
+  const clock = input.clock;
+  const recordCli = (
+    invocation: Awaited<ReturnType<typeof invokeAgentCli>>,
+    extra: { id: string; command: string; parentId: string },
+  ) => {
+    if (clock) ingestAgentInvocation(clock, invocation, { ...extra, owner: 'forescene' });
+  };
   const root = repoRoot();
   const workCwd = input.layout.workDir;
   const common = {
@@ -105,17 +114,29 @@ export async function runLiveLifecycle(input: {
     cwd: workCwd,
   };
 
-  const inspectOn = (profile: string) => invokeAgentCli({
-    ...common,
-    profile,
-    args: ['inspect', '--document'],
-  });
+  const call = async (
+    args: string[],
+    extra: { id: string; parentId: string; profile?: string },
+  ) => {
+    const invocation = await invokeAgentCli({
+      ...common,
+      profile: extra.profile ?? input.layout.profileDir,
+      args,
+    });
+    recordCli(invocation, { id: extra.id, command: args[0]!, parentId: extra.parentId });
+    return invocation;
+  };
+
+  const inspectOn = (profile: string, parentId: string) => call(
+    ['inspect', '--document'],
+    { id: 'inspect-preflight', parentId, profile },
+  );
 
   if (input.projectPackage) {
-    const opened = await invokeAgentCli({
-      ...common,
-      args: ['open', '--file', input.projectPackage, '--write'],
-    });
+    const opened = await call(
+      ['open', '--file', input.projectPackage, '--write'],
+      { id: 'project-open', parentId: 'cold-open' },
+    );
     if (opened.code !== 0 || opened.envelope?.ok === false) {
       const failure = failureFromInvocation(opened, 'project.open');
       return failed([
@@ -126,7 +147,7 @@ export async function runLiveLifecycle(input: {
     }
   }
 
-  const cold = await inspectOn(input.layout.profileDir);
+  const cold = await inspectOn(input.layout.profileDir, 'cold-open');
   if (cold.code !== 0 || cold.envelope?.ok === false) {
     const failure = failureFromInvocation(cold, 'project.inspect');
     return failed([
@@ -140,10 +161,10 @@ export async function runLiveLifecycle(input: {
 
   const planPath = path.join(input.layout.workDir, 'lifecycle-incremental.json');
   await writeFile(planPath, `${JSON.stringify(incrementalMutationPlan(), null, 2)}\n`);
-  const applied = await invokeAgentCli({
-    ...common,
-    args: ['apply', '--plan', planPath, '--write'],
-  });
+  const applied = await call(
+    ['apply', '--plan', planPath, '--write'],
+    { id: 'scene-authoring', parentId: 'incremental' },
+  );
   if (applied.code !== 0 || applied.envelope?.ok === false) {
     const failure = failureFromInvocation(applied, 'project.applyPlan');
     return failed([
@@ -154,10 +175,10 @@ export async function runLiveLifecycle(input: {
   }
 
   const incrementalPath = path.join(input.layout.projectDir, 'lifecycle-incremental.fsp');
-  const savedIncremental = await invokeAgentCli({
-    ...common,
-    args: ['save', '--output', incrementalPath, '--write'],
-  });
+  const savedIncremental = await call(
+    ['save', '--output', incrementalPath, '--write'],
+    { id: 'save-package', parentId: 'incremental' },
+  );
   if (savedIncremental.code !== 0 || savedIncremental.envelope?.ok === false) {
     const failure = failureFromInvocation(savedIncremental, 'project.save');
     return failed([
@@ -167,7 +188,7 @@ export async function runLiveLifecycle(input: {
     ], failure);
   }
 
-  const afterMutation = await inspectOn(input.layout.profileDir);
+  const afterMutation = await inspectOn(input.layout.profileDir, 'incremental');
   if (afterMutation.code !== 0 || afterMutation.envelope?.ok === false) {
     const failure = failureFromInvocation(afterMutation, 'project.inspect');
     return failed([
@@ -194,10 +215,10 @@ export async function runLiveLifecycle(input: {
   }
 
   const recoveryPath = path.join(input.layout.projectDir, 'lifecycle-recovery.fsp');
-  const saved = await invokeAgentCli({
-    ...common,
-    args: ['save', '--output', recoveryPath, '--write'],
-  });
+  const saved = await call(
+    ['save', '--output', recoveryPath, '--write'],
+    { id: 'save-package', parentId: 'recovery' },
+  );
   if (saved.code !== 0 || saved.envelope?.ok === false) {
     const failure = failureFromInvocation(saved, 'project.save');
     return failed([
@@ -207,11 +228,10 @@ export async function runLiveLifecycle(input: {
     ], failure);
   }
 
-  const reopened = await invokeAgentCli({
-    ...common,
-    profile: input.layout.recoveryProfileDir,
-    args: ['open', '--file', recoveryPath, '--write'],
-  });
+  const reopened = await call(
+    ['open', '--file', recoveryPath, '--write'],
+    { id: 'cold-reopen', parentId: 'recovery', profile: input.layout.recoveryProfileDir },
+  );
   if (reopened.code !== 0 || reopened.envelope?.ok === false) {
     const failure = failureFromInvocation(reopened, 'project.open');
     return failed([
@@ -221,7 +241,7 @@ export async function runLiveLifecycle(input: {
     ], failure);
   }
 
-  const recovered = await inspectOn(input.layout.recoveryProfileDir);
+  const recovered = await inspectOn(input.layout.recoveryProfileDir, 'recovery');
   if (recovered.code !== 0 || recovered.envelope?.ok === false) {
     const failure = failureFromInvocation(recovered, 'project.inspect');
     return failed([

@@ -12,7 +12,8 @@ import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
 import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/benchmark/git';
 import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
-import { BenchmarkClock } from '../scripts/benchmark/timing';
+import { BenchmarkClock, classifyCliPhase, emptyClassifyState, ingestCliLogs, summarizeBenchmarkTiming } from '../scripts/benchmark/timing';
+import { extractAgentEnvelopes } from '../scripts/agent/runDocumentedCli';
 import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -145,6 +146,50 @@ describe('benchmark harness v3', () => {
     expect(phases[0]?.id).toBe('prepare');
     expect(phases[0]?.owner).toBe('harness');
     expect(typeof phases[0]?.durationMs).toBe('number');
+  });
+
+  it('classifies CLI envelopes into E2E phases and does not treat missing cache as hits', async () => {
+    const state = emptyClassifyState();
+    expect(classifyCliPhase('render.frame.projected', { command: 'frame', appearance: 'projected' }, state).id).toBe('still-render.projected');
+    expect(classifyCliPhase('character.import', { command: 'import-character', rigMode: 'saved-rig' }, emptyClassifyState()).id).toBe('saved-rig-import');
+    const afterPreflight = emptyClassifyState();
+    afterPreflight.visualPreflightCount = 1;
+    expect(classifyCliPhase('project.applyPlan', { command: 'apply' }, afterPreflight).id).toBe('repair-pass-1');
+
+    const stdout = `${JSON.stringify({
+      ok: true,
+      operation: 'render.frame.clay',
+      durationMs: 40,
+      warnings: [],
+      result: { ok: true },
+    })}\n${JSON.stringify({
+      ok: true,
+      operation: 'render.video.clay',
+      durationMs: 90,
+      warnings: [],
+      result: { ok: true, timing: { encodeMs: 12 } },
+    })}\n`;
+    const stderr = '[agent] command=frame appearance=clay\n[agent] chromium-launch profile=/tmp/p recovered=0\n[agent] command=video appearance=clay\n';
+    expect(extractAgentEnvelopes(stdout)).toHaveLength(2);
+
+    const clock = new BenchmarkClock();
+    clock.start('run');
+    clock.start('invoke-candidate', 'candidate');
+    ingestCliLogs(clock, { stdout, stderr, parentId: 'invoke-candidate' });
+    clock.stop('invoke-candidate');
+    clock.stop('run');
+    const summary = summarizeBenchmarkTiming(clock.snapshot());
+    expect(summary.policy.soakGateTotalsAreNotE2EPhases).toBe(true);
+    expect(summary.retries).toBe(0);
+    expect(summary.cache.present).toBe(false);
+    expect(summary.chromiumLaunches).toBe(1);
+    expect(summary.chromiumLaunchSource).toBe('logged');
+    expect(summary.byPhaseId['still-render.clay']?.count).toBe(1);
+    expect(summary.byPhaseId['motion-video']?.count).toBe(1);
+    expect(summary.byPhaseId['motion-encode']?.durationMs).toBe(12);
+    expect(summary.candidateWallMs).toBeGreaterThanOrEqual(0);
+    expect(summary.foresceneToolMs).toBeGreaterThanOrEqual(40 + 90);
+    expect(summary.operationCount).toBeGreaterThanOrEqual(2);
   });
 
   it('prepare-only CLI finishes clean from an external cwd via FORESCENE_REPO_ROOT', () => {

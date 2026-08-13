@@ -1736,6 +1736,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             label: input.label,
             subjectIds: input.subjectIds,
             accepted: input.accepted,
+            keepWhenAccepted: input.keepWhenAccepted,
             restoreIfWorse: true,
           });
           const preflight = window.foreScene!.inspectShotVisualPreflight({
@@ -1748,6 +1749,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           label: `repair-${repairAttempts}`,
           subjectIds: definition.camera.subjects,
           accepted: rankImproved,
+          keepWhenAccepted: rankImproved,
         });
         let keptRepair = rankImproved && visualCandidate.evaluated.kept;
         let finalPixelStats = reframe.pixelStats;
@@ -1781,6 +1783,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
                 definition,
                 subjectNames: names,
               });
+              await writeJson(
+                path.join(outputDir, 'shots', `${definition.shotNumber}.composition.json`),
+                telemetry,
+              );
             } catch {
               telemetry = finalResult.telemetry ?? telemetry;
             }
