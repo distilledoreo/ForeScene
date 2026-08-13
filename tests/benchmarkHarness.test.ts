@@ -184,40 +184,61 @@ describe('benchmark harness v3', () => {
           {
             shotId: 's010',
             ok: true,
-            requestedSubjectIds: ['lead'],
+            subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+            presentSubjectIds: ['obj_lead_1'],
             missingSubjectIds: [],
             checks: [
               { id: 'camera_direction', status: 'passed' },
               { id: 'subject_visibility', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
             ],
           },
           {
             shotId: 's020',
             ok: true,
-            requestedSubjectIds: ['lead', 'partner'],
+            subjects: [
+              { objectId: 'obj_lead_1', name: 'Lead' },
+              { objectId: 'obj_partner_1', name: 'Partner' },
+            ],
+            presentSubjectIds: ['obj_lead_1', 'obj_partner_1'],
             missingSubjectIds: [],
             checks: [
               { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
               { id: 'framing_coverage', status: 'passed' },
             ],
           },
           {
             shotId: 's030',
             ok: true,
-            requestedSubjectIds: ['lead'],
+            subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+            presentSubjectIds: ['obj_lead_1'],
             missingSubjectIds: [],
             checks: [
               { id: 'camera_direction', status: 'passed' },
               { id: 'subject_visibility', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
               { id: 'motion_continuity', status: 'passed' },
             ],
-            samples: [{ timeSeconds: 0 }, { timeSeconds: 1 }, { timeSeconds: 2 }],
+            samples: [{ timeSeconds: 0, label: 'start' }, { timeSeconds: 1, label: 'mid' }, { timeSeconds: 2, label: 'end' }],
           },
         ],
       },
     });
     expect(passing.ok).toBe(true);
     expect(JSON.stringify(passing)).not.toMatch(/cameraMustBe|cameraPosition/);
+
+    const implicit = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [{
+          shotId: 's010',
+          missingSubjectIds: [],
+          checks: [],
+        }],
+      },
+    });
+    expect(implicit.ok).toBe(false);
+    expect(implicit.checks.some((check) => check.status === 'not_verified')).toBe(true);
 
     const failing = gradeVisualDiagnostics(spec, {
       result: {
