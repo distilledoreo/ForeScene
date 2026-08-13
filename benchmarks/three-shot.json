@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "three-shot",
+  "name": "Three-shot previs benchmark",
+  "description": "Neutral three-shot fixture for measuring previs ability. Do not hard-code camera coordinates; required subjects must be readable at the requested shot scale.",
+  "qualityMode": "rapid-previs",
+  "operatingMode": "greenfield",
+  "writeAuthorized": true,
+  "resetAuthorized": true,
+  "repairBudget": 2,
+  "requiredCliCapabilities": [
+    "project.inspect",
+    "project.open",
+    "project.save",
+    "project.applyPlan",
+    "render.frame.clay",
+    "render.frame.projected",
+    "render.video.clay",
+    "character.importSavedRig"
+  ],
+  "shots": [
+    {
+      "id": "s010",
+      "shotNumber": "010",
+      "name": "Lead medium",
+      "description": "Medium on the lead character. Head through waist; the second subject may be present but must not steal the frame.",
+      "intent": "still",
+      "requiredSubjects": ["lead"],
+      "framing": "medium",
+      "stillArtifacts": ["010.png"]
+    },
+    {
+      "id": "s020",
+      "shotNumber": "020",
+      "name": "Two-subject overlap",
+      "description": "Both required subjects must be readable at a medium-full scale with deliberate foreground/background overlap.",
+      "intent": "still",
+      "requiredSubjects": ["lead", "partner"],
+      "framing": "medium_full",
+      "stillArtifacts": ["020.png"]
+    },
+    {
+      "id": "s030",
+      "shotNumber": "030",
+      "name": "Crossing motion",
+      "description": "A short camera or blocking move that changes the frame between start and end. Still samples at start/mid/end plus one control video.",
+      "intent": "motion-required",
+      "requiredSubjects": ["lead"],
+      "framing": "medium",
+      "stillArtifacts": ["030-start.png", "030-mid.png", "030-end.png"],
+      "motionArtifacts": ["030.mp4"]
+    }
+  ]
+}

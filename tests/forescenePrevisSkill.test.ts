@@ -56,6 +56,7 @@ describe('ForeScene previs skill contract', () => {
       'agent:open',
       'agent:save',
       'agent:capabilities',
+      'FORESCENE_BENCHMARK_BRIEF',
       'agent:analyze-character',
       'agent:import-character',
       'renderControlVideo',
