@@ -13,6 +13,7 @@ import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/be
 import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
 import { BenchmarkClock } from '../scripts/benchmark/timing';
+import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -174,6 +175,85 @@ describe('benchmark harness v3', () => {
     expect(parsed.specId).toBe('three-shot');
     expect(parsed.runRoot).toBe(runRoot);
   }, 30_000);
+
+  it('grades visual-preflight metrics without requiring camera coordinates', async () => {
+    const spec = await loadBenchmarkSpec(path.join(repoRoot, 'benchmarks/three-shot.json'));
+    const passing = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [
+          {
+            shotId: 's010',
+            ok: true,
+            subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+            presentSubjectIds: ['obj_lead_1'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
+            ],
+          },
+          {
+            shotId: 's020',
+            ok: true,
+            subjects: [
+              { objectId: 'obj_lead_1', name: 'Lead' },
+              { objectId: 'obj_partner_1', name: 'Partner' },
+            ],
+            presentSubjectIds: ['obj_lead_1', 'obj_partner_1'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
+            ],
+          },
+          {
+            shotId: 's030',
+            ok: true,
+            subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+            presentSubjectIds: ['obj_lead_1'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
+              { id: 'motion_continuity', status: 'passed' },
+            ],
+            samples: [{ timeSeconds: 0, label: 'start' }, { timeSeconds: 1, label: 'mid' }, { timeSeconds: 2, label: 'end' }],
+          },
+        ],
+      },
+    });
+    expect(passing.ok).toBe(true);
+    expect(JSON.stringify(passing)).not.toMatch(/cameraMustBe|cameraPosition/);
+
+    const implicit = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [{
+          shotId: 's010',
+          missingSubjectIds: [],
+          checks: [],
+        }],
+      },
+    });
+    expect(implicit.ok).toBe(false);
+    expect(implicit.checks.some((check) => check.status === 'not_verified')).toBe(true);
+
+    const failing = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [{
+          shotId: 's020',
+          environmentOnly: true,
+          requestedSubjectIds: [],
+          missingSubjectIds: ['lead', 'partner'],
+          checks: [{ id: 'camera_direction', status: 'failed', message: 'not aimed at subjects' }],
+        }],
+      },
+    });
+    expect(failing.ok).toBe(false);
+    expect(failing.checks.some((check) => check.layer === 'subject' && !check.ok)).toBe(true);
+  });
 
   it('fails closed on an unexpected commit or dirty tree', () => {
     expect(enforceGitIdentity({

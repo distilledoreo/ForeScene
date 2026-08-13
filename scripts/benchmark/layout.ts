@@ -22,6 +22,7 @@ export interface BenchmarkRunLayout {
   hashesPath: string;
   timingPath: string;
   validationPath: string;
+  visualPath: string;
   reportPath: string;
 }
 
@@ -43,6 +44,7 @@ export async function createBenchmarkRunLayout(runRoot: string): Promise<Benchma
     hashesPath: path.join(resolvedRoot, 'hashes.json'),
     timingPath: path.join(resolvedRoot, 'timing.json'),
     validationPath: path.join(resolvedRoot, 'validation.json'),
+    visualPath: path.join(resolvedRoot, 'harness', 'visual.json'),
     reportPath: path.join(resolvedRoot, 'report.json'),
   };
   await mkdir(layout.harnessDir, { recursive: true });

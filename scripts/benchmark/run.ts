@@ -13,6 +13,7 @@ import { extractAgentEnvelope, failureFromInvocation } from './agentCli';
 import { collectBenchmarkRun, prepareBenchmarkRun } from './engine';
 import { isStopTheRun } from './failures';
 import { runLiveLifecycle, skippedLiveLifecycle, writeLifecycleRecords } from './lifecycle';
+import { runLiveVisualGrade, skippedVisualGrade } from './visualGrade';
 import { defaultRunRoot, repoRoot } from './layout';
 import { loadBenchmarkSpec } from './spec';
 import { BenchmarkClock } from './timing';
@@ -67,6 +68,7 @@ async function writeReport(
   spec: BenchmarkSpecV1,
   clock: BenchmarkClock,
   failure?: BenchmarkFailure,
+  extra?: { visualPath?: string },
 ) {
   const report = {
     ok: !failure,
@@ -77,6 +79,7 @@ async function writeReport(
     timing: clock.snapshot(),
     brief: layout.briefPath,
     validation: layout.validationPath,
+    visual: extra?.visualPath ?? layout.visualPath,
   };
   await writeFile(layout.timingPath, `${JSON.stringify({ phases: clock.snapshot() }, null, 2)}\n`, 'utf8');
   await writeFile(layout.reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
@@ -170,7 +173,25 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
   }
 
-  const failure = collected.failure;
+  clock.start('visual-grade');
+  let visualFailure: BenchmarkFailure | undefined;
+  if (args.skipLive || !liveUrl) {
+    await writeFile(
+      prepared.layout.visualPath,
+      `${JSON.stringify(skippedVisualGrade('Live visual-preflight skipped.'), null, 2)}\n`,
+      'utf8',
+    );
+  } else {
+    const visual = await runLiveVisualGrade({
+      spec,
+      layout: prepared.layout,
+      url: liveUrl,
+    });
+    visualFailure = visual.failure;
+  }
+  clock.stop('visual-grade');
+
+  const failure = collected.failure ?? visualFailure;
   await writeReport(prepared.layout, spec, clock, failure);
   return failure ? 1 : 0;
 }
