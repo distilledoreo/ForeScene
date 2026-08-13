@@ -27,6 +27,10 @@ npm run agent:capabilities
 
 If a capability is `true`, use the documented command. Do not inspect ForeScene source or call `window.foreScene` for that operation. See `docs/agent-capability-matrix.md`.
 
+## Benchmark mode
+
+When `FORESCENE_BENCHMARK=1` or `FORESCENE_BENCHMARK_BRIEF` is set, read that JSON brief first. Honor `writeAuthorized`, `resetAuthorized`, and `repairBudget`. Stay `cliOnly`: do not create `run-benchmark.ts`, `open-package.ts`, or `render-stills.ts`, and do not call `window.foreScene`. If ForeScene times out (`character.import` or similar), stop and report an infrastructure failure; do not edit the harness to make the run pass.
+
 ## Operating vs developing
 
 **Operating ForeScene** (this skill): manipulate a live project through the Agent CLI and hosted app. Do **not** edit application source code.
