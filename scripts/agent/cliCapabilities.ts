@@ -168,6 +168,17 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     write: true,
   },
   {
+    id: 'panorama.import',
+    label: 'Import styled panorama',
+    cliCommand: 'import-panorama',
+    cli: true,
+    ui: true,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: true,
+  },
+  {
     id: 'proxy.replace',
     label: 'Replace proxy with imported model',
     cliCommand: 'replace-proxy',

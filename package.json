@@ -26,6 +26,7 @@
     "agent:analyze-character": "tsx scripts/agent/cli.ts analyze-character",
     "agent:import-character": "tsx scripts/agent/cli.ts import-character",
     "agent:import-model": "tsx scripts/agent/cli.ts import-model",
+    "agent:import-panorama": "tsx scripts/agent/cli.ts import-panorama",
     "agent:replace-proxy": "tsx scripts/agent/cli.ts replace-proxy",
     "agent:render-passes": "tsx scripts/agent/cli.ts render-passes",
     "agent:plan-exports": "tsx scripts/agent/cli.ts plan-exports",

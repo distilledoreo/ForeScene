@@ -114,9 +114,15 @@ export async function runDocumentedAgentCommand(input: {
 
 export function assertSuccessfulEnvelope(invocation: DocumentedCliInvocation): AgentCliEnvelope {
   if (invocation.code !== 0) {
-    throw new Error(
-      `${invocation.npmScript} exited ${invocation.code}: ${invocation.envelope?.error?.message ?? invocation.stderr.slice(-600)}`,
-    );
+    const detail = invocation.envelope
+      ? JSON.stringify({
+        ok: invocation.envelope.ok,
+        operation: invocation.envelope.operation,
+        error: invocation.envelope.error,
+        result: invocation.envelope.result,
+      }).slice(0, 1_200)
+      : invocation.stderr.slice(-600);
+    throw new Error(`${invocation.npmScript} exited ${invocation.code}: ${detail}`);
   }
   if (!invocation.envelope) {
     throw new Error(`${invocation.npmScript} did not print a JSON envelope on stdout.`);

@@ -323,6 +323,7 @@ npm run agent:save
 npm run agent:analyze-character
 npm run agent:import-character
 npm run agent:import-model
+npm run agent:import-panorama
 npm run agent:replace-proxy
 npm run agent:render-passes
 npm run agent:plan-exports

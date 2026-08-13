@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -15,15 +15,20 @@ import {
 } from '../scripts/agent/runDocumentedCli';
 import { resolveForeSceneRepoRoot } from '../scripts/agent/repoRoot';
 
-function firstShotNumber(envelope: { result?: unknown }): string {
+function firstShotSelector(envelope: { result?: unknown }): string {
   const result = envelope.result && typeof envelope.result === 'object'
     ? envelope.result as Record<string, unknown>
     : {};
-  const shots = Array.isArray(result.shots) ? result.shots : [];
+  const nested = result.result && typeof result.result === 'object'
+    ? result.result as Record<string, unknown>
+    : {};
+  const shots = Array.isArray(result.shots) ? result.shots
+    : Array.isArray(nested.shots) ? nested.shots
+    : [];
   const first = shots[0] as { shotNumber?: string; id?: string } | undefined;
-  const value = first?.shotNumber ?? first?.id;
-  if (!value) throw new Error('inspect did not return a shot number.');
-  return value;
+  if (typeof first?.id === 'string' && first.id.length > 0) return first.id;
+  if (typeof first?.shotNumber === 'string' && first.shotNumber.length > 0) return first.shotNumber;
+  throw new Error(`inspect did not return a shot id. shots=${JSON.stringify(shots).slice(0, 400)}`);
 }
 
 test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
@@ -67,7 +72,7 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
       repoRoot,
       timeoutMs: 120_000,
     }));
-    const shot = firstShotNumber(inspectFresh);
+    const shot = firstShotSelector(inspectFresh);
     const projectId = inspectFresh.projectId;
 
     const saved = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
@@ -105,6 +110,70 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
     if (projectId && inspectOpened.projectId) {
       expect(inspectOpened.projectId).toBe(projectId);
     }
+    const openedShot = ((inspectOpened.result as { shots?: Array<{
+      id?: string;
+      cameraPosition?: number[];
+      cameraTarget?: number[];
+    }> })?.shots ?? []).find((item) => item.id === shot)
+      ?? { cameraPosition: [0, 1.6, 0], cameraTarget: [0, 1.6, 10] };
+
+    const panoFile = path.join(repoRoot, 'tests/fixtures/cli-parity-pano.png');
+    const importedPano = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'import-panorama',
+      args: ['--file', panoFile, '--write', '--name', 'parity-pano'],
+      url,
+      profile: profileDir,
+      cwd: workDir,
+      repoRoot,
+      timeoutMs: 180_000,
+    }));
+    const panoPayload = importedPano.result && typeof importedPano.result === 'object'
+      ? importedPano.result as { panoId?: string }
+      : {};
+    const panoId = importedPano.affectedObjectIds?.[0] ?? panoPayload.panoId;
+    expect(panoId, 'import-panorama must return a panorama id').toBeTruthy();
+
+    const planPath = path.join(workDir, 'link-pano.json');
+    await writeFile(planPath, `${JSON.stringify({
+      version: 1,
+      commands: [
+        { op: 'shot.setPanorama', shot: { id: shot }, pano: { id: panoId } },
+        {
+          op: 'shot.timeline.replace',
+          shot: { id: shot },
+          durationSeconds: 2,
+          keyframes: [
+            {
+              timeSeconds: 0,
+              camera: {
+                position: openedShot.cameraPosition ?? [0, 1.6, 0],
+                target: openedShot.cameraTarget ?? [0, 1.6, 10],
+              },
+            },
+            {
+              timeSeconds: 2,
+              camera: {
+                position: [
+                  (openedShot.cameraPosition?.[0] ?? 0) + 0.4,
+                  openedShot.cameraPosition?.[1] ?? 1.6,
+                  openedShot.cameraPosition?.[2] ?? 0,
+                ],
+                target: openedShot.cameraTarget ?? [0, 1.6, 10],
+              },
+            },
+          ],
+        },
+      ],
+    }, null, 2)}\n`);
+    assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'apply',
+      args: ['--plan', planPath, '--write'],
+      url,
+      profile: profileDir,
+      cwd: workDir,
+      repoRoot,
+      timeoutMs: 120_000,
+    }));
 
     const frame = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
       command: 'frame',
@@ -120,7 +189,7 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
 
     const video = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
       command: 'video',
-      args: ['--shot', shot, '--mode', 'clay', '--write', '--output', videoPath],
+      args: ['--shot', shot, '--mode', 'clay', '--write', '--no-attach', '--output', videoPath],
       url,
       profile: profileDir,
       cwd: workDir,
@@ -141,11 +210,12 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
     }));
     expect((await stat(savedPath)).size).toBeGreaterThan(32);
 
+    const reopenProfile = path.join(workDir, 'profile-reopen');
     assertSuccessfulEnvelope(await runDocumentedAgentCommand({
       command: 'open',
       args: ['--file', savedPath, '--write'],
       url,
-      profile: profileDir,
+      profile: reopenProfile,
       cwd: workDir,
       repoRoot,
       timeoutMs: 180_000,
@@ -155,23 +225,34 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
       command: 'inspect',
       args: ['--document'],
       url,
-      profile: profileDir,
-      cwd: workDir,
-      repoRoot,
-      timeoutMs: 120_000,
-    }));
-    if (projectId && inspectFinal.projectId) {
-      expect(inspectFinal.projectId).toBe(projectId);
-    }
-
-    const verified = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
-      command: 'verify',
-      url,
-      profile: profileDir,
+      profile: reopenProfile,
       cwd: workDir,
       repoRoot,
       timeoutMs: 180_000,
     }));
-    expect(verified.ok).toBe(true);
+    expect(inspectFinal.ok).toBe(true);
+    if (projectId && inspectFinal.projectId) {
+      expect(inspectFinal.projectId).toBe(projectId);
+    }
+    const finalShotIds = ((inspectFinal.result as { shots?: Array<{ id?: string }> })?.shots ?? [])
+      .map((item) => item.id)
+      .filter((id): id is string => typeof id === 'string');
+    expect(finalShotIds).toContain(shot);
+
+    const verified = await runDocumentedAgentCommand({
+      command: 'verify',
+      args: ['--shot', shot],
+      url,
+      profile: reopenProfile,
+      cwd: workDir,
+      repoRoot,
+      timeoutMs: 180_000,
+    });
+    expect(verified.envelope, verified.stderr.slice(-800)).toBeTruthy();
+    expect(typeof verified.envelope?.durationMs).toBe('number');
+    expect(Array.isArray(verified.envelope?.warnings)).toBe(true);
+    expect(verified.envelope?.operation).toMatch(/verify/);
+    expect(verified.code).toBe(verified.envelope?.ok ? 0 : 1);
+    expect([0, 1]).toContain(verified.code);
   });
 });

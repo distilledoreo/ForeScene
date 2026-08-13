@@ -28,6 +28,7 @@ export const AGENT_CLI_COMMANDS = [
   'analyze-character',
   'import-character',
   'import-model',
+  'import-panorama',
   'replace-proxy',
   'help',
 ] as const;
