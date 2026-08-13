@@ -27,6 +27,13 @@ export interface BenchmarkShotSpec {
   motionArtifacts?: string[];
 }
 
+export interface SemanticSubjectBinding {
+  semanticId: string;
+  objectId?: string;
+  name?: string;
+  stagingRole?: string;
+}
+
 export interface BenchmarkSpecV1 {
   version: typeof BENCHMARK_SPEC_VERSION;
   id: string;
@@ -38,6 +45,7 @@ export interface BenchmarkSpecV1 {
   resetAuthorized: boolean;
   repairBudget: number;
   shots: BenchmarkShotSpec[];
+  semanticSubjectBindings?: SemanticSubjectBinding[];
   requiredCliCapabilities: string[];
   basePackage?: string;
   assets?: Array<{ id: string; path: string; kind: 'glb' | 'fsrig' | 'panorama' | 'other' }>;
@@ -54,6 +62,7 @@ export interface BenchmarkCandidateBrief {
   forbidSourceInspection: true;
   forbidHarnessScripts: true;
   url?: string;
+  repoRoot: string;
   profileDir: string;
   outputDir: string;
   projectPackage?: string;

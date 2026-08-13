@@ -40,7 +40,7 @@ When `FORESCENE_BENCHMARK=1` or `FORESCENE_BENCHMARK_BRIEF` is set, the reposito
 3. Honor `resetAuthorized`. If it is `false`, `--reset-project` and `resetProject` are prohibited.
 4. Honor `repairBudget`: at most that many visual-repair passes after the first authoring pass. When the budget is exhausted, stop and report remaining failures.
 5. Stay `cliOnly`. Do not create `run-benchmark.ts`, `open-package.ts`, or `render-stills.ts`. Do not call `window.foreScene`. Do not inspect ForeScene source when the capability map marks the operation as CLI-supported.
-6. Use `FORESCENE_URL`, `FORESCENE_PROFILE`, and `FORESCENE_OUTPUT` from the environment. Write required stills and motion files under `FORESCENE_OUTPUT`.
+6. Use `FORESCENE_REPO_ROOT`, `FORESCENE_URL`, `FORESCENE_PROFILE`, and `FORESCENE_OUTPUT` from the environment (and the brief's `repoRoot` / `url` / `profileDir` / `outputDir` when present). The working directory may be outside the ForeScene checkout. Invoke documented commands as `npm --prefix "$FORESCENE_REPO_ROOT" run agent:<command>`. Write required stills and motion files under `FORESCENE_OUTPUT`.
 7. If ForeScene times out (`character.import` or similar), stop and report an infrastructure failure. Do not edit the harness, the skill, or ForeScene source to make the run pass.
 
 ## Operating vs developing
@@ -336,6 +336,7 @@ npm run agent:operations
 npm run agent:analyze-character
 npm run agent:import-character
 npm run agent:import-model
+npm run agent:import-panorama
 npm run agent:replace-proxy
 npm run agent:render-passes
 npm run agent:plan-exports

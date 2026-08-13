@@ -41,6 +41,7 @@ implementation.
 | Import GLB character | `character.import` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Import .fsrig saved rig | `character.importSavedRig` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Import GLB / scene model | `model.import` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Import styled panorama | `panorama.import` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Replace proxy with imported model | `proxy.replace` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Render clay frame | `render.frame.clay` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Render projected frame | `render.frame.projected` | ✅ | ✅ | ✅ | ✅ | ✅ |

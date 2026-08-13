@@ -43,14 +43,23 @@ function parseArgs(argv: string[]) {
   return args;
 }
 
-function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
+function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(command, { cwd, env, shell: true });
     let stdout = '';
     let stderr = '';
+    const timer = timeoutMs
+      ? setTimeout(() => {
+        child.kill('SIGINT');
+        stderr += `\nCandidate exceeded ${timeoutMs}ms`;
+      }, timeoutMs)
+      : undefined;
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
     child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
   });
 }
 
@@ -111,10 +120,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       ...process.env,
       FORESCENE_BENCHMARK: '1',
       FORESCENE_BENCHMARK_BRIEF: prepared.layout.briefPath,
+      FORESCENE_REPO_ROOT: repoRoot(),
       FORESCENE_URL: args.url ?? process.env.FORESCENE_URL ?? '',
       FORESCENE_PROFILE: prepared.layout.profileDir,
       FORESCENE_OUTPUT: prepared.layout.artifactDir,
-    });
+    }, Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), result.stdout);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stderr.log'), result.stderr);
     clock.stop('invoke-candidate');
