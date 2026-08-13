@@ -11,29 +11,38 @@ function baselinePayload() {
       visualPreflight: [
         {
           shotId: 's010',
-          requestedSubjectIds: ['lead'],
+          subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+          presentSubjectIds: ['obj_lead_1'],
           missingSubjectIds: [],
           checks: [
             { id: 'camera_direction', status: 'passed' },
             { id: 'subject_visibility', status: 'passed' },
+            { id: 'framing_coverage', status: 'passed' },
           ],
         },
         {
           shotId: 's020',
-          requestedSubjectIds: ['lead', 'partner'],
+          subjects: [
+            { objectId: 'obj_lead_1', name: 'Lead' },
+            { objectId: 'obj_partner_1', name: 'Partner' },
+          ],
+          presentSubjectIds: ['obj_lead_1', 'obj_partner_1'],
           missingSubjectIds: [],
           checks: [
             { id: 'camera_direction', status: 'passed' },
+            { id: 'subject_visibility', status: 'passed' },
             { id: 'framing_coverage', status: 'passed' },
           ],
         },
         {
           shotId: 's030',
-          requestedSubjectIds: ['lead'],
+          subjects: [{ objectId: 'obj_lead_1', name: 'Lead' }],
+          presentSubjectIds: ['obj_lead_1'],
           missingSubjectIds: [],
           checks: [
             { id: 'camera_direction', status: 'passed' },
             { id: 'subject_visibility', status: 'passed' },
+            { id: 'framing_coverage', status: 'passed' },
             { id: 'motion_continuity', status: 'passed' },
           ],
           samples: [{ timeSeconds: 0 }, { timeSeconds: 1 }, { timeSeconds: 2 }],
@@ -74,13 +83,28 @@ export async function runGateF(input: {
     };
   }
 
+  const implicitFail = gradeVisualDiagnostics(spec, {
+    result: { visualPreflight: [{ shotId: 's010', missingSubjectIds: [], checks: [] }] },
+  });
+  if (implicitFail.ok) {
+    return {
+      id: 'F',
+      name: SOAK_GATE_NAMES.F,
+      status: 'failed',
+      requiredLive: false,
+      message: 'Visual grader must fail closed when required checks are absent.',
+      durationMs: Date.now() - started,
+      retries: 0,
+    };
+  }
+
   if (!input.url || !input.profileDir) {
     return {
       id: 'F',
       name: SOAK_GATE_NAMES.F,
-      status: 'passed',
-      requiredLive: false,
-      message: 'Offline visual grader baseline passed. Live visual-preflight skipped.',
+      status: 'skipped',
+      requiredLive: true,
+      message: 'Fail-closed fixture passed. Live visual-preflight is required for stabilization and was skipped.',
       durationMs: Date.now() - started,
       retries: 0,
     };
@@ -109,7 +133,7 @@ export async function runGateF(input: {
     name: SOAK_GATE_NAMES.F,
     status: 'passed',
     requiredLive: true,
-    message: 'Offline visual grader baseline passed and visual-preflight returned an envelope.',
+    message: 'Fail-closed visual rules passed and live visual-preflight returned an envelope.',
     durationMs: Date.now() - started,
     retries: 0,
     details: { liveOperation: live.envelope.operation, liveOk: live.envelope.ok },
