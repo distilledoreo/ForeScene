@@ -50,4 +50,6 @@ not allowed to modify the harness to make the run pass.
 
 Technical validation answers “is this a structurally valid project/output?”
 Visual quality is a separate later layer and must not hard-code camera
-coordinates.
+coordinates. The visual grader consumes `agent:visual-preflight` metrics
+(subject, camera direction, environment/visibility, motion continuity). A
+technical pass is not visual approval.

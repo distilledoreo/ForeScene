@@ -12,6 +12,7 @@ import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
 import { skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
 import { BenchmarkClock } from '../scripts/benchmark/timing';
+import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -166,4 +167,62 @@ describe('benchmark harness v3', () => {
     expect(parsed.specId).toBe('three-shot');
     expect(parsed.runRoot).toBe(runRoot);
   }, 30_000);
+
+  it('grades visual-preflight metrics without requiring camera coordinates', async () => {
+    const spec = await loadBenchmarkSpec(path.join(repoRoot, 'benchmarks/three-shot.json'));
+    const passing = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [
+          {
+            shotId: 's010',
+            ok: true,
+            requestedSubjectIds: ['lead'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
+            ],
+          },
+          {
+            shotId: 's020',
+            ok: true,
+            requestedSubjectIds: ['lead', 'partner'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'framing_coverage', status: 'passed' },
+            ],
+          },
+          {
+            shotId: 's030',
+            ok: true,
+            requestedSubjectIds: ['lead'],
+            missingSubjectIds: [],
+            checks: [
+              { id: 'camera_direction', status: 'passed' },
+              { id: 'subject_visibility', status: 'passed' },
+              { id: 'motion_continuity', status: 'passed' },
+            ],
+            samples: [{ timeSeconds: 0 }, { timeSeconds: 1 }, { timeSeconds: 2 }],
+          },
+        ],
+      },
+    });
+    expect(passing.ok).toBe(true);
+    expect(JSON.stringify(passing)).not.toMatch(/cameraMustBe|cameraPosition/);
+
+    const failing = gradeVisualDiagnostics(spec, {
+      result: {
+        visualPreflight: [{
+          shotId: 's020',
+          environmentOnly: true,
+          requestedSubjectIds: [],
+          missingSubjectIds: ['lead', 'partner'],
+          checks: [{ id: 'camera_direction', status: 'failed', message: 'not aimed at subjects' }],
+        }],
+      },
+    });
+    expect(failing.ok).toBe(false);
+    expect(failing.checks.some((check) => check.layer === 'subject' && !check.ok)).toBe(true);
+  });
 });
