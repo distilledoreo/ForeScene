@@ -9,8 +9,8 @@ Select `existing-project-refinement` whenever inspection finds useful geometry, 
 Before any write, both modes must verify the unique project identity, retained
 shot scope, location/panorama routing, and missing assets. Rapid-previs writes a
 small capability/binding map plus locked-shot fingerprints. Production-integrity
-also runs `npm run agent:inspect -- --url <url>`, captures the full read-only
-document from `window.foreScene.getProjectDocument()`, and writes
+also runs `npm run agent:inspect -- --url <url> --document`, captures the full read-only
+document from the CLI envelope `result.document`, and writes
 `artifacts/previs/preflight/project-preservation.json`; that full artifact is
 required in production-integrity mode, not an optional note.
 

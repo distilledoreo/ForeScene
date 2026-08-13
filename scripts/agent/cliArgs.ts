@@ -51,6 +51,8 @@ export interface AgentCliArgs {
   rollbackBatch?: string;
   finalize: boolean;
   json: boolean;
+  document: boolean;
+  peopleVariant?: string;
   mode?: string;
   autoRepair: boolean;
   noAutoRepair: boolean;
@@ -76,6 +78,7 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
     allowHeavyModelImports: false,
     finalize: false,
     json: false,
+    document: false,
     autoRepair: true,
     noAutoRepair: false,
   };
@@ -151,6 +154,10 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.rollbackBatch = argv[++index];
     } else if (token === '--json') {
       args.json = true;
+    } else if (token === '--document') {
+      args.document = true;
+    } else if (token === '--people-variant') {
+      args.peopleVariant = argv[++index];
     } else if (token === '--finalize') {
       args.finalize = true;
     } else if (token === '--shot' || token === '--shots') {

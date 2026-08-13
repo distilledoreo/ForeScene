@@ -53,6 +53,9 @@ describe('ForeScene previs skill contract', () => {
     for (const phrase of [
       'agent:frame',
       'agent:video',
+      'agent:open',
+      'agent:save',
+      'agent:capabilities',
       'agent:analyze-character',
       'agent:import-character',
       'renderControlVideo',
@@ -139,7 +142,7 @@ describe('ForeScene previs skill contract', () => {
         invert: false,
       },
     });
-    expect(deliverables).toContain('createExportPlan()');
+    expect(deliverables).toContain('agent:plan-exports');
     expect(deliverables).toContain('`missing-projector` is a blocking failure');
   });
 

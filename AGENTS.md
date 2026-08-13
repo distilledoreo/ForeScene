@@ -11,13 +11,20 @@ ForeScene (`forescene` package) is a **local-first, browser-only** React 19 + Ty
 
 Preferred commands:
 
+- `npm run agent:capabilities`
 - `npm run agent:inspect`
+- `npm run agent:open`
+- `npm run agent:save`
 - `npm run agent:previs`
 - `npm run agent:preview`
 - `npm run agent:apply`
+- `npm run agent:frame`
+- `npm run agent:video`
 - `npm run agent:render-stills`
 - `npm run agent:contact-sheet`
 - `npm run agent:package`
+
+See `docs/agent-capability-matrix.md` for the public CLI contract.
 
 For ForeScene previs or production operation, read `skills/forescene-previs/SKILL.md`.
 Harness-specific copies under `.grok/`, `.claude/`, and `.kilo/` are generated
@@ -67,6 +74,7 @@ Run once after the implementation is stable:
 - `npm run test` (fast unit suite; no Chromium)
 - `npm run test:browser` when renderer / projection / WebGL code changed
 - `npm run test:e2e:smoke` (Chromium desktop smoke)
+- `npm run test:e2e:agent-cli` when Agent CLI open/inspect/frame/video/save parity changed
 - Any feature-specific E2E you added
 
 Leave tablet/phone responsive, WebKit, screenshot baselines, and heavy workflows to path-conditional CI or the full-regression workflow (main / nightly / manual).

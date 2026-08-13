@@ -5,11 +5,10 @@
 
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { chromium, type BrowserContext, type Page } from '@playwright/test';
+import { resolveForeSceneRepoRoot } from './repoRoot';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = path.resolve(__dirname, '../..');
+export const REPO_ROOT = resolveForeSceneRepoRoot();
 export const AGENT_PROFILE_DIR = path.resolve(REPO_ROOT, '.forescene-agent/browser-profile');
 
 export interface AgentBrowserOptions {

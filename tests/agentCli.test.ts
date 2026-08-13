@@ -16,6 +16,11 @@ import {
 } from '../scripts/agent/cliShotSelection';
 import { collectVisualPreflightResults } from '../src/engine/agent/visualValidation';
 import type { AgentVisualPreflightResult } from '../src/engine/agent/protocol';
+import {
+  renderCapabilityMatrixMarkdown,
+  resolveAgentRenderAppearance,
+} from '../scripts/agent/cliCapabilities';
+import { AgentCliUsageError, envelopeFromError, wrapAgentCliStdout } from '../scripts/agent/cliResult';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -40,6 +45,10 @@ describe('agent CLI discovery', () => {
       'asset-contract',
       'previs',
       'package',
+      'open',
+      'save',
+      'capabilities',
+      'import-panorama',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
     expect(help.checks.assetPoseContract).toMatch(/asset-contract/);
@@ -60,6 +69,12 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:asset-contract']).toContain('asset-contract');
     expect(packageJson.scripts?.['agent:verify']).toContain('verify');
     expect(packageJson.scripts?.['agent:help']).toContain('help');
+    expect(packageJson.scripts?.['agent:capabilities']).toContain('capabilities');
+    expect(packageJson.scripts?.['agent:open']).toContain('open');
+    expect(packageJson.scripts?.['agent:save']).toContain('save');
+    expect(packageJson.scripts?.['agent:frame']).toContain('frame');
+    expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
+    expect(packageJson.scripts?.['agent:video']).toContain('video');
   });
 
   it('prints machine-readable help from the live CLI', () => {
@@ -72,20 +87,26 @@ describe('agent CLI discovery', () => {
     const start = output.indexOf('{');
     expect(start).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(output.slice(start)) as {
-      commands: string[];
-      checks: Record<string, string>;
-      runIdentity: { runId: string };
-      shotSelection: Record<string, string>;
+      ok: boolean;
+      operation: string;
+      result: {
+        commands: string[];
+        checks: Record<string, string>;
+        runIdentity: { runId: string };
+        shotSelection: Record<string, string>;
+      };
     };
-    expect(parsed.commands).toEqual([...AGENT_CLI_COMMANDS]);
-    expect(parsed.checks.visualPreflight).toMatch(/omitted --shots/i);
-    expect(parsed.checks.visualPreflight).toMatch(/explicit/i);
-    expect(parsed.checks.assetPoseContract).toMatch(/optional --shot/i);
-    expect(parsed.runIdentity.runId).toMatch(/runId/);
-    expect(parsed.shotSelection.verify).toMatch(/collectVisualPreflightValidation/);
-    expect(parsed.shotSelection.frame).toMatch(/exactly one/i);
-    expect(parsed.shotSelection.video).toMatch(/exactly one/i);
-    expect(parsed.shotSelection.assetContract).toMatch(/shotId/);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.operation).toBe('agent.help');
+    expect(parsed.result.commands).toEqual([...AGENT_CLI_COMMANDS]);
+    expect(parsed.result.checks.visualPreflight).toMatch(/omitted --shots/i);
+    expect(parsed.result.checks.visualPreflight).toMatch(/explicit/i);
+    expect(parsed.result.checks.assetPoseContract).toMatch(/optional --shot/i);
+    expect(parsed.result.runIdentity.runId).toMatch(/runId/);
+    expect(parsed.result.shotSelection.verify).toMatch(/collectVisualPreflightValidation/);
+    expect(parsed.result.shotSelection.frame).toMatch(/exactly one/i);
+    expect(parsed.result.shotSelection.video).toMatch(/exactly one/i);
+    expect(parsed.result.shotSelection.assetContract).toMatch(/shotId/);
   }, 30_000);
 });
 
@@ -184,5 +205,104 @@ describe('agent CLI shot-selection contract', () => {
 
     const single = parseAgentCliArgs(['asset-contract', '--shot', 'shot_a']);
     expect(resolveCliCommandShotUsage(single.command, single.shotSelection).shotId).toBe('shot_a');
+  });
+});
+
+describe('agent CLI public surface', () => {
+  it('parses project open, save, inspect --document, and projected frame modes', () => {
+    const open = parseAgentCliArgs(['open', '--file', 'show.fsp', '--write']);
+    expect(open.command).toBe('open');
+    expect(open.file).toBe('show.fsp');
+    expect(open.writeAccess).toBe(true);
+
+    const save = parseAgentCliArgs(['save', '--output', 'show.fsp', '--write']);
+    expect(save.command).toBe('save');
+    expect(save.output).toBe('show.fsp');
+
+    const inspect = parseAgentCliArgs(['inspect', '--document']);
+    expect(inspect.document).toBe(true);
+
+    const frame = parseAgentCliArgs(['frame', '--shot', '02', '--mode', 'projected', '--output', '02.png']);
+    expect(frame.mode).toBe('projected');
+    expect(resolveAgentRenderAppearance({
+      command: frame.command,
+      appearance: frame.appearance,
+      mode: frame.mode,
+    })).toBe('projected');
+
+    const alias = parseAgentCliArgs(['frame', '--shot', '02', '--appearance', 'depth', '--output', '02.png']);
+    expect(resolveAgentRenderAppearance({
+      command: alias.command,
+      appearance: alias.appearance,
+      mode: alias.mode,
+    })).toBe('depth');
+  });
+
+  it('rejects invalid render modes before treating them as clay', () => {
+    expect(() => resolveAgentRenderAppearance({
+      command: 'frame',
+      mode: 'rapid-review',
+    })).toThrow(/clay, projected, or depth/);
+  });
+
+  it('prints a browser-free capability catalog with the Phase 1 gaps closed', () => {
+    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const output = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'capabilities'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    const parsed = JSON.parse(output.slice(output.indexOf('{'))) as {
+      ok: boolean;
+      operation: string;
+      result: {
+        capabilities: Record<string, boolean>;
+        jsonContract: { exitCodes: Record<string, number> };
+      };
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.operation).toBe('agent.capabilities');
+    expect(parsed.result.capabilities['project.open']).toBe(true);
+    expect(parsed.result.capabilities['project.save']).toBe(true);
+    expect(parsed.result.capabilities['character.importSavedRig']).toBe(true);
+    expect(parsed.result.capabilities['render.frame.projected']).toBe(true);
+    expect(parsed.result.capabilities['render.video.projected']).toBe(true);
+    expect(parsed.result.jsonContract.exitCodes).toEqual({ success: 0, failure: 1, usage: 2 });
+  }, 30_000);
+
+  it('keeps docs/agent-capability-matrix.md generated from the CLI catalog', () => {
+    const onDisk = readFileSync(path.join(repoRoot, 'docs/agent-capability-matrix.md'), 'utf8');
+    expect(onDisk).toBe(renderCapabilityMatrixMarkdown());
+  });
+
+  it('wraps command payloads in a stable JSON envelope', () => {
+    const envelope = wrapAgentCliStdout(
+      { operation: 'project.open', startedAt: Date.now() - 12 },
+      {
+        ok: true,
+        projectId: 'proj_1',
+        revisionId: 'rev_1',
+        diagnostics: [{ code: 'import_warning', message: 'legacy package', severity: 'warning' }],
+      },
+    );
+    expect(envelope.ok).toBe(true);
+    expect(envelope.operation).toBe('project.open');
+    expect(envelope.projectId).toBe('proj_1');
+    expect(envelope.revisionId).toBe('rev_1');
+    expect(envelope.warnings).toEqual([{ code: 'import_warning', message: 'legacy package' }]);
+    expect(envelope.durationMs).toBeGreaterThanOrEqual(12);
+  });
+
+  it('uses exit code 2 for usage errors', () => {
+    const { envelope, exitCode } = envelopeFromError(
+      { operation: 'project.open', startedAt: Date.now() },
+      new AgentCliUsageError('open requires --file <path.fsp>.'),
+    );
+    expect(exitCode).toBe(2);
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error).toEqual({
+      code: 'usage_error',
+      message: 'open requires --file <path.fsp>.',
+    });
   });
 });
