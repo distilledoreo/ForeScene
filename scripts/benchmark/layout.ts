@@ -1,19 +1,16 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const repoRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+import { resolveForeSceneRepoRoot } from '../agent/repoRoot';
 
 export function repoRoot(): string {
-  return process.env.FORESCENE_REPO_ROOT
-    ? path.resolve(process.env.FORESCENE_REPO_ROOT)
-    : repoRootFromHere;
+  return resolveForeSceneRepoRoot();
 }
 
 export interface BenchmarkRunLayout {
   runRoot: string;
   harnessDir: string;
   profileDir: string;
+  recoveryProfileDir: string;
   projectDir: string;
   workDir: string;
   artifactDir: string;
@@ -29,25 +26,28 @@ export interface BenchmarkRunLayout {
 }
 
 export async function createBenchmarkRunLayout(runRoot: string): Promise<BenchmarkRunLayout> {
+  const resolvedRoot = path.resolve(runRoot);
   const layout: BenchmarkRunLayout = {
-    runRoot,
-    harnessDir: path.join(runRoot, 'harness'),
-    profileDir: path.join(runRoot, 'profile'),
-    projectDir: path.join(runRoot, 'project'),
-    workDir: path.join(runRoot, 'work'),
-    artifactDir: path.join(runRoot, 'work', 'artifacts'),
-    lifecycleDir: path.join(runRoot, 'lifecycle'),
-    logsDir: path.join(runRoot, 'logs'),
-    specPath: path.join(runRoot, 'harness', 'spec.json'),
-    briefPath: path.join(runRoot, 'harness', 'brief.json'),
-    gitPath: path.join(runRoot, 'harness', 'git.json'),
-    hashesPath: path.join(runRoot, 'hashes.json'),
-    timingPath: path.join(runRoot, 'timing.json'),
-    validationPath: path.join(runRoot, 'validation.json'),
-    reportPath: path.join(runRoot, 'report.json'),
+    runRoot: resolvedRoot,
+    harnessDir: path.join(resolvedRoot, 'harness'),
+    profileDir: path.join(resolvedRoot, 'profile'),
+    recoveryProfileDir: path.join(resolvedRoot, 'profile-recovery'),
+    projectDir: path.join(resolvedRoot, 'project'),
+    workDir: path.join(resolvedRoot, 'work'),
+    artifactDir: path.join(resolvedRoot, 'work', 'artifacts'),
+    lifecycleDir: path.join(resolvedRoot, 'lifecycle'),
+    logsDir: path.join(resolvedRoot, 'logs'),
+    specPath: path.join(resolvedRoot, 'harness', 'spec.json'),
+    briefPath: path.join(resolvedRoot, 'harness', 'brief.json'),
+    gitPath: path.join(resolvedRoot, 'harness', 'git.json'),
+    hashesPath: path.join(resolvedRoot, 'hashes.json'),
+    timingPath: path.join(resolvedRoot, 'timing.json'),
+    validationPath: path.join(resolvedRoot, 'validation.json'),
+    reportPath: path.join(resolvedRoot, 'report.json'),
   };
   await mkdir(layout.harnessDir, { recursive: true });
   await mkdir(layout.profileDir, { recursive: true });
+  await mkdir(layout.recoveryProfileDir, { recursive: true });
   await mkdir(layout.projectDir, { recursive: true });
   await mkdir(layout.artifactDir, { recursive: true });
   await mkdir(layout.lifecycleDir, { recursive: true });
@@ -57,5 +57,7 @@ export async function createBenchmarkRunLayout(runRoot: string): Promise<Benchma
 
 export function defaultRunRoot(specId: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return path.join(repoRoot(), 'artifacts', 'benchmark', `${specId}-${stamp}`);
+  const configured = process.env.FORESCENE_BENCHMARK_RUN_ROOT;
+  const base = configured ? path.resolve(configured) : path.join(repoRoot(), 'artifacts', 'benchmark');
+  return path.join(base, `${specId}-${stamp}`);
 }
