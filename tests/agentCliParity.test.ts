@@ -14,7 +14,7 @@ describe('Agent CLI documented parity contract', () => {
     expect(spec).toContain('runDocumentedAgentCommand');
     expect(spec).toContain("'open'");
     expect(spec).toContain("'inspect'");
-    expect(spec).toContain("'frame'");
+    expect(spec).toContain("'import-panorama'");
     expect(spec).toContain("'video'");
     expect(spec).toContain("'save'");
     expect(spec).toContain("'verify'");

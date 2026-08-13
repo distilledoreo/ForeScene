@@ -277,6 +277,14 @@ export default function App() {
       />
       <input
         type="file"
+        accept="image/png,image/jpeg,.png,.jpg,.jpeg,.webp"
+        data-agent-pano-import-input
+        tabIndex={-1}
+        aria-hidden="true"
+        className="hidden"
+      />
+      <input
+        type="file"
         accept={projectBackupAcceptAttribute()}
         data-agent-project-open-input
         tabIndex={-1}

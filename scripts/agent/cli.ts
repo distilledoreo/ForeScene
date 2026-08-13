@@ -271,6 +271,34 @@ async function runCharacterImport(options: {
   });
 }
 
+async function runPanoramaImport(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  file: string;
+  name?: string;
+  profile?: string;
+}) {
+  requireExplicitWrite('agent:import-panorama', options.writeAccess);
+  const target = path.resolve(options.file);
+  await withSession({ ...options, command: 'import-panorama' }, async (session) => {
+    await session.page.locator('[data-agent-pano-import-input]').setInputFiles(target);
+    const result = await session.page.evaluate(async (input) => {
+      const fileInput = document.querySelector('[data-agent-pano-import-input]') as HTMLInputElement | null;
+      const file = fileInput?.files?.[0];
+      if (!file) throw new Error('Panorama file was not staged in the browser.');
+      return window.foreScene!.importPanoramaReference({
+        file,
+        mode: 'canonical',
+        name: input.name,
+      });
+    }, { name: options.name });
+    printJson(result);
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
 async function runModelImport(options: {
   url?: string;
   headless: boolean;
@@ -1240,6 +1268,20 @@ async function main() {
       name: args.name,
       consentToken: args.consentToken,
       allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      profile: args.profile,
+    });
+    return;
+  }
+
+  if (args.command === 'import-panorama') {
+    if (!args.file) throw new AgentCliUsageError('import-panorama requires --file <path>.');
+    await runPanoramaImport({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      file: args.file,
+      name: args.name,
       profile: args.profile,
     });
     return;

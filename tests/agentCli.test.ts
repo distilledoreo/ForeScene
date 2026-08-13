@@ -50,6 +50,7 @@ describe('agent CLI discovery', () => {
       'cancel',
       'operations',
       'capabilities',
+      'import-panorama',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
     expect(help.checks.assetPoseContract).toMatch(/asset-contract/);
@@ -76,6 +77,8 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:cancel']).toContain('cancel');
     expect(packageJson.scripts?.['agent:operations']).toContain('operations');
     expect(packageJson.scripts?.['agent:frame']).toContain('frame');
+    expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
+    expect(packageJson.scripts?.['agent:video']).toContain('video');
   });
 
   it('prints machine-readable help from the live CLI', () => {
