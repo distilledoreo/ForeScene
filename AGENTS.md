@@ -40,6 +40,7 @@ See `docs/previs-production-manifest.md` for the manifest reference.
 ### Running (see `package.json` scripts / `README.md` for the canonical list)
 - Dev server: `npm run dev` → serves on port **3000** (`--host=0.0.0.0`). This is the whole app.
 - Build: `npm run build` (Vite; does not type-check). Preview built output: `npm run preview` (port 4173).
+- Reliability soak: `npm run reliability:soak` (offline Gates A/D/E/F; add `--url` for live B/C). See `docs/reliability-soak.md`.
 
 ### Validation levels (do not overvalidate)
 

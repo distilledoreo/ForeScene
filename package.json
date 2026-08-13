@@ -48,6 +48,7 @@
     "agent:render-stills": "tsx scripts/agent/cli.ts render-stills",
     "agent:contact-sheet": "tsx scripts/agent/cli.ts contact-sheet",
     "agent:soak-saved-rig": "tsx scripts/agent/savedRigSoak.ts",
+    "reliability:soak": "tsx scripts/reliability/soak.ts",
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "benchmark:run": "tsx scripts/benchmark/run.ts",
     "test:e2e": "playwright test",
