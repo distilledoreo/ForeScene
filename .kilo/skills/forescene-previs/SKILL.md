@@ -320,6 +320,8 @@ npm run agent:screenshot
 npm run agent:frame
 npm run agent:video
 npm run agent:verify
+npm run agent:visual-preflight
+npm run agent:asset-contract
 npm run agent:run
 npm run agent:previs
 npm run agent:render-stills
@@ -327,7 +329,7 @@ npm run agent:contact-sheet
 npm run agent:package
 ```
 
-Use `agent:frame` for clean clay samples and `agent:video` for a direct shot render. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
+Use `agent:frame` for clean clay samples and `agent:video` for a direct shot render. Both accept exactly one `--shot` (or a single `--shots` value) and reject extra ids before the browser opens. `agent:verify` and `agent:visual-preflight` accept optional `--shot`/`--shots`: omitted selection validates every shot (or skips the visual gate on an empty project); an explicit selection that matches nothing fails, and unmatched ids appear in the JSON result. `agent:asset-contract` accepts one optional `--shot` (API `shotId`); omit the flag for the whole project. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
 
 The commands above remain independently available primitives.
 

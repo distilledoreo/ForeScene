@@ -52,6 +52,22 @@ import { getAssetInstanceIds, getAssetShotIds, listMissingProjectAssets } from '
 import { relinkModelAssetIntoProject } from '../modelImportService';
 import { touchProject } from '../../state/slices/touchProject';
 import { collectAgentBusyDiagnostics } from './busy';
+import { inspectShotVisualPreflight } from './visualPreflight';
+import { collectVisualPreflightResults } from './visualValidation';
+import { inspectAssetPoseContract } from './assetPoseContract';
+import {
+  beginShotRepairSession,
+  commitBestShotRepairCandidate,
+  evaluateShotRepairCandidate,
+} from './repairCandidates';
+import {
+  beginAgentRunSession,
+  buildAgentRunProvenance,
+  composeAgentValidationEvidence,
+  recordAgentValidationEvidence,
+} from './runProvenance';
+import { recordProvenanceCancellation, recordProvenanceRetry } from './cacheTelemetry';
+import { coerceShotTarget } from './targetResolver';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -134,7 +150,7 @@ import {
   getAgentSchema,
 } from './discovery';
 import { exportAgentProjectBackup } from './projectBackupControl';
-import { buildInlineArtifact, deriveOperationOk, deriveOperationStatus } from './renderResult';
+import { buildInlineArtifact, deriveOperationOk, deriveOperationStatus, registerRenderedFrameArtifact } from './renderResult';
 import { refreshAgentRevision } from './revisionSync';
 import { setAgentShotPanorama } from './shotPanorama';
 import {
@@ -279,6 +295,7 @@ import {
 import {
   deleteAgentArtifact,
   getAgentArtifactBlob,
+  getAgentArtifactHandle,
   getAgentArtifactStatus,
   listAgentArtifacts,
   persistAgentArtifact,
@@ -426,6 +443,7 @@ export function getForeSceneAgentStatus(): ForeSceneAgentStatus {
       lastSavedAt: safety.lastSavedAt,
       activeRevisionId: safety.activeRevisionId,
     },
+    provenance: buildAgentRunProvenance(),
   };
 }
 
@@ -438,6 +456,34 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     getStatus() {
       return getForeSceneAgentStatus();
+    },
+
+    beginRunSession(input = {}) {
+      beginAgentRunSession(input);
+      return getForeSceneAgentStatus();
+    },
+
+    recordRunValidation(input) {
+      const evidence = composeAgentValidationEvidence({
+        source: input.source ?? 'manual',
+        revisionId: input.revisionId ?? useProjectSafetyStore.getState().activeRevisionId,
+        visualPreflight: input.visualPreflight,
+        unmatchedVisualShotIds: input.unmatchedVisualShotIds,
+        assetPose: input.assetPose,
+        projectHealth: input.projectHealth,
+      });
+      return recordAgentValidationEvidence(evidence);
+    },
+
+    collectVisualPreflightValidation(input = {}) {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      return collectVisualPreflightResults({
+        shots: listShotsSnapshot(project),
+        requestedShotIds: input.shotIds,
+        inspect: (shotId) => inspectShotVisualPreflight({ project, shotId }),
+      });
     },
 
     getCapabilities() {
@@ -626,11 +672,23 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return inspectShotTimelineSnapshot(project, shot);
     },
 
-    sampleShotAtTime(input: { shot: AgentEntityTarget; timeSeconds: number }): AgentShotTimeSample {
+    sampleShotAtTime(input: {
+      shot?: AgentEntityTarget;
+      shotId?: string;
+      shotNumber?: string;
+      timeSeconds: number;
+    }): AgentShotTimeSample {
       const blocked = requireInspectionAccess();
       if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       const project = readInspectionContext().project;
-      const resolved = resolveExistingShotTarget(project, input.shot);
+      const target = coerceShotTarget(input);
+      if (!target) {
+        throw new AgentApiError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'sampleShotAtTime requires shot, shotId, or shotNumber.',
+        );
+      }
+      const resolved = resolveExistingShotTarget(project, target);
       if (!resolved.ok) {
         const first = resolved.diagnostics[0]!;
         throw new AgentApiError(first.code, first.message, first.candidates);
@@ -644,15 +702,29 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return sampleAgentShotState(input);
     },
 
-    inspectShotDiagnostics(input: { shotId: string; timeSeconds?: number; subjectIds?: string[] }) {
+    inspectShotDiagnostics(input: {
+      shotId?: string;
+      shot?: AgentEntityTarget;
+      timeSeconds?: number;
+      subjectIds?: string[];
+    }) {
       const blocked = requireInspectionAccess();
       if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
       const project = readInspectionContext().project;
-      const shot = project.shots.find((candidate) => candidate.id === input.shotId);
+      const target = coerceShotTarget(input);
+      if (!target) {
+        throw new AgentApiError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'inspectShotDiagnostics requires shotId or shot.');
+      }
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      const shot = project.shots.find((candidate) => candidate.id === resolved.id);
       if (!shot) {
         throw new AgentApiError(
           AGENT_DIAGNOSTIC_CODES.targetNotFound,
-          `No shot with id "${input.shotId}".`,
+          `No shot with id "${resolved.id}".`,
         );
       }
       const diagnostics = inspectAgentShotDiagnostics({
@@ -663,6 +735,167 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       });
       diagnostics.revisionId = readInspectionContext().revisionId;
       return diagnostics;
+    },
+
+    inspectShotVisualPreflight(input) {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const target = coerceShotTarget(input);
+      if (!target) {
+        throw new AgentApiError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'inspectShotVisualPreflight requires shotId or shot.');
+      }
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      return inspectShotVisualPreflight({
+        project,
+        shotId: resolved.id,
+        timeSeconds: input.timeSeconds,
+        subjectIds: input.subjectIds,
+        environmentOnly: input.environmentOnly,
+        allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
+      });
+    },
+
+    inspectAssetPoseContract(input = {}) {
+      const blocked = requireInspectionAccess();
+      if (blocked) throw new AgentApiError(blocked[0]!.code, blocked[0]!.message);
+      const project = readInspectionContext().project;
+      const target = coerceShotTarget(input);
+      const resolved = target ? resolveExistingShotTarget(project, target) : undefined;
+      if (resolved && !resolved.ok) {
+        const first = resolved.diagnostics[0]!;
+        throw new AgentApiError(first.code, first.message, first.candidates);
+      }
+      return inspectAssetPoseContract(
+        project,
+        resolved && resolved.ok ? resolved.id : undefined,
+        {
+          packageManifestPaths: input.packageManifestPaths,
+          producedPackageManifest: input.producedPackageManifest,
+        },
+      );
+    },
+
+    beginShotRepairSession(input) {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId ?? '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: blocked,
+        };
+      }
+      const project = readInspectionContext().project;
+      const target = coerceShotTarget(input);
+      if (!target) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'beginShotRepairSession requires shotId or shot.')],
+        };
+      }
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId ?? '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: resolved.diagnostics,
+        };
+      }
+      return beginShotRepairSession({ shotId: resolved.id, label: input.label });
+    },
+
+    evaluateShotRepairCandidate(input) {
+      const blocked = requireInspectionAccess();
+      if (blocked) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId ?? '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: blocked,
+        };
+      }
+      const project = readInspectionContext().project;
+      const target = coerceShotTarget(input);
+      if (!target) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'evaluateShotRepairCandidate requires shotId or shot.')],
+        };
+      }
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId ?? '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: resolved.diagnostics,
+        };
+      }
+      return evaluateShotRepairCandidate({
+        shotId: resolved.id,
+        label: input.label,
+        timeSeconds: input.timeSeconds,
+        subjectIds: input.subjectIds,
+        restoreIfWorse: input.restoreIfWorse,
+        accepted: input.accepted,
+      });
+    },
+
+    commitBestShotRepairCandidate(input) {
+      const project = useProjectStore.getState().project;
+      const target = coerceShotTarget(input);
+      if (!target) {
+        return Promise.resolve({
+          ok: false,
+          status: 'failed' as const,
+          shotId: '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, 'commitBestShotRepairCandidate requires shotId or shot.')],
+        });
+      }
+      const resolved = resolveExistingShotTarget(project, target);
+      if (!resolved.ok) {
+        return Promise.resolve({
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.shotId ?? '',
+          kept: false,
+          currentScore: 0,
+          bestScore: 0,
+          diagnostics: resolved.diagnostics,
+        });
+      }
+      return commitBestShotRepairCandidate({ shotId: resolved.id });
     },
 
     listLandmarks() {
@@ -1382,6 +1615,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         };
       }
       const { retryFailedShotStills } = await import('../shotStillActions');
+      recordProvenanceRetry();
       const result = await retryFailedShotStills({
         project: useProjectStore.getState().project,
         shotId: input.shotId,
@@ -1412,6 +1646,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     cancelShotStillPreparation(input) {
       const result = cancelShotStillPreparationAction(input?.shotId);
+      if (result.cancelledShotIds.length > 0) recordProvenanceCancellation();
       return { ok: true, cancelledShotIds: result.cancelledShotIds };
     },
 
@@ -1419,6 +1654,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       const cancelledCount = input?.shotId
         ? renderWorkCoordinator.cancelByOwner(input.shotId)
         : renderWorkCoordinator.cancelAll();
+      if (cancelledCount > 0) recordProvenanceCancellation();
       return { ok: true, cancelledCount };
     },
 
@@ -1514,6 +1750,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
       const dataUrl = await blobToDataUrlFromBlob(blob);
       const artifact = buildInlineArtifact({ mimeType: 'image/png', dataUrl });
+      const handle = getAgentArtifactHandle(storyboardArtifactId);
       const sheetSpec = buildContactSheetSpec({
         title: 'Storyboard',
         shots: artifactIds.map((id, idx) => ({
@@ -1536,6 +1773,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         width: storyboardWidth,
         height: storyboardHeight,
         artifact,
+        handle,
         pngDataUrl: dataUrl,
         diagnostics: sheetProgress.errors ?? [],
       };
@@ -2314,11 +2552,16 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           }
         }
 
-        const artifact = pngDataUrl
-          ? buildInlineArtifact({ mimeType: 'image/png', dataUrl: pngDataUrl })
+        const registered = pngDataUrl
+          ? registerRenderedFrameArtifact({
+            dataUrl: pngDataUrl,
+            fileName: `shot_${input.shotId}.png`,
+            revisionId: revisionNow,
+            shotId: input.shotId,
+          })
           : undefined;
         const status = deriveOperationStatus({
-          hasArtifact: Boolean(artifact),
+          hasArtifact: Boolean(registered),
           diagnostics: qualityDiagnostics,
         });
         const finalStatus = poseFailures.length > 0 ? 'failed' : status;
@@ -2334,7 +2577,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
             requestedTimeSeconds: timeSample.requestedTimeSeconds,
             sampledTimeSeconds: timeSample.sampledTimeSeconds,
           } : {}),
-          artifact,
+          artifact: registered?.inline,
+          handle: registered?.handle,
           pngDataUrl,
           pixelStats,
           appearance,

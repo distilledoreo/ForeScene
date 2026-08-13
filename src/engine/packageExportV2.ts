@@ -50,6 +50,7 @@ import {
   createProgressTracker,
   isPackageExportCancelled,
   normalizeCameraMoveProgress,
+  resolvePackageConcurrency,
   runPackageTasksWithConcurrency,
   ShotPackageError,
   throwIfAborted,
@@ -1069,7 +1070,7 @@ export async function buildForeSceneV2Package(
 
   await runPackageTasksWithConcurrency(
     shots,
-    options.packageConcurrency ?? 2,
+    resolvePackageConcurrency(options.packageConcurrency),
     async (shot, shotIndex) => {
       throwIfAborted(options.signal);
       const shotPlan = getPlannedShot(plan, shot.id);

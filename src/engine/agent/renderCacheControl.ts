@@ -13,6 +13,7 @@ import {
   type RenderCacheInspection,
   type RenderFingerprint,
 } from '../previs/renderCache';
+import { recordCacheOperation } from './cacheTelemetry';
 
 const STORAGE_KEY = 'forescene.render-cache.v1';
 const indexes = new Map<string, RenderCacheIndex>();
@@ -60,11 +61,27 @@ export function inspectAgentRenderCache(input: { projectId?: string } = {}): Ren
 }
 
 export function explainAgentRenderCacheHit(input: { projectId?: string; fingerprint: RenderFingerprint }): RenderCacheDecision {
-  return explainRenderCacheHit(loadIndex(projectKey(input.projectId)), input.fingerprint);
+  const decision = explainRenderCacheHit(loadIndex(projectKey(input.projectId)), input.fingerprint);
+  recordCacheOperation({
+    operation: 'render.explainHit',
+    hit: decision.hit,
+    reason: decision.reasons[0] ?? (decision.hit ? 'content_fingerprint_match' : 'no_content_fingerprint_match'),
+    fingerprint: decision.key,
+    artifactId: decision.entry?.artifactId,
+  });
+  return decision;
 }
 
 export function explainAgentRenderCacheMiss(input: { projectId?: string; fingerprint: RenderFingerprint }): RenderCacheDecision {
-  return explainRenderCacheMiss(loadIndex(projectKey(input.projectId)), input.fingerprint);
+  const decision = explainRenderCacheMiss(loadIndex(projectKey(input.projectId)), input.fingerprint);
+  recordCacheOperation({
+    operation: 'render.explainMiss',
+    hit: false,
+    reason: decision.reasons[0] ?? 'no_content_fingerprint_match',
+    fingerprint: decision.key,
+    artifactId: decision.entry?.artifactId,
+  });
+  return decision;
 }
 
 export function invalidateAgentRenderDependencies(input: { projectId?: string; dependencyIds: string[] }): RenderCacheInspection {
@@ -91,6 +108,13 @@ export function recordAgentRenderCacheEntry(input: {
     artifactPath: input.artifactPath,
     sourceRevisionId: input.sourceRevisionId,
     createdAt: new Date().toISOString(),
+  });
+  recordCacheOperation({
+    operation: 'render.record',
+    hit: false,
+    reason: 'recorded_ready_entry',
+    fingerprint: input.fingerprint.key,
+    artifactId: input.artifactId,
   });
   return inspectRenderCache(saveIndex(key, index));
 }

@@ -44,6 +44,7 @@ import {
   resolveExistingObjectTarget,
   resolveExistingShotTarget,
 } from './inspection';
+import { coerceShotTarget } from './targetResolver';
 import {
   applyShotCamera,
   applyShotStagingTransform,
@@ -79,9 +80,39 @@ function requireWriteAccess(operation: string): AgentDiagnostic[] | null {
 
 function requireShotId(shotId: string | undefined, operation: string): AgentDiagnostic[] | null {
   if (!shotId) {
-    return [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `${operation} requires shotId.`)];
+    return [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `${operation} requires shotId or shot.`)];
   }
   return null;
+}
+
+function resolveShotIdFromInput(
+  project: LocationProject,
+  input: { shotId?: string; shot?: import('./protocol').AgentEntityTarget },
+  operation: string,
+): { ok: true; id: string } | { ok: false; diagnostics: AgentDiagnostic[] } {
+  const target = coerceShotTarget(input);
+  if (!target) {
+    return {
+      ok: false,
+      diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.invalidArgument, `${operation} requires shotId or shot.`)],
+    };
+  }
+  return resolveExistingShotTarget(project, target);
+}
+
+function isPositionTarget(target: unknown): target is [number, number, number] | { position: [number, number, number] } {
+  if (Array.isArray(target) && target.length === 3 && target.every((value) => typeof value === 'number')) {
+    return true;
+  }
+  if (target && typeof target === 'object' && 'position' in target) {
+    const position = (target as { position?: unknown }).position;
+    return Array.isArray(position) && position.length === 3 && position.every((value) => typeof value === 'number');
+  }
+  return false;
+}
+
+function readPositionTarget(target: [number, number, number] | { position: [number, number, number] }): [number, number, number] {
+  return Array.isArray(target) ? target : target.position;
 }
 
 async function commitProjectMutation(
@@ -214,18 +245,16 @@ export async function snapAgentObjectToFloor(
 ): Promise<AgentSnapObjectToFloorResult> {
   const blocked = requireWriteAccess('snapObjectToFloor');
   if (blocked) return { ok: false, status: 'failed', diagnostics: blocked };
-  const missingShot = requireShotId(input.shotId, 'snapObjectToFloor');
-  if (missingShot) return { ok: false, status: 'failed', diagnostics: missingShot };
   const busy = await awaitAgentNotBusy();
   if (busy) return { ok: false, status: 'busy', diagnostics: busy };
 
   const project = useProjectStore.getState().project;
-  const shotResolved = resolveExistingShotTarget(project, { id: input.shotId! });
+  const shotResolved = resolveShotIdFromInput(project, input, 'snapObjectToFloor');
   if (!shotResolved.ok) return { ok: false, status: 'failed', diagnostics: shotResolved.diagnostics };
   const objectResolved = resolveObjectId(project, input.object);
   if (!objectResolved.ok) return { ok: false, status: 'failed', diagnostics: objectResolved.diagnostics };
 
-  const state = getShotEffectiveState(project, input.shotId!);
+  const state = getShotEffectiveState(project, shotResolved.id);
   const object = state ? getEffectiveObject(state, objectResolved.id) : undefined;
   if (!object) {
     return {
@@ -235,16 +264,16 @@ export async function snapAgentObjectToFloor(
     };
   }
 
-  const floorY = identifyFloorY(project, object.transform.position);
+  const floorY = identifyFloorY(project, object.transform.position, state?.objects);
   const nextPosition = groundObjectPositionOnFloor(object, floorY);
   const commit = await commitProjectMutation('Snap object to floor (shot staging)', (current) => (
-    applyShotStagingTransform(current, input.shotId!, object.id, { position: nextPosition })
+    applyShotStagingTransform(current, shotResolved.id, object.id, { position: nextPosition })
   ));
 
   return {
     ok: true,
     status: 'completed',
-    shotId: input.shotId,
+    shotId: shotResolved.id,
     objectId: object.id,
     position: nextPosition,
     revisionId: commit.revisionId,
@@ -257,18 +286,18 @@ export async function placeAgentObjectNearLandmark(
 ): Promise<AgentPlaceObjectNearLandmarkResult> {
   const blocked = requireWriteAccess('placeObjectNearLandmark');
   if (blocked) return { ok: false, status: 'failed', diagnostics: blocked };
-  const missingShot = requireShotId(input.shotId, 'placeObjectNearLandmark');
-  if (missingShot) return { ok: false, status: 'failed', diagnostics: missingShot };
   const busy = await awaitAgentNotBusy();
   if (busy) return { ok: false, status: 'busy', diagnostics: busy };
 
   const project = useProjectStore.getState().project;
+  const shotResolved = resolveShotIdFromInput(project, input, 'placeObjectNearLandmark');
+  if (!shotResolved.ok) return { ok: false, status: 'failed', diagnostics: shotResolved.diagnostics };
   const objectResolved = resolveObjectId(project, input.object);
   if (!objectResolved.ok) return { ok: false, status: 'failed', diagnostics: objectResolved.diagnostics };
   const landmarkResolved = resolveExistingLandmarkTarget(project, input.landmark);
   if (!landmarkResolved.ok) return { ok: false, status: 'failed', diagnostics: landmarkResolved.diagnostics };
 
-  const state = getShotEffectiveState(project, input.shotId!);
+  const state = getShotEffectiveState(project, shotResolved.id);
   const object = state ? getEffectiveObject(state, objectResolved.id) : undefined;
   const landmark = project.landmarks.find((candidate) => candidate.id === landmarkResolved.id);
   if (!object || !landmark) {
@@ -292,13 +321,13 @@ export async function placeAgentObjectNearLandmark(
   ];
 
   const commit = await commitProjectMutation('Place object near landmark (shot staging)', (current) => (
-    applyShotStagingTransform(current, input.shotId!, object.id, { position: nextPosition })
+    applyShotStagingTransform(current, shotResolved.id, object.id, { position: nextPosition })
   ));
 
   return {
     ok: true,
     status: 'completed',
-    shotId: input.shotId,
+    shotId: shotResolved.id,
     objectId: object.id,
     landmarkId: landmark.id,
     position: nextPosition,
@@ -312,45 +341,61 @@ export async function orientAgentObjectToward(
 ): Promise<AgentOrientObjectTowardResult> {
   const blocked = requireWriteAccess('orientObjectToward');
   if (blocked) return { ok: false, status: 'failed', diagnostics: blocked };
-  const missingShot = requireShotId(input.shotId, 'orientObjectToward');
-  if (missingShot) return { ok: false, status: 'failed', diagnostics: missingShot };
   const busy = await awaitAgentNotBusy();
   if (busy) return { ok: false, status: 'busy', diagnostics: busy };
 
   const project = useProjectStore.getState().project;
+  const shotResolved = resolveShotIdFromInput(project, input, 'orientObjectToward');
+  if (!shotResolved.ok) return { ok: false, status: 'failed', diagnostics: shotResolved.diagnostics };
   const objectResolved = resolveObjectId(project, input.object);
   if (!objectResolved.ok) return { ok: false, status: 'failed', diagnostics: objectResolved.diagnostics };
-  const targetResolved = resolveObjectId(project, input.target);
-  if (!targetResolved.ok) return { ok: false, status: 'failed', diagnostics: targetResolved.diagnostics };
 
-  const state = getShotEffectiveState(project, input.shotId!);
+  const state = getShotEffectiveState(project, shotResolved.id);
   const object = state ? getEffectiveObject(state, objectResolved.id) : undefined;
-  const target = state ? getEffectiveObject(state, targetResolved.id) : undefined;
-  if (!object || !target) {
+  if (!object) {
     return {
       ok: false,
       status: 'failed',
-      diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, 'Object or target not found.')],
+      diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, 'Object not found.')],
     };
+  }
+
+  let targetId: string | undefined;
+  let faceTarget: Vec3;
+  if (isPositionTarget(input.target)) {
+    faceTarget = readPositionTarget(input.target);
+  } else {
+    const targetResolved = resolveObjectId(project, input.target as import('./protocol').AgentEntityTarget);
+    if (!targetResolved.ok) return { ok: false, status: 'failed', diagnostics: targetResolved.diagnostics };
+    const target = state ? getEffectiveObject(state, targetResolved.id) : undefined;
+    if (!target) {
+      return {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, 'Object or target not found.')],
+      };
+    }
+    targetId = target.id;
+    faceTarget = target.transform.position;
   }
 
   const yaw = resolveFacingYaw({
     from: object.transform.position,
-    faceTarget: target.transform.position,
+    faceTarget,
   });
   const nextRotation: Vec3 = [...object.transform.rotation];
   nextRotation[1] = yaw;
 
   const commit = await commitProjectMutation('Orient object toward target (shot staging)', (current) => (
-    applyShotStagingTransform(current, input.shotId!, object.id, { rotation: nextRotation })
+    applyShotStagingTransform(current, shotResolved.id, object.id, { rotation: nextRotation })
   ));
 
   return {
     ok: true,
     status: 'completed',
-    shotId: input.shotId,
+    shotId: shotResolved.id,
     objectId: object.id,
-    targetId: target.id,
+    targetId,
     rotation: nextRotation,
     revisionId: commit.revisionId,
     diagnostics: commit.diagnostics,

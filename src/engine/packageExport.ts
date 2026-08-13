@@ -29,6 +29,7 @@ import {
   createProgressTracker,
   isPackageExportCancelled,
   normalizeCameraMoveProgress,
+  resolvePackageConcurrency,
   runPackageTasksWithConcurrency,
   ShotPackageError,
   throwIfAborted,
@@ -348,7 +349,7 @@ export async function buildLegacyMultiShotPackage(
   );
   const shotPaths = await runPackageTasksWithConcurrency(
     shots,
-    options.packageConcurrency ?? 2,
+    resolvePackageConcurrency(options.packageConcurrency),
     async (shot, shotIndex) => {
       throwIfAborted(options.signal);
       return appendShotPackageToZip(zip, project, shot, {

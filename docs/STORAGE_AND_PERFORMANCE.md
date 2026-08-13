@@ -30,6 +30,14 @@ Import tiers (standard / heavy / extreme / reject) are heuristics over estimated
 
 ---
 
+## Package assembly
+
+Browser package export still returns a `Blob`, so the finished archive is bounded in memory. Compression uses JSZip `generateInternalStream` when available so chunks are emitted incrementally (`chunked-stream`). If that API is missing, `generateAsync` is the documented `jszip-in-memory-fallback`. CLI artifact download streams through chunked base64 bindings (`chunked-base64`) that read `Blob.slice()` windows of 256 KiB. The page does **not** call `blob.arrayBuffer()` on the whole file before chunking. On the Node side, each decoded chunk is written through a sequential file sink that respects stream backpressure and deletes a partial file on failure — the normal path does **not** accumulate a second full `Buffer.concat`. A whole-file number-array copy (`uint8array-fallback`) is explicit, size-bounded (8 MiB), and never selected silently after a failed binding setup. Browser `downloadArtifact` reports `transferMode: "browser-blob"` and returns the registry Blob already in memory — that is an in-memory handle, not a streamed file. Playwright cannot stream a Blob out of `page.evaluate`, so CLI transfer stays chunked-in-page. CLI `package` / `video` / previs / refine results include `transfer` metadata (`transferMode`, `pageMaterialization`, `byteLength`, `chunkCount`). Bounded concurrency is configurable via `FORESCENE_PACKAGE_CONCURRENCY` (default 2, max 8) and `FORESCENE_BATCH_CONCURRENCY` (default 1, max 4).
+
+Package and backup export reconcile recovery resources first. A missing current-project recovery PNG/binary is a blocking diagnostic, not a suppressed skip.
+
+---
+
 ## Project storage and recovery
 
 | Topic | Figure | Classification |
@@ -69,7 +77,7 @@ Encode availability depends on WebCodecs / browser support. When Render MP4 is u
 | --- | --- | --- |
 | IndexedDB / storage quota | Varies by browser, device, and origin eviction policy | Measured baseline |
 | Decoded project-asset working set | 256 MiB or 256 entries for evictable in-memory Blob/object-URL payloads; the active project is pinned | Hard-enforced limit (evictable working set) |
-| Agent artifact registry | 64 artifacts or 512 MiB, least-recently-used entries reclaimed first | Hard-enforced limit |
+| Agent artifact registry | 64 artifacts or 512 MiB, least-recently-used unpinned entries reclaimed first. Persisted, authoritative, project-attached, and in-flight handles stay pinned until a caller can download them. Unpublished job outputs from an aborted/stale generation are deleted after that generation drains so they cannot pin the registry forever; published, persisted, and project-attached artifacts are kept. | Hard-enforced limit |
 | Failed saves | Surfaced as errors; the app must not report a successful save when persistence failed | Hard-enforced limit (behavior) |
 | WebGL context | One context per `SceneViewport`; released on unmount | Measured baseline |
 | Free GPU memory | Not reliably queryable; budgets use conservative heap estimates | Measured baseline |

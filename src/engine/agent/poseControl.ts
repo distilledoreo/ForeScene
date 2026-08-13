@@ -384,6 +384,7 @@ export async function exportAgentRigPackage(input: { objectId: string }) {
       mimeType: 'application/zip',
       fileName: pkg.fileName,
       revisionId: useProjectSafetyStore.getState().activeRevisionId,
+      authoritative: true,
     });
     return {
       ok: true,

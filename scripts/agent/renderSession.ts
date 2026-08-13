@@ -68,6 +68,7 @@ export class PersistentRenderSession {
   private lastRenderAt?: string;
   private revisionId?: string;
   private projectId?: string;
+  private sessionWarmed = false;
 
   constructor(page: Page, profile: RenderProfile, sessionId?: string) {
     this.page = page;
@@ -152,7 +153,9 @@ export class PersistentRenderSession {
         error.name = 'AbortError';
         throw error;
       }
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      if (!payload.sessionWarmed) {
+        await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      }
       if (
         payload.signalAborted
         || (typeof abortFn === 'function' && await abortFn())
@@ -162,9 +165,10 @@ export class PersistentRenderSession {
         throw error;
       }
       return window.foreScene!.renderShotFrame(payload.input);
-    }, { input, signalAborted: signal?.aborted ?? false });
+    }, { input, signalAborted: signal?.aborted ?? false, sessionWarmed: this.sessionWarmed });
     if (result.revisionId) this.revisionId = result.revisionId;
     this.lastRenderAt = new Date().toISOString();
+    this.sessionWarmed = true;
     return result;
   }
 
@@ -184,7 +188,9 @@ export class PersistentRenderSession {
         error.name = 'AbortError';
         throw error;
       }
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      if (!payload.sessionWarmed) {
+        await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      }
       if (
         payload.signalAborted
         || (typeof abortFn === 'function' && await abortFn())
@@ -198,7 +204,7 @@ export class PersistentRenderSession {
         planId: `select-${payload.shotId}`,
         commands: [{ op: 'shot.select', shot: { id: payload.shotId } }],
       });
-    }, { shotId: job.shotId, signalAborted: signal?.aborted ?? false });
+    }, { shotId: job.shotId, signalAborted: signal?.aborted ?? false, sessionWarmed: this.sessionWarmed });
 
     await waitForAgentIdle(this.page);
 
@@ -278,7 +284,9 @@ export class PersistentRenderSession {
         error.name = 'AbortError';
         throw error;
       }
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      if (!payload.sessionWarmed) {
+        await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
+      }
       if (
         payload.signalAborted
         || (typeof abortFn === 'function' && await abortFn())
@@ -288,7 +296,7 @@ export class PersistentRenderSession {
         throw error;
       }
       return window.foreScene!.renderShotBatch({ jobs: payload.inputs });
-    }, { inputs, signalAborted: signal?.aborted ?? false });
+    }, { inputs, signalAborted: signal?.aborted ?? false, sessionWarmed: this.sessionWarmed });
 
     const results: RenderSessionFrameResult[] = [];
     for (let index = 0; index < jobs.length; index += 1) {

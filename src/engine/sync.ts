@@ -206,7 +206,22 @@ export function getCanonicalPano(project: LocationProject): PanoReference | unde
   return project.panoRefs.find((pano) => pano.isCanonical) ?? project.panoRefs[0];
 }
 
+/** True when the shot was explicitly unlinked and must not inherit canonical. */
+export function isShotPanoramaExplicitlyUnlinked(shot: Shot): boolean {
+  return shot.linkedPanoId === null;
+}
+
+/** Persist a durable unlink (`linkedPanoId: null`) instead of a missing field. */
+export function unlinkShotPano(shot: Shot): Shot {
+  return {
+    ...shot,
+    linkedPanoId: null,
+    panoCrop: undefined,
+  };
+}
+
 export function resolveShotLinkedPano(project: LocationProject, shot: Shot): PanoReference | undefined {
+  if (shot.linkedPanoId === null) return undefined;
   if (shot.linkedPanoId) {
     return project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
   }
@@ -214,6 +229,7 @@ export function resolveShotLinkedPano(project: LocationProject, shot: Shot): Pan
 }
 
 export function withShotPanoLink(project: LocationProject, shot: Shot, pano?: PanoReference): Shot {
+  if (isShotPanoramaExplicitlyUnlinked(shot) && !pano) return unlinkShotPano(shot);
   const linkedPano = pano ?? resolveShotLinkedPano(project, shot);
   if (!linkedPano) return shot;
   return {
@@ -228,7 +244,32 @@ export function withShotPanoLink(project: LocationProject, shot: Shot, pano?: Pa
   };
 }
 
+/**
+ * Inherit the canonical panorama for shots that are unset (`undefined`) or
+ * whose assigned panorama no longer exists. Explicit unlinks (`linkedPanoId: null`)
+ * and explicit assignments to a still-present panorama are preserved.
+ */
 export function linkAllShotsToCanonicalPano(project: LocationProject): LocationProject {
+  const canonical = getCanonicalPano(project);
+  if (!canonical) return project;
+  return {
+    ...project,
+    shots: project.shots.map((shot) => {
+      if (isShotPanoramaExplicitlyUnlinked(shot)) return unlinkShotPano(shot);
+      if (shot.linkedPanoId) {
+        const existing = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+        if (existing) return withShotPanoLink(project, shot, existing);
+      }
+      return withShotPanoLink(project, shot, canonical);
+    }),
+  };
+}
+
+/**
+ * Explicit force-relink: every shot, including previously unlinked shots,
+ * is assigned the canonical panorama. Callers must opt into this.
+ */
+export function forceLinkAllShotsToCanonicalPano(project: LocationProject): LocationProject {
   const canonical = getCanonicalPano(project);
   if (!canonical) return project;
   return {
@@ -237,18 +278,46 @@ export function linkAllShotsToCanonicalPano(project: LocationProject): LocationP
   };
 }
 
-/** Preserve explicit per-shot pano assignments when hydrating an opened project. */
-export function preserveShotPanoLinks(project: LocationProject): LocationProject {
+/**
+ * Relink unset shots and followers of a replaced canonical panorama.
+ * Explicit unlinks and assignments to any other still-present panorama stay put.
+ */
+export function relinkCanonicalFollowers(
+  project: LocationProject,
+  previousCanonicalId?: string,
+): LocationProject {
   const canonical = getCanonicalPano(project);
   if (!canonical) return project;
   return {
     ...project,
     shots: project.shots.map((shot) => {
+      if (isShotPanoramaExplicitlyUnlinked(shot)) return unlinkShotPano(shot);
+      if (shot.linkedPanoId && shot.linkedPanoId !== previousCanonicalId) {
+        const existing = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+        if (existing) return withShotPanoLink(project, shot, existing);
+      }
+      return withShotPanoLink(project, shot, canonical);
+    }),
+  };
+}
+
+/** Preserve explicit per-shot pano assignments when hydrating an opened project. */
+export function preserveShotPanoLinks(project: LocationProject): LocationProject {
+  const canonical = getCanonicalPano(project);
+  return {
+    ...project,
+    shots: project.shots.map((shot) => {
+      if (isShotPanoramaExplicitlyUnlinked(shot)) {
+        return unlinkShotPano(shot);
+      }
       const explicitPanoId = shot.linkedPanoId ?? shot.panoCrop?.panoId;
       const linkedPano = explicitPanoId
         ? project.panoRefs.find((pano) => pano.id === explicitPanoId)
         : undefined;
-      return withShotPanoLink(project, shot, linkedPano ?? canonical);
+      if (linkedPano) return withShotPanoLink(project, shot, linkedPano);
+      // Legacy shots with no explicit assignment still inherit canonical.
+      if (!canonical) return shot;
+      return withShotPanoLink(project, shot, canonical);
     }),
   };
 }

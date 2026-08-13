@@ -891,7 +891,12 @@ export interface Shot {
   cameraKeyframes: CameraKeyframe[];
   /** Sparse transform/visibility differences from the global Build scene. */
   objectOverrides?: ShotObjectOverrides;
-  linkedPanoId?: string;
+  /**
+   * Explicit panorama assignment. `null` is a durable unlink (do not inherit
+   * the canonical panorama on hydrate/reopen). `undefined` is legacy-unset
+   * and still inherits the canonical panorama when one exists.
+   */
+  linkedPanoId?: string | null;
   panoCrop?: PanoCropSettings;
   landmarkIds: string[];
   /**

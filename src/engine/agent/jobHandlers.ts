@@ -1,9 +1,14 @@
 /**
  * Production job item handlers — each executes real work and may register artifacts.
+ *
+ * Handles produced by a render callback are claimed onto the job immediately so
+ * a late abort cannot leave an untracked pin. `ctx.registerArtifact()` still
+ * publishes successful results; unpublished claimed outputs are deleted after
+ * the job generation drains.
  */
 
 import type { AgentJobType, AgentRenderShotFrameInput } from './protocol';
-import { getAgentArtifactBlob, registerAgentArtifact } from './artifactRegistry';
+import { attachAgentArtifactContext, getAgentArtifactBlob, registerAgentArtifact } from './artifactRegistry';
 import { getAgentRenderShotFrameImpl } from './renderCallbackRegistry';
 import { agentError } from './diagnostics';
 import { buildContactSheetSpec } from '../previs/contactSheet';
@@ -58,11 +63,25 @@ async function runShotRenderItem(item: unknown, _index: number, ctx: JobHandlerC
   throwIfJobCancelled(ctx.signal);
   const input = parseRenderJob(item);
   const result = await getAgentRenderShotFrameImpl()(input);
+  // Claim any handle immediately so a late abort cannot leave an untracked pin.
+  // Unpublished claimed outputs are deleted after this generation drains.
+  if (result.handle?.artifactId) {
+    attachAgentArtifactContext(result.handle.artifactId, {
+      jobId: ctx.jobId,
+      shotId: input.shotId,
+      inFlight: true,
+      authoritative: true,
+    });
+  }
   throwIfJobCancelled(ctx.signal);
-  if (!result.ok || !result.artifact) {
+  if (!result.ok || !(result.handle || result.artifact)) {
     throw new Error(result.diagnostics[0]?.message ?? 'Shot render failed.');
   }
-  if (result.artifact.kind === 'inline' && result.artifact.dataUrl) {
+  if (result.handle?.artifactId) {
+    ctx.registerArtifact(result.handle.artifactId);
+    return;
+  }
+  if (result.artifact?.kind === 'inline' && result.artifact.dataUrl) {
     const blob = await dataUrlToBlob(result.artifact.dataUrl);
     const handle = registerAgentArtifact({
       blob,
@@ -71,6 +90,8 @@ async function runShotRenderItem(item: unknown, _index: number, ctx: JobHandlerC
       revisionId: ctx.revisionIdAtStart,
       jobId: ctx.jobId,
       shotId: input.shotId,
+      inFlight: true,
+      authoritative: true,
     });
     ctx.registerArtifact(handle.artifactId);
   }
@@ -126,6 +147,8 @@ async function runContactSheetItem(item: unknown, _index: number, ctx: JobHandle
     fileName: 'contact-sheet.png',
     revisionId: ctx.revisionIdAtStart,
     jobId: ctx.jobId,
+    inFlight: true,
+    authoritative: true,
   });
   ctx.registerArtifact(handle.artifactId);
 }
@@ -190,6 +213,23 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error('Could not decode contact sheet image.'));
     image.src = url;
   });
+}
+
+const testHandlerOverrides: Partial<Record<AgentJobType, JobHandler>> = {};
+
+export function setAgentJobHandlerForTests(type: AgentJobType, handler: JobHandler | undefined): void {
+  if (handler) testHandlerOverrides[type] = handler;
+  else delete testHandlerOverrides[type];
+}
+
+export function resetAgentJobHandlersForTests(): void {
+  for (const type of Object.keys(testHandlerOverrides) as AgentJobType[]) {
+    delete testHandlerOverrides[type];
+  }
+}
+
+export function resolveAgentJobHandler(type: AgentJobType): JobHandler | undefined {
+  return testHandlerOverrides[type] ?? AGENT_JOB_HANDLERS[type];
 }
 
 export const AGENT_JOB_HANDLERS: Partial<Record<AgentJobType, JobHandler>> = {

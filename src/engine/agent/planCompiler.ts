@@ -44,6 +44,7 @@ import {
 import {
   getCanonicalPano,
   linkAllShotsToCanonicalPano,
+  unlinkShotPano,
   withShotPanoLink,
 } from '../sync';
 import { normalizeWorkspace } from '../workflow';
@@ -917,6 +918,20 @@ function applyShotSetPanorama(
       diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${shotResolved.id}".`, { path })],
       warnings: [],
     };
+  }
+
+  if (command.pano === null) {
+    ctx.project = touchProject({
+      ...ctx.project,
+      shots: ctx.project.shots.map((candidate) => (
+        candidate.id === shot.id
+          ? { ...unlinkShotPano(candidate), updatedAt: new Date().toISOString() }
+          : candidate
+      )),
+    });
+    if (!diff.shotsCreated.includes(shot.id)) diff.shotsUpdated.push(shot.id);
+    if (ctx.selectedShotId === shot.id) ctx.activePanoId = undefined;
+    return { ok: true, warnings: [] };
   }
 
   let pano;

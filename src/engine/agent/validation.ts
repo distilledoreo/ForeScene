@@ -11,7 +11,7 @@ import {
   EXPORT_SETTING_TOP_LEVEL_KEYS,
   type ExportSettingFieldPath,
 } from '../exportConfiguration';
-import { HUMAN_POSE_PRESETS } from '../humanPosePresets';
+import { HUMAN_POSE_PRESET_ALIASES, HUMAN_POSE_PRESETS } from '../humanPosePresets';
 import {
   AGENT_CREATABLE_OBJECT_TYPES,
   AGENT_EXECUTABLE_OPS,
@@ -46,25 +46,7 @@ const ALLOWED_ROLES = new Set<string>(AGENT_STAGING_ROLES);
 const ALLOWED_WORKSPACES = new Set<string>(AGENT_WORKSPACES);
 const ALLOWED_OPS = new Set<string>(AGENT_EXECUTABLE_OPS);
 const ALLOWED_PRESETS = new Set(HUMAN_POSE_PRESETS.map((preset) => preset.id));
-
-/** Accept architecture-doc / previs semantic aliases for pose presets. */
-const POSE_PRESET_ALIASES: Record<string, string> = {
-  guard: 'elbows-bent',
-  defensive: 'elbows-bent',
-  reach: 'reaching-right',
-  'sword-raised': 'pointing',
-  'standing-neutral': 'neutral',
-  'standing-alert': 'standing-relaxed',
-  'standing-defensive': 'elbows-bent',
-  running: 'walk-contact-left',
-  kneeling: 'crouching',
-  seated: 'sitting',
-  reaching: 'reaching-right',
-  'holding-object': 'holding-waist',
-  'shield-ready': 'elbows-bent',
-  'sword-ready': 'pointing',
-  injured: 'crouching',
-};
+const POSE_PRESET_ALIASES = HUMAN_POSE_PRESET_ALIASES;
 
 export function parseForeSceneAgentPlan(input: unknown): AgentPlanParseResult {
   const errors: AgentDiagnostic[] = [];
@@ -1392,20 +1374,23 @@ function parseEntityTarget(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     errors.push(agentError(
       AGENT_DIAGNOSTIC_CODES.invalidArgument,
-      'Target must be an object with id, ref, or query.',
+      'Target must be an object with id, ref, query, or shotNumber.',
       { path },
     ));
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const present = ['id', 'ref', 'query'].filter((key) => record[key] !== undefined);
+  const present = ['id', 'ref', 'query', 'shotNumber'].filter((key) => record[key] !== undefined);
   if (present.length !== 1) {
     errors.push(agentError(
       AGENT_DIAGNOSTIC_CODES.invalidArgument,
-      'Target must include exactly one of id, ref, or query.',
+      'Target must include exactly one of id, ref, query, or shotNumber.',
       { path },
     ));
     return undefined;
+  }
+  if (typeof record.shotNumber === 'string' && record.shotNumber.trim()) {
+    return { shotNumber: record.shotNumber.trim() };
   }
   if (typeof record.id === 'string' && record.id.trim()) {
     return { id: record.id };
@@ -1420,6 +1405,7 @@ function parseEntityTarget(
       type?: SceneObjectType;
       stagingRole?: StagingRole;
       match?: 'exact' | 'contains';
+      shotNumber?: string;
     } = {};
     if (queryRecord.name !== undefined) {
       if (typeof queryRecord.name !== 'string') {
@@ -1457,10 +1443,17 @@ function parseEntityTarget(
         query.match = queryRecord.match;
       }
     }
-    if (!query.name && !query.type && !query.stagingRole) {
+    if (queryRecord.shotNumber !== undefined) {
+      if (typeof queryRecord.shotNumber !== 'string' || !queryRecord.shotNumber.trim()) {
+        errors.push(agentError('query_shot_number', 'query.shotNumber must be a nonempty string.', { path: `${path}.query.shotNumber` }));
+      } else {
+        query.shotNumber = queryRecord.shotNumber.trim();
+      }
+    }
+    if (!query.name && !query.type && !query.stagingRole && !query.shotNumber) {
       errors.push(agentError(
         AGENT_DIAGNOSTIC_CODES.invalidArgument,
-        'query requires name, type, and/or stagingRole.',
+        'query requires name, type, stagingRole, and/or shotNumber.',
         { path: `${path}.query` },
       ));
       return undefined;

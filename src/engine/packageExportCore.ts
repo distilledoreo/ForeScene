@@ -7,6 +7,13 @@
 
 import JSZip from 'jszip';
 import type { ProjectAsset, Shot } from '../domain/types';
+
+interface ZipInternalStream {
+  on(event: 'data', handler: (chunk?: Uint8Array, metadata?: { percent?: number }) => void): ZipInternalStream;
+  on(event: 'error', handler: (error?: Error) => void): ZipInternalStream;
+  on(event: 'end', handler: () => void): ZipInternalStream;
+  resume(): void;
+}
 import { getShotExportProgressLabel } from './exportNaming';
 import type { ExportPlan } from './exportPlan';
 import { getProjectAssetBlob } from './projectAssetStore';
@@ -70,6 +77,36 @@ export interface PackageExportOptions {
   commitLiveProject?: (
     updater: (live: import('../domain/types').LocationProject) => import('../domain/types').LocationProject,
   ) => import('../domain/types').LocationProject;
+}
+
+export const DEFAULT_PACKAGE_CONCURRENCY = 2;
+export const MAX_PACKAGE_CONCURRENCY = 8;
+export const ZIP_ASSEMBLY_MODE_STREAM = 'chunked-stream';
+export const ZIP_ASSEMBLY_MODE_IN_MEMORY = 'jszip-in-memory-fallback';
+
+/**
+ * Browser package APIs still return a Blob, so the final archive is bounded in
+ * memory. Compression is streamed through JSZip's internal chunk emitter when
+ * available; otherwise generateAsync is the documented fallback.
+ */
+export function resolvePackageConcurrency(override?: number): number {
+  if (override !== undefined && Number.isFinite(override) && override > 0) {
+    return Math.max(1, Math.min(MAX_PACKAGE_CONCURRENCY, Math.floor(override)));
+  }
+  const envValue = typeof process !== 'undefined'
+    ? Number(process.env?.FORESCENE_PACKAGE_CONCURRENCY)
+    : Number.NaN;
+  if (Number.isFinite(envValue) && envValue > 0) {
+    return Math.max(1, Math.min(MAX_PACKAGE_CONCURRENCY, Math.floor(envValue)));
+  }
+  return DEFAULT_PACKAGE_CONCURRENCY;
+}
+
+export function describeZipAssemblyMode(): typeof ZIP_ASSEMBLY_MODE_STREAM | typeof ZIP_ASSEMBLY_MODE_IN_MEMORY {
+  const zip = new JSZip();
+  return typeof (zip as { generateInternalStream?: unknown }).generateInternalStream === 'function'
+    ? ZIP_ASSEMBLY_MODE_STREAM
+    : ZIP_ASSEMBLY_MODE_IN_MEMORY;
 }
 
 export async function runPackageTasksWithConcurrency<T, R>(
@@ -167,6 +204,55 @@ export function createProgressTracker(args: {
   };
 }
 
+/**
+ * Assemble a ZIP Blob. Prefer JSZip generateInternalStream so compressed
+ * chunks are emitted incrementally. The Agent package API still returns a
+ * Blob, so the final archive remains in memory — that is the documented
+ * bounded fallback for the browser runtime.
+ */
+export async function assembleZipBlob(
+  zip: JSZip,
+  args: {
+    signal?: AbortSignal;
+    onProgress?: (fraction: number) => void;
+  } = {},
+): Promise<Blob> {
+  const zipWithStream = zip as JSZip & {
+    generateInternalStream?: (options: { type: 'uint8array'; compression?: string }) => ZipInternalStream;
+  };
+  if (typeof zipWithStream.generateInternalStream === 'function') {
+    const chunks: Uint8Array[] = [];
+    await new Promise<void>((resolve, reject) => {
+      zipWithStream.generateInternalStream!({ type: 'uint8array', compression: 'DEFLATE' })
+        .on('data', (chunk, metadata) => {
+          if (args.signal?.aborted) {
+            reject(new DOMException('Export cancelled.', 'AbortError'));
+            return;
+          }
+          if (chunk instanceof Uint8Array) chunks.push(chunk);
+          const fraction = Math.min(1, Math.max(0, (metadata?.percent ?? 0) / 100));
+          args.onProgress?.(fraction);
+        })
+        .on('error', (error) => {
+          reject(error instanceof Error ? error : new Error('ZIP assembly failed.'));
+        })
+        .on('end', () => resolve())
+        .resume();
+    });
+    return new Blob(chunks as BlobPart[], { type: 'application/zip' });
+  }
+
+  return zip.generateAsync(
+    { type: 'blob' },
+    (metadata) => {
+      if (args.signal?.aborted) {
+        throw new DOMException('Export cancelled.', 'AbortError');
+      }
+      args.onProgress?.(Math.min(1, Math.max(0, (metadata.percent ?? 0) / 100)));
+    },
+  );
+}
+
 export async function compressZip(
   zip: JSZip,
   args: {
@@ -187,14 +273,9 @@ export async function compressZip(
   });
 
   const startedAt = performance.now();
-  const blob = await zip.generateAsync(
-    { type: 'blob' },
-    (metadata) => {
-      // Cooperative: JSZip may still finish the current chunk before rejecting.
-      if (args.signal?.aborted) {
-        throw new DOMException('Export cancelled.', 'AbortError');
-      }
-      const fraction = Math.min(1, Math.max(0, (metadata.percent ?? 0) / 100));
+  const blob = await assembleZipBlob(zip, {
+    signal: args.signal,
+    onProgress: (fraction) => {
       args.tracker.report({
         phase: 'compressing',
         message: fraction > 0 ? `Compressing ZIP… ${Math.round(fraction * 100)}%` : 'Compressing ZIP…',
@@ -205,7 +286,7 @@ export async function compressZip(
         indeterminate: fraction <= 0,
       });
     },
-  );
+  });
   recordPreparedMediaMetric('zipAssemblyMs', Math.round(performance.now() - startedAt));
 
   throwIfAborted(args.signal);

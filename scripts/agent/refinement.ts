@@ -28,6 +28,7 @@ import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVe
 import { projectFingerprint } from '../../src/engine/agent/planDiff';
 import type { ForeSceneAgentPlan } from '../../src/engine/agent/protocol';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
+import { saveAgentArtifactToFile, toCliArtifactTransfer } from './artifactIo';
 
 const REVIEW_PASSES = [
   { fileName: 'clay_with-characters.png', appearance: 'clay', peopleVariant: 'with_people', content: 'full_scene' },
@@ -66,6 +67,12 @@ interface TemporalArtifactEvidence {
   output: string;
   sha256: string;
   durationSeconds?: number;
+  transfer?: {
+    transferMode: string;
+    pageMaterialization: string;
+    byteLength: number;
+    chunkCount: number;
+  };
 }
 
 interface TemporalEvidence {
@@ -395,7 +402,6 @@ async function renderTemporalSamples(
       };
     }
     const videoOutput = path.join(outputRoot, shot.shotNumber, 'temporal', 'motion-preview.mp4');
-    const downloadPromise = session.page.waitForEvent('download', { timeout: 600_000 }).catch(() => null);
     const video = await session.page.evaluate((input) => window.foreScene!.renderShotVideo(input), {
       shotId: shot.id,
       mode: 'quickPreview',
@@ -403,18 +409,18 @@ async function renderTemporalSamples(
       appearance: 'clay',
       contentMode: 'full_scene',
       attachToShot: false,
-      download: true,
+      download: false,
     } as const);
     if (!video.ok) throw new Error(`Motion video render failed for shot ${shot.shotNumber}: ${video.diagnostics.map((item) => item.message).join('; ')}`);
-    const download = await downloadPromise;
-    if (!download) throw new Error(`Motion video render for shot ${shot.shotNumber} did not produce a download.`);
-    await download.saveAs(videoOutput);
+    if (!video.artifact?.artifactId) throw new Error(`Motion video render for shot ${shot.shotNumber} did not produce an artifact handle.`);
+    const savedVideo = await saveAgentArtifactToFile(session.page, video.artifact.artifactId, videoOutput);
     const videoBytes = await readFile(videoOutput);
     temporal.video = {
       fileName: 'temporal/motion-preview.mp4',
       output: videoOutput,
       sha256: sha256(videoBytes),
       durationSeconds: video.durationSeconds ?? timeline.durationSeconds,
+      transfer: toCliArtifactTransfer(savedVideo),
     };
     samples.push({ shotId: shot.id, shotNumber: shot.shotNumber, temporal });
   }
@@ -644,11 +650,10 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   const exportPlanPath = path.join(outputRoot, 'final-export-plan.json');
   await writeJson(exportPlanPath, planResult);
   const packagePath = path.join(outputRoot, 'final-package.zip');
-  const downloadPromise = session.page.waitForEvent('download', { timeout: 300_000 }).catch(() => null);
   const exported = await session.page.evaluate((input) => window.foreScene!.exportPackage(input), {
     shotIds: selectedShotIds,
     packageType,
-    download: true,
+    download: false,
   });
   if (!exported.ok) throw new Error(`Final package export failed: ${exported.diagnostics.map((item) => item.message).join('; ')}`);
   const exportedShotIds = exported.shotIds ?? [];
@@ -657,9 +662,9 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
   if (unreviewedExportedShotIds.length > 0 || reviewedButUnexportedShotIds.length > 0) {
     throw new Error(`Final export shot scope mismatch. Unreviewed exports: ${unreviewedExportedShotIds.join(', ') || 'none'}; reviewed but unexported: ${reviewedButUnexportedShotIds.join(', ') || 'none'}.`);
   }
-  const download = await downloadPromise;
-  if (!download) throw new Error('Final package export reported success but no browser download was received.');
-  await download.saveAs(packagePath);
+  if (!exported.artifact?.artifactId) throw new Error('Final package export reported success but no artifact handle was returned.');
+  const savedPackage = await saveAgentArtifactToFile(session.page, exported.artifact.artifactId, packagePath);
+  const packageTransfer = toCliArtifactTransfer(savedPackage);
   const verification = await verifyPackageAgainstExportPlan(planResult, new Blob([await readFile(packagePath)]));
   const finalProject = await readProject(session);
   assertPreserved(plan, state, finalProject);
@@ -675,6 +680,7 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
       && unreviewedExportedShotIds.length === 0
       && reviewedButUnexportedShotIds.length === 0,
     packagePath,
+    packageTransfer,
     verification: { ok: verification.ok, missingCount: verification.missing.length },
   };
   await writeJson(path.join(outputRoot, 'finalization-report.json'), {
@@ -689,6 +695,7 @@ async function finalize(plan: RefinementPlan, state: RefinementState, options: R
     preservation: compareRefinementSnapshot(state.preservation, finalProject, plan.preserve, plan.allowMutations),
     exportPlanPath,
     packagePath,
+    packageTransfer,
     deliverablesProfile: profile.id,
     verification,
   });

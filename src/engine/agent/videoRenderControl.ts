@@ -15,6 +15,7 @@ import { useProjectStore } from '../../state/useProjectStore';
 import { awaitAgentNotBusy } from './busy';
 import { fingerprintShotTimeline } from '../shotTimeline';
 import { registerAgentArtifact } from './artifactRegistry';
+import { recordCacheOperation, recordOperationTiming, recordProvenanceCancellation } from './cacheTelemetry';
 import { deriveOperationOk, deriveOperationStatus } from './renderResult';
 import {
   isAgentShotVideoRenderActive,
@@ -51,6 +52,7 @@ export function cancelAgentShotVideoRender(): AgentShotVideoRenderResult {
     };
   }
   abortController.abort();
+  recordProvenanceCancellation();
   latestProgress = {
     phase: 'cancelled',
     progress: latestProgress?.progress ?? 0,
@@ -156,7 +158,8 @@ export async function renderAgentShotVideo(
   const timelineFingerprintAtStart = fingerprintShotTimeline(shot);
 
   const attachToShot = input.attachToShot !== false;
-  const shouldDownload = input.download !== false;
+  /** Browser download is an explicit side effect. Artifact handle is the default result path. */
+  const shouldDownload = input.download === true;
   const resolutionPreset = input.resolutionPreset ?? '1080p';
   if (!['720p', '1080p', '4k'].includes(resolutionPreset)) {
     return {
@@ -230,6 +233,7 @@ export async function renderAgentShotVideo(
             mimeType: video.mimeType,
             fileName: renderName(shot),
             revisionId: useProjectSafetyStore.getState().activeRevisionId,
+            authoritative: true,
           }),
           diagnostics: [agentError(
             AGENT_DIAGNOSTIC_CODES.staleRevision,
@@ -273,8 +277,19 @@ export async function renderAgentShotVideo(
       mimeType: video.mimeType,
       fileName: renderName(shot),
       revisionId,
+      authoritative: true,
     });
     latestProgress = { phase: 'complete', progress: 1, shotId: shot.id, message: shouldDownload ? 'Shot video rendered and downloaded.' : 'Shot video rendered.' };
+    recordCacheOperation({
+      operation: 'shot.video',
+      hit: video.cacheStatus === 'hit' || video.cacheStatus === 'joined',
+      reason: video.cacheStatus ?? 'miss',
+      artifactId: artifact.artifactId,
+    });
+    recordOperationTiming({
+      name: 'shot.video',
+      durationMs: video.timing.totalMs,
+    });
     const status = deriveOperationStatus({ hasArtifact: true, diagnostics: [] });
     return {
       ok: deriveOperationOk(status),
@@ -290,6 +305,14 @@ export async function renderAgentShotVideo(
       mimeType: video.mimeType,
       encodeMode: video.encodeMode,
       revisionId,
+      cacheStatus: video.cacheStatus,
+      timing: {
+        setupMs: video.timing.setupMs,
+        renderMs: video.timing.renderMs,
+        encodeMs: video.timing.encodeMs,
+        finalizeMs: video.timing.finalizeMs,
+        totalMs: video.timing.totalMs,
+      },
       diagnostics: [],
       progress: latestProgress,
     };

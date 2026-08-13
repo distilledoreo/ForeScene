@@ -9,6 +9,11 @@ import {
   runAgentProduction,
 } from '../src/engine/agent/productionRunControl';
 import { resetAgentProductionGateRunsForTests } from '../src/engine/agent/productionGateControl';
+import { createForeSceneBrowserApi } from '../src/engine/agent/browserApi';
+import {
+  beginAgentRunSession,
+  resetAgentRunProvenanceContextForTests,
+} from '../src/engine/agent/runProvenance';
 import { useProjectStore } from '../src/state/useProjectStore';
 import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
@@ -98,5 +103,26 @@ describe('browser production run lifecycle', () => {
     const cancelled = cancelAgentProductionRun(started.runId);
     expect(cancelled.status).toBe('cancelled');
     expect(getAgentProductionRun(started.runId)?.status).toBe('cancelled');
+  });
+
+  it('does not record a false cancellation when a terminal production run is cancelled again', async () => {
+    resetAgentRunProvenanceContextForTests();
+    const api = createForeSceneBrowserApi();
+    const started = await runAgentProduction({ manifest, maxCanaryShots: 1 });
+    expect(started.ok).toBe(true);
+    beginAgentRunSession({ runId: 'run_prod_cancel' });
+    const first = cancelAgentProductionRun(started.runId);
+    expect(first.status).toBe('cancelled');
+    expect(api.getStatus().provenance?.cancelled).toBe(true);
+
+    beginAgentRunSession({ runId: 'run_prod_cancel_again' });
+    expect(api.getStatus().provenance?.cancelled).toBe(false);
+    const second = cancelAgentProductionRun(started.runId);
+    expect(second.status).toBe('cancelled');
+    expect(second.ok).toBe(false);
+    expect(second.diagnostics.some((item) => item.code === 'production_run_terminal')).toBe(true);
+    expect(getAgentProductionRun(started.runId)?.status).toBe('cancelled');
+    expect(api.getStatus().provenance?.cancelled).toBe(false);
+    resetAgentRunProvenanceContextForTests();
   });
 });

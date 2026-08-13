@@ -3,6 +3,8 @@
  * Separates artifact production from quality diagnostics so `ok` has one meaning.
  */
 
+import { dataUrlToBlob } from '../fileTransfers';
+import { registerAgentArtifact } from './artifactRegistry';
 import type { AgentDiagnostic } from './diagnostics';
 import type {
   AgentArtifactHandle,
@@ -52,4 +54,25 @@ export function buildInlineArtifact(params: {
 
 export function buildHandleArtifact(handle: AgentArtifactHandle): AgentArtifactHandle {
   return handle;
+}
+
+/** Register a still/storyboard PNG as a pinned download handle plus the inline payload. */
+export function registerRenderedFrameArtifact(params: {
+  dataUrl: string;
+  fileName: string;
+  revisionId?: string;
+  shotId?: string;
+  jobId?: string;
+}): { inline: AgentArtifactInline; handle: AgentArtifactHandle } {
+  const inline = buildInlineArtifact({ mimeType: 'image/png', dataUrl: params.dataUrl });
+  const handle = registerAgentArtifact({
+    blob: dataUrlToBlob(params.dataUrl),
+    mimeType: 'image/png',
+    fileName: params.fileName,
+    revisionId: params.revisionId,
+    shotId: params.shotId,
+    jobId: params.jobId,
+    authoritative: true,
+  });
+  return { inline, handle };
 }

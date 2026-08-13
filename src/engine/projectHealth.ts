@@ -256,13 +256,15 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
     try {
       await verifyRetainedProjectAssetResource(resource);
     } catch (error) {
+      const message = error instanceof Error ? error.message : `Recovery binary ${resource.key} failed integrity verification.`;
+      const missing = /missing/i.test(message);
       issue(
         issues,
-        'corrupt-recovery-resource',
+        missing ? 'missing-recovery-resource' : 'corrupt-recovery-resource',
         'danger',
-        error instanceof Error
-          ? `Recovery binary ${resource.key} failed integrity verification: ${error.message}`
-          : `Recovery binary ${resource.key} failed integrity verification.`,
+        missing
+          ? `Recovery PNG/binary ${resource.key} is missing: ${message}`
+          : `Recovery binary ${resource.key} failed integrity verification: ${message}`,
       );
     }
   }
@@ -270,13 +272,15 @@ export async function runProjectHealthCheck(project: LocationProject): Promise<P
     try {
       await verifyRetainedModelResource(resource);
     } catch (error) {
+      const message = error instanceof Error ? error.message : `Recovery model ${resource.key} failed integrity verification.`;
+      const missing = /missing/i.test(message);
       issue(
         issues,
-        'corrupt-recovery-resource',
+        missing ? 'missing-recovery-resource' : 'corrupt-recovery-resource',
         'danger',
-        error instanceof Error
-          ? `Recovery model ${resource.key} failed integrity verification: ${error.message}`
-          : `Recovery model ${resource.key} failed integrity verification.`,
+        missing
+          ? `Recovery model ${resource.key} is missing: ${message}`
+          : `Recovery model ${resource.key} failed integrity verification: ${message}`,
       );
     }
   }

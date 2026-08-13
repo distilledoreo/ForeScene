@@ -69,6 +69,7 @@ async function persistInlineArtifact(
   runId: string,
   shotId: string,
 ): Promise<string | undefined> {
+  if (result.handle?.artifactId) return result.handle.artifactId;
   if (!result.artifact || result.artifact.kind !== 'inline' || !result.artifact.dataUrl) return undefined;
   const blob = await fetch(result.artifact.dataUrl).then((response) => response.blob());
   const handle = registerAgentArtifact({
@@ -77,6 +78,7 @@ async function persistInlineArtifact(
     fileName: `canary-${runId}-${shotId}.png`,
     revisionId: result.revisionId,
     shotId,
+    authoritative: true,
   });
   return handle.artifactId;
 }

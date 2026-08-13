@@ -198,6 +198,12 @@ export interface RefinementState {
     completedAt: string;
     productionComplete: boolean;
     packagePath?: string;
+    packageTransfer?: {
+      transferMode: string;
+      pageMaterialization: string;
+      byteLength: number;
+      chunkCount: number;
+    };
     verification?: { ok: boolean; missingCount: number };
   };
 }
