@@ -1,10 +1,15 @@
-import { cp, writeFile } from 'node:fs/promises';
+import { cp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { buildCandidateBrief } from './brief';
 import { harnessFailure, modelFailure } from './failures';
 import { findForbiddenCandidateFiles } from './forbidden';
 import { hashDirectory } from './hashes';
-import { gitIdentity } from './git';
+import {
+  enforceGitIdentity,
+  gitIdentity,
+  unauthorizedRepoModifications,
+  type GitIdentityRecord,
+} from './git';
 import { createBenchmarkRunLayout, type BenchmarkRunLayout } from './layout';
 import type { BenchmarkFailure, BenchmarkSpecV1 } from './types';
 import { validateTechnicalBenchmark, type TechnicalValidation } from './validator';
@@ -14,11 +19,16 @@ export async function prepareBenchmarkRun(input: {
   specPath: string;
   runRoot: string;
   url?: string;
-}): Promise<{ layout: BenchmarkRunLayout; failure?: BenchmarkFailure }> {
+  enforceRepositoryState?: boolean;
+}): Promise<{ layout: BenchmarkRunLayout; failure?: BenchmarkFailure; git?: GitIdentityRecord }> {
   const layout = await createBenchmarkRunLayout(input.runRoot);
   await writeFile(layout.specPath, `${JSON.stringify(input.spec, null, 2)}\n`, 'utf8');
   const git = await gitIdentity();
   await writeFile(layout.gitPath, `${JSON.stringify(git, null, 2)}\n`, 'utf8');
+  if (input.enforceRepositoryState !== false) {
+    const gitFailure = enforceGitIdentity(git);
+    if (gitFailure) return { layout, git, failure: gitFailure };
+  }
 
   let projectPackage: string | undefined;
   if (input.spec.basePackage) {
@@ -29,6 +39,7 @@ export async function prepareBenchmarkRun(input: {
     } catch (error) {
       return {
         layout,
+        git,
         failure: harnessFailure(`Could not copy base package ${source}: ${error instanceof Error ? error.message : String(error)}`),
       };
     }
@@ -41,13 +52,26 @@ export async function prepareBenchmarkRun(input: {
     projectPackage,
   });
   await writeFile(layout.briefPath, `${JSON.stringify(brief, null, 2)}\n`, 'utf8');
-  return { layout };
+  return { layout, git };
 }
 
 export async function collectBenchmarkRun(input: {
   spec: BenchmarkSpecV1;
   layout: BenchmarkRunLayout;
+  enforceRepositoryState?: boolean;
 }): Promise<{ failure?: BenchmarkFailure; validation: TechnicalValidation }> {
+  if (input.enforceRepositoryState !== false) {
+    const before = JSON.parse(await readFile(input.layout.gitPath, 'utf8')) as GitIdentityRecord;
+    const after = await gitIdentity();
+    const drift = unauthorizedRepoModifications(before, after);
+    if (drift) {
+      return {
+        failure: drift,
+        validation: { ok: false, checks: [{ id: 'git.unauthorized', ok: false, message: drift.message }] },
+      };
+    }
+  }
+
   const forbidden = await findForbiddenCandidateFiles(input.layout.workDir);
   if (forbidden.length > 0) {
     return {

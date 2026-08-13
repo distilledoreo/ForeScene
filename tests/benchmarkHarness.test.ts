@@ -4,12 +4,13 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { extractAgentEnvelope } from '../scripts/benchmark/agentCli';
+import { extractAgentEnvelope, failureFromInvocation } from '../scripts/benchmark/agentCli';
 import { buildCandidateBrief } from '../scripts/benchmark/brief';
 import { collectBenchmarkRun, prepareBenchmarkRun } from '../scripts/benchmark/engine';
 import { classifyCliFailure, isStopTheRun } from '../scripts/benchmark/failures';
 import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
-import { skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
+import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/benchmark/git';
+import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
 import { BenchmarkClock } from '../scripts/benchmark/timing';
 import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
@@ -77,6 +78,7 @@ describe('benchmark harness v3', () => {
       specPath: path.join(repoRoot, 'benchmarks/three-shot.json'),
       runRoot,
       url: 'http://127.0.0.1:3000',
+      enforceRepositoryState: false,
     });
     expect(prepared.failure).toBeUndefined();
     const brief = JSON.parse(await readFile(prepared.layout.briefPath, 'utf8')) as ReturnType<typeof buildCandidateBrief>;
@@ -86,6 +88,8 @@ describe('benchmark harness v3', () => {
     expect(brief.repairBudget).toBe(2);
     expect(brief.cliOnly).toBe(true);
     expect(brief.forbidWindowForeScene).toBe(true);
+    expect(brief.repoRoot).toBe(repoRoot);
+    expect(prepared.layout.recoveryProfileDir).toContain('profile-recovery');
 
     await writeFile(path.join(prepared.layout.artifactDir, '010.png'), 'png');
     await writeFile(path.join(prepared.layout.artifactDir, '020.png'), 'png');
@@ -96,7 +100,7 @@ describe('benchmark harness v3', () => {
     mp4.write('ftyp', 4, 'ascii');
     await writeFile(path.join(prepared.layout.artifactDir, '030.mp4'), mp4);
 
-    const collected = await collectBenchmarkRun({ spec, layout: prepared.layout });
+    const collected = await collectBenchmarkRun({ spec, layout: prepared.layout, enforceRepositoryState: false });
     expect(collected.failure).toBeUndefined();
     expect(collected.validation.ok).toBe(true);
   });
@@ -108,8 +112,9 @@ describe('benchmark harness v3', () => {
       spec,
       specPath: path.join(repoRoot, 'benchmarks/three-shot.json'),
       runRoot,
+      enforceRepositoryState: false,
     });
-    const collected = await collectBenchmarkRun({ spec, layout: prepared.layout });
+    const collected = await collectBenchmarkRun({ spec, layout: prepared.layout, enforceRepositoryState: false });
     expect(collected.validation.ok).toBe(false);
     expect(collected.failure?.class).toBe('MODEL_FAILURE');
   });
@@ -142,22 +147,25 @@ describe('benchmark harness v3', () => {
     expect(typeof phases[0]?.durationMs).toBe('number');
   });
 
-  it('prepare-only CLI finishes clean without candidate glue', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  it('prepare-only CLI finishes clean from an external cwd via FORESCENE_REPO_ROOT', () => {
     const runRoot = path.join(os.tmpdir(), `forescene-bench-cli-${Date.now()}`);
-    const output = execFileSync(process.execPath, [
-      tsxCli,
-      'scripts/benchmark/run.ts',
-      '--spec',
-      'benchmarks/three-shot.json',
-      '--run-root',
-      runRoot,
-      '--prepare-only',
-    ], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
+    const npmExec = process.env.npm_execpath;
+    const output = execFileSync(
+      npmExec ? process.execPath : 'npm',
+      npmExec
+        ? [npmExec, '--prefix', repoRoot, 'run', 'benchmark:run', '--', '--spec', 'benchmarks/three-shot.json', '--run-root', runRoot, '--prepare-only']
+        : ['--prefix', repoRoot, 'run', 'benchmark:run', '--', '--spec', 'benchmarks/three-shot.json', '--run-root', runRoot, '--prepare-only'],
+      {
+        cwd: os.tmpdir(),
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          FORESCENE_REPO_ROOT: repoRoot,
+          FORESCENE_BENCHMARK_ALLOW_DIRTY: '1',
+        },
+      },
+    );
     const parsed = JSON.parse(output.slice(output.indexOf('{'))) as {
       ok: boolean;
       specId: string;
@@ -224,5 +232,59 @@ describe('benchmark harness v3', () => {
     });
     expect(failing.ok).toBe(false);
     expect(failing.checks.some((check) => check.layer === 'subject' && !check.ok)).toBe(true);
+  });
+
+  it('fails closed on an unexpected commit or dirty tree', () => {
+    expect(enforceGitIdentity({
+      commit: 'aaa',
+      expectedCommit: 'bbb',
+      dirty: false,
+      porcelain: '',
+      allowDirty: false,
+    })?.class).toBe('ENVIRONMENT_FAILURE');
+    expect(enforceGitIdentity({
+      commit: 'aaa',
+      expectedCommit: 'aaa',
+      dirty: true,
+      porcelain: ' M src/App.tsx',
+      allowDirty: false,
+    })?.message).toMatch(/dirty/);
+    expect(enforceGitIdentity({
+      commit: 'aaa',
+      expectedCommit: 'aaa',
+      dirty: true,
+      porcelain: ' M src/App.tsx',
+      allowDirty: true,
+    })).toBeUndefined();
+  });
+
+  it('reports unauthorized source edits after the candidate', () => {
+    const before = {
+      commit: 'aaa',
+      expectedCommit: 'aaa',
+      dirty: false,
+      porcelain: '',
+      allowDirty: false,
+    };
+    expect(unauthorizedRepoModifications(before, {
+      ...before,
+      dirty: true,
+      porcelain: ' M scripts/benchmark/run.ts',
+    })?.message).toMatch(/Unauthorized/);
+  });
+
+  it('requires incremental lifecycle to be a real mutate/save plan', () => {
+    const plan = incrementalMutationPlan();
+    expect(plan.commands[0]?.op).toBe('project.updateInfo');
+  });
+
+  it('classifies CLI timeouts as infrastructure failures', () => {
+    const failure = failureFromInvocation({
+      code: 1,
+      stdout: '',
+      stderr: 'npm run agent:video exceeded 180000ms',
+    }, 'render.video');
+    expect(failure.class).toBe('INFRASTRUCTURE_FAILURE');
+    expect(isStopTheRun(failure)).toBe(true);
   });
 });
