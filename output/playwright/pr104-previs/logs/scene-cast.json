@@ -1,0 +1,33 @@
+{
+  "applied": {
+    "ok": true,
+    "planId": "previs-cast-Minimal Dialogue",
+    "verifiedRevisionId": "29b7b283-b163-40d1-a975-a2ae255c4f79",
+    "summary": {
+      "commandCount": 4,
+      "affectedObjectIds": [
+        "obj_msc3el5i_m7xcyz",
+        "obj_msc3el5j_m52zla"
+      ],
+      "affectedShotIds": [],
+      "affectedLandmarkIds": [],
+      "createdRefs": {
+        "cast_alex": {
+          "kind": "object",
+          "id": "obj_msc3el5i_m7xcyz",
+          "ref": "cast_alex",
+          "name": "Alex"
+        },
+        "cast_blair": {
+          "kind": "object",
+          "id": "obj_msc3el5j_m52zla",
+          "ref": "cast_blair",
+          "name": "Blair"
+        }
+      },
+      "description": "Previs cast for Minimal Dialogue"
+    },
+    "diagnostics": []
+  },
+  "importedCharacters": []
+}

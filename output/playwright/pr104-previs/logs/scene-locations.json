@@ -1,0 +1,101 @@
+{
+  "ok": true,
+  "planId": "previs-locations-Minimal Dialogue",
+  "verifiedRevisionId": "e5d7ce5b-9c5a-4220-a628-13252489bd5d",
+  "summary": {
+    "commandCount": 12,
+    "affectedObjectIds": [
+      "obj_msc3el3q_hvxrpl",
+      "obj_msc3el3q_qzpedw",
+      "obj_msc3el3q_we36ob",
+      "obj_msc3el3q_8kdvl2",
+      "obj_msc3el3q_6m5w1r"
+    ],
+    "affectedShotIds": [],
+    "affectedLandmarkIds": [
+      "landmark_msc3el3q_waxmvt",
+      "landmark_msc3el3q_c09me1",
+      "landmark_msc3el3q_wwpzn8",
+      "landmark_msc3el3q_nc92dq",
+      "landmark_msc3el3q_t6pkma",
+      "landmark_msc3el3q_3wk18p",
+      "landmark_msc3el3q_svbkwl"
+    ],
+    "createdRefs": {
+      "loc_room_floor": {
+        "kind": "object",
+        "id": "obj_msc3el3q_hvxrpl",
+        "ref": "loc_room_floor",
+        "name": "Interior Room Floor"
+      },
+      "loc_room_back-wall": {
+        "kind": "object",
+        "id": "obj_msc3el3q_qzpedw",
+        "ref": "loc_room_back-wall",
+        "name": "Back Wall"
+      },
+      "loc_room_left-wall": {
+        "kind": "object",
+        "id": "obj_msc3el3q_we36ob",
+        "ref": "loc_room_left-wall",
+        "name": "Left Wall"
+      },
+      "loc_room_right-wall": {
+        "kind": "object",
+        "id": "obj_msc3el3q_8kdvl2",
+        "ref": "loc_room_right-wall",
+        "name": "Right Wall"
+      },
+      "loc_room_door": {
+        "kind": "object",
+        "id": "obj_msc3el3q_6m5w1r",
+        "ref": "loc_room_door",
+        "name": "Doorway"
+      },
+      "loc_room_anchor_center": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_waxmvt",
+        "ref": "loc_room_anchor_center",
+        "name": "Center"
+      },
+      "loc_room_anchor_entrance": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_c09me1",
+        "ref": "loc_room_anchor_entrance",
+        "name": "Entrance"
+      },
+      "loc_room_anchor_exit": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_wwpzn8",
+        "ref": "loc_room_anchor_exit",
+        "name": "Exit"
+      },
+      "loc_room_anchor_left": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_nc92dq",
+        "ref": "loc_room_anchor_left",
+        "name": "Left"
+      },
+      "loc_room_anchor_right": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_t6pkma",
+        "ref": "loc_room_anchor_right",
+        "name": "Right"
+      },
+      "loc_room_anchor_foreground": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_3wk18p",
+        "ref": "loc_room_anchor_foreground",
+        "name": "Foreground"
+      },
+      "loc_room_anchor_background": {
+        "kind": "landmark",
+        "id": "landmark_msc3el3q_svbkwl",
+        "ref": "loc_room_anchor_background",
+        "name": "Background"
+      }
+    },
+    "description": "Previs locations for Minimal Dialogue"
+  },
+  "diagnostics": []
+}

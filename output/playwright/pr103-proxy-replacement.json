@@ -1,0 +1,229 @@
+{
+  "ok": true,
+  "command": "agent:replace-proxy",
+  "proxyObjectId": "obj_msc2u8q3_ydcimw",
+  "replacementObjectId": "obj_msc2thjj_pirx2k",
+  "requestedShotIds": [
+    "000"
+  ],
+  "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr103-proxy-replacement.json",
+  "before": {
+    "projectId": "project_msc2th9t_nq8kr0",
+    "shotIds": [
+      "shot_msc2th9t_wwulsd"
+    ],
+    "panoIds": []
+  },
+  "plan": {
+    "version": 1,
+    "planId": "proxy-replacement-obj_msc2u8q3_ydcimw-obj_msc2thjj_pirx2k",
+    "description": "Replace proxy Spider proxy with ReplacementTriangle",
+    "expectedFingerprint": "project_msc2th9t_nq8kr0|2026-08-02T17:31:19.852Z|Untitled Production|4|1|1|obj_msc2th9s_ggh7o8,obj_msc2th9s_jct4f8,obj_msc2thjj_pirx2k,obj_msc2u8q3_ydcimw|shot_msc2th9t_wwulsd|landmark_msc2th9t_04c89n",
+    "commands": [
+      {
+        "op": "object.update",
+        "object": {
+          "id": "obj_msc2thjj_pirx2k"
+        },
+        "updates": {
+          "transform": {
+            "position": [
+              2,
+              1,
+              -2
+            ],
+            "rotation": [
+              0,
+              35,
+              0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              1.5
+            ]
+          },
+          "visible": true
+        }
+      },
+      {
+        "op": "object.update",
+        "object": {
+          "id": "obj_msc2u8q3_ydcimw"
+        },
+        "updates": {
+          "visible": false
+        }
+      },
+      {
+        "op": "shot.stageObject",
+        "shot": {
+          "id": "shot_msc2th9t_wwulsd"
+        },
+        "object": {
+          "id": "obj_msc2thjj_pirx2k"
+        },
+        "transform": {
+          "position": [
+            3,
+            1.25,
+            -3
+          ],
+          "rotation": [
+            0,
+            55,
+            0
+          ],
+          "scale": [
+            1.75,
+            1.75,
+            1.75
+          ]
+        },
+        "visible": true
+      },
+      {
+        "op": "shot.stageObject",
+        "shot": {
+          "id": "shot_msc2th9t_wwulsd"
+        },
+        "object": {
+          "id": "obj_msc2u8q3_ydcimw"
+        },
+        "transform": {
+          "position": [
+            3,
+            1.25,
+            -3
+          ],
+          "rotation": [
+            0,
+            55,
+            0
+          ],
+          "scale": [
+            1.75,
+            1.75,
+            1.75
+          ]
+        },
+        "visible": false
+      }
+    ]
+  },
+  "affectedShots": [
+    {
+      "id": "shot_msc2th9t_wwulsd",
+      "shotNumber": "000",
+      "keyframeIds": []
+    }
+  ],
+  "beforeEvidence": [
+    {
+      "shotId": "shot_msc2th9t_wwulsd",
+      "shotNumber": "000",
+      "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr103-proxy-replacement.000.before.png",
+      "width": 960,
+      "height": 540,
+      "pixelStats": {
+        "width": 960,
+        "height": 540,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.8605938475586993,
+        "luminanceVariance": 0.01327341421622008,
+        "sampledUniqueColorCount": 10
+      },
+      "source": "canonical_clay_renderer"
+    }
+  ],
+  "preview": {
+    "ok": true,
+    "planId": "proxy-replacement-obj_msc2u8q3_ydcimw-obj_msc2thjj_pirx2k",
+    "summary": {
+      "commandCount": 4,
+      "affectedObjectIds": [
+        "obj_msc2thjj_pirx2k",
+        "obj_msc2u8q3_ydcimw"
+      ],
+      "affectedShotIds": [
+        "shot_msc2th9t_wwulsd"
+      ],
+      "affectedLandmarkIds": [],
+      "createdRefs": {},
+      "description": "Replace proxy Spider proxy with ReplacementTriangle"
+    },
+    "diff": {
+      "objectsCreated": [],
+      "objectsUpdated": [
+        "obj_msc2thjj_pirx2k",
+        "obj_msc2u8q3_ydcimw"
+      ],
+      "objectsDeleted": [],
+      "shotsCreated": [],
+      "shotsUpdated": [
+        "shot_msc2th9t_wwulsd",
+        "shot_msc2th9t_wwulsd"
+      ],
+      "shotsDeleted": [],
+      "landmarksCreated": [],
+      "landmarksUpdated": [],
+      "landmarksDeleted": [],
+      "selectionChanged": false,
+      "workspaceChanged": false,
+      "projectInfoChanged": false,
+      "exportConfigurationChanged": false
+    },
+    "fingerprint": "project_msc2th9t_nq8kr0|2026-08-02T17:31:19.852Z|Untitled Production|4|1|1|obj_msc2th9s_ggh7o8,obj_msc2th9s_jct4f8,obj_msc2thjj_pirx2k,obj_msc2u8q3_ydcimw|shot_msc2th9t_wwulsd|landmark_msc2th9t_04c89n",
+    "baseProjectUpdatedAt": "2026-08-02T17:31:19.852Z",
+    "warnings": [],
+    "diagnostics": []
+  },
+  "apply": {
+    "ok": true,
+    "planId": "proxy-replacement-obj_msc2u8q3_ydcimw-obj_msc2thjj_pirx2k",
+    "verifiedRevisionId": "02a88d64-8df7-4426-8ec1-c49bbba2b949",
+    "summary": {
+      "commandCount": 4,
+      "affectedObjectIds": [
+        "obj_msc2thjj_pirx2k",
+        "obj_msc2u8q3_ydcimw"
+      ],
+      "affectedShotIds": [
+        "shot_msc2th9t_wwulsd"
+      ],
+      "affectedLandmarkIds": [],
+      "createdRefs": {},
+      "description": "Replace proxy Spider proxy with ReplacementTriangle"
+    },
+    "diagnostics": []
+  },
+  "verification": {
+    "ok": true,
+    "errors": []
+  },
+  "afterEvidence": [
+    {
+      "shotId": "shot_msc2th9t_wwulsd",
+      "shotNumber": "000",
+      "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr103-proxy-replacement.000.after.png",
+      "width": 960,
+      "height": 540,
+      "pixelStats": {
+        "width": 960,
+        "height": 540,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.8924825778547396,
+        "luminanceVariance": 0.00555685063778677,
+        "sampledUniqueColorCount": 6
+      },
+      "source": "canonical_clay_renderer"
+    }
+  ],
+  "after": {
+    "projectId": "project_msc2th9t_nq8kr0",
+    "shotIds": [
+      "shot_msc2th9t_wwulsd"
+    ],
+    "panoIds": []
+  }
+}

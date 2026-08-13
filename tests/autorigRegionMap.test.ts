@@ -6,6 +6,7 @@ import {
   buildVertexAdjacency,
   computeConnectedComponents,
   computeTopologyHash,
+  fnv1a64Hex,
 } from '../src/engine/autorig/topology';
 import {
   AUTORIG_REGION_CODE,
@@ -100,6 +101,10 @@ describe('autorig topology', () => {
       triangles: Uint32Array.from([0, 2, 1, 0, 2, 3]),
     });
     expect(hashC).not.toBe(hashA);
+  });
+
+  it('keeps the standard FNV-1a 64-bit digest while using numeric word arithmetic', () => {
+    expect(fnv1a64Hex(new TextEncoder().encode('a'))).toBe('af63dc4c8601ec8c');
   });
 
   it('extracts multi-mesh parts from a canonical root', () => {

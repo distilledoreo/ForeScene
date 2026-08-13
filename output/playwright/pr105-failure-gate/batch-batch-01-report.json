@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "batchId": "batch-01",
+  "startedAt": "2026-08-02T18:01:25.249Z",
+  "previewedMutations": [],
+  "reviewManifestPath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\review-manifest.json",
+  "temporalSamples": [],
+  "preservation": {
+    "ok": true,
+    "errors": [],
+    "missing": {
+      "shots": [],
+      "panoramas": [],
+      "environmentObjects": []
+    }
+  },
+  "completedAt": "2026-08-02T18:01:28.207Z"
+}

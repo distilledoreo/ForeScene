@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "planFingerprint": "{\"version\":1,\"mode\":\"existing-project-refinement\",\"preserve\":{\"project\":true,\"shots\":true,\"panoramas\":true,\"environmentObjects\":true,\"cameras\":true,\"timelines\":true},\"characterImports\":[],\"modelImports\":[],\"proxyReplacements\":[],\"batches\":[{\"id\":\"sample-review\",\"shots\":[\"010\",\"020\",\"030\",\"040\"]}],\"deliverablesProfile\":\"ai-control-full\"}",
+  "preservation": {
+    "projectId": "project_msc41nol_kfyhnp",
+    "shotIds": [
+      "shot_msc41nol_bwv1df",
+      "shot_msc41nol_qisaiy",
+      "shot_msc41nol_u45xd1",
+      "shot_msc41nol_3bdq3n"
+    ],
+    "panoIds": [
+      "pano_msc41nol_99lwfi",
+      "pano_msc41nol_26kylh"
+    ],
+    "environmentObjectIds": [
+      "obj_msc41nok_kxko4l",
+      "obj_msc41nok_qa4ff8",
+      "obj_msc41nok_nsiyaz",
+      "obj_msc41nok_1bs5u5",
+      "obj_msc41nok_9ziejh",
+      "obj_msc41nok_umrcqc",
+      "obj_msc41nok_548300",
+      "obj_msc41nok_8ngvp4",
+      "obj_msc41nok_ep3pqq"
+    ],
+    "cameras": {
+      "shot_msc41nol_bwv1df": {
+        "position": [
+          0,
+          1.55,
+          4.2
+        ],
+        "target": [
+          0,
+          1.35,
+          0
+        ],
+        "fovDegrees": 55,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.1,
+        "far": 100
+      },
+      "shot_msc41nol_qisaiy": {
+        "position": [
+          -0.35,
+          1.5,
+          2.6
+        ],
+        "target": [
+          -1.05,
+          1.45,
+          0.15
+        ],
+        "fovDegrees": 40,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.1,
+        "far": 100
+      },
+      "shot_msc41nol_u45xd1": {
+        "position": [
+          0.85,
+          1.52,
+          1.35
+        ],
+        "target": [
+          -1,
+          1.5,
+          0.1
+        ],
+        "fovDegrees": 38,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.1,
+        "far": 100
+      },
+      "shot_msc41nol_3bdq3n": {
+        "position": [
+          -0.55,
+          1.55,
+          1.55
+        ],
+        "target": [
+          -1.1,
+          1.55,
+          0.15
+        ],
+        "fovDegrees": 28,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.1,
+        "far": 100
+      }
+    },
+    "timelines": {
+      "shot_msc41nol_bwv1df": [],
+      "shot_msc41nol_qisaiy": [],
+      "shot_msc41nol_u45xd1": [],
+      "shot_msc41nol_3bdq3n": []
+    }
+  },
+  "batches": {
+    "sample-review": {
+      "status": "failed",
+      "mutationCompletedAt": "2026-08-02T18:05:24.688Z",
+      "reviewManifestPath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\review-manifest.json",
+      "failure": "Review matrix or preservation verification failed."
+    }
+  },
+  "imports": {},
+  "replacements": []
+}

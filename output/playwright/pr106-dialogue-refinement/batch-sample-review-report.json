@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "batchId": "sample-review",
+  "startedAt": "2026-08-02T18:05:24.687Z",
+  "previewedMutations": [],
+  "reviewManifestPath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\review-manifest.json",
+  "temporalSamples": [],
+  "preservation": {
+    "ok": true,
+    "errors": [],
+    "missing": {
+      "shots": [],
+      "panoramas": [],
+      "environmentObjects": []
+    }
+  },
+  "completedAt": "2026-08-02T18:05:48.206Z"
+}

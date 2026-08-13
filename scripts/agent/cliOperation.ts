@@ -284,10 +284,25 @@ export async function requestCliOperationCancel(operationId: string): Promise<{
   }
   record.cancelRequested = true;
   record.updatedAt = nowIso();
+  const sameProcess = record.pid === process.pid;
+  const processAlive = sameProcess || isProcessAlive(record.pid);
+  if (!sameProcess && !processAlive) {
+    record.state = 'cancelled';
+    record.message = 'Operation cancelled because its CLI process is no longer running.';
+    await writeCliOperationRecord(record);
+    return {
+      ok: true,
+      operationId,
+      signaled: false,
+      alreadyTerminal: false,
+      record,
+      message: record.message,
+    };
+  }
   await writeCliOperationRecord(record);
 
   let signaled = false;
-  if (record.pid !== process.pid && isProcessAlive(record.pid)) {
+  if (!sameProcess && processAlive) {
     try {
       process.kill(record.pid, 'SIGINT');
       signaled = true;

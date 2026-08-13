@@ -1,0 +1,227 @@
+import { createHotContext as __vite__createHotContext } from "/@vite/client";import.meta.hot = __vite__createHotContext("/@fs/C:\\Users\\disti\\Documents\\App Development\\PanoRef\\src\\components\\autorig\\AutorigFixToolbar.tsx");import __vite__cjsImport0_react_jsxDevRuntime from "/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=2d845561"; const jsxDEV = __vite__cjsImport0_react_jsxDevRuntime["jsxDEV"];
+import { AutorigRegionToolbar } from "/src/components/autorig/AutorigRegionToolbar.tsx";
+export function AutorigFixToolbar({
+  tool,
+  onToolChange,
+  selectedRegion,
+  onSelectRegion,
+  restoreAutomatic,
+  onRestoreAutomaticChange,
+  brushRadius,
+  onBrushRadiusChange,
+  showAssignments,
+  onShowAssignmentsChange,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo
+}) {
+  return /* @__PURE__ */ jsxDEV("div", { className: "space-y-3", "data-autorig-fix-toolbar": true, children: [
+    /* @__PURE__ */ jsxDEV("div", { className: "flex flex-wrap gap-1.5", "data-autorig-fix-tools": true, children: [
+      ["brush", "Brush"],
+      ["lasso", "Select area"]
+    ].map(
+      ([id, label]) => /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          type: "button",
+          className: `rounded-lg px-2.5 py-1 text-xs font-semibold ${tool === id ? "bg-accent text-white" : "bg-surface-muted text-secondary"}`,
+          "data-autorig-fix-tool": id,
+          "data-active": tool === id ? "true" : "false",
+          onClick: () => onToolChange(id),
+          children: label
+        },
+        id,
+        false,
+        {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 46,
+          columnNumber: 9
+        },
+        this
+      )
+    ) }, void 0, false, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 41,
+      columnNumber: 7
+    }, this),
+    /* @__PURE__ */ jsxDEV(AutorigRegionToolbar, { selected: selectedRegion, onSelect: (region) => {
+      onRestoreAutomaticChange(false);
+      onSelectRegion(region);
+    } }, void 0, false, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 61,
+      columnNumber: 7
+    }, this),
+    /* @__PURE__ */ jsxDEV(
+      "button",
+      {
+        type: "button",
+        className: `w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold ${restoreAutomatic ? "bg-accent text-white" : "bg-surface-muted text-secondary"}`,
+        "data-autorig-restore-automatic": true,
+        "data-active": restoreAutomatic ? "true" : "false",
+        onClick: () => onRestoreAutomaticChange(!restoreAutomatic),
+        children: "Restore automatic"
+      },
+      void 0,
+      false,
+      {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+        lineNumber: 66,
+        columnNumber: 7
+      },
+      this
+    ),
+    tool === "brush" && /* @__PURE__ */ jsxDEV("label", { className: "block space-y-1", "data-autorig-brush-size": true, children: [
+      /* @__PURE__ */ jsxDEV("div", { className: "flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted", children: [
+        /* @__PURE__ */ jsxDEV("span", { children: "Brush size" }, void 0, false, {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 81,
+          columnNumber: 13
+        }, this),
+        /* @__PURE__ */ jsxDEV("span", { className: "normal-case tracking-normal text-secondary", children: [
+          Math.round(brushRadius),
+          "px"
+        ] }, void 0, true, {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 82,
+          columnNumber: 13
+        }, this)
+      ] }, void 0, true, {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+        lineNumber: 80,
+        columnNumber: 11
+      }, this),
+      /* @__PURE__ */ jsxDEV(
+        "input",
+        {
+          type: "range",
+          min: 10,
+          max: 80,
+          step: 1,
+          value: brushRadius,
+          onChange: (event) => onBrushRadiusChange(Number(event.target.value)),
+          className: "w-full accent-[var(--color-accent,#38bdf8)]",
+          "data-autorig-brush-radius": true
+        },
+        void 0,
+        false,
+        {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 84,
+          columnNumber: 11
+        },
+        this
+      )
+    ] }, void 0, true, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 79,
+      columnNumber: 7
+    }, this),
+    /* @__PURE__ */ jsxDEV("label", { className: "flex items-center gap-2 text-xs text-secondary", "data-autorig-show-assignments": true, children: [
+      /* @__PURE__ */ jsxDEV(
+        "input",
+        {
+          type: "checkbox",
+          checked: showAssignments,
+          onChange: (event) => onShowAssignmentsChange(event.target.checked),
+          "data-autorig-show-assignments-toggle": true
+        },
+        void 0,
+        false,
+        {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 98,
+          columnNumber: 9
+        },
+        this
+      ),
+      "Show assignments"
+    ] }, void 0, true, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 97,
+      columnNumber: 7
+    }, this),
+    /* @__PURE__ */ jsxDEV("div", { className: "flex flex-wrap gap-2", children: [
+      /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          type: "button",
+          className: "rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50",
+          onClick: onUndo,
+          disabled: !canUndo,
+          "data-autorig-region-undo": true,
+          children: "Undo"
+        },
+        void 0,
+        false,
+        {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 108,
+          columnNumber: 9
+        },
+        this
+      ),
+      /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          type: "button",
+          className: "rounded-lg border border-subtle px-2 py-1.5 text-xs font-semibold text-secondary disabled:opacity-50",
+          onClick: onRedo,
+          disabled: !canRedo,
+          "data-autorig-region-redo": true,
+          children: "Redo"
+        },
+        void 0,
+        false,
+        {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+          lineNumber: 117,
+          columnNumber: 9
+        },
+        this
+      )
+    ] }, void 0, true, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 107,
+      columnNumber: 7
+    }, this),
+    /* @__PURE__ */ jsxDEV("p", { className: "text-[11px] text-muted", "data-autorig-fix-hint": true, children: "One stroke selects the surrounding surface · Paint with left drag · Rotate with right drag" }, void 0, false, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+      lineNumber: 128,
+      columnNumber: 7
+    }, this)
+  ] }, void 0, true, {
+    fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx",
+    lineNumber: 40,
+    columnNumber: 5
+  }, this);
+}
+_c = AutorigFixToolbar;
+var _c;
+$RefreshReg$(_c, "AutorigFixToolbar");
+import * as RefreshRuntime from "/@react-refresh";
+const inWebWorker = typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+if (import.meta.hot && !inWebWorker) {
+  if (!window.$RefreshReg$) {
+    throw new Error(
+      "@vitejs/plugin-react can't detect preamble. Something is wrong."
+    );
+  }
+  RefreshRuntime.__hmr_import(import.meta.url).then((currentExports) => {
+    RefreshRuntime.registerExportsForReactRefresh("C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx", currentExports);
+    import.meta.hot.accept((nextExports) => {
+      if (!nextExports) return;
+      const invalidateMessage = RefreshRuntime.validateRefreshBoundaryAndEnqueueUpdate("C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx", currentExports, nextExports);
+      if (invalidateMessage) import.meta.hot.invalidate(invalidateMessage);
+    });
+  });
+}
+function $RefreshReg$(type, id) {
+  return RefreshRuntime.register(type, "C:/Users/disti/Documents/App Development/PanoRef/src/components/autorig/AutorigFixToolbar.tsx " + id);
+}
+function $RefreshSig$() {
+  return RefreshRuntime.createSignatureFunctionForTransform();
+}
+
+//# sourceMappingURL=data:application/json;base64,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RSxPQUFPRSxPQUFPO0FBQUEsVUFDakUsd0NBQW9DO0FBQUE7QUFBQSxRQUp0QztBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUEsTUFJc0M7QUFBQTtBQUFBLFNBTHhDO0FBQUE7QUFBQTtBQUFBO0FBQUEsV0FRQTtBQUFBLElBRUEsdUJBQUMsU0FBSSxXQUFVLHdCQUNiO0FBQUE7QUFBQSxRQUFDO0FBQUE7QUFBQSxVQUNDLE1BQUs7QUFBQSxVQUNMLFdBQVU7QUFBQSxVQUNWLFNBQVNaO0FBQUFBLFVBQ1QsVUFBVSxDQUFDRjtBQUFBQSxVQUNYLDRCQUF3QjtBQUFBO0FBQUE7QUFBQSxRQUwxQjtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUEsTUFRQTtBQUFBLE1BQ0E7QUFBQSxRQUFDO0FBQUE7QUFBQSxVQUNDLE1BQUs7QUFBQSxVQUNMLFdBQVU7QUFBQSxVQUNWLFNBQVNHO0FBQUFBLFVBQ1QsVUFBVSxDQUFDRjtBQUFBQSxVQUNYLDRCQUF3QjtBQUFBO0FBQUE7QUFBQSxRQUwxQjtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUEsTUFRQTtBQUFBLFNBbEJGO0FBQUE7QUFBQTtBQUFBO0FBQUEsV0FtQkE7QUFBQSxJQUVBLHVCQUFDLE9BQUUsV0FBVSwwQkFBeUIseUJBQXFCLE1BQUMsMEdBQTVEO0FBQUE7QUFBQTtBQUFBO0FBQUEsV0FFQTtBQUFBLE9BMUZGO0FBQUE7QUFBQTtBQUFBO0FBQUEsU0EyRkE7QUFFSjtBQUFDYyxLQTdIZTFCO0FBQWlCLElBQUEwQjtBQUFBLGFBQUFBLElBQUEiLCJuYW1lcyI6WyJBdXRvcmlnUmVnaW9uVG9vbGJhciIsIkF1dG9yaWdGaXhUb29sYmFyIiwidG9vbCIsIm9uVG9vbENoYW5nZSIsInNlbGVjdGVkUmVnaW9uIiwib25TZWxlY3RSZWdpb24iLCJyZXN0b3JlQXV0b21hdGljIiwib25SZXN0b3JlQXV0b21hdGljQ2hhbmdlIiwiYnJ1c2hSYWRpdXMiLCJvbkJydXNoUmFkaXVzQ2hhbmdlIiwic2hvd0Fzc2lnbm1lbnRzIiwib25TaG93QXNzaWdubWVudHNDaGFuZ2UiLCJjYW5VbmRvIiwiY2FuUmVkbyIsIm9uVW5kbyIsIm9uUmVkbyIsIm1hcCIsImlkIiwibGFiZWwiLCJyZWdpb24iLCJNYXRoIiwicm91bmQiLCJldmVudCIsIk51bWJlciIsInRhcmdldCIsInZhbHVlIiwiY2hlY2tlZCIsIl9jIl0sImlnbm9yZUxpc3QiOltdLCJzb3VyY2VzIjpbIkF1dG9yaWdGaXhUb29sYmFyLnRzeCJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgUmVhY3QgZnJvbSAncmVhY3QnO1xyXG5pbXBvcnQgdHlwZSB7IEF1dG9yaWdCb2R5UmVnaW9uSWQgfSBmcm9tICcuLi8uLi9lbmdpbmUvYXV0b3JpZy9yZWdpb25zJztcclxuaW1wb3J0IHsgQXV0b3JpZ1JlZ2lvblRvb2xiYXIgfSBmcm9tICcuL0F1dG9yaWdSZWdpb25Ub29sYmFyJztcclxuXHJcbmV4cG9ydCB0eXBlIEF1dG9yaWdGaXhUb29sID0gJ2JydXNoJyB8ICdsYXNzbyc7XHJcblxyXG4vKiogRml4LW1vZGUgY2hyb21lOiB0b29sIHNlbGVjdG9yLCByZWdpb24gYnV0dG9ucywgYnJ1c2ggc2l6ZSwgYW5kIHRvZ2dsZXMuICovXHJcbmV4cG9ydCBmdW5jdGlvbiBBdXRvcmlnRml4VG9vbGJhcih7XHJcbiAgdG9vbCxcclxuICBvblRvb2xDaGFuZ2UsXHJcbiAgc2VsZWN0ZWRSZWdpb24sXHJcbiAgb25TZWxlY3RSZWdpb24sXHJcbiAgcmVzdG9yZUF1dG9tYXRpYyxcclxuICBvblJlc3RvcmVBdXRvbWF0aWNDaGFuZ2UsXHJcbiAgYnJ1c2hSYWRpdXMsXHJcbiAgb25CcnVzaFJhZGl1c0NoYW5nZSxcclxuICBzaG93QXNzaWdubWVudHMsXHJcbiAgb25TaG93QXNzaWdubWVudHNDaGFuZ2UsXHJcbiAgY2FuVW5kbyxcclxuICBjYW5SZWRvLFxyXG4gIG9uVW5kbyxcclxuICBvblJlZG8sXHJcbn06IHtcclxuICB0b29sOiBBdXRvcmlnRml4VG9vbDtcclxuICBvblRvb2xDaGFuZ2U6ICh0b29sOiBBdXRvcmlnRml4VG9vbCkgPT4gdm9pZDtcclxuICBzZWxlY3RlZFJlZ2lvbjogQXV0b3JpZ0JvZHlSZWdpb25JZDtcclxuICBvblNlbGVjdFJlZ2lvbjogKHJlZ2lvbjogQXV0b3JpZ0JvZHlSZWdpb25JZCkgPT4gdm9pZDtcclxuICByZXN0b3JlQXV0b21hdGljOiBib29sZWFuO1xyXG4gIG9uUmVzdG9yZUF1dG9tYXRpY0NoYW5nZTogKHZhbHVlOiBib29sZWFuKSA9PiB2b2lkO1xyXG4gIGJydXNoUmFkaXVzOiBudW1iZXI7XHJcbiAgb25CcnVzaFJhZGl1c0NoYW5nZTogKHJhZGl1czogbnVtYmVyKSA9PiB2b2lkO1xyXG4gIHNob3dBc3NpZ25tZW50czogYm9vbGVhbjtcclxuICBvblNob3dBc3NpZ25tZW50c0NoYW5nZTogKHZhbHVlOiBib29sZWFuKSA9PiB2b2lkO1xyXG4gIGNhblVuZG86IGJvb2xlYW47XHJcbiAgY2FuUmVkbzogYm9vbGVhbjtcclxuICBvblVuZG86ICgpID0+IHZvaWQ7XHJcbiAgb25SZWRvOiAoKSA9PiB2b2lkO1xyXG59KSB7XHJcbiAgcmV0dXJuIChcclxuICAgIDxkaXYgY2xhc3NOYW1lPVwic3BhY2UteS0zXCIgZGF0YS1hdXRvcmlnLWZpeC10b29sYmFyPlxyXG4gICAgICA8ZGl2IGNsYXNzTmFtZT1cImZsZXggZmxleC13cmFwIGdhcC0xLjVcIiBkYXRhLWF1dG9yaWctZml4LXRvb2xzPlxyXG4gICAgICAgIHsoW1xyXG4gICAgICAgICAgWydicnVzaCcsICdCcnVzaCddLFxyXG4gICAgICAgICAgWydsYXNzbycsICdTZWxlY3QgYXJlYSddLFxyXG4gICAgICAgIF0gYXMgY29uc3QpLm1hcCgoW2lkLCBsYWJlbF0pID0+IChcclxuICAgICAgICAgIDxidXR0b25cclxuICAgICAgICAgICAga2V5PXtpZH1cclxuICAgICAgICAgICAgdHlwZT1cImJ1dHRvblwiXHJcbiAgICAgICAgICAgIGNsYXNzTmFtZT17YHJvdW5kZWQtbGcgcHgtMi41IHB5LTEgdGV4dC14cyBmb250LXNlbWlib2xkICR7XHJcbiAgICAgICAgICAgICAgdG9vbCA9PT0gaWQgPyAnYmctYWNjZW50IHRleHQtd2hpdGUnIDogJ2JnLXN1cmZhY2UtbXV0ZWQgdGV4dC1zZWNvbmRhcnknXHJcbiAgICAgICAgICAgIH1gfVxyXG4gICAgICAgICAgICBkYXRhLWF1dG9yaWctZml4LXRvb2w9e2lkfVxyXG4gICAgICAgICAgICBkYXRhLWFjdGl2ZT17dG9vbCA9PT0gaWQgPyAndHJ1ZScgOiAnZmFsc2UnfVxyXG4gICAgICAgICAgICBvbkNsaWNrPXsoKSA9PiBvblRvb2xDaGFuZ2UoaWQpfVxyXG4gICAgICAgICAgPlxyXG4gICAgICAgICAgICB7bGFiZWx9XHJcbiAgICAgICAgICA8L2J1dHRvbj5cclxuICAgICAgICApKX1cclxuICAgICAgPC9kaXY+XHJcblxyXG4gICAgICA8QXV0b3JpZ1JlZ2lvblRvb2xiYXIgc2VsZWN0ZWQ9e3NlbGVjdGVkUmVnaW9ufSBvblNlbGVjdD17KHJlZ2lvbikgPT4ge1xyXG4gICAgICAgIG9uUmVzdG9yZUF1dG9tYXRpY0NoYW5nZShmYWxzZSk7XHJcbiAgICAgICAgb25TZWxlY3RSZWdpb24ocmVnaW9uKTtcclxuICAgICAgfX0gLz5cclxuXHJcbiAgICAgIDxidXR0b25cclxuICAgICAgICB0eXBlPVwiYnV0dG9uXCJcclxuICAgICAgICBjbGFzc05hbWU9e2B3LWZ1bGwgcm91bmRlZC1sZyBweC0yIHB5LTEuNSB0ZXh0LWxlZnQgdGV4dC14cyBmb250LXNlbWlib2xkICR7XHJcbiAgICAgICAgICByZXN0b3JlQXV0b21hdGljID8gJ2JnLWFjY2VudCB0ZXh0LXdoaXRlJyA6ICdiZy1zdXJmYWNlLW11dGVkIHRleHQtc2Vjb25kYXJ5J1xyXG4gICAgICAgIH1gfVxyXG4gICAgICAgIGRhdGEtYXV0b3JpZy1yZXN0b3JlLWF1dG9tYXRpY1xyXG4gICAgICAgIGRhdGEtYWN0aXZlPXtyZXN0b3JlQXV0b21hdGljID8gJ3RydWUnIDogJ2ZhbHNlJ31cclxuICAgICAgICBvbkNsaWNrPXsoKSA9PiBvblJlc3RvcmVBdXRvbWF0aWNDaGFuZ2UoIXJlc3RvcmVBdXRvbWF0aWMpfVxyXG4gICAgICA+XHJcbiAgICAgICAgUmVzdG9yZSBhdXRvbWF0aWNcclxuICAgICAgPC9idXR0b24+XHJcblxyXG4gICAgICB7dG9vbCA9PT0gJ2JydXNoJyAmJiAoXHJcbiAgICAgICAgPGxhYmVsIGNsYXNzTmFtZT1cImJsb2NrIHNwYWNlLXktMVwiIGRhdGEtYXV0b3JpZy1icnVzaC1zaXplPlxyXG4gICAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJmbGV4IGl0ZW1zLWNlbnRlciBqdXN0aWZ5LWJldHdlZW4gdGV4dC1bMTBweF0gZm9udC1zZW1pYm9sZCB1cHBlcmNhc2UgdHJhY2tpbmctd2lkZSB0ZXh0LW11dGVkXCI+XHJcbiAgICAgICAgICAgIDxzcGFuPkJydXNoIHNpemU8L3NwYW4+XHJcbiAgICAgICAgICAgIDxzcGFuIGNsYXNzTmFtZT1cIm5vcm1hbC1jYXNlIHRyYWNraW5nLW5vcm1hbCB0ZXh0LXNlY29uZGFyeVwiPntNYXRoLnJvdW5kKGJydXNoUmFkaXVzKX1weDwvc3Bhbj5cclxuICAgICAgICAgIDwvZGl2PlxyXG4gICAgICAgICAgPGlucHV0XHJcbiAgICAgICAgICAgIHR5cGU9XCJyYW5nZVwiXHJcbiAgICAgICAgICAgIG1pbj17MTB9XHJcbiAgICAgICAgICAgIG1heD17ODB9XHJcbiAgICAgICAgICAgIHN0ZXA9ezF9XHJcbiAgICAgICAgICAgIHZhbHVlPXticnVzaFJhZGl1c31cclxuICAgICAgICAgICAgb25DaGFuZ2U9eyhldmVudCkgPT4gb25CcnVzaFJhZGl1c0NoYW5nZShOdW1iZXIoZXZlbnQudGFyZ2V0LnZhbHVlKSl9XHJcbiAgICAgICAgICAgIGNsYXNzTmFtZT1cInctZnVsbCBhY2NlbnQtW3ZhcigtLWNvbG9yLWFjY2VudCwjMzhiZGY4KV1cIlxyXG4gICAgICAgICAgICBkYXRhLWF1dG9yaWctYnJ1c2gtcmFkaXVzXHJcbiAgICAgICAgICAvPlxyXG4gICAgICAgIDwvbGFiZWw+XHJcbiAgICAgICl9XHJcblxyXG4gICAgICA8bGFiZWwgY2xhc3NOYW1lPVwiZmxleCBpdGVtcy1jZW50ZXIgZ2FwLTIgdGV4dC14cyB0ZXh0LXNlY29uZGFyeVwiIGRhdGEtYXV0b3JpZy1zaG93LWFzc2lnbm1lbnRzPlxyXG4gICAgICAgIDxpbnB1dFxyXG4gICAgICAgICAgdHlwZT1cImNoZWNrYm94XCJcclxuICAgICAgICAgIGNoZWNrZWQ9e3Nob3dBc3NpZ25tZW50c31cclxuICAgICAgICAgIG9uQ2hhbmdlPXsoZXZlbnQpID0+IG9uU2hvd0Fzc2lnbm1lbnRzQ2hhbmdlKGV2ZW50LnRhcmdldC5jaGVja2VkKX1cclxuICAgICAgICAgIGRhdGEtYXV0b3JpZy1zaG93LWFzc2lnbm1lbnRzLXRvZ2dsZVxyXG4gICAgICAgIC8+XHJcbiAgICAgICAgU2hvdyBhc3NpZ25tZW50c1xyXG4gICAgICA8L2xhYmVsPlxyXG5cclxuICAgICAgPGRpdiBjbGFzc05hbWU9XCJmbGV4IGZsZXgtd3JhcCBnYXAtMlwiPlxyXG4gICAgICAgIDxidXR0b25cclxuICAgICAgICAgIHR5cGU9XCJidXR0b25cIlxyXG4gICAgICAgICAgY2xhc3NOYW1lPVwicm91bmRlZC1sZyBib3JkZXIgYm9yZGVyLXN1YnRsZSBweC0yIHB5LTEuNSB0ZXh0LXhzIGZvbnQtc2VtaWJvbGQgdGV4dC1zZWNvbmRhcnkgZGlzYWJsZWQ6b3BhY2l0eS01MFwiXHJcbiAgICAgICAgICBvbkNsaWNrPXtvblVuZG99XHJcbiAgICAgICAgICBkaXNhYmxlZD17IWNhblVuZG99XHJcbiAgICAgICAgICBkYXRhLWF1dG9yaWctcmVnaW9uLXVuZG9cclxuICAgICAgICA+XHJcbiAgICAgICAgICBVbmRvXHJcbiAgICAgICAgPC9idXR0b24+XHJcbiAgICAgICAgPGJ1dHRvblxyXG4gICAgICAgICAgdHlwZT1cImJ1dHRvblwiXHJcbiAgICAgICAgICBjbGFzc05hbWU9XCJyb3VuZGVkLWxnIGJvcmRlciBib3JkZXItc3VidGxlIHB4LTIgcHktMS41IHRleHQteHMgZm9udC1zZW1pYm9sZCB0ZXh0LXNlY29uZGFyeSBkaXNhYmxlZDpvcGFjaXR5LTUwXCJcclxuICAgICAgICAgIG9uQ2xpY2s9e29uUmVkb31cclxuICAgICAgICAgIGRpc2FibGVkPXshY2FuUmVkb31cclxuICAgICAgICAgIGRhdGEtYXV0b3JpZy1yZWdpb24tcmVkb1xyXG4gICAgICAgID5cclxuICAgICAgICAgIFJlZG9cclxuICAgICAgICA8L2J1dHRvbj5cclxuICAgICAgPC9kaXY+XHJcblxyXG4gICAgICA8cCBjbGFzc05hbWU9XCJ0ZXh0LVsxMXB4XSB0ZXh0LW11dGVkXCIgZGF0YS1hdXRvcmlnLWZpeC1oaW50PlxyXG4gICAgICAgIE9uZSBzdHJva2Ugc2VsZWN0cyB0aGUgc3Vycm91bmRpbmcgc3VyZmFjZSDCtyBQYWludCB3aXRoIGxlZnQgZHJhZyDCtyBSb3RhdGUgd2l0aCByaWdodCBkcmFnXHJcbiAgICAgIDwvcD5cclxuICAgIDwvZGl2PlxyXG4gICk7XHJcbn1cclxuIl0sImZpbGUiOiJDOi9Vc2Vycy9kaXN0aS9Eb2N1bWVudHMvQXBwIERldmVsb3BtZW50L1Bhbm9SZWYvc3JjL2NvbXBvbmVudHMvYXV0b3JpZy9BdXRvcmlnRml4VG9vbGJhci50c3gifQ==

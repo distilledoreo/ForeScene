@@ -1,0 +1,973 @@
+{
+  "results": [
+    {
+      "shotNumber": "010",
+      "status": "passed",
+      "template": "two_shot",
+      "issues": [],
+      "telemetry": {
+        "shotId": "shot_msc3elgv_srp99n",
+        "shotNumber": "010",
+        "frameWidth": 3840,
+        "frameHeight": 2160,
+        "subjects": {
+          "alex": {
+            "bounds": {
+              "ndc": {
+                "minX": -0.7429758668886586,
+                "maxX": -0.5069041198124673,
+                "minY": -0.5028833075098245,
+                "maxY": 0.5038170131362548
+              },
+              "pixels": {
+                "left": 493.48633557377553,
+                "top": 535.8776258128447,
+                "right": 946.7440899600628,
+                "bottom": 1623.1139721106103
+              },
+              "widthCoverage": 0.11803587353809562,
+              "heightCoverage": 0.5033501603230396,
+              "areaCoverage": 0.05941337586927046,
+              "centerX": 0.18753000332471853,
+              "centerY": 0.4997665735933924,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.11803587353809562,
+                "heightCoverage": 0.5033501603230396,
+                "areaCoverage": 0.05941337586927046,
+                "centerX": 0.18753000332471853,
+                "centerY": 0.4997665735933924,
+                "pixels": {
+                  "left": 493.48633557377553,
+                  "top": 535.8776258128447,
+                  "right": 946.7440899600628,
+                  "bottom": 1623.1139721106103
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.11803587353809562,
+                "heightCoverage": 0.5033501603230396,
+                "areaCoverage": 0.05941337586927046,
+                "centerX": 0.18753000332471853,
+                "centerY": 0.4997665735933924,
+                "pixels": {
+                  "left": 493.48633557377553,
+                  "top": 535.8776258128447,
+                  "right": 946.7440899600628,
+                  "bottom": 1623.1139721106103
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": -0.7429758668886586,
+                "maxX": -0.5126520001228994,
+                "minY": 0.3081995678956562,
+                "maxY": 0.5038170131362548
+              },
+              "pixels": {
+                "left": 493.48633557377553,
+                "top": 535.8776258128447,
+                "right": 935.7081597640332,
+                "bottom": 747.1444666726914
+              },
+              "widthCoverage": 0.1151619333828796,
+              "heightCoverage": 0.09780872262029937,
+              "areaCoverage": 0.011263841598663464,
+              "centerX": 0.18609303324711052,
+              "centerY": 0.2969958547420223,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.1151619333828796,
+                "heightCoverage": 0.09780872262029937,
+                "areaCoverage": 0.011263841598663464,
+                "centerX": 0.18609303324711052,
+                "centerY": 0.2969958547420223,
+                "pixels": {
+                  "left": 493.48633557377553,
+                  "top": 535.8776258128447,
+                  "right": 935.7081597640332,
+                  "bottom": 747.1444666726914
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.1151619333828796,
+                "heightCoverage": 0.09780872262029937,
+                "areaCoverage": 0.011263841598663464,
+                "centerX": 0.18609303324711052,
+                "centerY": 0.2969958547420223,
+                "pixels": {
+                  "left": 493.48633557377553,
+                  "top": 535.8776258128447,
+                  "right": 935.7081597640332,
+                  "bottom": 747.1444666726914
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": 0.19269017590986942,
+                "y": 0.73637220871305,
+                "inFrame": true
+              },
+              "knees": {
+                "x": 0.19145863890582487,
+                "y": 0.6030862484993644,
+                "inFrame": true
+              },
+              "waist": {
+                "x": 0.19026170088225047,
+                "y": 0.47354484351969894,
+                "inFrame": true
+              },
+              "chest": {
+                "x": 0.1895927138887698,
+                "y": 0.4011421682418196,
+                "inFrame": true
+              },
+              "shoulders": {
+                "x": 0.18905544002393598,
+                "y": 0.34299445303967335,
+                "inFrame": true
+              },
+              "chin": {
+                "x": 0.18878610502500937,
+                "y": 0.3138450455649535,
+                "inFrame": true
+              },
+              "eyes": {
+                "x": 0.18851630303460215,
+                "y": 0.2846450968497374,
+                "inFrame": true
+              },
+              "headTop": {
+                "x": 0.18824603283710767,
+                "y": 0.2553944753321692,
+                "inFrame": true
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          },
+          "blair": {
+            "bounds": {
+              "ndc": {
+                "minX": 0.5152052560550372,
+                "maxX": 0.7500669898255697,
+                "minY": -0.5116580036721803,
+                "maxY": 0.4666835862334105
+              },
+              "pixels": {
+                "left": 2909.1940916256713,
+                "top": 575.9817268679167,
+                "right": 3360.128620465094,
+                "bottom": 1632.5906439659548
+              },
+              "widthCoverage": 0.11743086688526638,
+              "heightCoverage": 0.4891707949527954,
+              "areaCoverage": 0.05744375050626165,
+              "centerX": 0.8163180614701517,
+              "centerY": 0.5112436043596925,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.11743086688526638,
+                "heightCoverage": 0.4891707949527954,
+                "areaCoverage": 0.05744375050626165,
+                "centerX": 0.8163180614701517,
+                "centerY": 0.5112436043596925,
+                "pixels": {
+                  "left": 2909.1940916256713,
+                  "top": 575.9817268679167,
+                  "right": 3360.128620465094,
+                  "bottom": 1632.5906439659548
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.11743086688526638,
+                "heightCoverage": 0.4891707949527954,
+                "areaCoverage": 0.05744375050626165,
+                "centerX": 0.8163180614701517,
+                "centerY": 0.5112436043596925,
+                "pixels": {
+                  "left": 2909.1940916256713,
+                  "top": 575.9817268679167,
+                  "right": 3360.128620465094,
+                  "bottom": 1632.5906439659548
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": 0.5208686041289246,
+                "maxX": 0.7500669898255697,
+                "minY": 0.2789208533618158,
+                "maxY": 0.4666835862334105
+              },
+              "pixels": {
+                "left": 2920.067719927535,
+                "top": 575.9817268679167,
+                "right": 3360.128620465094,
+                "bottom": 778.7654783692391
+              },
+              "widthCoverage": 0.11459919284832268,
+              "heightCoverage": 0.0938813664357974,
+              "areaCoverage": 0.010758728817039995,
+              "centerX": 0.8177338984886237,
+              "centerY": 0.31359889010119346,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.11459919284832268,
+                "heightCoverage": 0.0938813664357974,
+                "areaCoverage": 0.010758728817039995,
+                "centerX": 0.8177338984886237,
+                "centerY": 0.31359889010119346,
+                "pixels": {
+                  "left": 2920.067719927535,
+                  "top": 575.9817268679167,
+                  "right": 3360.128620465094,
+                  "bottom": 778.7654783692391
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.11459919284832268,
+                "heightCoverage": 0.0938813664357974,
+                "areaCoverage": 0.010758728817039995,
+                "centerX": 0.8177338984886237,
+                "centerY": 0.31359889010119346,
+                "pixels": {
+                  "left": 2920.067719927535,
+                  "top": 575.9817268679167,
+                  "right": 3360.128620465094,
+                  "bottom": 778.7654783692391
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": 0.8110907649682735,
+                "y": 0.7403776668283054,
+                "inFrame": true
+              },
+              "knees": {
+                "x": 0.8123021745115531,
+                "y": 0.6108791037478952,
+                "inFrame": true
+              },
+              "waist": {
+                "x": 0.8134792883265433,
+                "y": 0.4850467223959655,
+                "inFrame": true
+              },
+              "chest": {
+                "x": 0.8141370826929857,
+                "y": 0.41472911120554634,
+                "inFrame": true
+              },
+              "shoulders": {
+                "x": 0.8146653091510192,
+                "y": 0.3582621899435693,
+                "inFrame": true
+              },
+              "chin": {
+                "x": 0.8149300891064303,
+                "y": 0.3299574568758402,
+                "inFrame": true
+              },
+              "eyes": {
+                "x": 0.8151953150434366,
+                "y": 0.30160504878683314,
+                "inFrame": true
+              },
+              "headTop": {
+                "x": 0.8154609880897703,
+                "y": 0.2732048451230291,
+                "inFrame": true
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          }
+        },
+        "blockers": [
+          {
+            "objectId": "obj_msc3el3q_qzpedw",
+            "projectedArea": 0.43881882662642985,
+            "nearCamera": false
+          }
+        ]
+      }
+    },
+    {
+      "shotNumber": "020",
+      "status": "passed",
+      "template": "medium",
+      "issues": [],
+      "telemetry": {
+        "shotId": "shot_msc3elgw_z1agso",
+        "shotNumber": "020",
+        "frameWidth": 3840,
+        "frameHeight": 2160,
+        "subjects": {
+          "alex": {
+            "bounds": {
+              "ndc": {
+                "minX": -0.28328372447801037,
+                "maxX": 0.2986183890652926,
+                "minY": -2.1028398161830935,
+                "maxY": 0.6191213692538368
+              },
+              "pixels": {
+                "left": 1376.09524900222,
+                "top": 411.3489212058564,
+                "right": 2493.347307005362,
+                "bottom": 2160
+              },
+              "widthCoverage": 0.2909510567716515,
+              "heightCoverage": 0.8095606846269183,
+              "areaCoverage": 0.23554253671298359,
+              "centerX": 0.5038336661468206,
+              "centerY": 0.5952196576865408,
+              "clipped": true,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.2909510567716515,
+                "heightCoverage": 1.3609805927184653,
+                "areaCoverage": 0.3959787416971461,
+                "centerX": 0.5038336661468206,
+                "centerY": 0.8709296117323142,
+                "pixels": {
+                  "left": 1376.09524900222,
+                  "top": 411.3489212058564,
+                  "right": 2493.347307005362,
+                  "bottom": 3351.067001477741
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.2909510567716515,
+                "heightCoverage": 0.8095606846269183,
+                "areaCoverage": 0.23554253671298359,
+                "centerX": 0.5038336661468206,
+                "centerY": 0.5952196576865408,
+                "pixels": {
+                  "left": 1376.09524900222,
+                  "top": 411.3489212058564,
+                  "right": 2493.347307005362,
+                  "bottom": 2160
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": -0.28328372447801037,
+                "maxX": 0.2986183890652926,
+                "minY": 0.11650404094629292,
+                "maxY": 0.6191213692538368
+              },
+              "pixels": {
+                "left": 1376.09524900222,
+                "top": 411.3489212058564,
+                "right": 2493.347307005362,
+                "bottom": 954.1756357780037
+              },
+              "widthCoverage": 0.2909510567716515,
+              "heightCoverage": 0.25130866415377184,
+              "areaCoverage": 0.07311852141141198,
+              "centerX": 0.5038336661468206,
+              "centerY": 0.3160936474499676,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.2909510567716515,
+                "heightCoverage": 0.25130866415377184,
+                "areaCoverage": 0.07311852141141198,
+                "centerX": 0.5038336661468206,
+                "centerY": 0.3160936474499676,
+                "pixels": {
+                  "left": 1376.09524900222,
+                  "top": 411.3489212058564,
+                  "right": 2493.347307005362,
+                  "bottom": 954.1756357780037
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.2909510567716515,
+                "heightCoverage": 0.25130866415377184,
+                "areaCoverage": 0.07311852141141198,
+                "centerX": 0.5038336661468206,
+                "centerY": 0.3160936474499676,
+                "pixels": {
+                  "left": 1376.09524900222,
+                  "top": 411.3489212058564,
+                  "right": 2493.347307005362,
+                  "bottom": 954.1756357780037
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": 0.5,
+                "y": 1.3896065241256603,
+                "inFrame": false
+              },
+              "knees": {
+                "x": 0.5,
+                "y": 1.069484436153948,
+                "inFrame": false
+              },
+              "waist": {
+                "x": 0.5,
+                "y": 0.7571636010139985,
+                "inFrame": true
+              },
+              "chest": {
+                "x": 0.5,
+                "y": 0.5820881696702845,
+                "inFrame": true
+              },
+              "shoulders": {
+                "x": 0.5,
+                "y": 0.44121421163427155,
+                "inFrame": true
+              },
+              "chin": {
+                "x": 0.5,
+                "y": 0.3705041002807974,
+                "inFrame": true
+              },
+              "eyes": {
+                "x": 0.5,
+                "y": 0.2996109580444831,
+                "inFrame": true
+              },
+              "headTop": {
+                "x": 0.5,
+                "y": 0.2285340733499217,
+                "inFrame": true
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          },
+          "blair": {
+            "bounds": {
+              "ndc": {
+                "minX": 0,
+                "maxX": 0,
+                "minY": 0,
+                "maxY": 0
+              },
+              "pixels": {
+                "left": 0,
+                "top": 0,
+                "right": 0,
+                "bottom": 0
+              },
+              "widthCoverage": 0,
+              "heightCoverage": 0,
+              "areaCoverage": 0,
+              "centerX": 0.5,
+              "centerY": 0.5,
+              "clipped": true,
+              "behindCamera": true,
+              "unclipped": {
+                "widthCoverage": 0,
+                "heightCoverage": 0,
+                "areaCoverage": 0,
+                "centerX": 0.5,
+                "centerY": 0.5,
+                "pixels": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0
+                }
+              },
+              "visible": {
+                "widthCoverage": 0,
+                "heightCoverage": 0,
+                "areaCoverage": 0,
+                "centerX": 0.5,
+                "centerY": 0.5,
+                "pixels": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 0,
+                  "bottom": 0
+                }
+              }
+            },
+            "visible": false
+          }
+        },
+        "blockers": [
+          {
+            "objectId": "obj_msc3el3q_qzpedw",
+            "projectedArea": 0.4381815262929065,
+            "nearCamera": false
+          }
+        ]
+      }
+    },
+    {
+      "shotNumber": "030",
+      "status": "passed",
+      "template": "over_the_shoulder",
+      "issues": [],
+      "telemetry": {
+        "shotId": "shot_msc3elgw_lxnz0x",
+        "shotNumber": "030",
+        "frameWidth": 3840,
+        "frameHeight": 2160,
+        "subjects": {
+          "alex": {
+            "bounds": {
+              "ndc": {
+                "minX": -0.42133726257956333,
+                "maxX": 0.39489293936708064,
+                "minY": -2.980508939506182,
+                "maxY": 0.9109708432990926
+              },
+              "pixels": {
+                "left": 1111.0324558472385,
+                "top": 96.15148923697998,
+                "right": 2678.1944435847945,
+                "bottom": 2160
+              },
+              "widthCoverage": 0.4081151009733219,
+              "heightCoverage": 0.9554854216495463,
+              "areaCoverage": 0.38994802933504163,
+              "centerX": 0.49338891919687927,
+              "centerY": 0.5222572891752268,
+              "clipped": true,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.4081151009733219,
+                "heightCoverage": 1.9457398914026376,
+                "areaCoverage": 0.7940858322476078,
+                "centerX": 0.49338891919687927,
+                "centerY": 1.0173845240517723,
+                "pixels": {
+                  "left": 1111.0324558472385,
+                  "top": 96.15148923697998,
+                  "right": 2678.1944435847945,
+                  "bottom": 4298.949654666677
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.4081151009733219,
+                "heightCoverage": 0.9554854216495463,
+                "areaCoverage": 0.38994802933504163,
+                "centerX": 0.49338891919687927,
+                "centerY": 0.5222572891752268,
+                "pixels": {
+                  "left": 1111.0324558472385,
+                  "top": 96.15148923697998,
+                  "right": 2678.1944435847945,
+                  "bottom": 2160
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": -0.42133726257956333,
+                "maxX": 0.39489293936708064,
+                "minY": 0.159406727751175,
+                "maxY": 0.9109708432990926
+              },
+              "pixels": {
+                "left": 1111.0324558472385,
+                "top": 96.15148923697998,
+                "right": 2678.1944435847945,
+                "bottom": 907.8407340287309
+              },
+              "widthCoverage": 0.4081151009733219,
+              "heightCoverage": 0.3757820577739588,
+              "areaCoverage": 0.15336233245238187,
+              "centerX": 0.49338891919687927,
+              "centerY": 0.2324056072374331,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.4081151009733219,
+                "heightCoverage": 0.3757820577739588,
+                "areaCoverage": 0.15336233245238187,
+                "centerX": 0.49338891919687927,
+                "centerY": 0.2324056072374331,
+                "pixels": {
+                  "left": 1111.0324558472385,
+                  "top": 96.15148923697998,
+                  "right": 2678.1944435847945,
+                  "bottom": 907.8407340287309
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.4081151009733219,
+                "heightCoverage": 0.3757820577739588,
+                "areaCoverage": 0.15336233245238187,
+                "centerX": 0.49338891919687927,
+                "centerY": 0.2324056072374331,
+                "pixels": {
+                  "left": 1111.0324558472385,
+                  "top": 96.15148923697998,
+                  "right": 2678.1944435847945,
+                  "bottom": 907.8407340287309
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": 0.5000000000000001,
+                "y": 1.674136489737539,
+                "inFrame": false
+              },
+              "knees": {
+                "x": 0.5000000000000001,
+                "y": 1.2583159130924266,
+                "inFrame": false
+              },
+              "waist": {
+                "x": 0.5000000000000001,
+                "y": 0.8420681403811081,
+                "inFrame": true
+              },
+              "chest": {
+                "x": 0.5000000000000001,
+                "y": 0.6040202145213007,
+                "inFrame": true
+              },
+              "shoulders": {
+                "x": 0.5000000000000001,
+                "y": 0.4099518570039219,
+                "inFrame": true
+              },
+              "chin": {
+                "x": 0.5000000000000001,
+                "y": 0.31167936293143994,
+                "inFrame": true
+              },
+              "eyes": {
+                "x": 0.5000000000000001,
+                "y": 0.21256721825337122,
+                "inFrame": true
+              },
+              "headTop": {
+                "x": 0.5000000000000001,
+                "y": 0.11260461570485003,
+                "inFrame": true
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          },
+          "blair": {
+            "bounds": {
+              "ndc": {
+                "minX": -2.6134828162511434,
+                "maxX": -0.5961009879388737,
+                "minY": -8.067670572923147,
+                "maxY": 1.693652305127562
+              },
+              "pixels": {
+                "left": 0,
+                "top": 0,
+                "right": 775.4861031573625,
+                "bottom": 2160
+              },
+              "widthCoverage": 0.20194950603056316,
+              "heightCoverage": 1,
+              "areaCoverage": 0.20194950603056316,
+              "centerX": 0.10097475301528158,
+              "centerY": 0.5,
+              "clipped": true,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 1.0086909141561349,
+                "heightCoverage": 4.880661439025354,
+                "areaCoverage": 4.923078848617081,
+                "centerX": -0.3023959510475043,
+                "centerY": 2.093504566948896,
+                "pixels": {
+                  "left": -3097.8870072021955,
+                  "top": -749.144489537767,
+                  "right": 775.4861031573625,
+                  "bottom": 9793.084218756998
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.20194950603056316,
+                "heightCoverage": 1,
+                "areaCoverage": 0.20194950603056316,
+                "centerX": 0.10097475301528158,
+                "centerY": 0.5,
+                "pixels": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 775.4861031573625,
+                  "bottom": 2160
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": -2.6134828162511434,
+                "maxX": -0.6605349613655375,
+                "minY": -0.4175228703034167,
+                "maxY": 1.693652305127562
+              },
+              "pixels": {
+                "left": 0,
+                "top": 0,
+                "right": 651.7728741781681,
+                "bottom": 1530.9246999276902
+              },
+              "widthCoverage": 0.16973251931723127,
+              "heightCoverage": 0.7087614351517084,
+              "areaCoverage": 0.1202998639831959,
+              "centerX": 0.08486625965861563,
+              "centerY": 0.3543807175758542,
+              "clipped": true,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.976473927442803,
+                "heightCoverage": 1.0555875877154894,
+                "areaCoverage": 1.0307537575364183,
+                "centerX": -0.31850444440417025,
+                "centerY": 0.18096764129396373,
+                "pixels": {
+                  "left": -3097.8870072021955,
+                  "top": -749.144489537767,
+                  "right": 651.7728741781681,
+                  "bottom": 1530.9246999276902
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.16973251931723127,
+                "heightCoverage": 0.7087614351517084,
+                "areaCoverage": 0.1202998639831959,
+                "centerX": 0.08486625965861563,
+                "centerY": 0.3543807175758542,
+                "pixels": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 651.7728741781681,
+                  "bottom": 1530.9246999276902
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": -0.19004599510471076,
+                "y": 2.935499661633088,
+                "inFrame": false
+              },
+              "knees": {
+                "x": -0.21528890245656884,
+                "y": 2.1827880373175645,
+                "inFrame": false
+              },
+              "waist": {
+                "x": -0.24144331815760367,
+                "y": 1.4028963849441622,
+                "inFrame": false
+              },
+              "chest": {
+                "x": -0.2568171452445137,
+                "y": 0.9444682729508617,
+                "inFrame": false
+              },
+              "shoulders": {
+                "x": -0.269582987749742,
+                "y": 0.5638069682157258,
+                "inFrame": false
+              },
+              "chin": {
+                "x": -0.27612878143973096,
+                "y": 0.3686196654162579,
+                "inFrame": false
+              },
+              "eyes": {
+                "x": -0.2827868826695503,
+                "y": 0.17008349358398966,
+                "inFrame": false
+              },
+              "headTop": {
+                "x": -0.2895602067743321,
+                "y": -0.03188847889367663,
+                "inFrame": false
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          }
+        },
+        "blockers": []
+      }
+    },
+    {
+      "shotNumber": "040",
+      "status": "passed",
+      "template": "close_up",
+      "issues": [],
+      "telemetry": {
+        "shotId": "shot_msc3elgw_20fydn",
+        "shotNumber": "040",
+        "frameWidth": 3840,
+        "frameHeight": 2160,
+        "subjects": {
+          "alex": {
+            "bounds": {
+              "ndc": {
+                "minX": -0.93056386471386,
+                "maxX": 0.9996029827985957,
+                "minY": -7.988045201253736,
+                "maxY": 0.8046869334636759
+              },
+              "pixels": {
+                "left": 133.3173797493888,
+                "top": 210.93811185923,
+                "right": 3839.237726973304,
+                "bottom": 2160
+              },
+              "widthCoverage": 0.9650834237562279,
+              "heightCoverage": 0.902343466731838,
+              "areaCoverage": 0.8708367222776261,
+              "centerX": 0.517259779521184,
+              "centerY": 0.548828266634081,
+              "clipped": true,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.9650834237562279,
+                "heightCoverage": 4.396366067358706,
+                "areaCoverage": 4.242860016372243,
+                "centerX": 0.517259779521184,
+                "centerY": 2.295839566947515,
+                "pixels": {
+                  "left": 133.3173797493888,
+                  "top": 210.93811185923,
+                  "right": 3839.237726973304,
+                  "bottom": 9707.088817354035
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.9650834237562279,
+                "heightCoverage": 0.902343466731838,
+                "areaCoverage": 0.8708367222776261,
+                "centerX": 0.517259779521184,
+                "centerY": 0.548828266634081,
+                "pixels": {
+                  "left": 133.3173797493888,
+                  "top": 210.93811185923,
+                  "right": 3839.237726973304,
+                  "bottom": 2160
+                }
+              }
+            },
+            "upperBodyBounds": {
+              "ndc": {
+                "minX": -0.93056386471386,
+                "maxX": 0.9996029827985957,
+                "minY": -0.9957770422807635,
+                "maxY": 0.8046869334636759
+              },
+              "pixels": {
+                "left": 133.3173797493888,
+                "top": 210.93811185923,
+                "right": 3839.237726973304,
+                "bottom": 2155.4392056632246
+              },
+              "widthCoverage": 0.9650834237562279,
+              "heightCoverage": 0.9002319878722197,
+              "areaCoverage": 0.8687989690305968,
+              "centerX": 0.517259779521184,
+              "centerY": 0.5477725272042719,
+              "clipped": false,
+              "behindCamera": false,
+              "unclipped": {
+                "widthCoverage": 0.9650834237562279,
+                "heightCoverage": 0.9002319878722197,
+                "areaCoverage": 0.8687989690305968,
+                "centerX": 0.517259779521184,
+                "centerY": 0.5477725272042719,
+                "pixels": {
+                  "left": 133.3173797493888,
+                  "top": 210.93811185923,
+                  "right": 3839.237726973304,
+                  "bottom": 2155.4392056632246
+                }
+              },
+              "visible": {
+                "widthCoverage": 0.9650834237562279,
+                "heightCoverage": 0.9002319878722197,
+                "areaCoverage": 0.8687989690305968,
+                "centerX": 0.517259779521184,
+                "centerY": 0.5477725272042719,
+                "pixels": {
+                  "left": 133.3173797493888,
+                  "top": 210.93811185923,
+                  "right": 3839.237726973304,
+                  "bottom": 2155.4392056632246
+                }
+              }
+            },
+            "landmarks": {
+              "feet": {
+                "x": 0.5,
+                "y": 3.6736674035863417,
+                "inFrame": false
+              },
+              "knees": {
+                "x": 0.5,
+                "y": 2.7451657237672316,
+                "inFrame": false
+              },
+              "waist": {
+                "x": 0.5,
+                "y": 1.8012134661053811,
+                "inFrame": false
+              },
+              "chest": {
+                "x": 0.5,
+                "y": 1.2547260578758475,
+                "inFrame": false
+              },
+              "shoulders": {
+                "x": 0.5,
+                "y": 0.8055645114449319,
+                "inFrame": true
+              },
+              "chin": {
+                "x": 0.5,
+                "y": 0.5768588242251573,
+                "inFrame": true
+              },
+              "eyes": {
+                "x": 0.5,
+                "y": 0.3453354345856706,
+                "inFrame": true
+              },
+              "headTop": {
+                "x": 0.5,
+                "y": 0.11094194773471688,
+                "inFrame": true
+              }
+            },
+            "visible": true,
+            "occlusionRatio": 0,
+            "faceOccluded": false
+          }
+        },
+        "blockers": []
+      }
+    }
+  ],
+  "generatedAt": "2026-08-02T17:47:15.950Z"
+}

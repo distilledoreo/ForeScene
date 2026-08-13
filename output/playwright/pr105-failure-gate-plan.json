@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "mode": "existing-project-refinement",
+  "preserve": {
+    "project": true,
+    "shots": true,
+    "panoramas": true,
+    "environmentObjects": true,
+    "cameras": true,
+    "timelines": true
+  },
+  "characterImports": [],
+  "modelImports": [],
+  "proxyReplacements": [],
+  "batches": [
+    { "id": "batch-01", "shots": ["010"] },
+    { "id": "batch-02", "shots": ["020"] }
+  ],
+  "deliverablesProfile": "ai-control-full"
+}

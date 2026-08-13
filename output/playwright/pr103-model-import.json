@@ -1,0 +1,60 @@
+{
+  "ok": true,
+  "objectRefs": [
+    {
+      "kind": "object",
+      "id": "obj_msc2thjj_pirx2k",
+      "name": "ReplacementTriangle"
+    }
+  ],
+  "summary": {
+    "sourceName": "proxy-replacement.obj",
+    "sourceFormat": "obj",
+    "mode": "separate",
+    "totalObjects": 1,
+    "totalVertices": 3,
+    "totalTriangles": 1,
+    "sourceNodeCount": 1,
+    "combined": false
+  },
+  "importBudget": {
+    "sourceFilename": "proxy-replacement.obj",
+    "fileSize": 54,
+    "instancesExpanded": false,
+    "topMeshes": [
+      {
+        "name": "ReplacementTriangle",
+        "path": "Group[0]/ReplacementTriangle[0]",
+        "vertices": 3,
+        "triangles": 1
+      }
+    ],
+    "warnings": [],
+    "loadedVertexCount": 3,
+    "triangleCount": 1,
+    "meshNodeCount": 1,
+    "instanceCount": 1,
+    "expandedInstanceCount": 0,
+    "uniquePositionBytes": 90,
+    "uniqueIndexBytes": 12,
+    "outputPositionBytes": 36,
+    "outputIndexBytes": 12,
+    "mode": "separate",
+    "normalBytes": 36,
+    "transformationBytes": 36,
+    "combinedTemporaryBytes": 0,
+    "packedBytes": 124,
+    "base64Bytes": 0,
+    "gpuBytes": 84,
+    "projectStorageBytes": 1404,
+    "estimatedPeakHeapBytes": 262,
+    "safetyBudgetBytes": 1610612736,
+    "tier": "standard",
+    "exceeded": []
+  },
+  "verifiedRevisionId": "475a6098-0c05-4600-aa69-b0874fe71ff3",
+  "warnings": [
+    "Removed 1 material and 0 texture references for graybox rendering.",
+    "This format has no reliable unit metadata; 1 source unit is treated as 1 meter."
+  ]
+}

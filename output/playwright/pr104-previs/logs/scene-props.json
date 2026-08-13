@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "planId": "previs-props-Minimal Dialogue",
+  "verifiedRevisionId": "919e171a-b9a2-469b-93f6-93a72f9ddbb4",
+  "summary": {
+    "commandCount": 2,
+    "affectedObjectIds": [
+      "obj_msc3elax_vez5vf"
+    ],
+    "affectedShotIds": [],
+    "affectedLandmarkIds": [],
+    "createdRefs": {
+      "prop_table": {
+        "kind": "object",
+        "id": "obj_msc3elax_vez5vf",
+        "ref": "prop_table",
+        "name": "Table"
+      }
+    },
+    "description": "Previs props for Minimal Dialogue"
+  },
+  "diagnostics": []
+}

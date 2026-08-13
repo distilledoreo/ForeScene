@@ -111,12 +111,17 @@ async function main() {
       });
       if (invocation.code !== 0 || invocation.envelope?.ok !== true) {
         await operation.fail(invocation.envelope?.error?.message ?? 'Saved-rig import failed.');
+        const lastHeartbeat = invocation.heartbeats.at(-1);
         printJson(context, {
           ok: false,
           completed: index,
           failedAt: index + 1,
           retries: 0,
           realAsset,
+          operation: invocation.envelope?.operation ?? lastHeartbeat?.type ?? 'character.import',
+          elapsedMs: invocation.durationMs,
+          timedOut: invocation.timedOut,
+          heartbeat: lastHeartbeat ?? null,
           error: invocation.envelope?.error?.message ?? invocation.stderr.slice(-400),
           runs,
         });
@@ -134,7 +139,9 @@ async function main() {
         poseable: result.poseable,
         appliedSavedRig: result.appliedSavedRig,
         durationMs: envelope.durationMs,
+        cliDurationMs: invocation.durationMs,
         heartbeats: invocation.heartbeats.length,
+        lastHeartbeat: invocation.heartbeats.at(-1) ?? null,
         retries: 0,
       });
     }

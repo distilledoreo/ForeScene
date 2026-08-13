@@ -1,0 +1,123 @@
+{
+  "applied": {
+    "ok": true,
+    "planId": "previs-shots-010-040",
+    "verifiedRevisionId": "6835f8a6-5717-4354-bd68-3cecdf4bdc30",
+    "summary": {
+      "commandCount": 25,
+      "affectedObjectIds": [],
+      "affectedShotIds": [
+        "shot_msc3elgv_srp99n",
+        "shot_msc3elgw_z1agso",
+        "shot_msc3elgw_lxnz0x",
+        "shot_msc3elgw_20fydn"
+      ],
+      "affectedLandmarkIds": [],
+      "createdRefs": {
+        "shot_010": {
+          "kind": "shot",
+          "id": "shot_msc3elgv_srp99n",
+          "ref": "shot_010",
+          "name": "Wide two-shot"
+        },
+        "shot_020": {
+          "kind": "shot",
+          "id": "shot_msc3elgw_z1agso",
+          "ref": "shot_020",
+          "name": "Alex medium"
+        },
+        "shot_030": {
+          "kind": "shot",
+          "id": "shot_msc3elgw_lxnz0x",
+          "ref": "shot_030",
+          "name": "Blair OTS"
+        },
+        "shot_040": {
+          "kind": "shot",
+          "id": "shot_msc3elgw_20fydn",
+          "ref": "shot_040",
+          "name": "Alex close-up"
+        }
+      },
+      "description": "Previs shots 010–040"
+    },
+    "diagnostics": []
+  },
+  "shotResults": {
+    "010": {
+      "ok": true,
+      "warnings": [
+        "wall_hidden_for_camera"
+      ],
+      "camera": {
+        "position": [
+          0.12,
+          1.19,
+          6.233499999999999
+        ],
+        "target": [
+          0,
+          0.8682885898121944,
+          0
+        ],
+        "fovDegrees": 32.26880217111643
+      }
+    },
+    "020": {
+      "ok": true,
+      "warnings": [
+        "Hiding 1 wall(s) for camera clarity.",
+        "wall_hidden_for_camera"
+      ],
+      "camera": {
+        "position": [
+          1.3597035965501554,
+          1.4,
+          0.9520747080352726
+        ],
+        "target": [
+          0,
+          1.3475,
+          0
+        ],
+        "fovDegrees": 32.26880217111643
+      }
+    },
+    "030": {
+      "ok": true,
+      "warnings": [
+        "wall_hidden_for_camera"
+      ],
+      "camera": {
+        "position": [
+          1.0975,
+          1.4776,
+          1.5
+        ],
+        "target": [
+          0,
+          1.3379999999999999,
+          0
+        ],
+        "fovDegrees": 32.26880217111643
+      }
+    },
+    "040": {
+      "ok": true,
+      "warnings": [],
+      "camera": {
+        "position": [
+          1.5434189767811757,
+          1.785,
+          1.080713602158096
+        ],
+        "target": [
+          0,
+          1.575,
+          0
+        ],
+        "fovDegrees": 13.585861564471855
+      }
+    }
+  }
+}

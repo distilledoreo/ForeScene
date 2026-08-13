@@ -1,3 +1,5 @@
+import { once } from 'node:events';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractAgentOpHeartbeats,
   parseAgentOpHeartbeatLine,
+  terminateProcessTree,
 } from '../scripts/agent/runDocumentedCli';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,5 +47,35 @@ describe('Agent CLI live operation reliability contract', () => {
     expect(beats).toHaveLength(2);
     expect(beats[1]?.heartbeatCount).toBe(2);
     expect(parseAgentOpHeartbeatLine('{ "ok": true }')).toBeUndefined();
+  });
+
+  it.runIf(process.platform === 'win32')('terminates a timed-out CLI process tree', async () => {
+    const rootChild = spawn(process.execPath, [
+      '-e',
+      'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); console.log(child.pid); setInterval(()=>{},1000);',
+    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let grandchildPid: number | undefined;
+    const pidReady = new Promise<void>((resolve) => {
+      rootChild.stdout?.on('data', (chunk) => {
+        const parsed = Number(String(chunk).trim());
+        if (Number.isInteger(parsed) && parsed > 0) {
+          grandchildPid = parsed;
+          resolve();
+        }
+      });
+    });
+    try {
+      await Promise.race([
+        pidReady,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('child pid was not reported')), 5_000)),
+      ]);
+      terminateProcessTree(rootChild);
+      await once(rootChild, 'close');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(grandchildPid).toBeDefined();
+      expect(() => process.kill(grandchildPid!, 0)).toThrow();
+    } finally {
+      if (rootChild.exitCode === null) terminateProcessTree(rootChild);
+    }
   });
 });

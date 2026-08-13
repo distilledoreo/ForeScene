@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "code": "shot_compile_warning",
+      "message": "wall_hidden_for_camera",
+      "severity": "warning",
+      "entityId": "s010"
+    },
+    {
+      "code": "shot_compile_warning",
+      "message": "Hiding 1 wall(s) for camera clarity.",
+      "severity": "warning",
+      "entityId": "s020"
+    },
+    {
+      "code": "shot_compile_warning",
+      "message": "wall_hidden_for_camera",
+      "severity": "warning",
+      "entityId": "s020"
+    },
+    {
+      "code": "shot_compile_warning",
+      "message": "wall_hidden_for_camera",
+      "severity": "warning",
+      "entityId": "s030"
+    }
+  ],
+  "locationCommands": 12,
+  "castCommands": 4,
+  "propCommands": 2,
+  "shotBatches": 1
+}

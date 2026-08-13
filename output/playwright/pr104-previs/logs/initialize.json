@@ -1,0 +1,51 @@
+{
+  "reset": {
+    "ok": true,
+    "planId": "reset-project_msc3e45g_s5dyfz",
+    "verifiedRevisionId": "4248b6e0-02be-46a1-a642-b6331d4f1665",
+    "projectId": "project_msc3e45g_s5dyfz",
+    "summary": {
+      "commandCount": 1,
+      "affectedObjectIds": [
+        "obj_msc3e45f_uxblxf",
+        "obj_msc3e45f_hflohb"
+      ],
+      "affectedShotIds": [
+        "shot_msc3e45g_duqvh2"
+      ],
+      "affectedLandmarkIds": [
+        "landmark_msc3e45g_z4yjft"
+      ],
+      "createdRefs": {},
+      "description": "Reset project to blank graybox: Minimal Dialogue"
+    },
+    "diagnostics": []
+  },
+  "status": {
+    "ready": true,
+    "apiVersion": 1,
+    "controlMode": "read-write",
+    "writeAccess": true,
+    "projectLoaded": true,
+    "projectId": "project_msc3e3z8_qa28rb",
+    "projectName": "Untitled Production",
+    "workspace": "build",
+    "revisionId": "cf48d4c2-821f-4568-a58f-4e68b60eccc2",
+    "projectUpdatedAt": "2026-08-02T17:46:46.820Z",
+    "appMode": "studio",
+    "busy": {
+      "criticalWrite": false,
+      "grayboxRender": false,
+      "packageExport": false,
+      "videoRender": false,
+      "characterImport": false
+    },
+    "persistence": {
+      "ready": true,
+      "status": "saved",
+      "message": "Saved locally and ready for recovery.",
+      "lastSavedAt": "2026-08-02T17:46:46.934Z",
+      "activeRevisionId": "cf48d4c2-821f-4568-a58f-4e68b60eccc2"
+    }
+  }
+}

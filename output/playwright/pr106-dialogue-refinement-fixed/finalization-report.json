@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "preservation": {
+    "ok": true,
+    "errors": [],
+    "missing": {
+      "shots": [],
+      "panoramas": [],
+      "environmentObjects": []
+    }
+  },
+  "exportPlanPath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement-fixed\\final-export-plan.json",
+  "packagePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement-fixed\\final-package.zip",
+  "verification": {
+    "ok": true,
+    "expectedEntryCount": 80,
+    "actualEntryCount": 80,
+    "missing": []
+  }
+}

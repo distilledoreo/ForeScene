@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "planFingerprint": "{\"version\":1,\"mode\":\"existing-project-refinement\",\"preserve\":{\"project\":true,\"shots\":true,\"panoramas\":true,\"environmentObjects\":true,\"cameras\":true,\"timelines\":true},\"characterImports\":[],\"modelImports\":[],\"proxyReplacements\":[],\"batches\":[{\"id\":\"batch-01\",\"shots\":[\"010\"]},{\"id\":\"batch-02\",\"shots\":[\"020\"]}],\"deliverablesProfile\":\"ai-control-full\"}",
+  "preservation": {
+    "projectId": "project_msc3e45g_s5dyfz",
+    "shotIds": [
+      "shot_msc3elgv_srp99n",
+      "shot_msc3elgw_z1agso",
+      "shot_msc3elgw_lxnz0x",
+      "shot_msc3elgw_20fydn"
+    ],
+    "panoIds": [],
+    "environmentObjectIds": [
+      "obj_msc3e45f_uxblxf",
+      "obj_msc3e45f_hflohb",
+      "obj_msc3el3q_hvxrpl",
+      "obj_msc3el3q_qzpedw",
+      "obj_msc3el3q_we36ob",
+      "obj_msc3el3q_8kdvl2",
+      "obj_msc3el3q_6m5w1r",
+      "obj_msc3el5i_m7xcyz",
+      "obj_msc3el5j_m52zla",
+      "obj_msc3elax_vez5vf"
+    ],
+    "cameras": {
+      "shot_msc3elgv_srp99n": {
+        "position": [
+          0.12,
+          1.19,
+          6.233499999999999
+        ],
+        "target": [
+          0,
+          0.8682885898121944,
+          0
+        ],
+        "fovDegrees": 32.26880217111643,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.05,
+        "far": 500
+      },
+      "shot_msc3elgw_z1agso": {
+        "position": [
+          2.1075405746527407,
+          1.428875,
+          1.4757157974546726
+        ],
+        "target": [
+          0,
+          1.3475,
+          0
+        ],
+        "fovDegrees": 32.26880217111643,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.05,
+        "far": 500
+      },
+      "shot_msc3elgw_lxnz0x": {
+        "position": [
+          1.0975,
+          1.4776,
+          1.5
+        ],
+        "target": [
+          0,
+          1.3379999999999999,
+          0
+        ],
+        "fovDegrees": 32.26880217111643,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.05,
+        "far": 500
+      },
+      "shot_msc3elgw_20fydn": {
+        "position": [
+          1.5434189767811757,
+          1.785,
+          1.080713602158096
+        ],
+        "target": [
+          0,
+          1.575,
+          0
+        ],
+        "fovDegrees": 13.585861564471855,
+        "aspectRatio": 1.7777777777777777,
+        "near": 0.05,
+        "far": 500
+      }
+    },
+    "timelines": {
+      "shot_msc3elgv_srp99n": [],
+      "shot_msc3elgw_z1agso": [],
+      "shot_msc3elgw_lxnz0x": [],
+      "shot_msc3elgw_20fydn": []
+    }
+  },
+  "batches": {
+    "batch-01": {
+      "status": "failed",
+      "mutationCompletedAt": "2026-08-02T18:01:25.250Z",
+      "reviewManifestPath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\review-manifest.json",
+      "failure": "Review matrix or preservation verification failed."
+    },
+    "batch-02": {
+      "status": "pending"
+    }
+  },
+  "imports": {},
+  "replacements": []
+}

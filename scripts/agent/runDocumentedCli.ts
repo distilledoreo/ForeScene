@@ -4,7 +4,7 @@
  * as the public contract, and not custom glue scripts.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { isAgentCliEnvelope, type AgentCliEnvelope } from './cliResult';
 import { resolveForeSceneRepoRoot } from './repoRoot';
 
@@ -18,6 +18,7 @@ export interface DocumentedCliInvocation {
   envelope?: AgentCliEnvelope;
   durationMs: number;
   heartbeats: AgentOpHeartbeat[];
+  timedOut: boolean;
 }
 
 export interface AgentOpHeartbeat {
@@ -182,6 +183,16 @@ function spawnNpm(argv: string[], cwd: string, env: NodeJS.ProcessEnv): ChildPro
     : spawn('npm', argv, { cwd, env });
 }
 
+export function terminateProcessTree(child: ChildProcess): void {
+  if (!child.pid || process.platform !== 'win32') return;
+  execFile(
+    'taskkill.exe',
+    ['/PID', String(child.pid), '/T', '/F'],
+    { windowsHide: true },
+    () => undefined,
+  );
+}
+
 export function startDocumentedAgentCommand(input: DocumentedCliRunInput): LiveDocumentedCliProcess {
   const prepared = buildSpawn(input);
   const started = Date.now();
@@ -190,6 +201,8 @@ export function startDocumentedAgentCommand(input: DocumentedCliRunInput): LiveD
   let stderr = '';
   const heartbeats: AgentOpHeartbeat[] = [];
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let treeTermination: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   let settled: DocumentedCliInvocation | undefined;
   let failure: Error | undefined;
   const waiters: Array<(invocation: DocumentedCliInvocation) => void> = [];
@@ -210,7 +223,16 @@ export function startDocumentedAgentCommand(input: DocumentedCliRunInput): LiveD
   };
 
   if (input.timeoutMs) {
-    timeout = setTimeout(() => interrupt(), input.timeoutMs);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      interrupt();
+      // SIGINT reaches only the npm wrapper on Windows. Give the CLI a short
+      // chance to close its browser context, then terminate that wrapper's
+      // complete process tree so Chromium cannot retain the profile lock.
+      treeTermination = setTimeout(() => {
+        if (!settled) terminateProcessTree(child);
+      }, 2_000);
+    }, input.timeoutMs);
   }
 
   child.on('error', (error) => {
@@ -220,6 +242,7 @@ export function startDocumentedAgentCommand(input: DocumentedCliRunInput): LiveD
   });
   child.on('close', (code) => {
     if (timeout) clearTimeout(timeout);
+    if (treeTermination) clearTimeout(treeTermination);
     settled = {
       command: input.command,
       npmScript: prepared.npmScript,
@@ -230,6 +253,7 @@ export function startDocumentedAgentCommand(input: DocumentedCliRunInput): LiveD
       envelope: extractAgentEnvelope(stdout),
       durationMs: Date.now() - started,
       heartbeats: heartbeats.length > 0 ? [...heartbeats] : extractAgentOpHeartbeats(stderr),
+      timedOut,
     };
     for (const resolve of waiters) resolve(settled);
   });

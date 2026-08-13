@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "sourceFileName": "joseph.glb",
+  "rigPackageFileName": "joseph.fsrig",
+  "characterName": "Joseph",
+  "sourceVertexCount": 6,
+  "packageVertexCount": 6,
+  "topologyVerified": true,
+  "warnings": [
+    "No skinned mesh was found in the source.",
+    "No deformation bones were found in the source.",
+    "Missing required humanoid joints: hips, spine, head, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot.",
+    "Automatic mapping confidence is low; manual mapping is required.",
+    "Missing required joints: hips, spine, head, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot.",
+    "Automatic mapping cannot be used until required joints are corrected."
+  ],
+  "diagnostics": [],
+  "glbFingerprint": "sha256:c34f49221bb5b7866db92ae45a882f2f0bec9673540239b7d11d06347aaff108",
+  "rigPackageFingerprint": "sha256:9688364370ca129f57c62a6e0123d0361caa58aadef4dec71d82cf92cbc1a4b6",
+  "importFingerprint": "sha256:c614df89cba526a2573166ac09b28b548548490f4e028931864275cd40670fa8",
+  "importBudget": {
+    "loadedVertexCount": 6,
+    "triangleCount": 2,
+    "meshNodeCount": 1,
+    "instanceCount": 1,
+    "expandedInstanceCount": 1,
+    "uniquePositionBytes": 72,
+    "uniqueIndexBytes": 0,
+    "outputPositionBytes": 72,
+    "outputIndexBytes": 0,
+    "mode": "separate",
+    "normalBytes": 72,
+    "transformationBytes": 72,
+    "combinedTemporaryBytes": 0,
+    "packedBytes": 184,
+    "base64Bytes": 0,
+    "gpuBytes": 144,
+    "projectStorageBytes": 1464,
+    "estimatedPeakHeapBytes": 328,
+    "safetyBudgetBytes": 1610612736,
+    "tier": "standard",
+    "exceeded": []
+  },
+  "consent": {
+    "required": false,
+    "provided": false,
+    "authorized": true
+  }
+}

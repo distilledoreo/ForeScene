@@ -1,0 +1,154 @@
+import { createHotContext as __vite__createHotContext } from "/@vite/client";import.meta.hot = __vite__createHotContext("/@fs/C:\\Users\\disti\\Documents\\App Development\\PanoRef\\src\\components\\common\\ImportedRigMappingDialog.tsx");import __vite__cjsImport0_react_jsxDevRuntime from "/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=2d845561"; const jsxDEV = __vite__cjsImport0_react_jsxDevRuntime["jsxDEV"];
+var _s = $RefreshSig$();
+import __vite__cjsImport1_react from "/node_modules/.vite/deps/react.js?v=2d845561"; const useEffect = __vite__cjsImport1_react["useEffect"]; const useMemo = __vite__cjsImport1_react["useMemo"]; const useState = __vite__cjsImport1_react["useState"];
+import { HUMAN_JOINT_LABELS } from "/src/engine/humanPose.ts";
+import { REQUIRED_IMPORTED_HUMANOID_JOINTS } from "/src/engine/importedRig/analyzeSkeleton.ts";
+import { Modal } from "/src/components/common/Modal.tsx";
+export function ImportedRigMappingDialog({
+  open,
+  profile,
+  confidence,
+  initialMapping,
+  boneOptions,
+  onCancel,
+  onConfirm
+}) {
+  _s();
+  const [mapping, setMapping] = useState(initialMapping);
+  useEffect(() => {
+    if (open) setMapping(initialMapping);
+  }, [open, initialMapping]);
+  const invalid = useMemo(() => {
+    const missingSpine = !mapping.spine && !mapping.chest;
+    return REQUIRED_IMPORTED_HUMANOID_JOINTS.some((jointId) => !mapping[jointId] && !(jointId === "spine" && !missingSpine)) || missingSpine;
+  }, [mapping]);
+  const setJoint = (jointId, path) => setMapping((current) => ({
+    ...current,
+    ...path ? { [jointId]: path } : { [jointId]: void 0 }
+  }));
+  return /* @__PURE__ */ jsxDEV(Modal, { open, onClose: onCancel, title: "Review imported rig mapping", size: "lg", children: /* @__PURE__ */ jsxDEV("div", { className: "space-y-3", "data-imported-rig-mapping-dialog": true, children: [
+    /* @__PURE__ */ jsxDEV("p", { className: "text-xs text-secondary", children: [
+      "Profile: ",
+      /* @__PURE__ */ jsxDEV("strong", { children: profile }, void 0, false, {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+        lineNumber: 40,
+        columnNumber: 20
+      }, this),
+      " · confidence ",
+      (confidence * 100).toFixed(0),
+      "%. Select a unique source bone for every required joint."
+    ] }, void 0, true, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+      lineNumber: 39,
+      columnNumber: 9
+    }, this),
+    /* @__PURE__ */ jsxDEV("div", { className: "max-h-[50vh] space-y-2 overflow-auto rounded-xl border border-subtle p-3", children: REQUIRED_IMPORTED_HUMANOID_JOINTS.map(
+      (jointId) => /* @__PURE__ */ jsxDEV("label", { className: "grid gap-1 text-xs text-secondary sm:grid-cols-[9rem_1fr] sm:items-center", children: [
+        /* @__PURE__ */ jsxDEV("span", { className: "font-semibold", children: HUMAN_JOINT_LABELS[jointId] }, void 0, false, {
+          fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+          lineNumber: 45,
+          columnNumber: 15
+        }, this),
+        /* @__PURE__ */ jsxDEV(
+          "select",
+          {
+            value: mapping[jointId] ?? (jointId === "spine" ? mapping.chest ?? "" : ""),
+            onChange: (event) => setJoint(jointId, event.target.value),
+            className: "rounded-lg border border-subtle bg-surface px-2 py-1.5 text-xs text-primary",
+            "data-imported-rig-joint": jointId,
+            children: [
+              /* @__PURE__ */ jsxDEV("option", { value: "", children: "Unmapped" }, void 0, false, {
+                fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+                lineNumber: 52,
+                columnNumber: 17
+              }, this),
+              boneOptions.map((bone) => /* @__PURE__ */ jsxDEV("option", { value: bone.path, children: [
+                bone.name,
+                " · ",
+                bone.path
+              ] }, bone.path, true, {
+                fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+                lineNumber: 53,
+                columnNumber: 44
+              }, this))
+            ]
+          },
+          void 0,
+          true,
+          {
+            fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+            lineNumber: 46,
+            columnNumber: 15
+          },
+          this
+        )
+      ] }, jointId, true, {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+        lineNumber: 44,
+        columnNumber: 11
+      }, this)
+    ) }, void 0, false, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+      lineNumber: 42,
+      columnNumber: 9
+    }, this),
+    invalid && /* @__PURE__ */ jsxDEV("p", { className: "text-xs text-rose-300", children: "Required mappings are incomplete." }, void 0, false, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+      lineNumber: 58,
+      columnNumber: 21
+    }, this),
+    /* @__PURE__ */ jsxDEV("div", { className: "flex justify-end gap-2 border-t border-subtle pt-3", children: [
+      /* @__PURE__ */ jsxDEV("button", { type: "button", onClick: onCancel, className: "rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary", children: "Cancel" }, void 0, false, {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+        lineNumber: 60,
+        columnNumber: 11
+      }, this),
+      /* @__PURE__ */ jsxDEV("button", { type: "button", disabled: invalid, onClick: () => onConfirm(mapping), className: "rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50", "data-imported-rig-mapping-confirm": true, children: "Use mapping" }, void 0, false, {
+        fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+        lineNumber: 61,
+        columnNumber: 11
+      }, this)
+    ] }, void 0, true, {
+      fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+      lineNumber: 59,
+      columnNumber: 9
+    }, this)
+  ] }, void 0, true, {
+    fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+    lineNumber: 38,
+    columnNumber: 7
+  }, this) }, void 0, false, {
+    fileName: "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx",
+    lineNumber: 37,
+    columnNumber: 5
+  }, this);
+}
+_s(ImportedRigMappingDialog, "G1qb2H9bOxEFpoo6eUj3zGaoMQ0=");
+_c = ImportedRigMappingDialog;
+var _c;
+$RefreshReg$(_c, "ImportedRigMappingDialog");
+import * as RefreshRuntime from "/@react-refresh";
+const inWebWorker = typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+if (import.meta.hot && !inWebWorker) {
+  if (!window.$RefreshReg$) {
+    throw new Error(
+      "@vitejs/plugin-react can't detect preamble. Something is wrong."
+    );
+  }
+  RefreshRuntime.__hmr_import(import.meta.url).then((currentExports) => {
+    RefreshRuntime.registerExportsForReactRefresh("C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx", currentExports);
+    import.meta.hot.accept((nextExports) => {
+      if (!nextExports) return;
+      const invalidateMessage = RefreshRuntime.validateRefreshBoundaryAndEnqueueUpdate("C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx", currentExports, nextExports);
+      if (invalidateMessage) import.meta.hot.invalidate(invalidateMessage);
+    });
+  });
+}
+function $RefreshReg$(type, id) {
+  return RefreshRuntime.register(type, "C:/Users/disti/Documents/App Development/PanoRef/src/components/common/ImportedRigMappingDialog.tsx " + id);
+}
+function $RefreshSig$() {
+  return RefreshRuntime.createSignatureFunctionForTransform();
+}
+
+//# sourceMappingURL=data:application/json;base64,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O0FBQUEsV0FBc0U7QUFBQSxJQUNsRix1QkFBQyxTQUFJLFdBQVUsc0RBQ2I7QUFBQSw2QkFBQyxZQUFPLE1BQUssVUFBUyxTQUFTTCxVQUFVLFdBQVUsa0ZBQWlGLHNCQUFwSTtBQUFBO0FBQUE7QUFBQTtBQUFBLGFBQTBJO0FBQUEsTUFDMUksdUJBQUMsWUFBTyxNQUFLLFVBQVMsVUFBVUssU0FBUyxTQUFTLE1BQU1KLFVBQVVFLE9BQU8sR0FBRyxXQUFVLHVGQUFzRixxQ0FBaUMsTUFBQywyQkFBOU07QUFBQTtBQUFBO0FBQUE7QUFBQSxhQUF5TjtBQUFBLFNBRjNOO0FBQUE7QUFBQTtBQUFBO0FBQUEsV0FHQTtBQUFBLE9BeEJGO0FBQUE7QUFBQTtBQUFBO0FBQUEsU0F5QkEsS0ExQkY7QUFBQTtBQUFBO0FBQUE7QUFBQSxTQTJCQTtBQUVKO0FBQUNELEdBM0RlUiwwQkFBd0I7QUFBQSxLQUF4QkE7QUFBd0IsSUFBQTRCO0FBQUEsYUFBQUEsSUFBQSIsIm5hbWVzIjpbInVzZUVmZmVjdCIsInVzZU1lbW8iLCJ1c2VTdGF0ZSIsIkhVTUFOX0pPSU5UX0xBQkVMUyIsIlJFUVVJUkVEX0lNUE9SVEVEX0hVTUFOT0lEX0pPSU5UUyIsIk1vZGFsIiwiSW1wb3J0ZWRSaWdNYXBwaW5nRGlhbG9nIiwib3BlbiIsInByb2ZpbGUiLCJjb25maWRlbmNlIiwiaW5pdGlhbE1hcHBpbmciLCJib25lT3B0aW9ucyIsIm9uQ2FuY2VsIiwib25Db25maXJtIiwiX3MiLCJtYXBwaW5nIiwic2V0TWFwcGluZyIsImludmFsaWQiLCJtaXNzaW5nU3BpbmUiLCJzcGluZSIsImNoZXN0Iiwic29tZSIsImpvaW50SWQiLCJzZXRKb2ludCIsInBhdGgiLCJjdXJyZW50IiwidW5kZWZpbmVkIiwidG9GaXhlZCIsIm1hcCIsImV2ZW50IiwidGFyZ2V0IiwidmFsdWUiLCJib25lIiwibmFtZSIsIl9jIl0sImlnbm9yZUxpc3QiOltdLCJzb3VyY2VzIjpbIkltcG9ydGVkUmlnTWFwcGluZ0RpYWxvZy50c3giXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgdXNlRWZmZWN0LCB1c2VNZW1vLCB1c2VTdGF0ZSB9IGZyb20gJ3JlYWN0JztcbmltcG9ydCB0eXBlIHsgSHVtYW5Kb2ludElkLCBJbXBvcnRlZEh1bWFub2lkUmlnUHJvZmlsZSB9IGZyb20gJy4uLy4uL2RvbWFpbi90eXBlcyc7XG5pbXBvcnQgeyBIVU1BTl9KT0lOVF9MQUJFTFMgfSBmcm9tICcuLi8uLi9lbmdpbmUvaHVtYW5Qb3NlJztcbmltcG9ydCB7IFJFUVVJUkVEX0lNUE9SVEVEX0hVTUFOT0lEX0pPSU5UUyB9IGZyb20gJy4uLy4uL2VuZ2luZS9pbXBvcnRlZFJpZy9hbmFseXplU2tlbGV0b24nO1xuaW1wb3J0IHsgTW9kYWwgfSBmcm9tICcuL01vZGFsJztcblxuZXhwb3J0IGZ1bmN0aW9uIEltcG9ydGVkUmlnTWFwcGluZ0RpYWxvZyh7XG4gIG9wZW4sXG4gIHByb2ZpbGUsXG4gIGNvbmZpZGVuY2UsXG4gIGluaXRpYWxNYXBwaW5nLFxuICBib25lT3B0aW9ucyxcbiAgb25DYW5jZWwsXG4gIG9uQ29uZmlybSxcbn06IHtcbiAgb3BlbjogYm9vbGVhbjtcbiAgcHJvZmlsZTogSW1wb3J0ZWRIdW1hbm9pZFJpZ1Byb2ZpbGU7XG4gIGNvbmZpZGVuY2U6IG51bWJlcjtcbiAgaW5pdGlhbE1hcHBpbmc6IFBhcnRpYWw8UmVjb3JkPEh1bWFuSm9pbnRJZCwgc3RyaW5nPj47XG4gIGJvbmVPcHRpb25zOiBBcnJheTx7IHBhdGg6IHN0cmluZzsgbmFtZTogc3RyaW5nIH0+O1xuICBvbkNhbmNlbDogKCkgPT4gdm9pZDtcbiAgb25Db25maXJtOiAobWFwcGluZzogUGFydGlhbDxSZWNvcmQ8SHVtYW5Kb2ludElkLCBzdHJpbmc+PikgPT4gdm9pZDtcbn0pIHtcbiAgY29uc3QgW21hcHBpbmcsIHNldE1hcHBpbmddID0gdXNlU3RhdGUoaW5pdGlhbE1hcHBpbmcpO1xuICB1c2VFZmZlY3QoKCkgPT4ge1xuICAgIGlmIChvcGVuKSBzZXRNYXBwaW5nKGluaXRpYWxNYXBwaW5nKTtcbiAgfSwgW29wZW4sIGluaXRpYWxNYXBwaW5nXSk7XG4gIGNvbnN0IGludmFsaWQgPSB1c2VNZW1vKCgpID0+IHtcbiAgICBjb25zdCBtaXNzaW5nU3BpbmUgPSAhbWFwcGluZy5zcGluZSAmJiAhbWFwcGluZy5jaGVzdDtcbiAgICByZXR1cm4gUkVRVUlSRURfSU1QT1JURURfSFVNQU5PSURfSk9JTlRTLnNvbWUoKGpvaW50SWQpID0+ICFtYXBwaW5nW2pvaW50SWRdICYmICEoam9pbnRJZCA9PT0gJ3NwaW5lJyAmJiAhbWlzc2luZ1NwaW5lKSkgfHwgbWlzc2luZ1NwaW5lO1xuICB9LCBbbWFwcGluZ10pO1xuICBjb25zdCBzZXRKb2ludCA9IChqb2ludElkOiBIdW1hbkpvaW50SWQsIHBhdGg6IHN0cmluZykgPT4gc2V0TWFwcGluZygoY3VycmVudCkgPT4gKHtcbiAgICAuLi5jdXJyZW50LFxuICAgIC4uLihwYXRoID8geyBbam9pbnRJZF06IHBhdGggfSA6IHsgW2pvaW50SWRdOiB1bmRlZmluZWQgfSksXG4gIH0pKTtcbiAgcmV0dXJuIChcbiAgICA8TW9kYWwgb3Blbj17b3Blbn0gb25DbG9zZT17b25DYW5jZWx9IHRpdGxlPVwiUmV2aWV3IGltcG9ydGVkIHJpZyBtYXBwaW5nXCIgc2l6ZT1cImxnXCI+XG4gICAgICA8ZGl2IGNsYXNzTmFtZT1cInNwYWNlLXktM1wiIGRhdGEtaW1wb3J0ZWQtcmlnLW1hcHBpbmctZGlhbG9nPlxuICAgICAgICA8cCBjbGFzc05hbWU9XCJ0ZXh0LXhzIHRleHQtc2Vjb25kYXJ5XCI+XG4gICAgICAgICAgUHJvZmlsZTogPHN0cm9uZz57cHJvZmlsZX08L3N0cm9uZz4gwrcgY29uZmlkZW5jZSB7KGNvbmZpZGVuY2UgKiAxMDApLnRvRml4ZWQoMCl9JS4gU2VsZWN0IGEgdW5pcXVlIHNvdXJjZSBib25lIGZvciBldmVyeSByZXF1aXJlZCBqb2ludC5cbiAgICAgICAgPC9wPlxuICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cIm1heC1oLVs1MHZoXSBzcGFjZS15LTIgb3ZlcmZsb3ctYXV0byByb3VuZGVkLXhsIGJvcmRlciBib3JkZXItc3VidGxlIHAtM1wiPlxuICAgICAgICAgIHtSRVFVSVJFRF9JTVBPUlRFRF9IVU1BTk9JRF9KT0lOVFMubWFwKChqb2ludElkKSA9PiAoXG4gICAgICAgICAgICA8bGFiZWwga2V5PXtqb2ludElkfSBjbGFzc05hbWU9XCJncmlkIGdhcC0xIHRleHQteHMgdGV4dC1zZWNvbmRhcnkgc206Z3JpZC1jb2xzLVs5cmVtXzFmcl0gc206aXRlbXMtY2VudGVyXCI+XG4gICAgICAgICAgICAgIDxzcGFuIGNsYXNzTmFtZT1cImZvbnQtc2VtaWJvbGRcIj57SFVNQU5fSk9JTlRfTEFCRUxTW2pvaW50SWRdfTwvc3Bhbj5cbiAgICAgICAgICAgICAgPHNlbGVjdFxuICAgICAgICAgICAgICAgIHZhbHVlPXttYXBwaW5nW2pvaW50SWRdID8/IChqb2ludElkID09PSAnc3BpbmUnID8gbWFwcGluZy5jaGVzdCA/PyAnJyA6ICcnKX1cbiAgICAgICAgICAgICAgICBvbkNoYW5nZT17KGV2ZW50KSA9PiBzZXRKb2ludChqb2ludElkLCBldmVudC50YXJnZXQudmFsdWUpfVxuICAgICAgICAgICAgICAgIGNsYXNzTmFtZT1cInJvdW5kZWQtbGcgYm9yZGVyIGJvcmRlci1zdWJ0bGUgYmctc3VyZmFjZSBweC0yIHB5LTEuNSB0ZXh0LXhzIHRleHQtcHJpbWFyeVwiXG4gICAgICAgICAgICAgICAgZGF0YS1pbXBvcnRlZC1yaWctam9pbnQ9e2pvaW50SWR9XG4gICAgICAgICAgICAgID5cbiAgICAgICAgICAgICAgICA8b3B0aW9uIHZhbHVlPVwiXCI+VW5tYXBwZWQ8L29wdGlvbj5cbiAgICAgICAgICAgICAgICB7Ym9uZU9wdGlvbnMubWFwKChib25lKSA9PiA8b3B0aW9uIGtleT17Ym9uZS5wYXRofSB2YWx1ZT17Ym9uZS5wYXRofT57Ym9uZS5uYW1lfSDCtyB7Ym9uZS5wYXRofTwvb3B0aW9uPil9XG4gICAgICAgICAgICAgIDwvc2VsZWN0PlxuICAgICAgICAgICAgPC9sYWJlbD5cbiAgICAgICAgICApKX1cbiAgICAgICAgPC9kaXY+XG4gICAgICAgIHtpbnZhbGlkICYmIDxwIGNsYXNzTmFtZT1cInRleHQteHMgdGV4dC1yb3NlLTMwMFwiPlJlcXVpcmVkIG1hcHBpbmdzIGFyZSBpbmNvbXBsZXRlLjwvcD59XG4gICAgICAgIDxkaXYgY2xhc3NOYW1lPVwiZmxleCBqdXN0aWZ5LWVuZCBnYXAtMiBib3JkZXItdCBib3JkZXItc3VidGxlIHB0LTNcIj5cbiAgICAgICAgICA8YnV0dG9uIHR5cGU9XCJidXR0b25cIiBvbkNsaWNrPXtvbkNhbmNlbH0gY2xhc3NOYW1lPVwicm91bmRlZC14bCBib3JkZXIgYm9yZGVyLXN1YnRsZSBweC0zIHB5LTIgdGV4dC1zbSBmb250LXNlbWlib2xkIHRleHQtc2Vjb25kYXJ5XCI+Q2FuY2VsPC9idXR0b24+XG4gICAgICAgICAgPGJ1dHRvbiB0eXBlPVwiYnV0dG9uXCIgZGlzYWJsZWQ9e2ludmFsaWR9IG9uQ2xpY2s9eygpID0+IG9uQ29uZmlybShtYXBwaW5nKX0gY2xhc3NOYW1lPVwicm91bmRlZC14bCBiZy1hY2NlbnQgcHgtMyBweS0yIHRleHQtc20gZm9udC1zZW1pYm9sZCB0ZXh0LXdoaXRlIGRpc2FibGVkOm9wYWNpdHktNTBcIiBkYXRhLWltcG9ydGVkLXJpZy1tYXBwaW5nLWNvbmZpcm0+VXNlIG1hcHBpbmc8L2J1dHRvbj5cbiAgICAgICAgPC9kaXY+XG4gICAgICA8L2Rpdj5cbiAgICA8L01vZGFsPlxuICApO1xufVxuXG4iXSwiZmlsZSI6IkM6L1VzZXJzL2Rpc3RpL0RvY3VtZW50cy9BcHAgRGV2ZWxvcG1lbnQvUGFub1JlZi9zcmMvY29tcG9uZW50cy9jb21tb24vSW1wb3J0ZWRSaWdNYXBwaW5nRGlhbG9nLnRzeCJ9

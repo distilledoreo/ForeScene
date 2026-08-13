@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "renderPipelineVersion": 2,
+  "manifestHash": "c2aeba158f70bee06523c89c",
+  "projectId": "project_msc3e45g_s5dyfz",
+  "createdAt": "2026-08-02T17:46:47.460Z",
+  "updatedAt": "2026-08-02T17:47:16.938Z",
+  "phases": {
+    "initialized": "complete",
+    "locations": "complete",
+    "cast": "complete",
+    "props": "complete",
+    "shots": "complete",
+    "render": "complete",
+    "validation": "complete",
+    "contactSheet": "complete",
+    "package": "skipped"
+  },
+  "entities": {
+    "locations.room": {
+      "objectIds": [
+        "obj_msc3el3q_hvxrpl",
+        "obj_msc3el3q_qzpedw",
+        "obj_msc3el3q_we36ob",
+        "obj_msc3el3q_8kdvl2",
+        "obj_msc3el3q_6m5w1r"
+      ],
+      "anchors": {
+        "center": "landmark_msc3el3q_waxmvt",
+        "entrance": "landmark_msc3el3q_c09me1",
+        "exit": "landmark_msc3el3q_wwpzn8",
+        "left": "landmark_msc3el3q_nc92dq",
+        "right": "landmark_msc3el3q_t6pkma",
+        "foreground": "landmark_msc3el3q_3wk18p",
+        "background": "landmark_msc3el3q_svbkwl"
+      },
+      "zoneOrigin": [
+        0,
+        0,
+        0
+      ],
+      "refs": {
+        "loc_room_floor": "obj_msc3el3q_hvxrpl",
+        "loc_room_back-wall": "obj_msc3el3q_qzpedw",
+        "loc_room_left-wall": "obj_msc3el3q_we36ob",
+        "loc_room_right-wall": "obj_msc3el3q_8kdvl2",
+        "loc_room_door": "obj_msc3el3q_6m5w1r"
+      }
+    },
+    "cast.alex": {
+      "objectId": "obj_msc3el5i_m7xcyz",
+      "refs": {
+        "cast_alex": "obj_msc3el5i_m7xcyz"
+      }
+    },
+    "cast.blair": {
+      "objectId": "obj_msc3el5j_m52zla",
+      "refs": {
+        "cast_blair": "obj_msc3el5j_m52zla"
+      }
+    },
+    "props.table": {
+      "objectId": "obj_msc3elax_vez5vf",
+      "refs": {
+        "prop_table": "obj_msc3elax_vez5vf"
+      }
+    }
+  },
+  "shots": {
+    "010": {
+      "compile": "complete",
+      "render": "complete",
+      "validation": "passed",
+      "attempts": 1,
+      "renderAttempts": 1,
+      "repairAttempts": 0,
+      "shotId": "shot_msc3elgv_srp99n",
+      "framePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\shots\\010.png",
+      "renderSource": "canonical_clay_renderer",
+      "pixelStats": {
+        "width": 3840,
+        "height": 2160,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.7654421164057333,
+        "luminanceVariance": 0.014343213006460576,
+        "sampledUniqueColorCount": 24
+      },
+      "issues": []
+    },
+    "020": {
+      "compile": "complete",
+      "render": "complete",
+      "validation": "passed",
+      "attempts": 1,
+      "renderAttempts": 1,
+      "repairAttempts": 1,
+      "shotId": "shot_msc3elgw_z1agso",
+      "framePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\shots\\020.png",
+      "renderSource": "canonical_clay_renderer",
+      "pixelStats": {
+        "width": 3840,
+        "height": 2160,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.7785827164720486,
+        "luminanceVariance": 0.02089626986776838,
+        "sampledUniqueColorCount": 28
+      },
+      "issues": []
+    },
+    "030": {
+      "compile": "complete",
+      "render": "complete",
+      "validation": "passed",
+      "attempts": 1,
+      "renderAttempts": 1,
+      "repairAttempts": 0,
+      "shotId": "shot_msc3elgw_lxnz0x",
+      "framePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\shots\\030.png",
+      "renderSource": "canonical_clay_renderer",
+      "pixelStats": {
+        "width": 3840,
+        "height": 2160,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.8562253605045336,
+        "luminanceVariance": 0.016906486492372808,
+        "sampledUniqueColorCount": 26
+      },
+      "issues": []
+    },
+    "040": {
+      "compile": "complete",
+      "render": "complete",
+      "validation": "passed",
+      "attempts": 1,
+      "renderAttempts": 1,
+      "repairAttempts": 0,
+      "shotId": "shot_msc3elgw_20fydn",
+      "framePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\shots\\040.png",
+      "renderSource": "canonical_clay_renderer",
+      "pixelStats": {
+        "width": 3840,
+        "height": 2160,
+        "opaquePixelRatio": 1,
+        "luminanceMean": 0.8256267112975677,
+        "luminanceVariance": 0.02060918572099979,
+        "sampledUniqueColorCount": 24
+      },
+      "issues": []
+    }
+  },
+  "outputDir": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs",
+  "revisionId": "4248b6e0-02be-46a1-a642-b6331d4f1665"
+}

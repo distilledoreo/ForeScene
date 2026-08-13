@@ -51,15 +51,32 @@ export interface TopologyBuffersInput {
   triangleMeshPart?: Uint32Array;
 }
 
-/** FNV-1a 64-bit hex digest over typed bytes (sync, worker-safe). */
+/**
+ * FNV-1a 64-bit hex digest over typed bytes (sync, worker-safe).
+ *
+ * Keep the 64-bit state as two uint32 words. BigInt arithmetic here used to
+ * multiply once per byte, which made a large real-world topology hash block
+ * the browser main thread for minutes even though the hash itself is small.
+ */
 export function fnv1a64Hex(bytes: Uint8Array): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
+  const primeLow = 0x1b3;
+  const primeHigh = 0x100;
+  const radix = 0x100000000;
+  let low = 0x84222325;
+  let high = 0xcbf29ce4;
   for (let i = 0; i < bytes.length; i += 1) {
-    hash ^= BigInt(bytes[i]!);
-    hash = (hash * prime) & 0xffffffffffffffffn;
+    low = (low ^ bytes[i]!) >>> 0;
+    const lowProduct = low * primeLow;
+    const nextLow = lowProduct >>> 0;
+    const nextHigh = (
+      high * primeLow
+      + low * primeHigh
+      + Math.floor(lowProduct / radix)
+    ) >>> 0;
+    low = nextLow;
+    high = nextHigh;
   }
-  return hash.toString(16).padStart(16, '0');
+  return `${high.toString(16).padStart(8, '0')}${low.toString(16).padStart(8, '0')}`;
 }
 
 function appendUint32(out: number[], value: number): void {

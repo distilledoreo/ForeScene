@@ -1,0 +1,554 @@
+{
+  "ok": false,
+  "generatedAt": "2026-08-02T18:05:24.689Z",
+  "shots": [
+    {
+      "id": "shot_msc41nol_bwv1df",
+      "shotNumber": "010",
+      "name": "Wide two-shot",
+      "description": "Alex and Blair standing across from each other in the dialogue room.",
+      "status": "planned",
+      "cameraPosition": [
+        0,
+        1.55,
+        4.2
+      ],
+      "cameraTarget": [
+        0,
+        1.35,
+        0
+      ],
+      "fovDegrees": 55,
+      "overrideObjectCount": 3,
+      "keyframeCount": 0,
+      "linkedPanoId": "pano_msc41nol_26kylh",
+      "passes": [
+        {
+          "fileName": "clay_with-characters.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\clay_with-characters.png",
+          "sha256": "sha256:bfaca0a6d6c376446c9c0b9436a3afb9214dc4334fde4ac1a39f3baa8077a1e4",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.7121088970880849,
+            "luminanceVariance": 0.02329930758588683,
+            "sampledUniqueColorCount": 82
+          }
+        },
+        {
+          "fileName": "clay_clean-plate.png",
+          "appearance": "clay",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\clay_clean-plate.png",
+          "sha256": "sha256:d807fd22ae62ee49ae325cb3a24e3c14d7ef3ab122739ae86a08d57656618a12",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.7204958294893843,
+            "luminanceVariance": 0.02151629424131285,
+            "sampledUniqueColorCount": 18
+          }
+        },
+        {
+          "fileName": "projected_with-characters.png",
+          "appearance": "projected",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\projected_with-characters.png",
+          "sha256": "sha256:968d563746bd5a0fcaa2d28765cfe41762cc4ee0a51468753d8113c4784e4b59",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.5524581176475961,
+            "luminanceVariance": 0.08788370609039065,
+            "sampledUniqueColorCount": 121
+          }
+        },
+        {
+          "fileName": "projected_clean-plate.png",
+          "appearance": "projected",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\projected_clean-plate.png",
+          "sha256": "sha256:0fea210ef2aa3109d9a51873278e6a4c829d51cef5272ed60e9d09eb646f2048",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.5489644714058354,
+            "luminanceVariance": 0.08983001090011394,
+            "sampledUniqueColorCount": 62
+          }
+        },
+        {
+          "fileName": "characters-only.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "characters_only",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\characters-only.png",
+          "sha256": "sha256:a364307533c9a9ed844d7ba7c773d358eb5c7fac1b8f78e0262ce27d1a2f1705",
+          "source": "canonical_character_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 0.039328703703703706,
+            "luminanceMean": 0.019432083151779096,
+            "luminanceVariance": 0.009337788804965675,
+            "sampledUniqueColorCount": 30
+          }
+        },
+        {
+          "fileName": "depth.png",
+          "appearance": "depth",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\010\\depth.png",
+          "sha256": "sha256:82b37ebfd7b5d4fbcd8f426aa45105ba5da7df778c338ea87a4985c55e8242e8",
+          "source": "canonical_depth_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.5923180525297321,
+            "luminanceVariance": 0.07198180163892476,
+            "sampledUniqueColorCount": 11
+          },
+          "depth": {
+            "encoding": "linear-camera-depth",
+            "nearMeters": 0.1,
+            "farMeters": 10.828754158831547,
+            "invert": false,
+            "grayscalePixelRatio": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "shot_msc41nol_qisaiy",
+      "shotNumber": "020",
+      "name": "Alex medium",
+      "description": "Medium on Alex listening.",
+      "status": "planned",
+      "cameraPosition": [
+        -0.35,
+        1.5,
+        2.6
+      ],
+      "cameraTarget": [
+        -1.05,
+        1.45,
+        0.15
+      ],
+      "fovDegrees": 40,
+      "overrideObjectCount": 3,
+      "keyframeCount": 0,
+      "linkedPanoId": "pano_msc41nol_26kylh",
+      "passes": [
+        {
+          "fileName": "clay_with-characters.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\clay_with-characters.png",
+          "sha256": "sha256:f46663a326e33b24f21f89f27c11bd8235574a8e02996932d5fc5d00cf1d85b3",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.6585353269175089,
+            "luminanceVariance": 0.017771426059369377,
+            "sampledUniqueColorCount": 54
+          }
+        },
+        {
+          "fileName": "clay_clean-plate.png",
+          "appearance": "clay",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\clay_clean-plate.png",
+          "sha256": "sha256:2afd0aa4d945342013c94a6807211d16eac45e89a3baa42d5ea48415217bbd0e",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.675209450192742,
+            "luminanceVariance": 0.015651329497063105,
+            "sampledUniqueColorCount": 17
+          }
+        },
+        {
+          "fileName": "projected_with-characters.png",
+          "appearance": "projected",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\projected_with-characters.png",
+          "sha256": "sha256:e34d67ebcecd0a062493c5943919322b2a0fab60c8a1582546ac708fdab97a7c",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.46255993518597427,
+            "luminanceVariance": 0.03885481253900136,
+            "sampledUniqueColorCount": 86
+          }
+        },
+        {
+          "fileName": "projected_clean-plate.png",
+          "appearance": "projected",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\projected_clean-plate.png",
+          "sha256": "sha256:4771bf72b45ff9a289831af72d8bf3656ede9c26a62eca155a25d2155fda66c4",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4516699342480695,
+            "luminanceVariance": 0.04014879123493781,
+            "sampledUniqueColorCount": 50
+          }
+        },
+        {
+          "fileName": "characters-only.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "characters_only",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\characters-only.png",
+          "sha256": "sha256:967ab01cc30b55d719bcc1b42a0f6ca45281d8855d6393733802af15c0ef99aa",
+          "source": "canonical_character_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 0.07818672839506173,
+            "luminanceMean": 0.03818206411885736,
+            "luminanceVariance": 0.01739042498563558,
+            "sampledUniqueColorCount": 19
+          }
+        },
+        {
+          "fileName": "depth.png",
+          "appearance": "depth",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\020\\depth.png",
+          "sha256": "sha256:61a9f1b6c73b3a852def90fb9b8592fd2343e27aaf9ade718f132638d67e39fd",
+          "source": "canonical_depth_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4737027959332035,
+            "luminanceVariance": 0.02064930483275118,
+            "sampledUniqueColorCount": 8
+          },
+          "depth": {
+            "encoding": "linear-camera-depth",
+            "nearMeters": 0.1,
+            "farMeters": 9.656951090164721,
+            "invert": false,
+            "grayscalePixelRatio": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "shot_msc41nol_u45xd1",
+      "shotNumber": "030",
+      "name": "Blair OTS",
+      "description": "Over Blair's shoulder onto Alex.",
+      "status": "planned",
+      "cameraPosition": [
+        0.85,
+        1.52,
+        1.35
+      ],
+      "cameraTarget": [
+        -1,
+        1.5,
+        0.1
+      ],
+      "fovDegrees": 38,
+      "overrideObjectCount": 3,
+      "keyframeCount": 0,
+      "linkedPanoId": "pano_msc41nol_26kylh",
+      "passes": [
+        {
+          "fileName": "clay_with-characters.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\clay_with-characters.png",
+          "sha256": "sha256:ee05a5c5a6e8e41fff7499ede6b82786c352bc92f1236b7fc7d53787e4a28d98",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.6547940196069593,
+            "luminanceVariance": 0.010214221478734964,
+            "sampledUniqueColorCount": 47
+          }
+        },
+        {
+          "fileName": "clay_clean-plate.png",
+          "appearance": "clay",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\clay_clean-plate.png",
+          "sha256": "sha256:39801d56bd0c276af85ea8f1f25a9fd46931f64bac53f3f8b8f9b4aa89befbf3",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.6689854138819654,
+            "luminanceVariance": 0.008091931082092274,
+            "sampledUniqueColorCount": 12
+          }
+        },
+        {
+          "fileName": "projected_with-characters.png",
+          "appearance": "projected",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\projected_with-characters.png",
+          "sha256": "sha256:3cebf21ca72af4f5a924445abdcf036e59c4c5496ce2f65838349648bbdce4b0",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4231656833096506,
+            "luminanceVariance": 0.025808809125658527,
+            "sampledUniqueColorCount": 57
+          }
+        },
+        {
+          "fileName": "projected_clean-plate.png",
+          "appearance": "projected",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\projected_clean-plate.png",
+          "sha256": "sha256:3631cf598695ea1fa8d35979c97bdf660d5f18240328b2dd23160c5ba5913f6e",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4105948672240558,
+            "luminanceVariance": 0.026321604360600187,
+            "sampledUniqueColorCount": 23
+          }
+        },
+        {
+          "fileName": "characters-only.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "characters_only",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\characters-only.png",
+          "sha256": "sha256:77de1fba368f7e945ed078cc134162a495e196e30ab964fefa5c03260dc5dbe2",
+          "source": "canonical_character_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 0.08065586419753086,
+            "luminanceMean": 0.03948111365286878,
+            "luminanceVariance": 0.017973164201481845,
+            "sampledUniqueColorCount": 18
+          }
+        },
+        {
+          "fileName": "depth.png",
+          "appearance": "depth",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\030\\depth.png",
+          "sha256": "sha256:4ba0d28a68151cd6c2268b157f90ab81a8bae33e71a5731bbf3ada24af96616d",
+          "source": "canonical_depth_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4674446562576371,
+            "luminanceVariance": 0.014981377563914017,
+            "sampledUniqueColorCount": 8
+          },
+          "depth": {
+            "encoding": "linear-camera-depth",
+            "nearMeters": 0.1,
+            "farMeters": 9.04308171166138,
+            "invert": false,
+            "grayscalePixelRatio": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "shot_msc41nol_3bdq3n",
+      "shotNumber": "040",
+      "name": "Alex close-up",
+      "description": "Close-up reaction on Alex.",
+      "status": "planned",
+      "cameraPosition": [
+        -0.55,
+        1.55,
+        1.55
+      ],
+      "cameraTarget": [
+        -1.1,
+        1.55,
+        0.15
+      ],
+      "fovDegrees": 28,
+      "overrideObjectCount": 3,
+      "keyframeCount": 0,
+      "linkedPanoId": "pano_msc41nol_26kylh",
+      "passes": [
+        {
+          "fileName": "clay_with-characters.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\040\\clay_with-characters.png",
+          "sha256": "sha256:71da8ea9bc36f6e2c5be70bdcbed46e4dd1a1babf0b370fbeb6736d914b4d02e",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.6130930248725018,
+            "luminanceVariance": 0.004561447499701388,
+            "sampledUniqueColorCount": 36
+          }
+        },
+        {
+          "fileName": "clay_clean-plate.png",
+          "appearance": "clay",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": false,
+          "diagnostics": [
+            {
+              "code": "frame_zero_variance",
+              "message": "Pixel variance is effectively zero (var=9.99e-5, unique=2).",
+              "severity": "error"
+            }
+          ]
+        },
+        {
+          "fileName": "projected_with-characters.png",
+          "appearance": "projected",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\040\\projected_with-characters.png",
+          "sha256": "sha256:33f42b27bfc23507589d8655cab85ec3931e4bcc0ea372f650c2cfd98981c7c8",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.4192967738141676,
+            "luminanceVariance": 0.0036927259617464125,
+            "sampledUniqueColorCount": 53
+          }
+        },
+        {
+          "fileName": "projected_clean-plate.png",
+          "appearance": "projected",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\040\\projected_clean-plate.png",
+          "sha256": "sha256:9db1f33b02bcd90fccd37c9d816baff14de7aa96d9e9a84a19169bc8b27c242a",
+          "source": "canonical_projected_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.39606445010337393,
+            "luminanceVariance": 0.0032718021638482864,
+            "sampledUniqueColorCount": 18
+          }
+        },
+        {
+          "fileName": "characters-only.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "characters_only",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\040\\characters-only.png",
+          "sha256": "sha256:48926c296446637585b0b79135d301008387f05519f38d2aa23a9eaacded7a7a",
+          "source": "canonical_character_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 0.19143518518518518,
+            "luminanceMean": 0.09329990353425714,
+            "luminanceVariance": 0.037447244150745615,
+            "sampledUniqueColorCount": 19
+          }
+        },
+        {
+          "fileName": "depth.png",
+          "appearance": "depth",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr106-dialogue-refinement\\reviews\\sample-review\\040\\depth.png",
+          "sha256": "sha256:f45c10903cfe7a38823e86b646ad943b70e84ac340d61da185344bb7ceb0a19f",
+          "source": "canonical_depth_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.5318286129264876,
+            "luminanceVariance": 0.02626841067581026,
+            "sampledUniqueColorCount": 5
+          },
+          "depth": {
+            "encoding": "linear-camera-depth",
+            "nearMeters": 0.1,
+            "farMeters": 8.990128753970511,
+            "invert": false,
+            "grayscalePixelRatio": 1
+          }
+        }
+      ]
+    }
+  ]
+}

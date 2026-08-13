@@ -1,0 +1,1263 @@
+{
+  "ok": true,
+  "plan": {
+    "schemaVersion": 1,
+    "projectId": "project_msc41nol_kfyhnp",
+    "projectName": "Dialogue Demo",
+    "packageType": "scene",
+    "packageFormat": "legacy-v1",
+    "requestedPackageFormat": "legacy-v1",
+    "profileId": "ai-generation",
+    "archiveFileName": "Dialogue_Demo_4_shots_package.zip",
+    "shots": [
+      {
+        "shotId": "shot_msc41nol_bwv1df",
+        "rootFolder": "shot_010_wide_two-shot",
+        "resolvedSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "hasOverrides": false,
+        "artifacts": [
+          {
+            "id": "shot_msc41nol_bwv1df:clay-viewport",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "clay-viewport",
+            "disposition": "produce",
+            "appearance": "clay",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/viewport_clay.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:projected-viewport",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "projected-viewport",
+            "disposition": "produce",
+            "appearance": "projected",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/viewport_projected.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:pano-crop",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "pano-crop",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/pano_crop.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:global-reference",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "global-reference",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/global_reference.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:cubemap",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "cubemap",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/px.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/nx.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/py.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/ny.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/pz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/nz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/inputs/cubemap/cubemap_stitched.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 7
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:global-graybox",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "global-graybox",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/inputs/global_graybox.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:ai-result-frame",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "ai-result-frame",
+            "disposition": "omit",
+            "omissionCode": "ai-result-not-attached",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:clay-camera-move",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "clay-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:projected-camera-move",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "projected-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:clay-reference-frames",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "clay-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:projected-reference-frames",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "projected-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:shot-metadata",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "shot-metadata",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/metadata/shot.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/metadata/camera.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/metadata/landmarks.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/metadata/location.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:prompts",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "prompts",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/prompts/image_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/prompts/video_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_010_wide_two-shot/prompts/negative_prompt.txt",
+                "kind": "text",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_bwv1df:shot-manifest",
+            "shotId": "shot_msc41nol_bwv1df",
+            "kind": "shot-manifest",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_010_wide_two-shot/manifest.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": false
+              }
+            ],
+            "workUnits": 1
+          }
+        ],
+        "workUnits": 15,
+        "estimatedFileCount": 20
+      },
+      {
+        "shotId": "shot_msc41nol_qisaiy",
+        "rootFolder": "shot_020_alex_medium",
+        "resolvedSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "hasOverrides": false,
+        "artifacts": [
+          {
+            "id": "shot_msc41nol_qisaiy:clay-viewport",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "clay-viewport",
+            "disposition": "produce",
+            "appearance": "clay",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/viewport_clay.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:projected-viewport",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "projected-viewport",
+            "disposition": "produce",
+            "appearance": "projected",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/viewport_projected.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:pano-crop",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "pano-crop",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/pano_crop.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:global-reference",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "global-reference",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/global_reference.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:cubemap",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "cubemap",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/px.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/nx.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/py.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/ny.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/pz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/nz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/inputs/cubemap/cubemap_stitched.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 7
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:global-graybox",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "global-graybox",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/inputs/global_graybox.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:ai-result-frame",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "ai-result-frame",
+            "disposition": "omit",
+            "omissionCode": "ai-result-not-attached",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:clay-camera-move",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "clay-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:projected-camera-move",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "projected-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:clay-reference-frames",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "clay-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:projected-reference-frames",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "projected-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:shot-metadata",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "shot-metadata",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/metadata/shot.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/metadata/camera.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/metadata/landmarks.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/metadata/location.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:prompts",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "prompts",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/prompts/image_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/prompts/video_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_020_alex_medium/prompts/negative_prompt.txt",
+                "kind": "text",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_qisaiy:shot-manifest",
+            "shotId": "shot_msc41nol_qisaiy",
+            "kind": "shot-manifest",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_020_alex_medium/manifest.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": false
+              }
+            ],
+            "workUnits": 1
+          }
+        ],
+        "workUnits": 15,
+        "estimatedFileCount": 20
+      },
+      {
+        "shotId": "shot_msc41nol_u45xd1",
+        "rootFolder": "shot_030_blair_ots",
+        "resolvedSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "hasOverrides": false,
+        "artifacts": [
+          {
+            "id": "shot_msc41nol_u45xd1:clay-viewport",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "clay-viewport",
+            "disposition": "produce",
+            "appearance": "clay",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/viewport_clay.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:projected-viewport",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "projected-viewport",
+            "disposition": "produce",
+            "appearance": "projected",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/viewport_projected.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:pano-crop",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "pano-crop",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/pano_crop.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:global-reference",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "global-reference",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/global_reference.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:cubemap",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "cubemap",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/px.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/nx.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/py.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/ny.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/pz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/nz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/inputs/cubemap/cubemap_stitched.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 7
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:global-graybox",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "global-graybox",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/inputs/global_graybox.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:ai-result-frame",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "ai-result-frame",
+            "disposition": "omit",
+            "omissionCode": "ai-result-not-attached",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:clay-camera-move",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "clay-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:projected-camera-move",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "projected-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:clay-reference-frames",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "clay-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:projected-reference-frames",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "projected-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:shot-metadata",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "shot-metadata",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/metadata/shot.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/metadata/camera.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/metadata/landmarks.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/metadata/location.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:prompts",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "prompts",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/prompts/image_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/prompts/video_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_030_blair_ots/prompts/negative_prompt.txt",
+                "kind": "text",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_u45xd1:shot-manifest",
+            "shotId": "shot_msc41nol_u45xd1",
+            "kind": "shot-manifest",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_030_blair_ots/manifest.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": false
+              }
+            ],
+            "workUnits": 1
+          }
+        ],
+        "workUnits": 15,
+        "estimatedFileCount": 20
+      },
+      {
+        "shotId": "shot_msc41nol_3bdq3n",
+        "rootFolder": "shot_040_alex_close-up",
+        "resolvedSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "hasOverrides": false,
+        "artifacts": [
+          {
+            "id": "shot_msc41nol_3bdq3n:clay-viewport",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "clay-viewport",
+            "disposition": "produce",
+            "appearance": "clay",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/viewport_clay.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:projected-viewport",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "projected-viewport",
+            "disposition": "produce",
+            "appearance": "projected",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/viewport_projected.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:pano-crop",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "pano-crop",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/pano_crop.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:global-reference",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "global-reference",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/global_reference.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:cubemap",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "cubemap",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/px.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/nx.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/py.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/ny.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/pz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/nz.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/inputs/cubemap/cubemap_stitched.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 7
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:global-graybox",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "global-graybox",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/inputs/global_graybox.png",
+                "kind": "image",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:ai-result-frame",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "ai-result-frame",
+            "disposition": "omit",
+            "omissionCode": "ai-result-not-attached",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:clay-camera-move",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "clay-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:projected-camera-move",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "projected-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:clay-reference-frames",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "clay-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:projected-reference-frames",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "projected-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:shot-metadata",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "shot-metadata",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/metadata/shot.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/metadata/camera.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/metadata/landmarks.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/metadata/location.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:prompts",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "prompts",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/prompts/image_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/prompts/video_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "shot_040_alex_close-up/prompts/negative_prompt.txt",
+                "kind": "text",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc41nol_3bdq3n:shot-manifest",
+            "shotId": "shot_msc41nol_3bdq3n",
+            "kind": "shot-manifest",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "shot_040_alex_close-up/manifest.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": false
+              }
+            ],
+            "workUnits": 1
+          }
+        ],
+        "workUnits": 15,
+        "estimatedFileCount": 20
+      }
+    ],
+    "sharedArtifacts": [],
+    "issues": [
+      {
+        "id": "shot_msc41nol_bwv1df-pano-origin-distance",
+        "code": "shot_msc41nol_bwv1df-pano-origin-distance",
+        "severity": "info",
+        "message": "Reference origin distance: 4.2 m. The panorama crop may have different perspective from the shot camera.",
+        "shotId": "shot_msc41nol_bwv1df"
+      },
+      {
+        "id": "shot_msc41nol_qisaiy-pano-origin-distance",
+        "code": "shot_msc41nol_qisaiy-pano-origin-distance",
+        "severity": "info",
+        "message": "Reference origin distance: 2.6 m. The panorama crop may have different perspective from the shot camera.",
+        "shotId": "shot_msc41nol_qisaiy"
+      },
+      {
+        "id": "shot_msc41nol_u45xd1-pano-origin-distance",
+        "code": "shot_msc41nol_u45xd1-pano-origin-distance",
+        "severity": "info",
+        "message": "Reference origin distance: 1.6 m. The panorama crop may have different perspective from the shot camera.",
+        "shotId": "shot_msc41nol_u45xd1"
+      },
+      {
+        "id": "shot_msc41nol_3bdq3n-pano-origin-distance",
+        "code": "shot_msc41nol_3bdq3n-pano-origin-distance",
+        "severity": "info",
+        "message": "Reference origin distance: 1.6 m. The panorama crop may have different perspective from the shot camera.",
+        "shotId": "shot_msc41nol_3bdq3n"
+      }
+    ],
+    "estimatedFileCount": 80,
+    "estimatedWorkUnits": 60,
+    "summary": {
+      "shotCount": 4,
+      "estimatedFileCount": 80,
+      "estimatedWorkUnits": 60,
+      "producedArtifactCounts": {
+        "clay-viewport": 4,
+        "projected-viewport": 4,
+        "pano-crop": 4,
+        "global-reference": 4,
+        "cubemap": 4,
+        "global-graybox": 4,
+        "shot-metadata": 4,
+        "prompts": 4,
+        "shot-manifest": 4
+      },
+      "overrideShotCount": 0,
+      "warningCount": 0,
+      "errorCount": 0
+    }
+  },
+  "summary": {
+    "shotCount": 4,
+    "estimatedFileCount": 80,
+    "estimatedWorkUnits": 60,
+    "producedArtifactCounts": {
+      "clay-viewport": 4,
+      "projected-viewport": 4,
+      "pano-crop": 4,
+      "global-reference": 4,
+      "cubemap": 4,
+      "global-graybox": 4,
+      "shot-metadata": 4,
+      "prompts": 4,
+      "shot-manifest": 4
+    },
+    "overrideShotCount": 0,
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "diagnostics": []
+}

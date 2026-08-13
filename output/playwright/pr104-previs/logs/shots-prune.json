@@ -1,0 +1,39 @@
+{
+  "extras": [
+    {
+      "id": "shot_msc3e45g_duqvh2",
+      "shotNumber": "000",
+      "name": "Origin",
+      "description": "Blank graybox origin shot — replaced by previs shot list.",
+      "status": "planned",
+      "cameraPosition": [
+        0,
+        1.65,
+        6
+      ],
+      "cameraTarget": [
+        0,
+        1.2,
+        0
+      ],
+      "fovDegrees": 32.26880217111643,
+      "overrideObjectCount": 0,
+      "keyframeCount": 0
+    }
+  ],
+  "prune": {
+    "ok": true,
+    "planId": "previs-shot-prune",
+    "verifiedRevisionId": "307d479b-1143-465d-ac0b-3361c77025b5",
+    "summary": {
+      "commandCount": 1,
+      "affectedObjectIds": [],
+      "affectedShotIds": [
+        "shot_msc3e45g_duqvh2"
+      ],
+      "affectedLandmarkIds": [],
+      "createdRefs": {}
+    },
+    "diagnostics": []
+  }
+}

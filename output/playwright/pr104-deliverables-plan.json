@@ -1,0 +1,323 @@
+{
+  "ok": true,
+  "plan": {
+    "schemaVersion": 1,
+    "projectId": "project_msc3e45g_s5dyfz",
+    "projectName": "Minimal Dialogue",
+    "packageType": "current-shot",
+    "packageFormat": "legacy-v1",
+    "requestedPackageFormat": "legacy-v1",
+    "profileId": "custom",
+    "archiveFileName": "010_wide_two-shot_package.zip",
+    "shots": [
+      {
+        "shotId": "shot_msc3elgv_srp99n",
+        "rootFolder": "010_wide_two-shot",
+        "resolvedSettings": {
+          "width": 3840,
+          "height": 2160,
+          "peopleExportMode": "with_people",
+          "characterPass": {
+            "enabled": false,
+            "includeStill": true,
+            "includeMotion": true,
+            "motionFormat": "green_mp4",
+            "backgroundColor": "#00FF00",
+            "includeAttachedProps": true
+          },
+          "includeViewport": true,
+          "includeProjectedViewport": true,
+          "includeProjectedCameraMoveReferenceFrames": true,
+          "includeProjectedCameraMoveVideo": true,
+          "includeAiResultFrame": true,
+          "includePanoCrop": true,
+          "includeFullPano": true,
+          "includeGrayboxPano": true,
+          "includeCameraMoveVideo": true,
+          "includeCameraMoveReferenceFrames": true,
+          "includeMetadata": true,
+          "includePrompt": true,
+          "depth": {
+            "enabled": false,
+            "includeViewportStill": true,
+            "includeReferenceFrames": true,
+            "includeCameraMoveVideo": true,
+            "rangeMode": "auto",
+            "invert": false
+          }
+        },
+        "hasOverrides": false,
+        "artifacts": [
+          {
+            "id": "shot_msc3elgv_srp99n:clay-viewport",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "clay-viewport",
+            "disposition": "produce",
+            "appearance": "clay",
+            "files": [
+              {
+                "path": "010_wide_two-shot/inputs/viewport_clay.png",
+                "kind": "image",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:projected-viewport",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "projected-viewport",
+            "disposition": "omit",
+            "omissionCode": "missing-projector",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:pano-crop",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "pano-crop",
+            "disposition": "omit",
+            "omissionCode": "missing-linked-pano",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:cubemap",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "cubemap",
+            "disposition": "omit",
+            "omissionCode": "missing-full-pano-source",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:global-reference",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "global-reference",
+            "disposition": "omit",
+            "omissionCode": "missing-canonical-pano",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:global-graybox",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "global-graybox",
+            "disposition": "omit",
+            "omissionCode": "missing-graybox-pano",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:ai-result-frame",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "ai-result-frame",
+            "disposition": "omit",
+            "omissionCode": "ai-result-not-attached",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:clay-camera-move",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "clay-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-move",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:projected-camera-move",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "projected-camera-move",
+            "disposition": "omit",
+            "omissionCode": "missing-projector",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:clay-reference-frames",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "clay-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-camera-keyframes",
+            "appearance": "clay",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:projected-reference-frames",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "projected-reference-frames",
+            "disposition": "omit",
+            "omissionCode": "missing-projector",
+            "appearance": "projected",
+            "files": [],
+            "workUnits": 0
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:shot-metadata",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "shot-metadata",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "010_wide_two-shot/metadata/shot.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "010_wide_two-shot/metadata/camera.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "010_wide_two-shot/metadata/landmarks.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "010_wide_two-shot/metadata/location.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:prompts",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "prompts",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "010_wide_two-shot/prompts/image_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "010_wide_two-shot/prompts/video_gen_prompt.txt",
+                "kind": "text",
+                "required": true,
+                "manifestEntry": true
+              },
+              {
+                "path": "010_wide_two-shot/prompts/negative_prompt.txt",
+                "kind": "text",
+                "required": false,
+                "manifestEntry": true
+              }
+            ],
+            "workUnits": 1
+          },
+          {
+            "id": "shot_msc3elgv_srp99n:shot-manifest",
+            "shotId": "shot_msc3elgv_srp99n",
+            "kind": "shot-manifest",
+            "disposition": "produce",
+            "files": [
+              {
+                "path": "010_wide_two-shot/manifest.json",
+                "kind": "json",
+                "required": true,
+                "manifestEntry": false
+              }
+            ],
+            "workUnits": 1
+          }
+        ],
+        "workUnits": 4,
+        "estimatedFileCount": 9
+      }
+    ],
+    "sharedArtifacts": [],
+    "issues": [
+      {
+        "id": "selection-missing-graybox-pano",
+        "code": "selection-missing-graybox-pano",
+        "severity": "warning",
+        "message": "Graybox panorama export is enabled for a selected shot, but no graybox 360 has been rendered from Build."
+      },
+      {
+        "id": "selection-missing-projector",
+        "code": "selection-missing-projector",
+        "severity": "warning",
+        "message": "Projected exports are enabled for a selected shot, but no usable styled panorama projector is available."
+      },
+      {
+        "id": "selection-missing-full-pano",
+        "code": "selection-missing-full-pano",
+        "severity": "warning",
+        "message": "Full pano / cubemap export is enabled for a selected shot, but no canonical or linked panorama is available."
+      },
+      {
+        "id": "shot_msc3elgv_srp99n-missing-graybox-pano",
+        "code": "shot_msc3elgv_srp99n-missing-graybox-pano",
+        "severity": "warning",
+        "message": "Graybox panorama export is enabled, but no graybox 360 has been rendered from Build.",
+        "shotId": "shot_msc3elgv_srp99n"
+      },
+      {
+        "id": "shot_msc3elgv_srp99n-missing-projector",
+        "code": "shot_msc3elgv_srp99n-missing-projector",
+        "severity": "warning",
+        "message": "Projected exports are enabled, but no usable styled panorama projector is available. Those outputs will be omitted from the package.",
+        "shotId": "shot_msc3elgv_srp99n"
+      },
+      {
+        "id": "shot_msc3elgv_srp99n-missing-pano-for-crop",
+        "code": "shot_msc3elgv_srp99n-missing-pano-for-crop",
+        "severity": "warning",
+        "message": "Panorama crop is enabled, but this shot is not linked to a panorama.",
+        "shotId": "shot_msc3elgv_srp99n"
+      },
+      {
+        "id": "shot_msc3elgv_srp99n-missing-full-pano-for-cubemap",
+        "code": "shot_msc3elgv_srp99n-missing-full-pano-for-cubemap",
+        "severity": "warning",
+        "message": "Full pano / cubemap export is enabled, but no canonical or linked panorama is available.",
+        "shotId": "shot_msc3elgv_srp99n"
+      }
+    ],
+    "estimatedFileCount": 9,
+    "estimatedWorkUnits": 4,
+    "summary": {
+      "shotCount": 1,
+      "estimatedFileCount": 9,
+      "estimatedWorkUnits": 4,
+      "producedArtifactCounts": {
+        "clay-viewport": 1,
+        "shot-metadata": 1,
+        "prompts": 1,
+        "shot-manifest": 1
+      },
+      "overrideShotCount": 0,
+      "warningCount": 7,
+      "errorCount": 0
+    }
+  },
+  "summary": {
+    "shotCount": 1,
+    "estimatedFileCount": 9,
+    "estimatedWorkUnits": 4,
+    "producedArtifactCounts": {
+      "clay-viewport": 1,
+      "shot-metadata": 1,
+      "prompts": 1,
+      "shot-manifest": 1
+    },
+    "overrideShotCount": 0,
+    "warningCount": 7,
+    "errorCount": 0
+  },
+  "diagnostics": []
+}

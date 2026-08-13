@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "projectId": "project_msc3e45g_s5dyfz",
+  "shotsRequested": 4,
+  "shotsCreated": 4,
+  "importedCharacters": 0,
+  "framesRendered": 4,
+  "controlVideosRendered": 0,
+  "controlVideosFailed": 0,
+  "passed": 4,
+  "warnings": 0,
+  "failed": 0,
+  "contactSheet": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\contact-sheet.png",
+  "manifestHash": "c2aeba158f70bee06523c89c",
+  "runStatePath": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr104-previs\\run-state.json"
+}

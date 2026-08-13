@@ -1,0 +1,135 @@
+{
+  "ok": false,
+  "generatedAt": "2026-08-02T18:01:25.250Z",
+  "shots": [
+    {
+      "id": "shot_msc3elgv_srp99n",
+      "shotNumber": "010",
+      "name": "Wide two-shot",
+      "description": "Alex and Blair standing across from each other.",
+      "status": "planned",
+      "cameraPosition": [
+        0.12,
+        1.19,
+        6.233499999999999
+      ],
+      "cameraTarget": [
+        0,
+        0.8682885898121944,
+        0
+      ],
+      "fovDegrees": 32.26880217111643,
+      "overrideObjectCount": 6,
+      "keyframeCount": 0,
+      "passes": [
+        {
+          "fileName": "clay_with-characters.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\010\\clay_with-characters.png",
+          "sha256": "sha256:0bc0fe1ed84fbc70f4ac5e5f0968448209472a0a0be2bc1d0f3d5200039e8083",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.7654421164057333,
+            "luminanceVariance": 0.014343213006460576,
+            "sampledUniqueColorCount": 24
+          }
+        },
+        {
+          "fileName": "clay_clean-plate.png",
+          "appearance": "clay",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\010\\clay_clean-plate.png",
+          "sha256": "sha256:2667c961047f34dea2ae7dd479bdd92eec05bfc1f6ef89e4ca6bb7ef3405f2e8",
+          "source": "canonical_clay_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.7699014609651383,
+            "luminanceVariance": 0.013259540936767289,
+            "sampledUniqueColorCount": 8
+          }
+        },
+        {
+          "fileName": "projected_with-characters.png",
+          "appearance": "projected",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": false,
+          "diagnostics": [
+            {
+              "code": "render_failed",
+              "message": "Projected viewport export requires an importable styled panorama with a valid image asset.",
+              "severity": "error"
+            }
+          ]
+        },
+        {
+          "fileName": "projected_clean-plate.png",
+          "appearance": "projected",
+          "peopleVariant": "clean_plate",
+          "content": "full_scene",
+          "ok": false,
+          "diagnostics": [
+            {
+              "code": "render_failed",
+              "message": "Projected viewport export requires an importable styled panorama with a valid image asset.",
+              "severity": "error"
+            }
+          ]
+        },
+        {
+          "fileName": "characters-only.png",
+          "appearance": "clay",
+          "peopleVariant": "with_people",
+          "content": "characters_only",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\010\\characters-only.png",
+          "sha256": "sha256:4c49ce21379b596d6d2d61421800eddfd1743db404f266aa63d49d5bad2fe62c",
+          "source": "canonical_character_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 0.05127314814814815,
+            "luminanceMean": 0.030521934065600803,
+            "luminanceVariance": 0.017400187016420373,
+            "sampledUniqueColorCount": 16
+          }
+        },
+        {
+          "fileName": "depth.png",
+          "appearance": "depth",
+          "peopleVariant": "with_people",
+          "content": "full_scene",
+          "ok": true,
+          "output": "C:\\Users\\disti\\Documents\\App Development\\PanoRef\\output\\playwright\\pr105-failure-gate\\reviews\\batch-01\\010\\depth.png",
+          "sha256": "sha256:0240da563d688cd7e4ecfacba74dddbfeb6897d5d321365f3381bdf11bb1b562",
+          "source": "canonical_depth_renderer",
+          "pixelStats": {
+            "width": 3840,
+            "height": 2160,
+            "opaquePixelRatio": 1,
+            "luminanceMean": 0.6399835390948596,
+            "luminanceVariance": 0.010221579225915822,
+            "sampledUniqueColorCount": 11
+          },
+          "depth": {
+            "encoding": "linear-camera-depth",
+            "nearMeters": 0.05,
+            "farMeters": 21.21502074550012,
+            "invert": false,
+            "grayscalePixelRatio": 1
+          }
+        }
+      ]
+    }
+  ]
+}
