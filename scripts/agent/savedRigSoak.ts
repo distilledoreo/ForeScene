@@ -1,13 +1,20 @@
 /**
- * Live saved-rig import soak. Default is 20 consecutive documented CLI imports.
+ * Live saved-rig import soak. Default is 20 consecutive documented CLI imports
+ * of the synthetic humanoid fixture.
  *
  *   npm run agent:soak-saved-rig -- --url http://127.0.0.1:4173 --write
+ *
+ * Optional real-asset soak (caller-supplied paths only — no production names
+ * in this script):
+ *
+ *   npm run agent:soak-saved-rig -- --url http://127.0.0.1:4173 --write \
+ *     --source /path/to/character.glb --rig-package /path/to/character.fsrig
  *
  * Each iteration uses `npm run agent:import-character` with a fresh profile.
  * Failures stop immediately. Retries are not reliability.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseAgentCliArgs } from './cliArgs';
@@ -20,6 +27,14 @@ import { unriggedHumanoidGlb } from '../../tests/fixtures/unriggedHumanoidGlb';
 
 function printJson(context: CliStdoutContext, value: unknown): void {
   process.stdout.write(`${JSON.stringify(wrapAgentCliStdout(context, value), null, 2)}\n`);
+}
+
+async function assertReadable(filePath: string, label: string): Promise<void> {
+  try {
+    await access(filePath);
+  } catch {
+    throw new Error(`${label} is not readable: ${filePath}`);
+  }
 }
 
 async function main() {
@@ -35,11 +50,28 @@ async function main() {
     operation: 'character.importSavedRig.soak',
     startedAt: Date.now(),
   };
+  const sourceArg = args.file ?? process.env.FORESCENE_SAVED_RIG_SOURCE;
+  const rigArg = args.rigPackage ?? process.env.FORESCENE_SAVED_RIG_PACKAGE;
+  if (Boolean(sourceArg) !== Boolean(rigArg)) {
+    process.stderr.write('agent:soak-saved-rig real-asset mode requires both --source/--file and --rig-package.\n');
+    process.exitCode = AGENT_CLI_EXIT.usage;
+    return;
+  }
+  const realAsset = Boolean(sourceArg && rigArg);
   const root = await mkdtemp(path.join(os.tmpdir(), 'forescene-saved-rig-soak-'));
-  const sourcePath = path.join(root, 'joseph.glb');
-  const rigPath = path.join(root, 'joseph.fsrig');
-  await writeFile(sourcePath, Buffer.from(unriggedHumanoidGlb()));
-  await writeFile(rigPath, Buffer.from(await savedRigFsrig()));
+  let sourcePath: string;
+  let rigPath: string;
+  if (realAsset) {
+    sourcePath = path.resolve(sourceArg!);
+    rigPath = path.resolve(rigArg!);
+    await assertReadable(sourcePath, 'Saved-rig source');
+    await assertReadable(rigPath, 'Saved-rig package');
+  } else {
+    sourcePath = path.join(root, 'humanoid.glb');
+    rigPath = path.join(root, 'humanoid.fsrig');
+    await writeFile(sourcePath, Buffer.from(unriggedHumanoidGlb()));
+    await writeFile(rigPath, Buffer.from(await savedRigFsrig()));
+  }
 
   const operation = beginCliOperation({
     type: 'character.importSavedRig.soak',
@@ -67,14 +99,15 @@ async function main() {
           '--file', sourcePath,
           '--rig-package', rigPath,
           '--rig-mode', 'saved-rig',
-          '--name', `Joseph soak ${index + 1}`,
+          '--name', `Saved-rig soak ${index + 1}`,
           '--write',
+          ...(realAsset ? ['--allow-heavy-character-imports'] : []),
         ],
         url: args.url,
         profile: profileDir,
         cwd: root,
         repoRoot,
-        timeoutMs: 180_000,
+        timeoutMs: realAsset ? 10 * 60_000 : 180_000,
       });
       if (invocation.code !== 0 || invocation.envelope?.ok !== true) {
         await operation.fail(invocation.envelope?.error?.message ?? 'Saved-rig import failed.');
@@ -83,6 +116,7 @@ async function main() {
           completed: index,
           failedAt: index + 1,
           retries: 0,
+          realAsset,
           error: invocation.envelope?.error?.message ?? invocation.stderr.slice(-400),
           runs,
         });
@@ -109,6 +143,7 @@ async function main() {
       ok: true,
       iterations,
       retries: 0,
+      realAsset,
       soakHeartbeatCount: operation.record.heartbeatCount,
       uniqueFingerprints: new Set(runs.map((run) => String(run.importFingerprint ?? ''))).size,
       runs,

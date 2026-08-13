@@ -20,6 +20,9 @@ describe('reliability soak gates A–F', () => {
     expect(result.status, result.message).toBe('passed');
     expect(result.retries).toBe(0);
     expect(result.message).toMatch(/CLI-only E2E/);
+    expect(result.message).toMatch(/live execution requires --url/);
+    expect(result.message).not.toMatch(/CLI parity E2E passed/);
+    expect(result.details).toMatchObject({ e2eExecuted: false });
   });
 
   it('skips required live Gates B and C without --url', async () => {

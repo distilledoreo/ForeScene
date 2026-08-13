@@ -22,6 +22,8 @@ function skipped(id: 'B' | 'C', message: string, started: number): SoakGateResul
 export async function runGateB(input: {
   url?: string;
   iterations?: number;
+  savedRigSource?: string;
+  savedRigPackage?: string;
 }): Promise<SoakGateResult> {
   const started = Date.now();
   if (!input.url) {
@@ -48,14 +50,51 @@ export async function runGateB(input: {
       retries: 0,
     };
   }
+
+  const source = input.savedRigSource ?? process.env.FORESCENE_SAVED_RIG_SOURCE;
+  const rigPackage = input.savedRigPackage ?? process.env.FORESCENE_SAVED_RIG_PACKAGE;
+  if (!source || !rigPackage) {
+    return {
+      id: 'B',
+      name: SOAK_GATE_NAMES.B,
+      status: 'passed',
+      requiredLive: true,
+      message: `Synthetic saved-rig soak completed ${iterations} consecutive documented CLI imports with zero retries. Real-asset soak was not supplied (not evidence).`,
+      durationMs: Date.now() - started,
+      retries: 0,
+      details: { syntheticIterations: iterations, realAsset: false },
+    };
+  }
+
+  const real = await runDocumentedAgentCommand({
+    command: 'soak-saved-rig',
+    args: ['--write', '--source', source, '--rig-package', rigPackage],
+    url: input.url,
+    timeoutMs: 60 * 60_000,
+    env: {
+      FORESCENE_SAVED_RIG_SOAK_ITERATIONS: '5',
+    },
+  });
+  if (real.code !== 0 || real.envelope?.ok !== true) {
+    return {
+      id: 'B',
+      name: SOAK_GATE_NAMES.B,
+      status: 'failed',
+      requiredLive: true,
+      message: real.envelope?.error?.message || real.stderr.slice(-600) || `Real-asset saved-rig soak exited ${real.code}.`,
+      durationMs: Date.now() - started,
+      retries: 0,
+    };
+  }
   return {
     id: 'B',
     name: SOAK_GATE_NAMES.B,
     status: 'passed',
     requiredLive: true,
-    message: `Saved-rig soak completed ${iterations} consecutive documented CLI imports with zero retries.`,
+    message: `Synthetic saved-rig soak completed ${iterations}/20 consecutive documented CLI imports and real-asset soak completed 5/5 with zero retries.`,
     durationMs: Date.now() - started,
     retries: 0,
+    details: { syntheticIterations: iterations, realAsset: true, realIterations: 5 },
   };
 }
 
@@ -234,7 +273,7 @@ export async function runGateC(input: {
   }
 
   for (let index = 0; index < 2; index += 1) {
-    const output = path.join(workDir, `video-${index + 1}.mp4`);
+    const output = path.join(workDir, `video-clay-${index + 1}.mp4`);
     const video = await runDocumentedAgentCommand({
       command: 'video',
       args: ['--shot', shotId as string, '--mode', 'clay', '--write', '--no-attach', '--output', output],
@@ -268,14 +307,47 @@ export async function runGateC(input: {
     artifacts.push(output);
   }
 
+  const projectedVideo = path.join(workDir, 'video-projected-1.mp4');
+  const projected = await runDocumentedAgentCommand({
+    command: 'video',
+    args: ['--shot', shotId as string, '--mode', 'projected', '--write', '--no-attach', '--output', projectedVideo],
+    url: input.url,
+    profile: input.profileDir,
+    timeoutMs: 240_000,
+  });
+  if (projected.code !== 0 || projected.envelope?.ok !== true) {
+    return {
+      id: 'C',
+      name: SOAK_GATE_NAMES.C,
+      status: 'failed',
+      requiredLive: true,
+      message: projected.envelope?.error?.message ?? 'Projected video failed.',
+      durationMs: Date.now() - started,
+      retries: 0,
+    };
+  }
+  const projectedSize = (await stat(projectedVideo)).size;
+  if (projectedSize <= 32) {
+    return {
+      id: 'C',
+      name: SOAK_GATE_NAMES.C,
+      status: 'failed',
+      requiredLive: true,
+      message: `Projected video wrote ${projectedSize} bytes.`,
+      durationMs: Date.now() - started,
+      retries: 0,
+    };
+  }
+  artifacts.push(projectedVideo);
+
   return {
     id: 'C',
     name: SOAK_GATE_NAMES.C,
     status: 'passed',
     requiredLive: true,
-    message: `Rendered repeated clay+projected${modes.includes('depth') ? '+depth' : ''} frames and two clay videos for shot ${shotId} with artifact bytes verified.`,
+    message: `Rendered repeated clay+projected${modes.includes('depth') ? '+depth' : ''} frames, two clay videos, and one projected video for shot ${shotId} with artifact bytes verified.`,
     durationMs: Date.now() - started,
     retries: 0,
-    details: { shotId, modes, artifacts: artifacts.length },
+    details: { shotId, modes, artifacts: artifacts.length, projectedVideo: true },
   };
 }

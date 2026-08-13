@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -10,7 +11,7 @@ import { loadBenchmarkSpec } from '../benchmark/spec';
 import { repoRoot } from '../benchmark/layout';
 import { SOAK_GATE_NAMES, type SoakGateResult } from './types';
 
-export async function runGateA(): Promise<SoakGateResult> {
+export async function runGateA(input: { url?: string } = {}): Promise<SoakGateResult> {
   const started = Date.now();
   const root = repoRoot();
   const checks: string[] = [];
@@ -65,6 +66,29 @@ export async function runGateA(): Promise<SoakGateResult> {
     return failA(started, `CLI capabilities not marked skillDocumented: ${undocumented.map((record) => record.id).join(', ')}`);
   }
 
+  if (!input.url) {
+    checks.push('CLI parity E2E live execution requires --url (static presence is not pass evidence)');
+    return {
+      id: 'A',
+      name: SOAK_GATE_NAMES.A,
+      status: 'passed',
+      requiredLive: false,
+      message: checks.join('; '),
+      durationMs: Date.now() - started,
+      retries: 0,
+      details: { capabilityCount: AGENT_CLI_CAPABILITY_RECORDS.length, e2eExecuted: false },
+    };
+  }
+
+  const e2e = await runCliParityE2E(root, input.url);
+  if (e2e.code !== 0) {
+    return failA(
+      started,
+      `CLI parity E2E failed at ${input.url} (exit ${e2e.code}): ${tail(e2e.stderr || e2e.stdout, 800)}`,
+    );
+  }
+  checks.push('CLI parity E2E passed');
+
   return {
     id: 'A',
     name: SOAK_GATE_NAMES.A,
@@ -73,8 +97,52 @@ export async function runGateA(): Promise<SoakGateResult> {
     message: checks.join('; '),
     durationMs: Date.now() - started,
     retries: 0,
-    details: { capabilityCount: AGENT_CLI_CAPABILITY_RECORDS.length },
+    details: { capabilityCount: AGENT_CLI_CAPABILITY_RECORDS.length, e2eExecuted: true },
   };
+}
+
+function tail(text: string, max: number): string {
+  const trimmed = text.trim();
+  return trimmed.length <= max ? trimmed : trimmed.slice(-max);
+}
+
+function runCliParityE2E(root: string, url: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const npmExecPath = process.env.npm_execpath;
+    const argv = ['--prefix', root, 'run', 'test:e2e:agent-cli'];
+    const child = npmExecPath
+      ? spawn(process.execPath, [npmExecPath, ...argv], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PLAYWRIGHT_BASE_URL: url,
+          PLAYWRIGHT_SKIP_BUILD: '1',
+        },
+      })
+      : spawn('npm', argv, {
+        cwd: root,
+        env: {
+          ...process.env,
+          PLAYWRIGHT_BASE_URL: url,
+          PLAYWRIGHT_SKIP_BUILD: '1',
+        },
+      });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGINT');
+    }, 8 * 60_000);
+    child.stdout?.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      resolve({ code: 1, stdout, stderr: `${stderr}\n${error.message}` });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
 }
 
 function failA(started: number, message: string): SoakGateResult {

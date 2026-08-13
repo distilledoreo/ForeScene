@@ -866,6 +866,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         subjectIds: input.subjectIds,
         restoreIfWorse: input.restoreIfWorse,
         accepted: input.accepted,
+        keepWhenAccepted: input.keepWhenAccepted,
       });
     },
 

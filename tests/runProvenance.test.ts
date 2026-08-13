@@ -536,8 +536,30 @@ describe('run provenance session telemetry', () => {
     expect(verify.runId).not.toBe(pack.runId);
     expect(verify.command).toBe('verify');
     expect(pack.command).toBe('package');
-    expect(verify.sourceCommit).toBeUndefined();
-    expect(verify.buildId).toBeUndefined();
+    const previousCommit = {
+      FORESCENE_SOURCE_COMMIT: process.env.FORESCENE_SOURCE_COMMIT,
+      VITE_GIT_COMMIT: process.env.VITE_GIT_COMMIT,
+      GITHUB_SHA: process.env.GITHUB_SHA,
+      FORESCENE_BUILD_ID: process.env.FORESCENE_BUILD_ID,
+      VITE_BUILD_ID: process.env.VITE_BUILD_ID,
+    };
+    try {
+      delete process.env.FORESCENE_SOURCE_COMMIT;
+      delete process.env.VITE_GIT_COMMIT;
+      delete process.env.GITHUB_SHA;
+      delete process.env.FORESCENE_BUILD_ID;
+      delete process.env.VITE_BUILD_ID;
+      const isolated = createCliInvocationIdentity({ command: 'verify' });
+      expect(isolated.sourceCommit).toBeUndefined();
+      expect(isolated.buildId).toBeUndefined();
+      process.env.FORESCENE_SOURCE_COMMIT = 'deadbeefcafebabe';
+      expect(createCliInvocationIdentity({ command: 'verify' }).sourceCommit).toBe('deadbeefcafebabe');
+    } finally {
+      for (const [key, value] of Object.entries(previousCommit)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
 
     const api = createForeSceneBrowserApi();
     const first = api.beginRunSession(verify);

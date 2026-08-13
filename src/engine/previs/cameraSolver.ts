@@ -1084,7 +1084,7 @@ function distanceForCrop(params: {
   let distance = params.cropHeight / denom;
   if (params.template === 'establishing') distance *= 1.35;
   if (params.template === 'insert') distance *= 0.45;
-  if (params.template === 'close_up') distance *= 0.95;
+  if (params.template === 'close_up') distance *= 0.78;
   if (params.template === 'medium_close_up') distance *= 0.9;
   return Math.min(40, Math.max(0.45, distance));
 }

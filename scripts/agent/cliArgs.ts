@@ -121,7 +121,7 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.screenshot = argv[++index];
     } else if (token === '--input') {
       args.input = argv[++index];
-    } else if (token === '--file') {
+    } else if (token === '--file' || token === '--source') {
       args.file = argv[++index];
     } else if (token === '--rig-package') {
       args.rigPackage = argv[++index];
