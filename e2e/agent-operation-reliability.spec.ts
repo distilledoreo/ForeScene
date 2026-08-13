@@ -151,10 +151,16 @@ test.describe('Agent CLI operation reliability @heavy @agent-ops', () => {
     expect(result.retries).toBe(0);
     expect(result.runs).toHaveLength(20);
     expect(soak.envelope?.ok).toBe(true);
+    expect(soak.durationMs, '20 consecutive live imports must take more than 60s').toBeGreaterThan(60_000);
+    const soakBeats = soak.heartbeats.filter((beat) => beat.type.includes('soak') || beat.operationId === soak.envelope?.operationId);
+    const beats = soakBeats.length > 0 ? soakBeats : soak.heartbeats;
+    expect(beats.length).toBeGreaterThanOrEqual(2);
+    expect(beats[beats.length - 1]!.elapsedMs).toBeGreaterThanOrEqual(60_000);
+    expect(beats[beats.length - 1]!.heartbeatCount).toBeGreaterThan(beats[0]!.heartbeatCount);
   });
 
-  test('heartbeats distinguish a live >60s operation from a hang, then cancel recovers', async ({ baseURL }) => {
-    test.setTimeout(8 * 60_000);
+  test('cancel during a live video lets the next inspect reuse the same profile', async ({ baseURL }) => {
+    test.setTimeout(4 * 60_000);
     const url = process.env.FORESCENE_URL ?? baseURL;
     expect(url).toBeTruthy();
     const repoRoot = resolveForeSceneRepoRoot();
@@ -180,33 +186,31 @@ test.describe('Agent CLI operation reliability @heavy @agent-ops', () => {
       timeoutMs: 7 * 60_000,
     });
 
-    const deadline = Date.now() + 4 * 60_000;
-    let alive = false;
+    const deadline = Date.now() + 90_000;
+    let cancelledId: string | undefined;
     while (Date.now() < deadline) {
       const beats = video.heartbeats();
       if (beats.length >= 3) {
         const first = beats[0]!;
         const last = beats[beats.length - 1]!;
-        const advancing = last.elapsedMs - first.elapsedMs >= 60_000
-          && last.heartbeatCount > first.heartbeatCount
-          && last.operationId === first.operationId;
-        if (advancing) {
-          alive = true;
-          const cancelled = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
-            command: 'cancel',
-            args: ['--operation', last.operationId],
-            url,
-            cwd: workDir,
-            repoRoot,
-            timeoutMs: 30_000,
-          }));
-          expect(cancelled.ok).toBe(true);
-          break;
-        }
+        expect(last.operationId).toBe(first.operationId);
+        expect(last.heartbeatCount).toBeGreaterThan(first.heartbeatCount);
+        expect(last.elapsedMs).toBeGreaterThan(first.elapsedMs);
+        const cancelled = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+          command: 'cancel',
+          args: ['--operation', last.operationId],
+          url,
+          cwd: workDir,
+          repoRoot,
+          timeoutMs: 30_000,
+        }));
+        expect(cancelled.ok).toBe(true);
+        cancelledId = last.operationId;
+        break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    expect(alive, `heartbeats did not advance past 60s: ${JSON.stringify(video.heartbeats().slice(-3))}`).toBe(true);
+    expect(cancelledId, `no cancelable video operation. heartbeats=${JSON.stringify(video.heartbeats())}`).toBeTruthy();
 
     const finished = await video.wait();
     expect(finished.code).not.toBe(0);

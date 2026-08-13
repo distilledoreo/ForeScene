@@ -23,6 +23,7 @@ describe('Agent CLI live operation reliability contract', () => {
     const spec = readFileSync(path.join(repoRoot, 'e2e/agent-operation-reliability.spec.ts'), 'utf8');
     expect(spec).toContain('soak-saved-rig');
     expect(spec).toContain("'cancel'");
+    expect(spec).toContain('soak-saved-rig');
     expect(spec).toContain('startDocumentedAgentCommand');
     expect(spec).not.toMatch(/window\.foreScene/);
     expect(spec).not.toMatch(/from ['"]\.\.\/src\/engine\/agent/);

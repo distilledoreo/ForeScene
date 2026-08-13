@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseAgentCliArgs } from './cliArgs';
+import { beginCliOperation } from './cliOperation';
 import { AGENT_CLI_EXIT, wrapAgentCliStdout, type CliStdoutContext } from './cliResult';
 import { assertSuccessfulEnvelope, runDocumentedAgentCommand } from './runDocumentedCli';
 import { resolveForeSceneRepoRoot } from './repoRoot';
@@ -40,11 +41,26 @@ async function main() {
   await writeFile(sourcePath, Buffer.from(unriggedHumanoidGlb()));
   await writeFile(rigPath, Buffer.from(await savedRigFsrig()));
 
+  const operation = beginCliOperation({
+    type: 'character.importSavedRig.soak',
+  });
+  context.operationId = operation.record.operationId;
   const runs: Array<Record<string, unknown>> = [];
+  await operation.start(`Saved-rig soak 0/${iterations}`);
   try {
     for (let index = 0; index < iterations; index += 1) {
+      if (await operation.isCancelRequested()) {
+        await operation.cancel('Saved-rig soak was cancelled.');
+        printJson(context, { ok: false, completed: index, retries: 0, cancelled: true, runs });
+        process.exitCode = AGENT_CLI_EXIT.failure;
+        return;
+      }
       const profileDir = path.join(root, `profile-${index + 1}`);
       await mkdir(profileDir, { recursive: true });
+      await operation.progress({
+        progress: index / iterations,
+        message: `Saved-rig import ${index + 1}/${iterations}`,
+      });
       const invocation = await runDocumentedAgentCommand({
         command: 'import-character',
         args: [
@@ -61,6 +77,7 @@ async function main() {
         timeoutMs: 180_000,
       });
       if (invocation.code !== 0 || invocation.envelope?.ok !== true) {
+        await operation.fail(invocation.envelope?.error?.message ?? 'Saved-rig import failed.');
         printJson(context, {
           ok: false,
           completed: index,
@@ -87,14 +104,17 @@ async function main() {
         retries: 0,
       });
     }
+    await operation.complete(`Saved-rig soak ${iterations}/${iterations}`);
     printJson(context, {
       ok: true,
       iterations,
       retries: 0,
+      soakHeartbeatCount: operation.record.heartbeatCount,
       uniqueFingerprints: new Set(runs.map((run) => String(run.importFingerprint ?? ''))).size,
       runs,
     });
   } finally {
+    operation.dispose();
     await rm(root, { recursive: true, force: true });
   }
 }
