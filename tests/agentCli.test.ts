@@ -47,6 +47,8 @@ describe('agent CLI discovery', () => {
       'package',
       'open',
       'save',
+      'cancel',
+      'operations',
       'capabilities',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
@@ -71,6 +73,8 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:capabilities']).toContain('capabilities');
     expect(packageJson.scripts?.['agent:open']).toContain('open');
     expect(packageJson.scripts?.['agent:save']).toContain('save');
+    expect(packageJson.scripts?.['agent:cancel']).toContain('cancel');
+    expect(packageJson.scripts?.['agent:operations']).toContain('operations');
     expect(packageJson.scripts?.['agent:frame']).toContain('frame');
   });
 
@@ -264,6 +268,7 @@ describe('agent CLI public surface', () => {
     expect(parsed.result.capabilities['character.importSavedRig']).toBe(true);
     expect(parsed.result.capabilities['render.frame.projected']).toBe(true);
     expect(parsed.result.capabilities['render.video.projected']).toBe(true);
+    expect(parsed.result.capabilities['operation.cancel']).toBe(true);
     expect(parsed.result.jsonContract.exitCodes).toEqual({ success: 0, failure: 1, usage: 2 });
   }, 30_000);
 

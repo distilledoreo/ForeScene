@@ -70,9 +70,10 @@ export function cancelForeSceneBrowserWorkScript(): string {
   return `(() => {
     const api = window.foreScene;
     if (!api) return;
-    api.cancelPackageExport?.();
-    api.cancelShotVideoRender?.();
-    api.cancelShotStillPreparation?.();
-    api.cancelRenderWork?.();
+        api.cancelPackageExport?.();
+        api.cancelShotVideoRender?.();
+        api.cancelShotStillPreparation?.();
+        api.cancelRenderWork?.();
+        api.cancelCharacterImport?.();
   })()`;
 }

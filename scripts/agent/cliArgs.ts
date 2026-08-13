@@ -50,6 +50,7 @@ export interface AgentCliArgs {
   retryBatch?: string;
   rollbackBatch?: string;
   finalize: boolean;
+  operation?: string;
   json: boolean;
   document: boolean;
   peopleVariant?: string;
@@ -154,6 +155,8 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.rollbackBatch = argv[++index];
     } else if (token === '--json') {
       args.json = true;
+    } else if (token === '--operation') {
+      args.operation = argv[++index];
     } else if (token === '--document') {
       args.document = true;
     } else if (token === '--people-variant') {

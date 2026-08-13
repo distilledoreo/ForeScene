@@ -7,6 +7,8 @@ export const AGENT_CLI_COMMANDS = [
   'inspect',
   'open',
   'save',
+  'cancel',
+  'operations',
   'preview',
   'apply',
   'screenshot',
@@ -46,7 +48,7 @@ export function buildAgentCliHelpDocument() {
       assetPoseContract: 'inspectAssetPoseContract via `asset-contract` or `verify`. `asset-contract` accepts one optional --shot (API shotId); omit the flag for the whole project. Multiple ids are rejected.',
       repairCandidates: 'begin/evaluate/commitBestShotRepairCandidate inside `previs` repair',
       provenance: 'getStatus().provenance on verify, package, previs, and video (per-invocation runId, retries, cancelled, revision-bound validation)',
-      resumeCancel: 'Ctrl+C / SIGINT cancels package, video, and still jobs; previs resumes from run-state.json',
+      resumeCancel: 'Ctrl+C / SIGINT or `npm run agent:cancel -- --operation <id>` cancels package, video, still, and character-import jobs; previs resumes from run-state.json',
       recoveryResources: '`package` and `exportProjectBackup` reconcile recovery binaries before export',
     },
     discovery: {
@@ -62,6 +64,12 @@ export function buildAgentCliHelpDocument() {
     projectLifecycle: {
       open: '`open --file <package.fsp> --write` stages the package and calls openProjectPackage.',
       save: '`save --output <package.fsp> --write` exports a verified `.fsp` backup.',
+    },
+    operations: {
+      lifecycle: 'requested → accepted → running → progress → completed | failed | cancelled',
+      heartbeat: 'stderr `[agent-op]` JSON every 5s while a heavy command is alive',
+      cancel: '`npm run agent:cancel -- --operation <id>` (or omit --operation to cancel the latest active run)',
+      profileLocks: 'openAgentBrowser removes stale Chromium SingletonLock files when the owner pid is dead',
     },
     runIdentity: {
       runId: 'Generated per CLI invocation and published as getStatus().provenance.cli.runId',

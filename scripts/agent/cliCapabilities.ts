@@ -101,6 +101,29 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     notes: 'npm run agent:save -- --output <package.fsp> --write',
   },
   {
+    id: 'operation.cancel',
+    label: 'Cancel a running CLI operation',
+    cliCommand: 'cancel',
+    cli: true,
+    ui: false,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: false,
+    notes: 'npm run agent:cancel -- --operation <op_id> sends SIGINT to the CLI pid; it does not kill Chromium.',
+  },
+  {
+    id: 'operation.list',
+    label: 'List CLI operations',
+    cliCommand: 'operations',
+    cli: true,
+    ui: false,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: false,
+  },
+  {
     id: 'project.previewPlan',
     label: 'Preview mutation plan',
     cliCommand: 'preview',
@@ -428,7 +451,7 @@ export function buildAgentCliCapabilitiesDocument() {
     commands: [...AGENT_CLI_COMMANDS],
     renderAppearances: [...AGENT_RENDER_APPEARANCES],
     jsonContract: {
-      envelope: ['ok', 'operation', 'durationMs', 'projectId', 'revisionId', 'affectedObjectIds', 'affectedShotIds', 'warnings', 'error', 'result'],
+      envelope: ['ok', 'operation', 'operationId', 'durationMs', 'projectId', 'revisionId', 'affectedObjectIds', 'affectedShotIds', 'warnings', 'error', 'profileRecovery', 'result'],
       exitCodes: { success: 0, failure: 1, usage: 2 },
     },
   };
@@ -438,6 +461,8 @@ export function commandToOperationName(command: string): string {
   if (command === 'help') return 'agent.help';
   if (command === 'frame') return 'render.frame';
   if (command === 'video') return 'render.video';
+  if (command === 'cancel') return 'operation.cancel';
+  if (command === 'operations') return 'operation.list';
   const match = AGENT_CLI_CAPABILITY_RECORDS.find((record) => record.cliCommand === command);
   return match?.id ?? `cli.${command}`;
 }

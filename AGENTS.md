@@ -14,7 +14,8 @@ Preferred commands:
 - `npm run agent:capabilities`
 - `npm run agent:inspect`
 - `npm run agent:open`
-- `npm run agent:save`
+- `npm run agent:cancel`
+- `npm run agent:operations`
 - `npm run agent:previs`
 - `npm run agent:preview`
 - `npm run agent:apply`

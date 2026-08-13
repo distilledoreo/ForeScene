@@ -35,6 +35,8 @@ npm run agent:refine -- --plan production/refinement-plan.json --batch batch-01 
 `preview` prepares a plan without mutating the live project (read-only mode is enough).  
 `apply` / `run` / `package` **require** explicit `--write` or `--persist-write` and refuse to start without it.
 
+Long-running commands emit `[agent-op]` JSON heartbeats on stderr every 5 seconds and write `.forescene-agent/operations/<id>.json`. Cancel with `npm run agent:cancel -- --operation <id>` (SIGINT to the CLI pid). Stale Chromium `SingletonLock` files are removed automatically when the owner process is dead.
+
 `agent:verify` and `agent:visual-preflight` honor `--shot`/`--shots`. An explicit selection that matches nothing fails, and unmatched ids appear in the JSON result and provenance. An empty project with no `--shots` skips the visual gate instead of reporting a vacuous pass. `agent:frame` and `agent:video` accept exactly one shot and reject extra ids before the browser opens. Clay, projected, and depth are `--mode` values on those commands (`--appearance` remains an alias). `agent:asset-contract` accepts one optional `--shot` (API `shotId`) and rejects additional ids.
 
 `agent:import-model` takes the same ordinary-model path as **Import 3D scene**.
