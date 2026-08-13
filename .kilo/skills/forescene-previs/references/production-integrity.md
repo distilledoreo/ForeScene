@@ -3,7 +3,7 @@
 Production-integrity is opt-in for final packages, client approvals, motion
 deliverables, or high-value projects where complete evidence matters.
 
-Use the gated production runner or equivalent browser APIs. Retain the full
+Use `npm run agent:production`. Do not call `window.foreScene` production APIs when `production.orchestrate` is true. Retain the full
 project preservation preflight and final comparison, recovery revisions,
 capability-covering canary, artifact hashes, detailed batch review, motion
 samples, and approval gates.
