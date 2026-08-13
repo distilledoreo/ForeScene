@@ -275,6 +275,14 @@ export default function App() {
         aria-hidden="true"
         className="hidden"
       />
+      <input
+        type="file"
+        accept={projectBackupAcceptAttribute()}
+        data-agent-project-open-input
+        tabIndex={-1}
+        aria-hidden="true"
+        className="hidden"
+      />
       <main className="absolute inset-0">
         <Suspense
           fallback={(

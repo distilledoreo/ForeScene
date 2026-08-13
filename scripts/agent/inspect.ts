@@ -13,10 +13,14 @@ export interface AgentInspectPayload {
   shots: unknown;
   landmarks: unknown;
   exportPlan: unknown;
+  document?: unknown;
 }
 
-export async function inspectViaBrowser(page: Page): Promise<AgentInspectPayload> {
-  return page.evaluate(() => {
+export async function inspectViaBrowser(
+  page: Page,
+  options: { includeDocument?: boolean } = {},
+): Promise<AgentInspectPayload> {
+  return page.evaluate((includeDocument) => {
     const api = window.foreScene;
     if (!api) {
       throw new Error('window.foreScene is not available');
@@ -47,6 +51,7 @@ export async function inspectViaBrowser(page: Page): Promise<AgentInspectPayload
             estimatedFileCount: exportPlan.plan?.estimatedFileCount,
           }
         : exportPlan,
+      ...(includeDocument ? { document: api.getProjectDocument() } : {}),
     };
-  });
+  }, options.includeDocument === true);
 }

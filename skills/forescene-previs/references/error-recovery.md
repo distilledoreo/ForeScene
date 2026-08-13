@@ -22,7 +22,7 @@ For a retained project, location, cast, or prop changes are incremental refineme
 
 ## Export-plan omission
 
-Call `createExportPlan()` after changing export settings. If a required projected artifact is omitted with `missing-projector`, stop and repair the usable panorama/projector or obtain an explicit revised deliverables request. Any required omitted kind blocks package success.
+Call `npm run agent:plan-exports` after changing export settings. If a required projected artifact is omitted with `missing-projector`, stop and repair the usable panorama/projector or obtain an explicit revised deliverables request. Any required omitted kind blocks package success.
 
 ## Video cancelled, stale, or failed
 
@@ -67,4 +67,4 @@ Never claim successful videos when their logs show failures, a replacement refin
 
 ## Agent busy
 
-Wait through `window.foreScene.waitForIdle({ timeoutMs: 60_000 })` or retry after package export, graybox render, character import, or video activity finishes. `waitForIdle` only covers busy state; use viewport readiness before judging a frame. Never start overlapping Agent writes.
+Wait for the previous Agent CLI command to finish, or retry after package export, graybox render, character import, or video activity finishes. Busy-state waits only cover flags; use `agent:verify` / visual preflight before judging a frame. Never start overlapping Agent writes.

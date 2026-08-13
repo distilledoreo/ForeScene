@@ -3,7 +3,10 @@
  */
 
 export const AGENT_CLI_COMMANDS = [
+  'capabilities',
   'inspect',
+  'open',
+  'save',
   'preview',
   'apply',
   'screenshot',
@@ -47,9 +50,18 @@ export function buildAgentCliHelpDocument() {
       recoveryResources: '`package` and `exportProjectBackup` reconcile recovery binaries before export',
     },
     discovery: {
-      describeCapabilities: 'window.foreScene.describeCapabilities()',
+      cliCapabilities: '`npm run agent:capabilities` — canonical public surface; no browser required',
+      describeCapabilities: 'window.foreScene.describeCapabilities() — browser API only; prefer CLI capabilities',
       describeOperation: 'window.foreScene.describeOperation(name)',
       getAgentSchema: 'window.foreScene.getAgentSchema()',
+    },
+    renderModes: {
+      frame: 'Clay, projected, and depth are `--mode` (alias `--appearance`) on `frame`. Default clay.',
+      video: 'Same `--mode` / `--appearance` contract as `frame`.',
+    },
+    projectLifecycle: {
+      open: '`open --file <package.fsp> --write` stages the package and calls openProjectPackage.',
+      save: '`save --output <package.fsp> --write` exports a verified `.fsp` backup.',
     },
     runIdentity: {
       runId: 'Generated per CLI invocation and published as getStatus().provenance.cli.runId',

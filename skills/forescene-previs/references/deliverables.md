@@ -53,7 +53,7 @@ It configures:
 
 ## Plan gate
 
-After applying the profile and before rendering, call `window.foreScene.createExportPlan()` for the selected shot IDs. Record the returned plan or a derived `artifacts/previs/preflight/deliverables-plan.json` containing its revision/time, selected shots, required kinds, omissions, and blocking decision.
+After applying the profile and before rendering, run `npm run agent:plan-exports` for the selected shot IDs. Record the returned plan or a derived `artifacts/previs/preflight/deliverables-plan.json` containing its revision/time, selected shots, required kinds, omissions, and blocking decision.
 
 For every selected shot, verify these artifact kinds as applicable to the shot:
 

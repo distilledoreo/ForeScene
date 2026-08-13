@@ -1,6 +1,6 @@
 # ForeScene Agent API
 
-ForeScene exposes a browser Agent API on `window.foreScene` so CLI coding agents can inspect and mutate the open project without clicking through the UI.
+ForeScene exposes a browser Agent API on `window.foreScene`. The **canonical public automation surface** is the Agent CLI (`npm run agent:*`). Agents should query `npm run agent:capabilities` and use documented CLI commands instead of calling `window.foreScene` or inspecting source for supported operations. See [agent-capability-matrix.md](./agent-capability-matrix.md).
 
 Playwright hosts and observes the browser. The Agent API performs exact project reads and protected mutations.
 
@@ -37,7 +37,7 @@ npm run dev
 npm run agent:inspect
 ```
 
-JSON is written to stdout. Diagnostics and progress go to stderr.
+JSON is written to stdout as a stable envelope (`ok`, `operation`, `durationMs`, `warnings`, `error`, `result`). Diagnostics and progress go to stderr.
 
 ## Permission model
 

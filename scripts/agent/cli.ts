@@ -3,7 +3,10 @@
  * ForeScene Agent CLI — Playwright host for window.foreScene.
  *
  * Usage:
+ *   npm run agent:capabilities
  *   npm run agent:inspect
+ *   npm run agent:open -- --file project.fsp --write
+ *   npm run agent:save -- --output project.fsp --write
  *   npm run agent:preview -- --plan plans/example.json
  *   npm run agent:apply -- --plan plans/example.json --write
  *   npm run agent:screenshot -- --workspace shots --output artifacts/shot.png
@@ -24,6 +27,7 @@
  *   npm run agent:visual-preflight -- --shots 01,02
  *   npm run agent:asset-contract
  *   npm run agent:verify -- --json
+ *   npm run agent:frame -- --shot 01 --mode projected --output artifacts/01.projected.png
  *
  * Write commands require explicit `--write` (session) or `--persist-write` (profile).
  * Project reset additionally requires `--reset-project`.
@@ -51,7 +55,20 @@ import {
   type AgentArtifactTransferTelemetry,
 } from './artifactIo';
 import { parseAgentCliArgs } from './cliArgs';
+import {
+  buildAgentCliCapabilitiesDocument,
+  commandToOperationName,
+  resolveAgentRenderAppearance,
+  type AgentRenderAppearance,
+} from './cliCapabilities';
 import { buildAgentCliHelpDocument } from './cliCommands';
+import {
+  AGENT_CLI_EXIT,
+  AgentCliUsageError,
+  envelopeFromError,
+  wrapAgentCliStdout,
+  type CliStdoutContext,
+} from './cliResult';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
 import {
   resolveCliCommandShotUsage,
@@ -60,13 +77,39 @@ import {
 } from './cliShotSelection';
 
 let activeCliCommand: string | undefined;
+const cliStdout: CliStdoutContext = {
+  operation: 'cli.inspect',
+  startedAt: Date.now(),
+};
 
 function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(wrapAgentCliStdout(cliStdout, value), null, 2)}\n`);
 }
 
 function printErr(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+function resolveRenderAppearance(command: string, appearance?: string, mode?: string): AgentRenderAppearance {
+  try {
+    return resolveAgentRenderAppearance({ command, appearance, mode });
+  } catch (error) {
+    throw new AgentCliUsageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function resolvePeopleVariant(value?: string): 'with_people' | 'clean_plate' | undefined {
+  if (!value) return undefined;
+  if (value === 'with_people' || value === 'clean_plate') return value;
+  throw new AgentCliUsageError('--people-variant must be with_people or clean_plate.');
+}
+
+function resolveFrameContent(value?: string): 'full_scene' | 'characters_only' | undefined {
+  if (!value) return undefined;
+  if (value === 'full_scene' || value === 'characters_only' || value === 'full') {
+    return value === 'full' ? 'full_scene' : value;
+  }
+  throw new AgentCliUsageError('--content must be full_scene, characters_only, or full.');
 }
 
 function parseArgs(argv: string[]) {
@@ -396,15 +439,30 @@ async function runFrame(options: {
   profile?: string;
   shotId: string;
   timeSeconds?: number;
+  appearance: AgentRenderAppearance;
+  peopleVariant?: 'with_people' | 'clean_plate';
+  content?: 'full_scene' | 'characters_only';
   output: string;
 }) {
   await withSession(options, async (session) => {
     const result = await session.page.evaluate(async (input) => (
-      window.foreScene!.renderShotFrame({ shotId: input.shotId, timeSeconds: input.timeSeconds, appearance: 'clay' })
-    ), { shotId: options.shotId, timeSeconds: options.timeSeconds });
+      window.foreScene!.renderShotFrame({
+        shotId: input.shotId,
+        timeSeconds: input.timeSeconds,
+        appearance: input.appearance,
+        peopleVariant: input.peopleVariant,
+        content: input.content,
+      })
+    ), {
+      shotId: options.shotId,
+      timeSeconds: options.timeSeconds,
+      appearance: options.appearance,
+      peopleVariant: options.peopleVariant,
+      content: options.content,
+    });
     if (!result.ok || !result.pngDataUrl) {
       printJson(result);
-      process.exitCode = 1;
+      process.exitCode = AGENT_CLI_EXIT.failure;
       return;
     }
     const comma = result.pngDataUrl.indexOf(',');
@@ -412,7 +470,57 @@ async function runFrame(options: {
     const target = path.resolve(options.output);
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64'));
-    printJson({ ...result, pngDataUrl: undefined, output: target });
+    printJson({ ...result, pngDataUrl: undefined, output: target, appearance: options.appearance });
+  });
+}
+
+async function runOpenProject(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  file: string;
+}) {
+  requireExplicitWrite('agent:open', options.writeAccess);
+  const target = path.resolve(options.file);
+  await withSession(options, async (session) => {
+    await session.page.locator('[data-agent-project-open-input]').setInputFiles(target);
+    const result = await session.page.evaluate(async () => {
+      const fileInput = document.querySelector('[data-agent-project-open-input]') as HTMLInputElement | null;
+      const file = fileInput?.files?.[0];
+      if (!file) throw new Error('Project package was not staged in the browser.');
+      return window.foreScene!.openProjectPackage({ file });
+    });
+    printJson({ ...result, file: target });
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
+async function runSaveProject(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  output: string;
+}) {
+  requireExplicitWrite('agent:save', options.writeAccess);
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(async () => (
+      window.foreScene!.exportProjectBackup({ download: false })
+    ));
+    let savedPath: string | undefined;
+    let transfer: AgentArtifactTransferTelemetry | undefined;
+    if (result.ok && result.artifact?.artifactId) {
+      const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
+      savedPath = saved.savedPath;
+      transfer = toCliArtifactTransfer(saved);
+    } else if (result.ok && !result.artifact?.artifactId) {
+      throw new Error('Project save reported success but no artifact handle was returned.');
+    }
+    printJson({ ...result, savedPath, transfer });
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
   });
 }
 
@@ -634,7 +742,7 @@ async function runVideo(options: {
 
 function requireExplicitWrite(command: string, writeAccess: boolean): void {
   if (!writeAccess) {
-    throw new Error(
+    throw new AgentCliUsageError(
       `${command} requires --write (session) or --persist-write (trusted profile).`,
     );
   }
@@ -1015,7 +1123,13 @@ async function runAssetContract(options: {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
+  cliStdout.operation = commandToOperationName(args.command);
   printErr(`[agent] command=${args.command}`);
+
+  if (args.command === 'capabilities') {
+    printJson(buildAgentCliCapabilitiesDocument());
+    return;
+  }
 
   if (args.command === 'analyze-character') {
     if (!args.file) throw new Error('analyze-character requires --file <path>.');
@@ -1094,8 +1208,7 @@ async function main() {
     } else {
       printErr('ForeScene Agent CLI — use --json for machine-readable help.');
       printErr(`Commands: ${help.commands.join(', ')}`);
-      printErr('Discovery: window.foreScene.describeCapabilities()');
-      printErr('Schema: window.foreScene.getAgentSchema()');
+      printErr('Discovery: npm run agent:capabilities');
       printErr('Checks: visual-preflight, asset-contract, verify (includes both + health + provenance)');
     }
     return;
@@ -1110,7 +1223,33 @@ async function main() {
       profile: args.profile,
     }, async (session) => {
       printErr(`[agent] connected ${session.url}`);
-      printJson(await inspectViaBrowser(session.page));
+      printJson(await inspectViaBrowser(session.page, { includeDocument: args.document }));
+    });
+    return;
+  }
+
+  if (args.command === 'open') {
+    if (!args.file) throw new AgentCliUsageError('open requires --file <path.fsp>.');
+    await runOpenProject({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      file: args.file,
+    });
+    return;
+  }
+
+  if (args.command === 'save') {
+    if (!args.output) throw new AgentCliUsageError('save requires --output <path.fsp>.');
+    await runSaveProject({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      output: args.output,
     });
     return;
   }
@@ -1205,7 +1344,9 @@ async function main() {
 
   if (args.command === 'frame') {
     const usage = resolveCliCommandShotUsage('frame', args.shotSelection);
-    if (!args.output) throw new Error('--output is required for frame');
+    if (!args.output) throw new AgentCliUsageError('--output is required for frame');
+    const appearance = resolveRenderAppearance('frame', args.appearance, args.mode);
+    cliStdout.operation = `render.frame.${appearance}`;
     await runFrame({
       url: args.url,
       headless: args.headless,
@@ -1213,6 +1354,9 @@ async function main() {
       persistWrite: args.persistWrite,
       shotId: usage.shotId!,
       timeSeconds: args.timeSeconds,
+      appearance,
+      peopleVariant: resolvePeopleVariant(args.peopleVariant),
+      content: resolveFrameContent(args.content),
       output: args.output,
       profile: args.profile,
     });
@@ -1222,6 +1366,8 @@ async function main() {
   if (args.command === 'video') {
     const usage = resolveCliCommandShotUsage('video', args.shotSelection);
     requireExplicitWrite('video', args.writeAccess);
+    const appearance = resolveRenderAppearance('video', args.appearance, args.mode);
+    cliStdout.operation = `render.video.${appearance}`;
     await runVideo({
       url: args.url,
       headless: args.headless,
@@ -1230,7 +1376,7 @@ async function main() {
       shotId: usage.shotId!,
       output: args.output,
       resolution: args.resolution,
-      appearance: args.appearance,
+      appearance,
       content: args.content,
       attachToShot: !args.noAttach,
       download: !args.noDownload,
@@ -1392,15 +1538,12 @@ async function main() {
     return;
   }
 
-  throw new Error(`Unknown command: ${args.command}`);
+  throw new AgentCliUsageError(`Unknown command: ${args.command}`);
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  printErr(`[agent] ${message}`);
-  printJson({
-    ok: false,
-    error: message,
-  });
-  process.exitCode = 1;
+  const { envelope, exitCode } = envelopeFromError(cliStdout, error);
+  printErr(`[agent] ${envelope.error?.message ?? 'Command failed.'}`);
+  process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+  process.exitCode = exitCode;
 });

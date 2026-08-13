@@ -17,6 +17,16 @@ Use this skill when an automation harness must drive a **hosted or local ForeSce
 
 The output is an editable ForeScene project and an evidence-backed handoff package. ForeScene control videos communicate camera, timing, blocking, and silhouette intent; they are not final AI video and do not replace performance animation.
 
+## Canonical CLI surface
+
+The Agent CLI is the public automation surface. Before authoring, run:
+
+```bash
+npm run agent:capabilities
+```
+
+If a capability is `true`, use the documented command. Do not inspect ForeScene source or call `window.foreScene` for that operation. See `docs/agent-capability-matrix.md`.
+
 ## Operating vs developing
 
 **Operating ForeScene** (this skill): manipulate a live project through the Agent CLI and hosted app. Do **not** edit application source code.
@@ -190,7 +200,7 @@ Before any write, inspect the live project and select one quality mode and one o
 
 For existing-project refinement, complete the required preflight **before any write**:
 
-1. Run `npm run agent:inspect` and read `window.foreScene.getProjectDocument()` in the connected session.
+1. Run `npm run agent:inspect -- --document` and retain the returned project document IDs.
 2. Write `artifacts/previs/preflight/project-preservation.json` with the project identity, counts, preservation choices, planned replacements, and every retained ID.
 3. Confirm `resetAuthorized` is `false`; only a user’s explicit reconstruction request can make it `true`.
 4. Preview every mutation plan before applying it. Preserve the original shot, panorama, retained environment-object, camera, and timeline IDs.
@@ -288,7 +298,7 @@ Do not casually drift from producing frames into modifying ForeScene. A source f
 Before any render, ask for the required output profile or infer it from the request and state the inference. **Never silently default to clay-only.** Use the built-in recommended `ai-control-full` profile when the task requires AI-control, multipass, clean-plate, character-only, projected, or depth deliverables. Its exact Agent plan is [ai-control-full-export-plan.json](examples/ai-control-full-export-plan.json).
 
 1. Apply the profile through `agent:apply -- --plan <path> --write`.
-2. Call `window.foreScene.createExportPlan()` afterward.
+2. Call `npm run agent:plan-exports` afterward.
 3. Confirm every required artifact kind is planned with `disposition: "produce"`; required projected artifacts omitted with `missing-projector` are a blocking failure, not a warning to ignore.
 4. For a motion-required shot, verify the clay/projected/depth camera-move and reference-frame artifacts expected by the selected profile. For a still, explicitly record that motion artifacts are not required.
 5. Only then run `agent:package` and verify the resulting files.
@@ -306,7 +316,10 @@ Visual QA is authoritative: compare the final frame with the shot description, m
 These commands are available in the ForeScene checkout:
 
 ```bash
+npm run agent:capabilities
 npm run agent:inspect
+npm run agent:open
+npm run agent:save
 npm run agent:analyze-character
 npm run agent:import-character
 npm run agent:import-model
@@ -329,7 +342,7 @@ npm run agent:contact-sheet
 npm run agent:package
 ```
 
-Use `agent:frame` for clean clay samples and `agent:video` for a direct shot render. Both accept exactly one `--shot` (or a single `--shots` value) and reject extra ids before the browser opens. `agent:verify` and `agent:visual-preflight` accept optional `--shot`/`--shots`: omitted selection validates every shot (or skips the visual gate on an empty project); an explicit selection that matches nothing fails, and unmatched ids appear in the JSON result. `agent:asset-contract` accepts one optional `--shot` (API `shotId`); omit the flag for the whole project. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
+Use `agent:frame` for clean clay, projected, or depth samples (`--mode clay|projected|depth`) and `agent:video` for a direct shot render with the same mode flag. Both accept exactly one `--shot` (or a single `--shots` value) and reject extra ids before the browser opens. `agent:open -- --file <package.fsp> --write` loads an existing project; `agent:save -- --output <package.fsp> --write` writes a verified backup. `agent:inspect -- --document` returns the full project document for preservation IDs. `agent:verify` and `agent:visual-preflight` accept optional `--shot`/`--shots`: omitted selection validates every shot (or skips the visual gate on an empty project); an explicit selection that matches nothing fails, and unmatched ids appear in the JSON result. `agent:asset-contract` accepts one optional `--shot` (API `shotId`); omit the flag for the whole project. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
 
 The commands above remain independently available primitives.
 
@@ -368,7 +381,7 @@ artifacts/previs/
 └── run-state.json
 ```
 
-`shots/*.png` must come from the canonical clean clay renderer (`window.foreScene.renderShotFrame`), not a UI screenshot. `debug/*-ui.png` is for human debugging only. A contact sheet is required for readable review but cannot replace opening suspicious individual frames.
+`shots/*.png` must come from the canonical renderer via `agent:frame` (clay by default; `--mode projected` or `--mode depth` when required), not a UI screenshot. `debug/*-ui.png` is for human debugging only. A contact sheet is required for readable review but cannot replace opening suspicious individual frames.
 
 The production review planner supports a master sequence sheet,
 location-grouped sheets, motion triptychs, and adjacent-shot continuity strips.
@@ -382,15 +395,14 @@ decision separately.
 
 For every motion shot, render and inspect `t = 0`, `t = duration / 2`, and `t = duration`; open or sample the MP4 itself. Confirm the MP4 exists, is nonempty, matches the shot/pass identity, and is newer than the relevant scene change.
 
-## Agent browser APIs
+## Agent CLI primitives
 
-Useful when inspecting a live session:
+Useful documented CLI commands when inspecting a live session:
 
-- `window.foreScene.getProjectDocument()` — read-only full project snapshot for preservation IDs.
-- `window.foreScene.createExportPlan({ shotIds? })` — package plan that must be checked before rendering.
-- `window.foreScene.renderShotFrame({ shotId, timeSeconds, pass: 'clay' })` — clean clay PNG data URL and pixel stats.
-- `window.foreScene.waitForViewportReady({ workspace: 'shots', shotId })` — stable visual readiness, not just idle.
-- `window.foreScene.waitForIdle()` — busy flags only; not proof that the viewport is visually ready.
+- `npm run agent:inspect -- --document` — read-only project snapshot for preservation IDs.
+- `npm run agent:plan-exports` — package plan that must be checked before rendering.
+- `npm run agent:frame -- --shot <id> --mode clay --output <png>` — clean PNG and pixel stats.
+- `npm run agent:verify` — idle/busy plus visual and health gates; not proof that a frame is visually ready.
 
 Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes.
 
