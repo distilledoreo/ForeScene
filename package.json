@@ -49,6 +49,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
     "test:e2e:smoke": "playwright test --project=desktop-chromium --grep \"@smoke\"",
+    "test:e2e:agent-cli": "playwright test --project=desktop-chromium --grep \"@agent-cli\"",
     "test:e2e:responsive": "playwright test --grep \"@responsive\"",
     "test:e2e:webkit": "playwright test --project=desktop-webkit --grep \"@smoke\" --grep-invert \"@webkit-gpu\" --workers=1",
     "test:e2e:webkit-gpu": "playwright test --project=desktop-webkit --grep \"@webkit-gpu\" --workers=1",

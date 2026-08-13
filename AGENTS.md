@@ -74,6 +74,7 @@ Run once after the implementation is stable:
 - `npm run test` (fast unit suite; no Chromium)
 - `npm run test:browser` when renderer / projection / WebGL code changed
 - `npm run test:e2e:smoke` (Chromium desktop smoke)
+- `npm run test:e2e:agent-cli` when Agent CLI open/inspect/frame/video/save parity changed
 - Any feature-specific E2E you added
 
 Leave tablet/phone responsive, WebKit, screenshot baselines, and heavy workflows to path-conditional CI or the full-regression workflow (main / nightly / manual).
