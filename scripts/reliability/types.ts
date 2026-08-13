@@ -32,6 +32,7 @@ export interface SoakReport {
   startedAt: string;
   endedAt: string;
   durationMs: number;
+  timing?: import('./perf').SoakTimingSummary;
 }
 
 export const SOAK_GATE_NAMES: Record<SoakGateId, string> = {

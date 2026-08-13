@@ -18,6 +18,7 @@ import { runGateD } from './gateD';
 import { runGateE } from './gateE';
 import { runGateF } from './gateF';
 import { runGateB, runGateC } from './gateLive';
+import { summarizeSoakTiming } from './perf';
 import { repoRoot } from '../benchmark/layout';
 import type { SoakGateResult, SoakReport } from './types';
 
@@ -38,7 +39,7 @@ function summarize(gates: SoakGateResult[], startedAt: Date, live: boolean): Soa
   const endedAt = new Date();
   const retriesTotal = gates.reduce((sum, gate) => sum + gate.retries, 0);
   const executedFailed = gates.some((gate) => gate.status === 'failed');
-  return {
+  const report: SoakReport = {
     ok: !executedFailed && retriesTotal === 0,
     live,
     retriesTotal,
@@ -52,6 +53,8 @@ function summarize(gates: SoakGateResult[], startedAt: Date, live: boolean): Soa
     endedAt: endedAt.toISOString(),
     durationMs: endedAt.getTime() - startedAt.getTime(),
   };
+  report.timing = summarizeSoakTiming(report);
+  return report;
 }
 
 export async function runReliabilitySoak(input: {

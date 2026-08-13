@@ -9,6 +9,7 @@ import { runGateE } from '../scripts/reliability/gateE';
 import { runGateF } from '../scripts/reliability/gateF';
 import { runGateB, runGateC } from '../scripts/reliability/gateLive';
 import { runReliabilitySoak } from '../scripts/reliability/soak';
+import { summarizeSoakTiming } from '../scripts/reliability/perf';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -65,5 +66,35 @@ describe('reliability soak gates A–F', () => {
     expect(report.gates.find((gate) => gate.id === 'B')?.status).toBe('skipped');
     expect(report.gates.find((gate) => gate.id === 'C')?.status).toBe('skipped');
     expect(report.gates.filter((gate) => gate.status === 'failed')).toEqual([]);
+    expect(report.timing?.ok).toBe(true);
+    expect(report.timing?.retriesTotal).toBe(0);
+    expect(report.timing?.policy.doNotOptimizeByRetrying).toBe(true);
   }, 60_000);
+
+  it('rejects soak timings that used retries', () => {
+    const timing = summarizeSoakTiming({
+      ok: true,
+      live: false,
+      retriesTotal: 2,
+      policy: {
+        retriesMustRemainZero: true,
+        doNotKillChromium: true,
+        infrastructureStopsTheRun: true,
+      },
+      gates: [{
+        id: 'A',
+        name: 'CLI completeness',
+        status: 'passed',
+        requiredLive: false,
+        message: 'retried',
+        durationMs: 10,
+        retries: 2,
+      }],
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: 10,
+    });
+    expect(timing.ok).toBe(false);
+    expect(timing.policy.measureBeforeOptimize).toBe(true);
+  });
 });
