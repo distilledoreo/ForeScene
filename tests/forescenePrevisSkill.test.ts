@@ -57,6 +57,8 @@ describe('ForeScene previs skill contract', () => {
       'agent:save',
       'agent:capabilities',
       'FORESCENE_BENCHMARK_BRIEF',
+      'FORESCENE_REPO_ROOT',
+      'npm --prefix',
       'writeAuthorized',
       'resetAuthorized',
       'repairBudget',

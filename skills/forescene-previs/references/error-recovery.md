@@ -38,6 +38,10 @@ Read the batch review and correct the actual visual cause: subject selection, as
 
 Do not advance to the next batch until every shot in the current batch passes a fresh visual review. If the frame is visually unusable despite a passing `validation.json`, the shot remains failed.
 
+## Hung CLI operation
+
+Cancel with `npm run agent:cancel -- --operation <id>`. Do not kill Chromium. Do not hand-delete profile locks while a live CLI pid still owns them. After cancel, the next documented command should reuse the profile.
+
 ## Partial run or browser closed
 
 Re-run the same command without resetting. Completed phases and shots are reusable only when their inputs and scene revision remain valid. Recheck the preservation record, changed shots, and artifact timestamps before trusting prior outputs.
