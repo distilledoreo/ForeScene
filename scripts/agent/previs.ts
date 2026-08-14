@@ -38,6 +38,7 @@ import {
   inspectShotCompositionError,
   createInitialRunState,
   firstIncompletePhase,
+  preflightProductionAssets,
   hashPrevisManifest,
   isCanonicalFrame,
   isRepairableIssue,
@@ -74,6 +75,7 @@ import {
   type ProductionRunTiming,
 } from '../../src/engine/previs/index';
 import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession';
+import { attachAgentRunSession, detachAgentRunSession, startAgentRunSession } from './agentSession';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
@@ -766,6 +768,16 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
   }
 
+  const assetPreflight = await preflightProductionAssets(manifest, options.manifestPath);
+  if (!assetPreflight.ok) {
+    return {
+      ok: false,
+      phase: 'validate',
+      diagnostics: assetPreflight.errors,
+      error: 'Manifest asset preflight failed.',
+    };
+  }
+
   const loaded = await loadOrCreateRunState({
     outputDir,
     manifest,
@@ -856,13 +868,23 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }).catch(() => undefined);
     },
   });
-  const session = await openAgentBrowser({
+  if (!options.profileDir) {
+    return {
+      ok: false,
+      phase: 'validate',
+      error: 'Production/previs runs require an explicit --profile.',
+    };
+  }
+  const runSession = await startAgentRunSession({
     url: options.url,
     headless: options.headless,
     writeAccess: options.writeAccess,
     persistWrite: options.persistWrite,
     profileDir: options.profileDir,
+    command: 'previs',
   });
+  attachAgentRunSession(runSession);
+  const session = runSession.browser;
   triggerBrowserAbort = await installCliAbortBridge(session.page);
   await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
     command: 'previs',
@@ -2138,7 +2160,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     throw error;
   } finally {
     abortScope.dispose();
-    await session.close();
+    detachAgentRunSession();
+    await runSession.close();
   }
 }
 

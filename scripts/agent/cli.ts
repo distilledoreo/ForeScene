@@ -60,6 +60,7 @@ import {
   agentCliCommandRequiresProfile,
   requireExplicitAgentProfile,
 } from './agentProfile';
+import { activeAgentRunSession } from './agentSession';
 import { parseAgentCliArgs } from './cliArgs';
 import {
   buildAgentCliCapabilitiesDocument,
@@ -885,18 +886,27 @@ async function withSession<T>(
   });
 
   await operation.start(`Starting ${operation.record.type}`);
+  let ownsBrowser = false;
   try {
-    session = await openAgentBrowser({
-      url: options.url,
-      headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
-      writeAccess: options.writeAccess,
-      persistWrite: options.persistWrite,
-      profileDir: options.profile,
-    });
+    const shared = activeAgentRunSession();
+    const reuse = Boolean(shared && options.profile && shared.profileDir === requireExplicitAgentProfile(options.profile));
+    if (reuse && shared) {
+      session = shared.browser;
+      cliStdout.profile = shared.profileDir;
+    } else {
+      ownsBrowser = true;
+      session = await openAgentBrowser({
+        url: options.url,
+        headless: options.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+        writeAccess: options.writeAccess,
+        persistWrite: options.persistWrite,
+        profileDir: options.profile,
+      });
+    }
     cliStdout.profileRecovery = session.profileRecovery;
     await publishCliInvocationIdentity(session.page, createCliInvocationIdentity({
       command: options.command ?? activeCliCommand,
-      profile: options.profile,
+      profile: options.profile ?? session.profileDir,
     }));
     triggerBrowserAbort = await installCliAbortBridge(session.page);
     activeCliOperation = operation;
@@ -925,7 +935,7 @@ async function withSession<T>(
     operation.dispose();
     if (cancelBrowserPromise) await cancelBrowserPromise;
     abortScope.dispose();
-    await session?.close();
+    if (ownsBrowser) await session?.close();
   }
 }
 

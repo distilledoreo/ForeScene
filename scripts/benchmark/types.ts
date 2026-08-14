@@ -66,6 +66,7 @@ export interface BenchmarkCandidateBrief {
   profileDir: string;
   outputDir: string;
   projectPackage?: string;
+  productionManifest?: string;
   shots: BenchmarkShotSpec[];
 }
 

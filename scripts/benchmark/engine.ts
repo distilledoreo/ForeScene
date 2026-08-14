@@ -1,7 +1,7 @@
 import { cp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { buildCandidateBrief } from './brief';
-import { harnessFailure, modelFailure } from './failures';
+import { applicationDefect, harnessFailure, modelFailure } from './failures';
 import { findForbiddenCandidateFiles } from './forbidden';
 import { hashDirectory } from './hashes';
 import {
@@ -10,6 +10,7 @@ import {
   unauthorizedRepoModifications,
   type GitIdentityRecord,
 } from './git';
+import { compileAndPreflightBenchmarkInput } from './compileProductionInput';
 import { createBenchmarkRunLayout, type BenchmarkRunLayout } from './layout';
 import type { BenchmarkClock } from './timing';
 import type { BenchmarkFailure, BenchmarkSpecV1 } from './types';
@@ -57,11 +58,32 @@ export async function prepareBenchmarkRun(input: {
     }
   }
 
+  const productionManifestPath = path.join(layout.harnessDir, 'production-manifest.json');
+  const compiled = await withPhase(input.clock, 'production-input', 'prepare', () => (
+    compileAndPreflightBenchmarkInput({
+      spec: input.spec,
+      specPath: input.specPath,
+      outputManifestPath: productionManifestPath,
+    })
+  ));
+  if (!compiled.parsedOk || !compiled.preflight.ok) {
+    return {
+      layout,
+      git,
+      failure: applicationDefect(
+        'production.preflight',
+        compiled.preflight.errors.map((error) => error.message).join('; ')
+          || 'Generated production manifest failed preflight.',
+      ),
+    };
+  }
+
   const brief = buildCandidateBrief({
     spec: input.spec,
     layout,
     url: input.url,
     projectPackage,
+    productionManifest: productionManifestPath,
   });
   await writeFile(layout.briefPath, `${JSON.stringify(brief, null, 2)}\n`, 'utf8');
   return { layout, git };

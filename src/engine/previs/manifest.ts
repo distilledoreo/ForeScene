@@ -6,6 +6,8 @@
 import type { Vec3 } from '../../domain/types';
 
 export const PREVIS_MANIFEST_VERSION = 1 as const;
+export const PREVIS_MANIFEST_VERSIONS = [1, 2] as const;
+export type PrevisManifestVersion = (typeof PREVIS_MANIFEST_VERSIONS)[number];
 
 export const PREVIS_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '2.39:1'] as const;
 export type PrevisAspectRatio = (typeof PREVIS_ASPECT_RATIOS)[number];
@@ -123,8 +125,37 @@ export const PREVIS_MANIFEST_LIMITS = {
   maxSceneExtentMeters: 1500,
 } as const;
 
+export const PREVIS_SEMANTIC_ROLES = ['subject', 'prop', 'character'] as const;
+export type PrevisSemanticRole = (typeof PREVIS_SEMANTIC_ROLES)[number];
+
+export const PREVIS_ASSET_TYPES = [
+  'imported_model',
+  'imported_character',
+  'saved_rig',
+  'panorama',
+  'image',
+  'video',
+  'primitive_proxy',
+] as const;
+export type PrevisAssetType = (typeof PREVIS_ASSET_TYPES)[number];
+
+export const PREVIS_ASSET_IMPORT_MODES = ['ordinary_model', 'character', 'saved_rig'] as const;
+export type PrevisAssetImportMode = (typeof PREVIS_ASSET_IMPORT_MODES)[number];
+
+export interface PrevisAssetDefinition {
+  id: string;
+  type: PrevisAssetType;
+  source?: string;
+  importMode?: PrevisAssetImportMode;
+  semanticRole?: PrevisSemanticRole;
+  required?: boolean;
+  rigMode?: PrevisImportedCharacterRigMode;
+  rigPackage?: string;
+  replaceProxy?: string;
+}
+
 export interface PrevisProductionManifestV1 {
-  version: typeof PREVIS_MANIFEST_VERSION;
+  version: PrevisManifestVersion;
   project: {
     name: string;
     description?: string;
@@ -134,6 +165,7 @@ export interface PrevisProductionManifestV1 {
   locations: PrevisLocationDefinition[];
   cast: PrevisCharacterDefinition[];
   props?: PrevisPropDefinition[];
+  assets?: PrevisAssetDefinition[];
   shots: PrevisShotDefinition[];
 }
 

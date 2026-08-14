@@ -11,9 +11,12 @@ import {
   PREVIS_LOCATION_FEATURE_TYPES,
   PREVIS_LOCATION_SLOTS,
   PREVIS_LOCATION_TEMPLATES,
+  PREVIS_ASSET_IMPORT_MODES,
+  PREVIS_ASSET_TYPES,
   PREVIS_IMPORTED_CHARACTER_RIG_MODES,
   PREVIS_MANIFEST_LIMITS,
-  PREVIS_MANIFEST_VERSION,
+  PREVIS_MANIFEST_VERSIONS,
+  PREVIS_SEMANTIC_ROLES,
   PREVIS_PROP_PRIMITIVES,
   PREVIS_RELATIVE_RELATIONS,
   type PrevisAspectRatio,
@@ -22,6 +25,9 @@ import {
   type PrevisCameraAngle,
   type PrevisCameraTemplate,
   type PrevisCharacterDefinition,
+  type PrevisAssetDefinition,
+  type PrevisAssetImportMode,
+  type PrevisAssetType,
   type PrevisImportedCharacterRigMode,
   type PrevisLensClass,
   type PrevisLocationDefinition,
@@ -32,6 +38,7 @@ import {
   type PrevisPropDefinition,
   type PrevisPropPrimitive,
   type PrevisRelativeRelation,
+  type PrevisSemanticRole,
   type PrevisShotDefinition,
   type PrevisShotMotion,
   type PrevisShotMotionKeyframe,
@@ -57,10 +64,10 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const root = coerceJsonRoot(input, errors, warnings);
   if (!root) return { errors, warnings };
 
-  if (root.version !== PREVIS_MANIFEST_VERSION) {
+  if (!(PREVIS_MANIFEST_VERSIONS as readonly number[]).includes(root.version as number)) {
     errors.push(previsError(
       PREVIS_DIAGNOSTIC_CODES.schemaVersion,
-      `version must be ${PREVIS_MANIFEST_VERSION}.`,
+      `version must be ${PREVIS_MANIFEST_VERSIONS.join(' or ')}.`,
       { path: 'version' },
     ));
   }
@@ -111,6 +118,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const locationIds = new Set<string>();
   const castIds = new Set<string>();
   const propIds = new Set<string>();
+  const assetIds = new Set<string>();
   const shotIds = new Set<string>();
   const shotNumbers = new Set<string>();
 
@@ -119,12 +127,24 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const props = root.props === undefined
     ? undefined
     : parseProps(root.props, propIds, errors, warnings);
+  const assets = root.assets === undefined
+    ? undefined
+    : parseAssets(root.assets, assetIds, errors, warnings);
+  if (cast.length === 0 && (assets?.length ?? 0) === 0) {
+    errors.push(previsError(
+      PREVIS_DIAGNOSTIC_CODES.emptyField,
+      'cast must contain at least one character, or assets must declare a subject.',
+      { path: 'cast' },
+    ));
+  }
+
   const shots = parseShots(
     root.shots,
     {
       locationIds,
       castIds,
       propIds,
+      assetIds,
       shotIds,
       shotNumbers,
     },
@@ -137,7 +157,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   }
 
   const manifest: PrevisProductionManifestV1 = {
-    version: PREVIS_MANIFEST_VERSION,
+    version: root.version === 2 ? 2 : 1,
     project: {
       name: projectName,
       aspectRatio,
@@ -147,6 +167,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
     locations,
     cast,
     ...(props !== undefined ? { props } : {}),
+    ...(assets !== undefined ? { assets } : {}),
     shots,
   };
 
@@ -305,14 +326,6 @@ function parseCast(
     errors.push(previsError(
       PREVIS_DIAGNOSTIC_CODES.missingField,
       'cast must be an array.',
-      { path: 'cast' },
-    ));
-    return [];
-  }
-  if (value.length === 0) {
-    errors.push(previsError(
-      PREVIS_DIAGNOSTIC_CODES.emptyField,
-      'cast must contain at least one character.',
       { path: 'cast' },
     ));
     return [];
@@ -505,12 +518,108 @@ function parseProps(
   return result;
 }
 
+function parseAssets(
+  value: unknown,
+  assetIds: Set<string>,
+  errors: PrevisDiagnostic[],
+  warnings: PrevisDiagnostic[],
+): PrevisAssetDefinition[] {
+  if (!Array.isArray(value)) {
+    errors.push(previsError(
+      PREVIS_DIAGNOSTIC_CODES.invalidType,
+      'assets must be an array when provided.',
+      { path: 'assets' },
+    ));
+    return [];
+  }
+  const result: PrevisAssetDefinition[] = [];
+  value.forEach((entry, index) => {
+    const path = `assets[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'asset must be an object.', { path }));
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = readId(record.id, `${path}.id`, assetIds, errors);
+    const type = readEnum(record.type, PREVIS_ASSET_TYPES, `${path}.type`, errors) as PrevisAssetType | undefined;
+    const source = readOptionalString(record.source, `${path}.source`, errors, warnings);
+    const importMode = record.importMode === undefined
+      ? undefined
+      : readEnum(record.importMode, PREVIS_ASSET_IMPORT_MODES, `${path}.importMode`, errors) as PrevisAssetImportMode | undefined;
+    const semanticRole = record.semanticRole === undefined
+      ? undefined
+      : readEnum(record.semanticRole, PREVIS_SEMANTIC_ROLES, `${path}.semanticRole`, errors) as PrevisSemanticRole | undefined;
+    const required = typeof record.required === 'boolean' ? record.required : undefined;
+    const rigMode = record.rigMode === undefined
+      ? undefined
+      : readEnum(record.rigMode, PREVIS_IMPORTED_CHARACTER_RIG_MODES, `${path}.rigMode`, errors) as PrevisImportedCharacterRigMode | undefined;
+    const rigPackage = readOptionalString(record.rigPackage, `${path}.rigPackage`, errors, warnings);
+    const replaceProxy = readOptionalString(record.replaceProxy, `${path}.replaceProxy`, errors, warnings);
+
+    if (type === 'imported_model' && importMode === 'character') {
+      errors.push(previsError(
+        PREVIS_DIAGNOSTIC_CODES.semanticTypeMismatch,
+        'An ordinary imported_model cannot use importMode "character".',
+        { path: `${path}.importMode`, entityId: id },
+      ));
+    }
+    if (type === 'imported_model' && semanticRole === 'character') {
+      errors.push(previsError(
+        PREVIS_DIAGNOSTIC_CODES.semanticTypeMismatch,
+        'semanticRole "character" requires type imported_character or saved_rig, not imported_model.',
+        { path: `${path}.semanticRole`, entityId: id },
+      ));
+    }
+    if (type === 'imported_model' && (rigMode || rigPackage)) {
+      errors.push(previsError(
+        PREVIS_DIAGNOSTIC_CODES.unexpectedCharacterRig,
+        'Ordinary imported models cannot declare rigMode or rigPackage.',
+        { path: `${path}.rigMode`, entityId: id },
+      ));
+    }
+    if ((type === 'imported_character' || type === 'saved_rig' || importMode === 'character' || importMode === 'saved_rig')
+      && (rigMode === 'saved-rig' || type === 'saved_rig' || importMode === 'saved_rig')
+      && !rigPackage) {
+      errors.push(previsError(
+        PREVIS_DIAGNOSTIC_CODES.missingSavedRigPackage,
+        'rigPackage is required when the asset is declared as a saved-rig character.',
+        { path: `${path}.rigPackage`, entityId: id },
+      ));
+    }
+    if ((type === 'imported_model' || type === 'imported_character' || type === 'panorama' || type === 'image' || type === 'video')
+      && !source
+      && required !== false) {
+      errors.push(previsError(
+        PREVIS_DIAGNOSTIC_CODES.missingAssetSource,
+        `Asset "${id ?? path}" requires a source path.`,
+        { path: `${path}.source`, entityId: id },
+      ));
+    }
+
+    if (id && type) {
+      result.push({
+        id,
+        type,
+        ...(source !== undefined ? { source } : {}),
+        ...(importMode !== undefined ? { importMode } : {}),
+        ...(semanticRole !== undefined ? { semanticRole } : {}),
+        ...(required !== undefined ? { required } : {}),
+        ...(rigMode !== undefined ? { rigMode } : {}),
+        ...(rigPackage !== undefined ? { rigPackage } : {}),
+        ...(replaceProxy !== undefined ? { replaceProxy } : {}),
+      });
+    }
+  });
+  return result;
+}
+
 function parseShots(
   value: unknown,
   ids: {
     locationIds: Set<string>;
     castIds: Set<string>;
     propIds: Set<string>;
+    assetIds: Set<string>;
     shotIds: Set<string>;
     shotNumbers: Set<string>;
   },
@@ -582,10 +691,10 @@ function parseShots(
 
     const subjects = parseStringArray(record.subjects, `${path}.subjects`, errors, true);
     for (const subject of subjects) {
-      if (!ids.castIds.has(subject) && !ids.propIds.has(subject)) {
+      if (!ids.castIds.has(subject) && !ids.propIds.has(subject) && !ids.assetIds.has(subject)) {
         errors.push(previsError(
           PREVIS_DIAGNOSTIC_CODES.unknownReference,
-          `Unknown subject "${subject}" (not in cast or props).`,
+          `Unknown subject "${subject}" (not in cast, props, or assets).`,
           { path: `${path}.subjects`, entityId: id },
         ));
       }
@@ -769,7 +878,7 @@ function parseMotionStaging(
 function parseBlocking(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisBlockingInstruction[] {
@@ -798,7 +907,7 @@ function parseBlocking(
     }
     const record = entry as Record<string, unknown>;
     const subject = readNonemptyString(record.subject, `${itemPath}.subject`, errors);
-    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject)) {
+    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject) && !ids.assetIds?.has(subject)) {
       errors.push(previsError(
         PREVIS_DIAGNOSTIC_CODES.unknownReference,
         `Unknown blocking subject "${subject}".`,
@@ -889,7 +998,7 @@ function parsePlacement(
 function parseCamera(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisShotDefinition['camera'] | undefined {
@@ -906,7 +1015,7 @@ function parseCamera(
   ) as PrevisCameraTemplate | undefined;
   const subjects = parseStringArray(record.subjects, `${path}.subjects`, errors, true);
   for (const subject of subjects) {
-    if (!ids.castIds.has(subject) && !ids.propIds.has(subject)) {
+    if (!ids.castIds.has(subject) && !ids.propIds.has(subject) && !ids.assetIds?.has(subject)) {
       errors.push(previsError(
         PREVIS_DIAGNOSTIC_CODES.unknownReference,
         `Unknown camera subject "${subject}".`,

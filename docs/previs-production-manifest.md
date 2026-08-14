@@ -15,11 +15,12 @@ shotlist.md
 
 ## Schema
 
-`version` must be `1`.
+`version` must be `1` or `2`. Version 2 adds first-class `assets` and allows
+an empty `cast` when those assets supply the subjects.
 
 ```ts
 interface PrevisProductionManifestV1 {
-  version: 1;
+  version: 1 | 2;
   project: {
     name: string;
     description?: string;
@@ -29,9 +30,17 @@ interface PrevisProductionManifestV1 {
   locations: PrevisLocationDefinition[];
   cast: PrevisCharacterDefinition[];
   props?: PrevisPropDefinition[];
+  assets?: PrevisAssetDefinition[];
   shots: PrevisShotDefinition[];
 }
 ```
+
+`semanticRole` (`subject` | `prop` | `character`) is not an implementation
+type. A nonhumanoid GLB with `type: "imported_model"` and
+`semanticRole: "subject"` stays an ordinary imported model. Preflight checks
+source existence and hash, and rejects a missing rig only for assets declared
+as characters. Benchmark prepare writes this generated manifest so the
+candidate does not translate schemas.
 
 Cast entries may be built-in semantic mannequins or imported characters. An
 imported character source is resolved relative to the manifest file, analyzed,

@@ -31,6 +31,9 @@ export const PREVIS_DIAGNOSTIC_CODES = {
   unsupportedSavedRigExtension: 'unsupported_saved_rig_extension',
   unexpectedRigPackage: 'unexpected_rig_package',
   missingImportedCharacterSource: 'missing_imported_character_source',
+  missingAssetSource: 'missing_asset_source',
+  unexpectedCharacterRig: 'unexpected_character_rig',
+  semanticTypeMismatch: 'semantic_type_mismatch',
 } as const;
 
 export function previsError(

@@ -7,6 +7,7 @@ export function buildCandidateBrief(input: {
   layout: BenchmarkRunLayout;
   url?: string;
   projectPackage?: string;
+  productionManifest?: string;
 }): BenchmarkCandidateBrief {
   return {
     mode: 'benchmark',
@@ -23,6 +24,7 @@ export function buildCandidateBrief(input: {
     profileDir: input.layout.profileDir,
     outputDir: input.layout.artifactDir,
     projectPackage: input.projectPackage,
+    productionManifest: input.productionManifest,
     shots: input.spec.shots,
   };
 }
