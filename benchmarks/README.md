@@ -28,6 +28,20 @@ npm run benchmark:run -- --spec benchmarks/three-shot.json --skip-live --skip-ca
 npm run benchmark:run -- --spec benchmarks/three-shot.json --url http://127.0.0.1:3000 --candidate '<your agent command>'
 ```
 
+The harness also accepts the frozen external
+`music-video-v2-panorama-triad/shot-manifest.json` format directly. It adapts
+that specification at the harness boundary, copies its canonical neutral base
+package, and writes a validated production manifest before candidate launch:
+
+```bash
+npm run benchmark:run -- --spec "C:\path\to\music-video-v2-panorama-triad\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --prepare-only
+```
+
+The adapter preserves the frozen three-shot requirements and full artifact
+contract. `Hand_Monster_v3.glb` remains an ordinary imported model; the Joseph
+assets remain saved-rig characters. The candidate does not translate either
+manifest format.
+
 `--prepare-only` writes the run layout, git identity, and candidate brief, then exits 0 without collecting artifacts. Use it to smoke the harness. Without `--prepare-only`, missing stills/MP4s are a `MODEL_FAILURE`.
 
 Live cold-open / incremental / recovery steps call `agent:inspect`, `agent:save`, and `agent:open` against `--url`. Pass `--skip-live` in unit tests.

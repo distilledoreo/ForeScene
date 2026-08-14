@@ -28,6 +28,81 @@ describe('benchmark harness v3', () => {
     expect(JSON.stringify(spec)).not.toMatch(/cameraMustBe|cameraPosition/);
   });
 
+  it('adapts the frozen panorama-triad benchmark into a launchable V3 contract', async () => {
+    const benchmarkRoot = await mkdtemp(path.join(os.tmpdir(), 'forescene-panorama-triad-'));
+    await mkdir(path.join(benchmarkRoot, 'seed'), { recursive: true });
+    await mkdir(path.join(benchmarkRoot, 'assets'), { recursive: true });
+    await writeFile(path.join(benchmarkRoot, 'seed', 'what_im_fighting_for_panorama_triad_base.fsp'), 'neutral-package');
+    await Promise.all([
+      writeFile(path.join(benchmarkRoot, 'assets', 'Hand_Monster_v3.glb'), 'monster'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Amputated.glb'), 'j2'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Amputated.fsrig'), 'j2-rig'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Final.glb'), 'j3'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Final.fsrig'), 'j3-rig'),
+    ]);
+    const specPath = path.join(benchmarkRoot, 'shot-manifest.json');
+    await writeFile(specPath, JSON.stringify({
+      benchmarkId: 'music-video-v2-panorama-triad',
+      version: '2.0.0',
+      mode: 'create_three_shots_from_environment_only_base',
+      baseProject: { expectedShotCount: 0, expectedSceneObjectCount: 22, expectedPanoRefCount: 4, expectedLandmarkCount: 28 },
+      locations: {
+        ruins: { anchorLandmark: 'ruins_platform', styledPanoId: 'pano_ruins' },
+        corridor: { anchorLandmark: 'corridor_center', styledPanoId: null, note: 'No corridor panorama.' },
+        armory: { anchorLandmark: 'armory_center', styledPanoId: 'pano_armory' },
+      },
+      shots: [
+        {
+          shotNumber: '01', name: 'H1 newborn hand creature', kind: 'static_creature_composition', location: 'ruins', linkedPanoId: 'pano_ruins',
+          assets: [{ file: 'Hand_Monster_v3.glb', importAs: 'ordinary_model' }], requirements: ['Five finger limbs and eye stalk.'], deliverable: 'creature-final.png',
+        },
+        {
+          shotNumber: '02', name: 'Sprint chase toward armory', kind: 'three_second_motion', location: 'corridor', linkedPanoId: null,
+          assets: [{ file: 'Roman Joseph Amputated.glb', rigFile: 'Roman Joseph Amputated.fsrig', importAs: 'saved_rig_character' }, { file: 'Hand_Monster_v3.glb', importAs: 'ordinary_model' }],
+          requirements: ['Three-second chase at t=0 and t=3.'], deliverables: ['chase-start.png', 'chase-mid.png', 'chase-end.png', 'chase-motion.mp4'],
+        },
+        {
+          shotNumber: '03', name: 'J3 battle-ready stance', kind: 'static_saved_rig_character_pose', location: 'armory', linkedPanoId: 'pano_armory',
+          assets: [{ file: 'Roman Joseph Final.glb', rigFile: 'Roman Joseph Final.fsrig', importAs: 'saved_rig_character' }], requirements: ['Shield and wrist blade.'], deliverable: 'fighter-final.png',
+        },
+      ],
+      standardDeliverables: ['creature-final.png', 'chase-start.png', 'chase-mid.png', 'chase-end.png', 'chase-motion.mp4', 'fighter-final.png', 'contact-sheet.png', 'final-project.fsp', 'run-report.json', 'validation-report.json'],
+    }));
+
+    const spec = await loadBenchmarkSpec(specPath);
+    expect(spec.id).toBe('music-video-v2-panorama-triad');
+    expect(spec.operatingMode).toBe('existing-project-refinement');
+    expect(spec.resetAuthorized).toBe(false);
+    expect(spec.repairBudget).toBe(2);
+    expect(spec.basePackage).toBe(path.join(benchmarkRoot, 'seed', 'what_im_fighting_for_panorama_triad_base.fsp'));
+    expect(spec.requiredArtifacts).toContain('final-project.fsp');
+    expect(spec.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
+    expect(spec.shots[1]?.intent).toBe('motion-required');
+    expect(spec.productionManifest?.assets?.find((asset) => asset.id === 'hand-monster')).toMatchObject({
+      type: 'imported_model',
+      importMode: 'ordinary_model',
+      semanticRole: 'subject',
+    });
+    expect(spec.productionManifest?.cast).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'joseph-amputated', type: 'imported_character', rigMode: 'saved-rig' }),
+      expect.objectContaining({ id: 'joseph-final', type: 'imported_character', rigMode: 'saved-rig' }),
+    ]));
+
+    const runRoot = path.join(benchmarkRoot, 'runs', 'MV3-Benchmark-02');
+    const prepared = await prepareBenchmarkRun({
+      spec,
+      specPath,
+      runRoot,
+      enforceRepositoryState: false,
+    });
+    expect(prepared.failure).toBeUndefined();
+    const brief = JSON.parse(await readFile(prepared.layout.briefPath, 'utf8')) as ReturnType<typeof buildCandidateBrief>;
+    expect(brief.projectPackage).toBe(path.join(prepared.layout.projectDir, 'what_im_fighting_for_panorama_triad_base.fsp'));
+    expect(brief.requiredArtifacts).toContain('validation-report.json');
+    const production = JSON.parse(await readFile(brief.productionManifest!, 'utf8')) as typeof spec.productionManifest;
+    expect(production?.assets?.find((asset) => asset.id === 'hand-monster')?.type).toBe('imported_model');
+  });
+
   it('rejects specs that encode a benchmark camera solution', () => {
     expect(() => parseBenchmarkSpec({
       version: 1,
