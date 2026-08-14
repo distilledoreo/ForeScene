@@ -79,6 +79,22 @@ describe('benchmark harness v3', () => {
     expect(spec.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
     expect(spec.shots[1]?.intent).toBe('motion-required');
     expect(spec.productionManifest?.project.operatingMode).toBe('existing-project-refinement');
+    const chaseMotion = spec.productionManifest?.shots[1]?.motion;
+    expect(chaseMotion).toMatchObject({
+      durationSeconds: 3,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0 },
+        { timeSeconds: 1.5 },
+        { timeSeconds: 3 },
+      ],
+    });
+    const chaseStart = chaseMotion?.keyframes[0]?.staging ?? [];
+    const chaseEnd = chaseMotion?.keyframes.at(-1)?.staging ?? [];
+    for (const subject of ['joseph-amputated', 'hand-monster']) {
+      expect(chaseStart.find((item) => item.subject === subject)?.transform?.position)
+        .not.toEqual(chaseEnd.find((item) => item.subject === subject)?.transform?.position);
+    }
     expect(spec.productionManifest?.assets?.find((asset) => asset.id === 'hand-monster')).toMatchObject({
       type: 'imported_model',
       importMode: 'ordinary_model',

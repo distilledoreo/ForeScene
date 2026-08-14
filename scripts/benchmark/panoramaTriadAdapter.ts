@@ -93,6 +93,38 @@ function productionShot(shot: FrozenShot): PrevisShotDefinition {
   const subjects = requiredSubjects(shot.shotNumber);
   const visibleSubjects = subjects.filter((id) => id.startsWith('joseph-'));
   const visibleProps = subjects.filter((id) => id === 'shield' || id === 'wrist-blade');
+  const chaseMotion: PrevisShotDefinition['motion'] = shot.shotNumber === '02'
+    ? {
+        durationSeconds: 3,
+        renderControlVideo: true,
+        keyframes: [
+          {
+            timeSeconds: 0,
+            camera: { position: [95.5, 1.8, -5.3], target: [100, 1, -5.9], fovDegrees: 35 },
+            staging: [
+              { subject: 'joseph-amputated', transform: { position: [100, 0.875, -5.3] } },
+              { subject: 'hand-monster', transform: { position: [100, 0, -6.5] } },
+            ],
+          },
+          {
+            timeSeconds: 1.5,
+            camera: { position: [95.5, 1.8, 0], target: [100, 1, -0.6], fovDegrees: 35 },
+            staging: [
+              { subject: 'joseph-amputated', transform: { position: [100, 0.875, 0] } },
+              { subject: 'hand-monster', transform: { position: [100, 0, -1.2] } },
+            ],
+          },
+          {
+            timeSeconds: 3,
+            camera: { position: [95.5, 1.8, 5.3], target: [100, 1, 4.7], fovDegrees: 35 },
+            staging: [
+              { subject: 'joseph-amputated', transform: { position: [100, 0.875, 5.3] } },
+              { subject: 'hand-monster', transform: { position: [100, 0, 4.1] } },
+            ],
+          },
+        ],
+      }
+    : undefined;
   return {
     id: `mv3-shot-${shot.shotNumber}`,
     shotNumber: shot.shotNumber,
@@ -122,6 +154,7 @@ function productionShot(shot: FrozenShot): PrevisShotDefinition {
         `Produce ${artifacts(shot).join(', ')}.`,
       ],
     },
+    ...(chaseMotion ? { motion: chaseMotion } : {}),
   };
 }
 
