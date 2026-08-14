@@ -202,6 +202,41 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+async function copyIfPresent(source: string, target: string): Promise<void> {
+  try {
+    const info = await stat(source);
+    if (!info.isFile() || info.size === 0) return;
+    if (path.resolve(source) === path.resolve(target)) return;
+    await copyFile(source, target);
+  } catch (error) {
+    if (error instanceof Error && /ENOENT|not found/i.test(error.message)) return;
+    throw error;
+  }
+}
+
+/**
+ * Map ForeScene's canonical production filenames to the frozen benchmark's
+ * human-readable deliverable names before structural validation.
+ */
+export async function materializeV3LiteArtifacts(
+  prepared: V3LitePreparedRun,
+): Promise<void> {
+  for (const shot of prepared.loaded.contract.shots) {
+    for (const [index, artifact] of shot.stillArtifacts.entries()) {
+      const source = shot.intent === 'motion-required'
+        ? path.join(prepared.layout.artifactDir, 'shots', `${shot.shotNumber}-sample-${index}.png`)
+        : path.join(prepared.layout.artifactDir, 'shots', `${shot.shotNumber}.png`);
+      await copyIfPresent(source, path.join(prepared.layout.artifactDir, artifact));
+    }
+    for (const artifact of shot.motionArtifacts ?? []) {
+      await copyIfPresent(
+        path.join(prepared.layout.artifactDir, 'shots', `${shot.shotNumber}.mp4`),
+        path.join(prepared.layout.artifactDir, artifact),
+      );
+    }
+  }
+}
+
 async function writeV3LiteReports(input: {
   prepared: V3LitePreparedRun;
   doctor?: V3LiteDoctorReport;
@@ -304,6 +339,7 @@ export async function runV3Lite(input: {
   const candidate = { ...candidateResult, invocationCount: 1 as const };
   await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), candidate.stdout, 'utf8');
   await writeFile(path.join(prepared.layout.logsDir, 'candidate.stderr.log'), candidate.stderr, 'utf8');
+  await materializeV3LiteArtifacts(prepared);
   const technical = await validateV3LiteTechnical(prepared.loaded.contract, prepared.layout, candidate.code);
   const after = await gitIdentity();
   const drift = unauthorizedRepoModifications(prepared.git, after);

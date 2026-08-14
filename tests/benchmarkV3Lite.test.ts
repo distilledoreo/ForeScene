@@ -187,10 +187,16 @@ describe('ForeScene Benchmark V3-Lite', () => {
         const output = env.FORESCENE_OUTPUT!;
         const finalProject = env.FORESCENE_BENCHMARK_FINAL_PROJECT!;
         const contract = await loadV3LiteContract(contractPath);
-        for (const still of contract.contract.requiredStills) await writeFile(path.join(output, still), 'still');
+        await mkdir(path.join(output, 'shots'), { recursive: true });
+        await writeFile(path.join(output, 'shots', '01.png'), 'still');
+        await writeFile(path.join(output, 'shots', '02-sample-0.png'), 'still');
+        await writeFile(path.join(output, 'shots', '02-sample-1.png'), 'still');
+        await writeFile(path.join(output, 'shots', '02-sample-2.png'), 'still');
+        await writeFile(path.join(output, 'shots', '03.png'), 'still');
+        await writeFile(path.join(output, 'contact-sheet.png'), 'still');
         const mp4 = Buffer.alloc(32);
         mp4.write('ftyp', 4, 'ascii');
-        await writeFile(path.join(output, 'chase-motion.mp4'), mp4);
+        await writeFile(path.join(output, 'shots', '02.mp4'), mp4);
         await writeFile(finalProject, 'final-project');
         await writeFile(path.join(output, contract.contract.quality.evidenceFile), JSON.stringify({ grade: 'failed' }));
         return { code: 0, stdout: '{}', stderr: '', runtimeMs: 17, timedOut: false };
