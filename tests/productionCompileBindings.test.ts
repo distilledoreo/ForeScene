@@ -214,6 +214,67 @@ describe('production compile group bindings', () => {
     expect(keyframedDistance).toBeCloseTo(originalDistance, 4);
   });
 
+  it('uses live imported-model bounds and preserves multipart offsets in static and motion staging', () => {
+    const project = createDefaultProject();
+    project.workflow.production = undefined;
+    const palm = createSceneObject('box');
+    palm.dimensions = [1, 0.5, 1];
+    palm.transform.position = [0, 0.25, 0];
+    const finger = createSceneObject('box');
+    finger.dimensions = [0.2, 0.2, 1];
+    finger.transform.position = [0.6, 0.6, 0];
+    project.scene.objects.push(palm, finger);
+    const input = manifest({
+      cast: [],
+      props: [],
+      assets: [{ id: 'hand-monster', type: 'imported_model', semanticRole: 'subject' }],
+      shots: [{
+        id: 'shot.monster',
+        shotNumber: '01',
+        name: 'Monster',
+        description: 'Imported multipart monster',
+        locationId: 'location.interior',
+        subjects: ['hand-monster'],
+        blocking: [{ subject: 'hand-monster', placement: { type: 'location_slot', slot: 'center' } }],
+        camera: { template: 'close_up', subjects: ['hand-monster'] },
+        motion: {
+          durationSeconds: 1,
+          keyframes: [{
+            timeSeconds: 0,
+            staging: [{ subject: 'hand-monster', transform: { position: [2, 0, 3] } }],
+          }, {
+            timeSeconds: 1,
+            staging: [{ subject: 'hand-monster', transform: { position: [2, 0, 4] } }],
+          }],
+        },
+      }],
+    });
+    const context = createEmptyCompiledContext();
+    context.locationOrigins['location.interior'] = [0, 0, 0];
+    context.entities['assets.hand-monster'] = {
+      objectId: palm.id,
+      objectIds: [palm.id, finger.id],
+      groupId: 'asset.hand-monster',
+    };
+    const batch = compileShotBatch(input, context, input.shots, 0, { presenceProject: project });
+    expect(batch.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(batch.shotResults['01']?.camera?.target[1]).toBeLessThan(1);
+    const staticTransforms = batch.plan.commands
+      .filter((command) => command.op === 'shot.stageObject' && command.visible && command.transform)
+      .map((command) => command.op === 'shot.stageObject' ? command.transform! : undefined)
+      .filter((transform): transform is NonNullable<typeof transform> => Boolean(transform));
+    expect(staticTransforms).toHaveLength(2);
+    expect(staticTransforms[0]!.position).not.toEqual(staticTransforms[1]!.position);
+
+    const timeline = batch.plan.commands.find((command) => command.op === 'shot.timeline.replace');
+    const motionTransforms = timeline?.op === 'shot.timeline.replace'
+      ? (timeline.keyframes[0]?.objects ?? []).flatMap((entry) => entry.transform ? [entry.transform] : [])
+      : [];
+    expect(motionTransforms).toHaveLength(2);
+    expect(motionTransforms[0]!.position).not.toEqual(motionTransforms[1]!.position);
+    expect(Math.min(...motionTransforms.map((transform) => transform.position[1]))).toBeGreaterThanOrEqual(0);
+  });
+
   it('compiles group-only prepared locations without template geometry', () => {
     const { project, table, tableTop } = preparedMultipartProject();
     const entityBindings = buildProductionCompileEntityBindings(project);

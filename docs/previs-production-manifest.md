@@ -175,7 +175,8 @@ may still satisfy a static-only contract.
 Environment contracts route a shot to a prepared location panorama. The
 location must name `defaultPanoId` or `panoIds`; the compiler emits an
 executable `shot.setPanorama` command and verification compares the resulting
-shot link against the expected ID:
+shot link against the expected ID. Set `defaultPanoId` to `null` to explicitly
+leave shots at that location unlinked when no calibrated panorama exists:
 
 ```ts
 window.foreScene.inspectShotEnvironmentContract({ shotId: 'shot-001' });

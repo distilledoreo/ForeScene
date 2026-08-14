@@ -3,7 +3,7 @@
   "id": "music-video-v2-panorama-triad-v3-lite",
   "benchmarkId": "music-video-v2-panorama-triad",
   "manifest": "production-manifest.json",
-  "manifestSha256": "9f05a72041902e55ca5f51982af89606d1cb95fc8a4931b589e9d1c29acd65ea",
+  "manifestSha256": "9ec09c1f09c8befba672688a2e4fe751621167e15040e7ef0226801c52af7e6c",
   "basePackage": "seed/what_im_fighting_for_panorama_triad_base.fsp",
   "requiredArtifacts": [
     "creature-final.png",

@@ -159,6 +159,8 @@ export async function prepareV3LiteRun(input: {
   const basePackage = resolveV3LiteInputPath(input.inputRoot, loaded.contract.basePackage, 'basePackage');
   const projectPackage = path.join(layout.projectDir, path.basename(basePackage));
   await copyFile(basePackage, projectPackage);
+  const productionManifest = path.join(layout.harnessDir, 'production-manifest.json');
+  await copyFile(loaded.manifestPath, productionManifest);
   const spec = v3LiteBenchmarkSpec(loaded.contract);
   await writeFile(layout.specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
   const brief = buildCandidateBrief({
@@ -166,7 +168,7 @@ export async function prepareV3LiteRun(input: {
     layout,
     url: input.url,
     projectPackage,
-    productionManifest: path.join(layout.harnessDir, 'production-manifest.json'),
+    productionManifest,
   });
   const enrichedBrief: BenchmarkCandidateBrief = {
     ...brief,

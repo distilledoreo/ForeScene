@@ -29,6 +29,20 @@ function loadExample(name: string) {
 }
 
 describe('previs production manifest', () => {
+  it('preserves explicit prepared panorama routing including an intentional null link', () => {
+    const input = loadExample('minimal-dialogue.json') as Record<string, unknown>;
+    input.locations = [
+      { id: 'room', name: 'Room', template: 'interior_room', panoIds: ['pano_room'], defaultPanoId: 'pano_room' },
+      { id: 'corridor', name: 'Corridor', template: 'corridor', panoIds: [], defaultPanoId: null },
+    ];
+    const parsed = parsePrevisProductionManifest(input);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.manifest?.locations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'room', panoIds: ['pano_room'], defaultPanoId: 'pano_room' }),
+      expect.objectContaining({ id: 'corridor', panoIds: [], defaultPanoId: null }),
+    ]));
+  });
+
   it('maps imported semantic subjects to their prepared scene object IDs', () => {
     const parsed = parsePrevisProductionManifest({
       version: 2,

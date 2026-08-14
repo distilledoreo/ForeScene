@@ -64,3 +64,11 @@ Technical completion and quality are separate. A candidate can be technically
 complete while `harness/quality.json` grades its compositions `low` or
 `failed`; that is not converted into an infrastructure failure. Quality
 evidence is optional, and missing evidence is reported as `not-graded`.
+
+After the candidate exits, the harness samples required still PNGs. Flat or
+mostly-gray frames, and composition/validation evidence that a required
+subject is not visible, are recorded as pixel-gate quality findings. Those
+findings can fail or withhold a visual-control grade; they do not change
+technical validation and are never promoted into an infrastructure failure.
+Occupancy telemetry alone is not treated as proof that a still is visually
+controlled.

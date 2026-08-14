@@ -8,6 +8,8 @@ import { loadV3LiteContract, v3LiteManifestSha256 } from '../scripts/benchmark/v
 import { runV3LiteDoctor } from '../scripts/benchmark/v3LiteDoctor';
 import { prepareV3LiteRun, runV3Lite } from '../scripts/benchmark/v3LiteRun';
 import { gradeV3LiteQuality } from '../scripts/benchmark/v3LiteQuality';
+import { analyzeRgbaFrame } from '../scripts/benchmark/v3LitePixelGate';
+import { encodePngRgba } from '../scripts/benchmark/pngRgba';
 import { validateV3LiteTechnical } from '../scripts/benchmark/v3LiteValidator';
 import { parseAgentCliArgs } from '../scripts/agent/cliArgs';
 
@@ -58,7 +60,19 @@ describe('ForeScene Benchmark V3-Lite', () => {
     expect(loaded.contract.requiredArtifacts).toContain('validation-report.json');
     expect(loaded.manifest.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
     expect(loaded.manifest.shots[1]?.motion?.keyframes).toHaveLength(3);
+    expect(loaded.manifest.shots[1]?.motion?.keyframes?.[0]?.camera?.position).toEqual([101.2, 1.6, -2.0]);
     expect(loaded.manifest.assets?.[0]?.source).toBe('assets/Hand_Monster_v3.glb');
+    expect(loaded.manifest.locations.map((location) => location.defaultPanoId)).toEqual([
+      'pano_ms9pmx85_pgw9px',
+      null,
+      'pano_ms9pmxdn_xdnia1',
+    ]);
+    expect(loaded.manifest.shots[0]?.requirements?.notes).toContain(
+      'Place the creature near ruins_platform as a hand-sized newborn, not a generic spider.',
+    );
+    expect(loaded.manifest.shots[1]?.requirements?.notes).toContain(
+      'The creature starts about 1–1.5 meters behind and remains visibly in pursuit.',
+    );
   });
 
   it('uses one manifest identity for LF and CRLF while rejecting semantic edits', async () => {
@@ -184,6 +198,10 @@ describe('ForeScene Benchmark V3-Lite', () => {
       }),
       candidateRunner: async ({ env }) => {
         launches += 1;
+        expect(JSON.parse(await readFile(env.FORESCENE_BENCHMARK_MANIFEST!, 'utf8'))).toMatchObject({
+          version: 2,
+          shots: expect.any(Array),
+        });
         const output = env.FORESCENE_OUTPUT!;
         const finalProject = env.FORESCENE_BENCHMARK_FINAL_PROJECT!;
         const contract = await loadV3LiteContract(contractPath);
@@ -256,6 +274,119 @@ describe('ForeScene Benchmark V3-Lite', () => {
     expect(args.finalProject).toBe('C:/fresh/final-project.fsp');
     expect(args.file).toBe('C:/fresh/base.fsp');
     vi.unstubAllEnvs();
+  });
+
+  it('does not treat a technically complete gray still as visually controlled', async () => {
+    const inputRoot = await fixtureInputRoot();
+    const runRoot = path.join(await (await import('node:fs/promises')).mkdtemp(path.join(os.tmpdir(), 'forescene-v3-lite-gray-')), 'fresh-run');
+    const gray = new Uint8Array(32 * 32 * 4);
+    for (let i = 0; i < gray.length; i += 4) {
+      gray[i] = 148;
+      gray[i + 1] = 150;
+      gray[i + 2] = 147;
+      gray[i + 3] = 255;
+    }
+    const grayPng = encodePngRgba({ width: 32, height: 32, data: gray });
+    const result = await runV3Lite({
+      contractPath,
+      inputRoot,
+      runRoot,
+      url: 'https://forescene.test',
+      candidate: 'fixture-candidate',
+      doctorRunner: async (input) => ({
+        report: {
+          ok: true,
+          checkedAt: new Date().toISOString(),
+          contractPath: input.contractPath,
+          inputRoot: input.inputRoot,
+          url: input.url ?? '',
+          profileDir: input.layout.profileDir,
+          checks: [{ id: 'fixture', ok: true, message: 'fixture doctor pass' }],
+        },
+      }),
+      candidateRunner: async ({ env }) => {
+        const output = env.FORESCENE_OUTPUT!;
+        const finalProject = env.FORESCENE_BENCHMARK_FINAL_PROJECT!;
+        const contract = await loadV3LiteContract(contractPath);
+        await mkdir(path.join(output, 'shots'), { recursive: true });
+        await writeFile(path.join(output, 'shots', '01.png'), grayPng);
+        await writeFile(path.join(output, 'shots', '02-sample-0.png'), grayPng);
+        await writeFile(path.join(output, 'shots', '02-sample-1.png'), grayPng);
+        await writeFile(path.join(output, 'shots', '02-sample-2.png'), grayPng);
+        await writeFile(path.join(output, 'shots', '03.png'), grayPng);
+        await writeFile(path.join(output, 'contact-sheet.png'), grayPng);
+        await writeFile(path.join(output, 'shots', '01.composition.json'), JSON.stringify({
+          shotNumber: '01',
+          subjects: { 'hand-monster': { visible: true } },
+        }));
+        await writeFile(path.join(output, 'shots', '02.composition.json'), JSON.stringify({
+          shotNumber: '02',
+          subjects: {
+            'joseph-amputated': { visible: false },
+            'hand-monster': { visible: false },
+          },
+        }));
+        await writeFile(path.join(output, 'shots', '03.composition.json'), JSON.stringify({
+          shotNumber: '03',
+          subjects: {
+            'joseph-final': { visible: true },
+            shield: { visible: true },
+            'wrist-blade': { visible: true },
+          },
+        }));
+        const mp4 = Buffer.alloc(32);
+        mp4.write('ftyp', 4, 'ascii');
+        await writeFile(path.join(output, 'shots', '02.mp4'), mp4);
+        await writeFile(finalProject, 'final-project');
+        await writeFile(path.join(output, contract.contract.quality.evidenceFile), JSON.stringify({ grade: 'passed' }));
+        return { code: 0, stdout: '{}', stderr: '', runtimeMs: 11, timedOut: false };
+      },
+    });
+    expect(result.technical?.ok).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.failure).toBeUndefined();
+    expect(result.quality?.hardExecutionFailure).toBe(false);
+    expect(result.quality?.technicalPass).toBe(true);
+    expect(result.quality?.status).toBe('failed');
+    expect(result.quality?.ok).toBe(false);
+    expect(result.quality?.source).toBe('candidate+pixel-evidence');
+    expect(result.quality?.pixel?.ok).toBe(false);
+    expect(result.quality?.pixel?.visuallyControlled).toBe(false);
+    expect(result.quality?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        artifact: 'creature-final.png',
+        status: 'failed',
+        code: expect.stringMatching(/frame_mostly_gray|frame_flat/),
+      }),
+      expect.objectContaining({ code: 'required_subject_not_visible', artifact: 'chase-start.png' }),
+    ]));
+  });
+
+  it('treats a flat gray buffer as visually uncontrolled even when occupancy would pass', () => {
+    const gray = new Uint8Array(48 * 48 * 4);
+    for (let i = 0; i < gray.length; i += 4) {
+      const level = 128 + ((i / 4) % 3) * 16;
+      gray[i] = level;
+      gray[i + 1] = level;
+      gray[i + 2] = level;
+      gray[i + 3] = 255;
+    }
+    const analysis = analyzeRgbaFrame(gray, 48, 48);
+    expect(analysis.mostlyGray).toBe(true);
+    expect(analysis.stats.luminanceVariance).toBeGreaterThan(1e-6);
+    expect(analysis.stats.sampledUniqueColorCount).toBeGreaterThan(2);
+
+    const varied = new Uint8Array(48 * 48 * 4);
+    for (let y = 0; y < 48; y += 1) {
+      for (let x = 0; x < 48; x += 1) {
+        const i = (y * 48 + x) * 4;
+        varied[i] = (x * 5) % 256;
+        varied[i + 1] = (y * 7) % 256;
+        varied[i + 2] = 40 + ((x + y) % 80);
+        varied[i + 3] = 255;
+      }
+    }
+    expect(analyzeRgbaFrame(varied, 48, 48).mostlyGray).toBe(false);
   });
 
   it('reports missing quality evidence as ungraded rather than as technical infrastructure failure', async () => {

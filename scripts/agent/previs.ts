@@ -1337,6 +1337,33 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           error: `Imported model asset "${asset.id}" failed.`,
         };
       }
+      if (asset.semanticRole === 'subject') {
+        const roleApplied = await applyPlanOnPage(session.page, {
+          version: 1,
+          planId: `previs-asset-role-${asset.id}`,
+          description: `Classify imported subject ${asset.id} for shot staging`,
+          commands: objectIds.map((objectId) => ({
+            op: 'object.update' as const,
+            object: { id: objectId },
+            updates: { stagingRole: 'prop' },
+          })),
+        });
+        if (!roleApplied.ok) {
+          await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+            importedModels: importedModelResults,
+            roleApplied,
+          });
+          return {
+            ok: false,
+            phase: 'props',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: roleApplied.diagnostics,
+            error: `Imported model subject "${asset.id}" could not be classified for shot staging.`,
+          };
+        }
+      }
       state = upsertEntity(state, entityKey, {
         objectId: objectIds[0],
         objectIds,
@@ -1448,9 +1475,17 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }
     }
 
+    // Asset imports happen after the initial production compile. Re-read the
+    // live document so multipart geometry, bounds, presence, and panorama
+    // routing are compiled against the objects that will actually be staged.
+    const liveProjectForShotCompile = await session.page.evaluate(
+      () => window.foreScene!.getProjectDocument(),
+    );
+
     const shotBatches = compileShotList(manifest, resolvedContext, {
       skipShotNumbers: skipShots,
       existingShotIds,
+      presenceProject: liveProjectForShotCompile,
     });
 
     state = setPhase(state, 'shots', 'in_progress');
@@ -2176,6 +2211,40 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
     state = setPhase(state, 'contactSheet', 'complete');
     await writeJson(runStatePath, state);
+
+    // Repairs and media rendering can revisit shot state. Reassert every
+    // explicit manifest panorama contract immediately before package/backup,
+    // including null for locations with no calibrated panorama.
+    const liveShotsForPanoramaFinalize = await session.page.evaluate(() => window.foreScene!.listShots());
+    const panoramaFinalizeCommands = manifest.shots.flatMap((manifestShot) => {
+      const location = manifest.locations.find((item) => item.id === manifestShot.locationId);
+      if (!location) return [];
+      const specified = Object.prototype.hasOwnProperty.call(location, 'defaultPanoId')
+        || (location.panoIds?.length ?? 0) > 0;
+      if (!specified) return [];
+      const liveShot = liveShotsForPanoramaFinalize.find((item) => item.shotNumber === manifestShot.shotNumber);
+      if (!liveShot) return [];
+      const panoId = location.defaultPanoId !== undefined
+        ? location.defaultPanoId
+        : location.panoIds?.[0];
+      return [{
+        op: 'shot.setPanorama' as const,
+        shot: { id: liveShot.id },
+        pano: typeof panoId === 'string' ? { id: panoId } : null,
+      }];
+    });
+    if (panoramaFinalizeCommands.length > 0) {
+      const panoramaFinalized = await applyPlanOnPage(session.page, {
+        version: 1,
+        planId: 'previs-finalize-shot-panoramas',
+        description: 'Reassert production panorama contracts before export',
+        commands: panoramaFinalizeCommands,
+      });
+      await writeJson(path.join(outputDir, 'logs', 'panorama-finalize.json'), panoramaFinalized);
+      if (!panoramaFinalized.ok) {
+        throw new Error(panoramaFinalized.diagnostics?.[0]?.message ?? 'Final panorama routing failed.');
+      }
+    }
 
     let packagePath: string | undefined;
     let packageTransfer: AgentArtifactTransferTelemetry | undefined;

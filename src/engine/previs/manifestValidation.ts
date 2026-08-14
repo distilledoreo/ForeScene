@@ -236,6 +236,27 @@ function parseLocations(
       `${path}.template`,
       errors,
     ) as PrevisLocationTemplate | undefined;
+    let panoIds: string[] | undefined;
+    if (record.panoIds !== undefined) {
+      if (!Array.isArray(record.panoIds)) {
+        errors.push(previsError(
+          PREVIS_DIAGNOSTIC_CODES.invalidType,
+          'panoIds must be an array of panorama ids.',
+          { path: `${path}.panoIds` },
+        ));
+      } else {
+        panoIds = record.panoIds.flatMap((panoId, panoIndex) => {
+          const parsed = readNonemptyString(panoId, `${path}.panoIds[${panoIndex}]`, errors);
+          return parsed ? [parsed] : [];
+        });
+      }
+    }
+    let defaultPanoId: string | null | undefined;
+    if (record.defaultPanoId === null) {
+      defaultPanoId = null;
+    } else if (record.defaultPanoId !== undefined) {
+      defaultPanoId = readNonemptyString(record.defaultPanoId, `${path}.defaultPanoId`, errors);
+    }
 
     if (template === 'custom_blueprint') {
       errors.push(previsError(
@@ -321,6 +342,8 @@ function parseLocations(
         id,
         name,
         template,
+        ...(panoIds !== undefined ? { panoIds } : {}),
+        ...(defaultPanoId !== undefined || record.defaultPanoId === null ? { defaultPanoId } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(dimensions !== undefined ? { dimensions } : {}),
         ...(features !== undefined ? { features } : {}),
