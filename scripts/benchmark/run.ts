@@ -5,7 +5,7 @@
  *   npm run benchmark:run -- --spec benchmarks/three-shot.json --candidate '<candidate command>'
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,121 @@ function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, timeou
       resolve({ code: code ?? 1, stdout, stderr });
     });
   });
+}
+
+export function candidateWorkingDirectory(): string {
+  return repoRoot();
+}
+
+interface CandidateInvocation {
+  executable: string;
+  args: string[];
+}
+
+function npmScriptInvocation(script: string, args: string[]): CandidateInvocation {
+  const npmExec = process.env.npm_execpath;
+  return npmExec
+    ? { executable: process.execPath, args: [npmExec, 'run', script, '--', ...args] }
+    : { executable: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: ['run', script, '--', ...args] };
+}
+
+export function productionCandidateInvocations(input: {
+  projectPackage: string;
+  productionManifest: string;
+  profileDir: string;
+  outputDir: string;
+  finalProjectPath: string;
+  url: string;
+  repairBudget: number;
+  shots?: BenchmarkSpecV1['shots'];
+  manifest?: BenchmarkSpecV1['productionManifest'];
+}): CandidateInvocation[] {
+  const shared = ['--url', input.url, '--profile', input.profileDir];
+  return [
+    npmScriptInvocation('agent:open', ['--file', input.projectPackage, ...shared, '--write']),
+    npmScriptInvocation('agent:production', [
+      '--manifest', input.productionManifest,
+      ...shared,
+      '--output', input.outputDir,
+      '--final-project', input.finalProjectPath,
+      '--write',
+      '--mode', 'delivery',
+      '--max-repair-passes', String(input.repairBudget),
+      '--allow-heavy-character-imports',
+    ]),
+  ];
+}
+
+async function materializeProductionArtifacts(input: {
+  spec: BenchmarkSpecV1;
+  layout: BenchmarkRunLayout;
+}): Promise<void> {
+  for (const shot of input.spec.shots) {
+    for (const artifact of shot.stillArtifacts) {
+      const artifactIndex = shot.stillArtifacts.indexOf(artifact);
+      const source = shot.intent === 'motion-required'
+        ? path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}-sample-${artifactIndex}.png`)
+        : path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}.png`);
+      await copyFile(source, path.join(input.layout.artifactDir, artifact));
+      await copyFile(source, path.join(input.layout.runRoot, artifact));
+    }
+    for (const artifact of shot.motionArtifacts ?? []) {
+      const generated = path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}.mp4`);
+      await copyFile(generated, path.join(input.layout.artifactDir, artifact));
+      await copyFile(generated, path.join(input.layout.runRoot, artifact));
+    }
+  }
+  const contactSheet = path.join(input.layout.artifactDir, 'contact-sheet.png');
+  await copyFile(contactSheet, path.join(input.layout.runRoot, 'contact-sheet.png'));
+}
+
+async function isNonemptyFile(filePath: string): Promise<boolean> {
+  return stat(filePath).then((value) => value.isFile() && value.size > 0).catch(() => false);
+}
+
+function runInvocation(
+  invocation: CandidateInvocation,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(invocation.executable, invocation.args, { cwd, env, shell: false });
+    let stdout = '';
+    let stderr = '';
+    const timer = timeoutMs
+      ? setTimeout(() => {
+        child.kill('SIGINT');
+        stderr += `\nCandidate exceeded ${timeoutMs}ms`;
+      }, timeoutMs)
+      : undefined;
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', (error) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: 1, stdout, stderr: `${stderr}${error.message}\n` });
+    });
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+async function runProductionCandidate(
+  invocations: CandidateInvocation[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let stdout = '';
+  let stderr = '';
+  for (const invocation of invocations) {
+    const result = await runInvocation(invocation, candidateWorkingDirectory(), env, timeoutMs);
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.code !== 0) return { code: result.code, stdout, stderr };
+  }
+  return { code: 0, stdout, stderr };
 }
 
 async function writeReport(
@@ -123,7 +238,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   if (!args.skipCandidate && args.candidate) {
     clock.start('invoke-candidate', 'candidate');
-    const result = await runCommand(args.candidate, prepared.layout.workDir, {
+    const candidateEnv = {
       ...process.env,
       FORESCENE_BENCHMARK: '1',
       FORESCENE_BENCHMARK_BRIEF: prepared.layout.briefPath,
@@ -131,7 +246,23 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       FORESCENE_URL: args.url ?? process.env.FORESCENE_URL ?? '',
       FORESCENE_PROFILE: prepared.layout.profileDir,
       FORESCENE_OUTPUT: prepared.layout.artifactDir,
-    }, Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000);
+    };
+    const timeoutMs = Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000;
+    const finalProjectPath = path.join(prepared.layout.runRoot, 'final-project.fsp');
+    const structuredProduction = args.candidate === 'production';
+    const result = structuredProduction
+      ? await runProductionCandidate(productionCandidateInvocations({
+          projectPackage: prepared.layout.projectDir + path.sep + path.basename(spec.basePackage!),
+          productionManifest: path.join(prepared.layout.harnessDir, 'production-manifest.json'),
+          profileDir: prepared.layout.profileDir,
+          outputDir: prepared.layout.artifactDir,
+          finalProjectPath,
+          url: args.url ?? process.env.FORESCENE_URL ?? '',
+          repairBudget: spec.repairBudget,
+          shots: spec.shots,
+          manifest: spec.productionManifest,
+        }), candidateEnv, timeoutMs)
+      : await runCommand(args.candidate, candidateWorkingDirectory(), candidateEnv, timeoutMs);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), result.stdout);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stderr.log'), result.stderr);
     ingestCliLogs(clock, {
@@ -153,11 +284,30 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       await writeReport(prepared.layout, spec, clock, failure);
       return 1;
     }
+    if (structuredProduction) {
+      try {
+        await materializeProductionArtifacts({ spec, layout: prepared.layout });
+      } catch (error) {
+        const failure: BenchmarkFailure = {
+          class: 'HARNESS_FAILURE',
+          operation: 'candidate.materialize',
+          message: error instanceof Error ? error.message : String(error),
+        };
+        clock.stop('run');
+        await writeReport(prepared.layout, spec, clock, failure);
+        return 1;
+      }
+    }
   }
 
   clock.start('collect-artifacts');
   const collected = await collectBenchmarkRun({ spec, layout: prepared.layout, clock });
   clock.stop('collect-artifacts');
+  if (collected.failure) {
+    clock.stop('run');
+    await writeReport(prepared.layout, spec, clock, collected.failure);
+    return 1;
+  }
 
   const brief = JSON.parse(await readFile(prepared.layout.briefPath, 'utf8')) as BenchmarkCandidateBrief;
   const liveUrl = args.url ?? brief.url;
@@ -174,10 +324,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     clock.stop('cold-open');
   } else {
     clock.start('cold-open', 'forescene');
+    const finalProjectPath = path.join(prepared.layout.runRoot, 'final-project.fsp');
+    const lifecycleProject = await isNonemptyFile(finalProjectPath)
+      ? finalProjectPath
+      : brief.projectPackage;
     const live = await runLiveLifecycle({
       layout: prepared.layout,
       url: liveUrl,
-      projectPackage: brief.projectPackage,
+      projectPackage: lifecycleProject,
       clock,
     });
     await writeLifecycleRecords(prepared.layout, live.records);

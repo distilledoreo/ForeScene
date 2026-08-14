@@ -117,6 +117,17 @@ describe('agent CLI discovery', () => {
 });
 
 describe('agent CLI shot-selection contract', () => {
+  it('parses the production final-project output path', () => {
+    const args = parseAgentCliArgs([
+      'production',
+      '--manifest',
+      'production-manifest.json',
+      '--final-project',
+      'MV3-Benchmark-13/final-project.fsp',
+    ]);
+    expect(args.finalProject).toBe('MV3-Benchmark-13/final-project.fsp');
+  });
+
   it('passes explicit verify --shots into collectVisualPreflightValidation', () => {
     const args = parseAgentCliArgs(['verify', '--shots', 'shot_a,shot_b']);
     const usage = resolveCliCommandShotUsage(args.command, args.shotSelection);

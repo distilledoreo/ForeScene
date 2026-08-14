@@ -22,6 +22,7 @@ export function validateShotDefinition(
   const locationIds = new Set(manifest.locations.map((location) => location.id));
   const castIds = new Set(manifest.cast.map((character) => character.id));
   const propIds = new Set((manifest.props ?? []).map((prop) => prop.id));
+  const assetIds = new Set((manifest.assets ?? []).map((asset) => asset.id));
 
   if (!locationIds.has(shot.locationId)) {
     errors.push(previsError(
@@ -40,7 +41,7 @@ export function validateShotDefinition(
   }
 
   for (const subject of shot.subjects) {
-    if (!castIds.has(subject) && !propIds.has(subject)) {
+    if (!castIds.has(subject) && !propIds.has(subject) && !assetIds.has(subject)) {
       errors.push(previsError(
         PREVIS_DIAGNOSTIC_CODES.unknownReference,
         `Unknown subject "${subject}".`,
@@ -67,6 +68,7 @@ export function validateShotDefinition(
     } else if (
       !castIds.has(shot.camera.foregroundSubject)
       && !propIds.has(shot.camera.foregroundSubject)
+      && !assetIds.has(shot.camera.foregroundSubject)
     ) {
       errors.push(previsError(
         PREVIS_DIAGNOSTIC_CODES.unknownReference,
@@ -81,7 +83,8 @@ export function validateShotDefinition(
     if (instruction.placement.type === 'relative') {
       const key = normalizeAnchorKey(instruction.placement.anchor);
       const knownSubject = castIds.has(instruction.placement.anchor)
-        || propIds.has(instruction.placement.anchor);
+        || propIds.has(instruction.placement.anchor)
+        || assetIds.has(instruction.placement.anchor);
       const knownAnchor = Boolean(
         anchors[instruction.placement.anchor]
         || anchors[key],
@@ -106,7 +109,7 @@ export function validateShotDefinition(
         break;
       }
     }
-    const knownSubjects = new Set([...castIds, ...propIds]);
+    const knownSubjects = new Set([...castIds, ...propIds, ...assetIds]);
     for (const keyframe of shot.motion.keyframes) {
       for (const staging of keyframe.staging ?? []) {
         if (!knownSubjects.has(staging.subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${staging.subject}".`, { path: `${path}.motion`, entityId: shot.id }));

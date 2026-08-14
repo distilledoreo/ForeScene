@@ -12,6 +12,7 @@ import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
 import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/benchmark/git';
 import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
+import { candidateWorkingDirectory, productionCandidateInvocations } from '../scripts/benchmark/run';
 import { BenchmarkClock, classifyCliPhase, emptyClassifyState, ingestCliLogs, summarizeBenchmarkTiming } from '../scripts/benchmark/timing';
 import { extractAgentEnvelopes } from '../scripts/agent/runDocumentedCli';
 import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
@@ -26,6 +27,103 @@ describe('benchmark harness v3', () => {
     expect(spec.shots[1]?.requiredSubjects).toEqual(['lead', 'partner']);
     expect(spec.shots[2]?.intent).toBe('motion-required');
     expect(JSON.stringify(spec)).not.toMatch(/cameraMustBe|cameraPosition/);
+  });
+
+  it('adapts the frozen panorama-triad benchmark into a launchable V3 contract', async () => {
+    const benchmarkRoot = await mkdtemp(path.join(os.tmpdir(), 'forescene-panorama-triad-'));
+    await mkdir(path.join(benchmarkRoot, 'seed'), { recursive: true });
+    await mkdir(path.join(benchmarkRoot, 'assets'), { recursive: true });
+    await writeFile(path.join(benchmarkRoot, 'seed', 'what_im_fighting_for_panorama_triad_base.fsp'), 'neutral-package');
+    await Promise.all([
+      writeFile(path.join(benchmarkRoot, 'assets', 'Hand_Monster_v3.glb'), 'monster'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Amputated.glb'), 'j2'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Amputated.fsrig'), 'j2-rig'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Final.glb'), 'j3'),
+      writeFile(path.join(benchmarkRoot, 'assets', 'Roman Joseph Final.fsrig'), 'j3-rig'),
+    ]);
+    const specPath = path.join(benchmarkRoot, 'shot-manifest.json');
+    await writeFile(specPath, JSON.stringify({
+      benchmarkId: 'music-video-v2-panorama-triad',
+      version: '2.0.0',
+      mode: 'create_three_shots_from_environment_only_base',
+      baseProject: { expectedShotCount: 0, expectedSceneObjectCount: 22, expectedPanoRefCount: 4, expectedLandmarkCount: 28 },
+      locations: {
+        ruins: { anchorLandmark: 'ruins_platform', styledPanoId: 'pano_ruins' },
+        corridor: { anchorLandmark: 'corridor_center', styledPanoId: null, note: 'No corridor panorama.' },
+        armory: { anchorLandmark: 'armory_center', styledPanoId: 'pano_armory' },
+      },
+      shots: [
+        {
+          shotNumber: '01', name: 'H1 newborn hand creature', kind: 'static_creature_composition', location: 'ruins', linkedPanoId: 'pano_ruins',
+          assets: [{ file: 'Hand_Monster_v3.glb', importAs: 'ordinary_model' }], requirements: ['Five finger limbs and eye stalk.'], deliverable: 'creature-final.png',
+        },
+        {
+          shotNumber: '02', name: 'Sprint chase toward armory', kind: 'three_second_motion', location: 'corridor', linkedPanoId: null,
+          assets: [{ file: 'Roman Joseph Amputated.glb', rigFile: 'Roman Joseph Amputated.fsrig', importAs: 'saved_rig_character' }, { file: 'Hand_Monster_v3.glb', importAs: 'ordinary_model' }],
+          requirements: ['Three-second chase at t=0 and t=3.'], deliverables: ['chase-start.png', 'chase-mid.png', 'chase-end.png', 'chase-motion.mp4'],
+        },
+        {
+          shotNumber: '03', name: 'J3 battle-ready stance', kind: 'static_saved_rig_character_pose', location: 'armory', linkedPanoId: 'pano_armory',
+          assets: [{ file: 'Roman Joseph Final.glb', rigFile: 'Roman Joseph Final.fsrig', importAs: 'saved_rig_character' }], requirements: ['Shield and wrist blade.'], deliverable: 'fighter-final.png',
+        },
+      ],
+      standardDeliverables: ['creature-final.png', 'chase-start.png', 'chase-mid.png', 'chase-end.png', 'chase-motion.mp4', 'fighter-final.png', 'contact-sheet.png', 'final-project.fsp', 'run-report.json', 'validation-report.json'],
+    }));
+
+    const spec = await loadBenchmarkSpec(specPath);
+    expect(spec.id).toBe('music-video-v2-panorama-triad');
+    expect(spec.operatingMode).toBe('existing-project-refinement');
+    expect(spec.resetAuthorized).toBe(false);
+    expect(spec.repairBudget).toBe(2);
+    expect(spec.basePackage).toBe(path.join(benchmarkRoot, 'seed', 'what_im_fighting_for_panorama_triad_base.fsp'));
+    expect(spec.requiredArtifacts).toContain('final-project.fsp');
+    expect(spec.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
+    expect(spec.shots[1]?.intent).toBe('motion-required');
+    expect(spec.productionManifest?.project.operatingMode).toBe('existing-project-refinement');
+    const chaseMotion = spec.productionManifest?.shots[1]?.motion;
+    expect(chaseMotion).toMatchObject({
+      durationSeconds: 3,
+      renderControlVideo: true,
+      keyframes: [
+        { timeSeconds: 0 },
+        { timeSeconds: 1.5 },
+        { timeSeconds: 3 },
+      ],
+    });
+    const chaseStart = chaseMotion?.keyframes[0]?.staging ?? [];
+    const chaseEnd = chaseMotion?.keyframes.at(-1)?.staging ?? [];
+    for (const subject of ['joseph-amputated', 'hand-monster']) {
+      expect(chaseStart.find((item) => item.subject === subject)?.transform?.position)
+        .not.toEqual(chaseEnd.find((item) => item.subject === subject)?.transform?.position);
+    }
+    expect(spec.productionManifest?.assets?.find((asset) => asset.id === 'hand-monster')).toMatchObject({
+      type: 'imported_model',
+      importMode: 'ordinary_model',
+      semanticRole: 'subject',
+    });
+    expect(spec.productionManifest?.shots[0]?.requirements?.visibleSubjects).toEqual(['hand-monster']);
+    expect(spec.productionManifest?.shots[1]?.requirements?.visibleSubjects).toEqual([
+      'joseph-amputated',
+      'hand-monster',
+    ]);
+    expect(spec.productionManifest?.cast).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'joseph-amputated', type: 'imported_character', rigMode: 'saved-rig' }),
+      expect.objectContaining({ id: 'joseph-final', type: 'imported_character', rigMode: 'saved-rig' }),
+    ]));
+
+    const runRoot = path.join(benchmarkRoot, 'runs', 'MV3-Benchmark-02');
+    const prepared = await prepareBenchmarkRun({
+      spec,
+      specPath,
+      runRoot,
+      enforceRepositoryState: false,
+    });
+    expect(prepared.failure).toBeUndefined();
+    const brief = JSON.parse(await readFile(prepared.layout.briefPath, 'utf8')) as ReturnType<typeof buildCandidateBrief>;
+    expect(brief.projectPackage).toBe(path.join(prepared.layout.projectDir, 'what_im_fighting_for_panorama_triad_base.fsp'));
+    expect(brief.requiredArtifacts).toContain('validation-report.json');
+    const production = JSON.parse(await readFile(brief.productionManifest!, 'utf8')) as typeof spec.productionManifest;
+    expect(production?.assets?.find((asset) => asset.id === 'hand-monster')?.type).toBe('imported_model');
   });
 
   it('rejects specs that encode a benchmark camera solution', () => {
@@ -248,6 +346,61 @@ describe('benchmark harness v3', () => {
     expect(parsed.runRoot).toBe(runRoot);
   }, 30_000);
 
+  it('launches repository CLI commands from the ForeScene checkout, not the candidate workspace', () => {
+    expect(path.resolve(candidateWorkingDirectory())).toBe(repoRoot);
+    expect(path.resolve(candidateWorkingDirectory())).not.toBe(path.resolve(os.tmpdir(), 'candidate-workspace'));
+    const npmExec = process.env.npm_execpath;
+    const packageName = execFileSync(npmExec ? process.execPath : 'npm.cmd', npmExec
+      ? [npmExec, 'pkg', 'get', 'name']
+      : ['pkg', 'get', 'name'], {
+      cwd: candidateWorkingDirectory(),
+      encoding: 'utf8',
+    }).trim();
+    expect(JSON.parse(packageName)).toBe('forescene');
+  });
+
+  it('passes spaced Windows benchmark paths as structured production arguments', () => {
+    const paths = {
+      projectPackage: 'C:\\Benchmark Runs\\MV3-09\\project\\neutral.fsp',
+      productionManifest: 'C:\\Benchmark Runs\\MV3-09\\harness\\production-manifest.json',
+      profileDir: 'C:\\Benchmark Runs\\MV3-09\\profile',
+      outputDir: 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts',
+      finalProjectPath: 'C:\\Benchmark Runs\\MV3-09\\final-project.fsp',
+      url: 'https://forescene.example',
+      repairBudget: 2,
+      shots: [{
+        id: 'mv3-shot-02', shotNumber: '02', name: 'Chase', description: 'Chase',
+        intent: 'motion-required' as const, requiredSubjects: ['lead'],
+        stillArtifacts: ['chase-start.png', 'chase-mid.png', 'chase-end.png'],
+        motionArtifacts: ['chase-motion.mp4'],
+      }],
+      manifest: {
+        version: 2 as const,
+        project: { name: 'Benchmark', aspectRatio: '16:9' as const },
+        locations: [], cast: [],
+        shots: [{
+          id: 'mv3-shot-02', shotNumber: '02', name: 'Chase', description: 'Chase',
+          locationId: 'corridor', subjects: ['lead'], blocking: [],
+          camera: { template: 'full' as const, subjects: ['lead'] },
+          motion: { durationSeconds: 3, keyframes: [
+            { timeSeconds: 0 }, { timeSeconds: 1.5 }, { timeSeconds: 3 },
+          ] },
+        }],
+      },
+    };
+    const invocations = productionCandidateInvocations(paths);
+    expect(invocations).toHaveLength(2);
+    for (const value of Object.values(paths).filter((item): item is string => typeof item === 'string')) {
+      expect(invocations.some((invocation) => invocation.args.includes(value))).toBe(true);
+    }
+    expect(invocations.flatMap((invocation) => invocation.args).some((arg) => /^['\"]|['\"]$/.test(arg))).toBe(false);
+    expect(invocations[0]?.args).toContain('agent:open');
+    expect(invocations[1]?.args).toContain('agent:production');
+    expect(invocations[1]?.args).toEqual(expect.arrayContaining([
+      'agent:production', '--final-project', paths.finalProjectPath,
+    ]));
+  });
+
   it('grades visual-preflight metrics without requiring camera coordinates', async () => {
     const spec = await loadBenchmarkSpec(path.join(repoRoot, 'benchmarks/three-shot.json'));
     const passing = gradeVisualDiagnostics(spec, {
@@ -331,10 +484,19 @@ describe('benchmark harness v3', () => {
     expect(enforceGitIdentity({
       commit: 'aaa',
       expectedCommit: 'bbb',
+      expectedCommitIsAncestor: false,
       dirty: false,
       porcelain: '',
       allowDirty: false,
     })?.class).toBe('ENVIRONMENT_FAILURE');
+    expect(enforceGitIdentity({
+      commit: 'descendant',
+      expectedCommit: 'stabilization',
+      expectedCommitIsAncestor: true,
+      dirty: false,
+      porcelain: '',
+      allowDirty: false,
+    })).toBeUndefined();
     expect(enforceGitIdentity({
       commit: 'aaa',
       expectedCommit: 'aaa',

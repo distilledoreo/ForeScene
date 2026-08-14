@@ -38,6 +38,7 @@ import {
   inspectShotCompositionError,
   createInitialRunState,
   firstIncompletePhase,
+  inferExistingProjectLocationBindings,
   preflightProductionAssets,
   hashPrevisManifest,
   isCanonicalFrame,
@@ -52,6 +53,7 @@ import {
   upsertEntity,
   upsertShotState,
   buildSubjectBoundsForRepair,
+  buildSubjectIdentityMap,
   solidBlockersForRepair,
   validateShotFrame,
   rankFrameValidation,
@@ -108,6 +110,8 @@ export interface PrevisCliOptions {
   maxRepairPasses?: number;
   timeBudgetSeconds?: number;
   skipControlVideos?: boolean;
+  /** Export a verified .fsp backup before the production session closes. */
+  finalProjectPath?: string;
 }
 
 export interface PrevisCliResult {
@@ -133,6 +137,8 @@ export interface PrevisCliResult {
   reviewArtifacts?: string[];
   package?: string;
   packageTransfer?: AgentArtifactTransferTelemetry;
+  finalProject?: string;
+  finalProjectTransfer?: AgentArtifactTransferTelemetry;
   artifactPaths?: string[];
   diagnostics?: unknown[];
   timing?: ProductionRunTiming;
@@ -219,6 +225,7 @@ async function renderCleanShotFrame(
     profile?: RenderProfile;
     renderSession?: PersistentRenderSession;
     shotNumber?: string;
+    timeSeconds?: number;
   },
 ): Promise<{
   ok: boolean;
@@ -291,6 +298,7 @@ async function renderCleanShotFrame(
   const result = await page.evaluate(async (payload) => {
     return window.foreScene!.renderShotFrame({
       shotId: payload.shotId,
+      timeSeconds: payload.timeSeconds,
       appearance: payload.appearance,
       peopleVariant: payload.peopleVariant,
       content: payload.content,
@@ -299,6 +307,7 @@ async function renderCleanShotFrame(
     });
   }, {
     shotId,
+    timeSeconds: options?.timeSeconds,
     appearance: profile.appearance,
     peopleVariant: profile.peopleVariant,
     content: profile.content,
@@ -351,7 +360,9 @@ async function renderControlVideo(
     resolutionPreset: '1080p',
     appearance: 'clay',
     contentMode: 'full_scene',
-    attachToShot: true,
+    // This runner owns the file artifact. Attaching here can race timeline
+    // persistence and incorrectly turn a valid render into stale_revision.
+    attachToShot: false,
     download: false,
   }), shotId);
   if (!result.ok) {
@@ -558,6 +569,24 @@ async function importManifestCharacter(
   return { sourcePath, result };
 }
 
+async function importManifestModelAsset(
+  page: Page,
+  sourcePath: string,
+  consentToken?: string,
+) {
+  await page.locator('[data-agent-model-import-input]').setInputFiles(sourcePath);
+  return page.evaluate(async (input) => {
+    const fileInput = document.querySelector('[data-agent-model-import-input]') as HTMLInputElement | null;
+    const file = fileInput?.files?.[0];
+    if (!file) throw new Error('Model file was not staged in the browser.');
+    return window.foreScene!.importModel({
+      file,
+      mode: 'separate',
+      consentToken: input.consentToken,
+    });
+  }, { consentToken });
+}
+
 async function analyzeManifestSavedRigCharacter(
   page: Page,
   asset: ResolvedManifestCharacterAsset,
@@ -627,13 +656,6 @@ async function resetProjectOnPage(
     ...payload,
     resetAuthorization: 'reset-project',
   }), input);
-}
-
-function subjectNameMap(manifest: PrevisProductionManifestV1): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const character of manifest.cast) map[character.id] = character.name;
-  for (const prop of manifest.props ?? []) map[prop.id] = prop.name;
-  return map;
 }
 
 function resolveMappingIds(
@@ -1059,7 +1081,31 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         .map(([shotNumber]) => shotNumber),
     );
 
-    const compiled = compileProduction(manifest, { skipShotNumbers: skipShots });
+    const preparedProject = manifest.project.operatingMode === 'existing-project-refinement'
+      ? await session.page.evaluate(() => window.foreScene!.getProjectDocument())
+      : undefined;
+    const locationBindings = preparedProject
+      ? inferExistingProjectLocationBindings(preparedProject, manifest)
+      : undefined;
+    if (preparedProject) {
+      const unboundLocations = manifest.locations.filter((location) => !locationBindings?.[location.id]);
+      if (unboundLocations.length > 0) {
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'locations',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          error: `Existing-project refinement could not bind prepared locations: ${unboundLocations.map((item) => item.id).join(', ')}.`,
+        };
+      }
+    }
+    const compiled = compileProduction(manifest, {
+      skipShotNumbers: skipShots,
+      locationBindings,
+      presenceProject: preparedProject,
+    });
     await writeJson(path.join(outputDir, 'logs', 'compile.json'), {
       ok: compiled.ok,
       diagnostics: compiled.diagnostics,
@@ -1224,6 +1270,125 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       await writeJson(runStatePath, state);
     }
 
+    const importedModelResults: Array<{
+      id: string;
+      sourcePath?: string;
+      sourceSha256?: string;
+      ok: boolean;
+      objectIds?: string[];
+      reused?: boolean;
+      warnings?: string[];
+      diagnostics?: unknown[];
+    }> = [];
+    for (const asset of assetPreflight.assets) {
+      if (asset.expectedObjectType !== 'imported_model') continue;
+      const entityKey = `assets.${asset.id}`;
+      const existing = state.entities[entityKey];
+      if (existing?.objectId) {
+        importedModelResults.push({
+          id: asset.id,
+          sourcePath: asset.sourcePath,
+          sourceSha256: asset.sourceSha256,
+          ok: true,
+          objectIds: existing.objectIds ?? [existing.objectId],
+          reused: true,
+        });
+        continue;
+      }
+      if (!asset.sourcePath) {
+        if (!asset.required) continue;
+        importedModelResults.push({ id: asset.id, ok: false });
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), importedModelResults);
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          error: `Imported model asset "${asset.id}" has no resolved source path.`,
+        };
+      }
+      const result = await importManifestModelAsset(
+        session.page,
+        asset.sourcePath,
+        options.allowHeavyCharacterImports ? 'allow-heavy-model-imports' : undefined,
+      );
+      const objectIds = result.objectRefs?.map((ref) => ref.id).filter(Boolean) ?? [];
+      importedModelResults.push({
+        id: asset.id,
+        sourcePath: asset.sourcePath,
+        sourceSha256: asset.sourceSha256,
+        ok: result.ok && objectIds.length > 0,
+        objectIds,
+        warnings: result.warnings,
+        diagnostics: result.diagnostics,
+      });
+      if (!result.ok || objectIds.length === 0) {
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), importedModelResults);
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: result.diagnostics,
+          error: `Imported model asset "${asset.id}" failed.`,
+        };
+      }
+      if (asset.semanticRole === 'subject') {
+        const roleApplied = await applyPlanOnPage(session.page, {
+          version: 1,
+          planId: `previs-asset-role-${asset.id}`,
+          description: `Classify imported subject ${asset.id} for shot staging`,
+          commands: objectIds.map((objectId) => ({
+            op: 'object.update' as const,
+            object: { id: objectId },
+            updates: { stagingRole: 'prop' },
+          })),
+        });
+        if (!roleApplied.ok) {
+          await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+            importedModels: importedModelResults,
+            roleApplied,
+          });
+          return {
+            ok: false,
+            phase: 'props',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: roleApplied.diagnostics,
+            error: `Imported model subject "${asset.id}" could not be classified for shot staging.`,
+          };
+        }
+      }
+      state = upsertEntity(state, entityKey, {
+        objectId: objectIds[0],
+        objectIds,
+        ...(objectIds.length > 1 ? { groupId: `asset.${asset.id}` } : {}),
+        refs: Object.fromEntries(objectIds.map((id) => [id, id])),
+        sourceSha256: asset.sourceSha256,
+      });
+    }
+    if (importedModelResults.length > 0) {
+      const bindings = Object.fromEntries(
+        importedModelResults.flatMap((result) => result.objectIds?.[0] ? [[result.id, result.objectIds[0]]] : []),
+      );
+      const bindingResult = Object.keys(bindings).length > 0
+        ? await session.page.evaluate(async (input) => window.foreScene!.bindManifestAssets(input), {
+          manifest,
+          bindings,
+        })
+        : undefined;
+      await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+        importedModels: importedModelResults,
+        bindingResult,
+      });
+      await writeJson(runStatePath, state);
+    }
+
     if (state.phases.props !== 'complete') {
       if (compiled.props.plan.commands.length > 0) {
         state = setPhase(state, 'props', 'in_progress');
@@ -1310,9 +1475,17 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }
     }
 
+    // Asset imports happen after the initial production compile. Re-read the
+    // live document so multipart geometry, bounds, presence, and panorama
+    // routing are compiled against the objects that will actually be staged.
+    const liveProjectForShotCompile = await session.page.evaluate(
+      () => window.foreScene!.getProjectDocument(),
+    );
+
     const shotBatches = compileShotList(manifest, resolvedContext, {
       skipShotNumbers: skipShots,
       existingShotIds,
+      presenceProject: liveProjectForShotCompile,
     });
 
     state = setPhase(state, 'shots', 'in_progress');
@@ -1560,7 +1733,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const validationStartedAt = Date.now();
       state = setPhase(state, 'validation', 'in_progress');
     let project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
-    const names = subjectNameMap(manifest);
+    const names = buildSubjectIdentityMap(manifest, state);
     const validationResults: FrameValidationResult[] = [];
     let previousCamera: CameraData | undefined;
 
@@ -1892,6 +2065,43 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     state = setPhase(state, 'validation', 'complete');
     await writeJson(runStatePath, state);
 
+    const sampledFramePaths: string[] = [];
+    const sampledFrameFailures: Array<{
+      shotNumber: string;
+      timeSeconds: number;
+      error: string;
+    }> = [];
+    for (const definition of manifest.shots) {
+      if (!definition.motion?.keyframes.length) continue;
+      const currentShot = project.shots.find((shot) => shot.shotNumber === definition.shotNumber);
+      if (!currentShot) continue;
+      for (const [index, keyframe] of definition.motion.keyframes.entries()) {
+        const sampledPath = path.join(outputDir, 'shots', `${definition.shotNumber}-sample-${index}.png`);
+        const sampled = await renderCleanShotFrame(session.page, currentShot.id, sampledPath, {
+          profile: renderProfile,
+          shotNumber: definition.shotNumber,
+          timeSeconds: keyframe.timeSeconds,
+        });
+        if (!sampled.ok) {
+          // Keyframe samples are benchmark evidence, not run-critical frames.
+          // Record the failure and continue; the harness reports missing
+          // evidence as not-graded and required stills still fail closed.
+          sampledFrameFailures.push({
+            shotNumber: definition.shotNumber,
+            timeSeconds: keyframe.timeSeconds,
+            error: sampled.error ?? 'unknown error',
+          });
+          continue;
+        }
+        sampledFramePaths.push(sampledPath);
+      }
+    }
+    await writeJson(path.join(outputDir, 'logs', 'sampled-frames.json'), {
+      ok: sampledFrameFailures.length === 0,
+      frames: sampledFramePaths.length,
+      failures: sampledFrameFailures,
+    });
+
     timeBudget?.assertWithinBudget('create_review_sheets');
     state = setPhase(state, 'contactSheet', 'in_progress');
     const sheetEntries = manifest.shots.map((shot) => {
@@ -2020,6 +2230,40 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     state = setPhase(state, 'contactSheet', 'complete');
     await writeJson(runStatePath, state);
 
+    // Repairs and media rendering can revisit shot state. Reassert every
+    // explicit manifest panorama contract immediately before package/backup,
+    // including null for locations with no calibrated panorama.
+    const liveShotsForPanoramaFinalize = await session.page.evaluate(() => window.foreScene!.listShots());
+    const panoramaFinalizeCommands = manifest.shots.flatMap((manifestShot) => {
+      const location = manifest.locations.find((item) => item.id === manifestShot.locationId);
+      if (!location) return [];
+      const specified = Object.prototype.hasOwnProperty.call(location, 'defaultPanoId')
+        || (location.panoIds?.length ?? 0) > 0;
+      if (!specified) return [];
+      const liveShot = liveShotsForPanoramaFinalize.find((item) => item.shotNumber === manifestShot.shotNumber);
+      if (!liveShot) return [];
+      const panoId = location.defaultPanoId !== undefined
+        ? location.defaultPanoId
+        : location.panoIds?.[0];
+      return [{
+        op: 'shot.setPanorama' as const,
+        shot: { id: liveShot.id },
+        pano: typeof panoId === 'string' ? { id: panoId } : null,
+      }];
+    });
+    if (panoramaFinalizeCommands.length > 0) {
+      const panoramaFinalized = await applyPlanOnPage(session.page, {
+        version: 1,
+        planId: 'previs-finalize-shot-panoramas',
+        description: 'Reassert production panorama contracts before export',
+        commands: panoramaFinalizeCommands,
+      });
+      await writeJson(path.join(outputDir, 'logs', 'panorama-finalize.json'), panoramaFinalized);
+      if (!panoramaFinalized.ok) {
+        throw new Error(panoramaFinalized.diagnostics?.[0]?.message ?? 'Final panorama routing failed.');
+      }
+    }
+
     let packagePath: string | undefined;
     let packageTransfer: AgentArtifactTransferTelemetry | undefined;
     let packageFailed = false;
@@ -2051,6 +2295,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       state = setPhase(state, 'package', 'skipped');
     }
 
+    let finalProjectPath: string | undefined;
+    let finalProjectTransfer: AgentArtifactTransferTelemetry | undefined;
+    if (options.finalProjectPath) {
+      const backup = await session.page.evaluate(async () => (
+        window.foreScene!.exportProjectBackup({ download: false })
+      ));
+      if (!backup.ok || !backup.artifact?.artifactId) {
+        throw new Error(backup.diagnostics?.[0]?.message ?? 'Final project backup did not return an artifact.');
+      }
+      const saved = await saveAgentArtifactToFile(session.page, backup.artifact.artifactId, options.finalProjectPath);
+      finalProjectPath = saved.savedPath;
+      finalProjectTransfer = toCliArtifactTransfer(saved);
+    }
+
     timing.repairMs = repairMs;
     timing.reviewMs = Date.now() - validationStartedAt;
     timing.totalMs = Date.now() - runStartedAt;
@@ -2069,6 +2327,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       htmlPath,
       path.join(outputDir, 'logs', 'production-review-artifacts.json'),
       packagePath,
+      finalProjectPath,
+      ...sampledFramePaths,
       path.join(outputDir, 'validation.json'),
     ].filter((value): value is string => Boolean(value));
 
@@ -2110,6 +2370,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
       packageTransfer,
+      finalProject: finalProjectPath,
+      finalProjectTransfer,
       artifactPaths,
       manifestHash,
       runStatePath,

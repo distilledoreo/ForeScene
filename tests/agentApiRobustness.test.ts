@@ -637,6 +637,40 @@ describe('agent API robustness', () => {
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.hero).toBe(heroObject!.id);
   });
 
+  it('accepts a production asset id when binding an imported model', async () => {
+    const manifest = {
+      version: 2 as const,
+      project: { name: 'Imported asset', aspectRatio: '16:9' as const },
+      cast: [],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' as const }],
+      assets: [{
+        id: 'hand-monster',
+        type: 'imported_model' as const,
+        source: './Hand_Monster.glb',
+        importMode: 'ordinary_model' as const,
+        semanticRole: 'subject' as const,
+      }],
+      shots: [{
+        id: 'shot_1',
+        shotNumber: '001',
+        name: 'Monster shot',
+        description: 'Ordinary imported model subject.',
+        locationId: 'loc',
+        subjects: ['hand-monster'],
+        camera: { template: 'medium' as const, subjects: ['hand-monster'] },
+      }],
+    };
+    const object = useProjectStore.getState().project.scene.objects[0]!;
+
+    const bound = await bindAgentManifestAssets({
+      manifest,
+      bindings: { 'hand-monster': object.id },
+    });
+
+    expect(bound.ok).toBe(true);
+    expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.['hand-monster']).toBe(object.id);
+  });
+
   it('persists typed production bindings and validates a prepared location', async () => {
     const project = useProjectStore.getState().project;
     const heroObject = project.scene.objects.find((object) => object.type === 'human_dummy')!;

@@ -33,6 +33,7 @@ import {
 } from './shotPresence';
 import { resolveProductionPose } from './entityCapability';
 import { resolveShotEnvironment } from './shotEnvironment';
+import { selectionBounds } from '../buildSelection';
 
 export { defaultPropDimensions } from './propDimensions';
 
@@ -230,6 +231,24 @@ function compileSingleShot(
         yawRadians,
       });
     }
+    const importedAsset = manifest.assets?.find((item) => (
+      item.id === id && (item.type === 'imported_model' || item.type === 'primitive_proxy')
+    ));
+    if (importedAsset) {
+      const assetDimensions = manifestAssetDimensions(manifest, context, options.presenceProject, id)
+        ?? [1.3, 1.3, 1.3] as Vec3;
+      return subjectBoundsFromPlacement({
+        id,
+        // Imported-model blocking positions are floor contacts. Keep camera
+        // bounds aligned with the grounded transform emitted below instead of
+        // inheriting landmark marker height (commonly 1.2m).
+        position: [position[0], 0, position[2]],
+        width: assetDimensions[0],
+        height: assetDimensions[1],
+        depth: assetDimensions[2],
+        yawRadians,
+      });
+    }
     return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
   });
 
@@ -315,6 +334,27 @@ function compileSingleShot(
       productionShotId: shot.shotNumber,
     })
     : undefined;
+  const manifestLocation = manifest.locations.find((location) => location.id === shot.locationId);
+  const manifestPanoSpecified = Boolean(manifestLocation) && (
+    Object.prototype.hasOwnProperty.call(manifestLocation, 'defaultPanoId')
+    || (manifestLocation?.panoIds?.length ?? 0) > 0
+  );
+  const manifestPanoId = manifestLocation?.defaultPanoId !== undefined
+    ? manifestLocation.defaultPanoId
+    : manifestLocation?.panoIds?.[0];
+  if (
+    manifestPanoSpecified
+    && typeof manifestPanoId === 'string'
+    && options.presenceProject
+    && !options.presenceProject.panoRefs.some((pano) => pano.id === manifestPanoId)
+  ) {
+    diagnostics.push(previsError(
+      'expected_panorama_missing',
+      `Location "${shot.locationId}" names panorama "${manifestPanoId}", but it is not present in the live project.`,
+      { entityId: shot.id },
+    ));
+    return { ok: false, commands: [], diagnostics, warnings };
+  }
   if (environment?.diagnostics.length) {
     for (const item of environment.diagnostics) {
       diagnostics.push(item.severity === 'warning'
@@ -383,11 +423,13 @@ function compileSingleShot(
   // Route the prepared panorama after the shot exists. This is an executable
   // plan command rather than a direct store write, so preview/apply and
   // production compilation share the same deterministic mutation path.
-  if (environment?.panorama) {
+  if (manifestPanoSpecified || environment?.panorama) {
     commands.push({
       op: 'shot.setPanorama',
       shot: shotTarget,
-      pano: { id: environment.panorama.id },
+      pano: manifestPanoSpecified
+        ? (typeof manifestPanoId === 'string' ? { id: manifestPanoId } : null)
+        : { id: environment!.panorama!.id },
     });
   }
 
@@ -478,6 +520,42 @@ function compileSingleShot(
     }
   }
 
+  for (const asset of manifest.assets ?? []) {
+    if (asset.type !== 'imported_model' && asset.type !== 'primitive_proxy') continue;
+    const entityMapping = context.entities[`assets.${asset.id}`];
+    if (!entityMapping) continue;
+    const inShot = shot.subjects.includes(asset.id) || visibleIds.has(asset.id);
+    const blocking = blockingResults[asset.id];
+    const assetDimensions = manifestAssetDimensions(manifest, context, options.presenceProject, asset.id);
+    if (inShot) {
+      const position = subjectPositions[asset.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
+      const transform = {
+        position: [position[0], assetDimensions ? assetDimensions[1] / 2 : 0, position[2]] as Vec3,
+        rotation: [...(blocking?.rotation ?? [0, 0, 0])] as Vec3,
+        scale: [1, 1, 1] as Vec3,
+      };
+      effectiveStaticTransforms[asset.id] = transform;
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('asset', asset.id),
+        project: options.presenceProject,
+        visible: true,
+        transform,
+      });
+    } else {
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('asset', asset.id),
+        project: options.presenceProject,
+        visible: false,
+      });
+    }
+  }
+
   // Hide inactive location geometry via staging when possible — location objects
   // are architecture (stagingRole set). Stage visibility for other locations' floors etc.
   for (const location of manifest.locations) {
@@ -536,9 +614,17 @@ function compileSingleShot(
             ...(keyframe.staging?.flatMap((staging) => {
               const castMapping = context.entities[`cast.${staging.subject}`];
               const propMapping = context.entities[`props.${staging.subject}`];
-              const mapping = castMapping ?? propMapping;
-              const prefix = manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop';
+              const assetMapping = context.entities[`assets.${staging.subject}`];
+              const mapping = castMapping ?? propMapping ?? assetMapping;
+              const prefix = manifest.cast.some((item) => item.id === staging.subject)
+                ? 'cast'
+                : (manifest.props ?? []).some((item) => item.id === staging.subject)
+                  ? 'prop'
+                  : 'asset';
               const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
+              const stagedAssetDimensions = assetMapping
+                ? manifestAssetDimensions(manifest, context, options.presenceProject, staging.subject)
+                : undefined;
               return buildKeyframeStagingObjects({
                 mapping,
                 project: options.presenceProject,
@@ -546,6 +632,9 @@ function compileSingleShot(
                 effectiveStaticTransform: effectiveStaticTransforms[staging.subject],
                 staging,
                 resolvedPose,
+                groundOffsetY: stagedAssetDimensions
+                  ? stagedAssetDimensions[1] / 2
+                  : undefined,
               });
             }) ?? []),
             ...(closedWorldPresence?.dynamicObjectIds.map((objectId) => ({
@@ -717,6 +806,8 @@ function buildKeyframeStagingObjects(input: {
     };
   };
   resolvedPose?: string;
+  /** Imported-model manifest positions are floor contacts, matching static blocking placement. */
+  groundOffsetY?: number;
 }): Array<{
   object: { id: string } | { ref: string };
   visible?: boolean;
@@ -729,8 +820,11 @@ function buildKeyframeStagingObjects(input: {
     scale: [1, 1, 1] as Vec3,
   };
   if (input.staging.transform) {
+    const requestedPosition = input.staging.transform.position;
     const targetTransform: Transform = {
-      position: input.staging.transform.position ?? baseTransform.position,
+      position: requestedPosition
+        ? [requestedPosition[0], requestedPosition[1] + (input.groundOffsetY ?? 0), requestedPosition[2]]
+        : baseTransform.position,
       rotation: input.staging.transform.rotation ?? baseTransform.rotation,
       scale: input.staging.transform.scale ?? baseTransform.scale,
     };
@@ -761,6 +855,35 @@ function buildKeyframeStagingObjects(input: {
     ...(input.staging.visible !== undefined ? { visible: input.staging.visible } : {}),
     ...(input.resolvedPose ? { posePreset: input.resolvedPose } : {}),
   }));
+}
+
+function manifestAssetDimensions(
+  manifest: PrevisProductionManifestV1,
+  context: CompiledProductionContext,
+  project: LocationProject | undefined,
+  assetId: string,
+): Vec3 | undefined {
+  const asset = manifest.assets?.find((item) => item.id === assetId);
+  if (!asset || (asset.type !== 'imported_model' && asset.type !== 'primitive_proxy') || !project) {
+    return undefined;
+  }
+  const mapping = context.entities[`assets.${assetId}`];
+  const objectIds = mapping?.objectIds?.length
+    ? mapping.objectIds
+    : (mapping?.objectId ? [mapping.objectId] : []);
+  const members = objectIds.flatMap((objectId) => {
+    const object = project.scene.objects.find((item) => item.id === objectId);
+    return object ? [object] : [];
+  });
+  if (members.length === 0) return undefined;
+  const bounds = selectionBounds(members);
+  const size: Vec3 = [
+    bounds.max.x - bounds.min.x,
+    bounds.max.y - bounds.min.y,
+    bounds.max.z - bounds.min.z,
+  ];
+  if (!size.every((value) => Number.isFinite(value) && value > 0)) return undefined;
+  return size;
 }
 
 /**

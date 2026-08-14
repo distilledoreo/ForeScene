@@ -26,6 +26,7 @@ interface PrevisProductionManifestV1 {
     description?: string;
     aspectRatio: '16:9' | '9:16' | '1:1' | '2.39:1';
     frameRate?: number;
+    operatingMode?: 'greenfield' | 'existing-project-refinement';
   };
   locations: PrevisLocationDefinition[];
   cast: PrevisCharacterDefinition[];
@@ -39,8 +40,14 @@ interface PrevisProductionManifestV1 {
 type. A nonhumanoid GLB with `type: "imported_model"` and
 `semanticRole: "subject"` stays an ordinary imported model. Preflight checks
 source existence and hash, and rejects a missing rig only for assets declared
-as characters. Benchmark prepare writes this generated manifest so the
-candidate does not translate schemas.
+as characters. During `agent:previs`, required ordinary model assets are
+imported, recorded under their manifest IDs in resumable run state, and staged
+as shot subjects or props without entering the character-analysis or rigging
+path. The project binding is also persisted when the connected ForeScene build
+supports version-2 asset IDs. In `existing-project-refinement` mode, locations
+are resolved from `<location-id>_*` landmarks and existing set objects; missing
+location bindings fail closed before scene mutation. Benchmark prepare
+writes this generated manifest so the candidate does not translate schemas.
 
 Cast entries may be built-in semantic mannequins or imported characters. An
 imported character source is resolved relative to the manifest file, analyzed,
@@ -168,7 +175,8 @@ may still satisfy a static-only contract.
 Environment contracts route a shot to a prepared location panorama. The
 location must name `defaultPanoId` or `panoIds`; the compiler emits an
 executable `shot.setPanorama` command and verification compares the resulting
-shot link against the expected ID:
+shot link against the expected ID. Set `defaultPanoId` to `null` to explicitly
+leave shots at that location unlinked when no calibrated panorama exists:
 
 ```ts
 window.foreScene.inspectShotEnvironmentContract({ shotId: 'shot-001' });

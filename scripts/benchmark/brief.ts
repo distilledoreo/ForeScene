@@ -25,6 +25,7 @@ export function buildCandidateBrief(input: {
     outputDir: input.layout.artifactDir,
     projectPackage: input.projectPackage,
     productionManifest: input.productionManifest,
+    requiredArtifacts: input.spec.requiredArtifacts,
     shots: input.spec.shots,
   };
 }

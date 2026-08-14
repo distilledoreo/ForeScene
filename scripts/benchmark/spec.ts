@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { BENCHMARK_SPEC_VERSION, type BenchmarkSpecV1 } from './types';
 import { harnessFailure } from './failures';
+import { adaptFrozenPanoramaTriadSpec, isFrozenPanoramaTriadSpec } from './panoramaTriadAdapter';
 
 export function parseBenchmarkSpec(value: unknown): BenchmarkSpecV1 {
   if (!value || typeof value !== 'object') {
@@ -26,5 +27,6 @@ export function parseBenchmarkSpec(value: unknown): BenchmarkSpecV1 {
 
 export async function loadBenchmarkSpec(filePath: string): Promise<BenchmarkSpecV1> {
   const raw = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
+  if (isFrozenPanoramaTriadSpec(raw)) return adaptFrozenPanoramaTriadSpec(raw, filePath);
   return parseBenchmarkSpec(raw);
 }

@@ -139,7 +139,7 @@ export function compileLocationsPhase(
     const locationBinding = resolveCompileEntityBinding(location.id, options);
     const richLocationBinding = options.locationBindings?.[location.id];
     if (richLocationBinding && richLocationBinding.objectIds.length > 0) {
-      const origin = locationZoneOrigin(index);
+      const origin = richLocationBinding.anchors.center ?? locationZoneOrigin(index);
       origins.push(origin);
       next.locationOrigins[location.id] = origin;
       next.locationAnchors[location.id] = { ...richLocationBinding.anchors };

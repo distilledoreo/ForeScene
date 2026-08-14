@@ -1,0 +1,192 @@
+{
+  "version": 2,
+  "project": {
+    "name": "music-video-v2-panorama-triad",
+    "operatingMode": "existing-project-refinement",
+    "description": "Frozen music-video-v2 panorama-triad production contract. Preserve the imported environment-only base.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "ruins",
+      "name": "Roman ruins",
+      "description": "Use the existing environment at landmark ruins_platform.",
+      "template": "ruins",
+      "panoIds": ["pano_ms9pmx85_pgw9px"],
+      "defaultPanoId": "pano_ms9pmx85_pgw9px"
+    },
+    {
+      "id": "corridor",
+      "name": "Roman ruins corridor",
+      "description": "Use the existing environment at landmark corridor_center. No corridor-specific styled panorama exists; use geometry/clay and do not mislabel the ruins panorama as corridor-aligned.",
+      "template": "corridor",
+      "panoIds": [],
+      "defaultPanoId": null
+    },
+    {
+      "id": "armory",
+      "name": "Armory",
+      "description": "Use the existing environment at landmark armory_center.",
+      "template": "armory",
+      "panoIds": ["pano_ms9pmxdn_xdnia1"],
+      "defaultPanoId": "pano_ms9pmxdn_xdnia1"
+    }
+  ],
+  "cast": [
+    {
+      "id": "joseph-amputated",
+      "name": "Joseph J2 Amputated",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Amputated.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Amputated.fsrig"
+    },
+    {
+      "id": "joseph-final",
+      "name": "Joseph J3 Final",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Final.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Final.fsrig"
+    }
+  ],
+  "assets": [
+    {
+      "id": "hand-monster",
+      "type": "imported_model",
+      "source": "assets/Hand_Monster_v3.glb",
+      "importMode": "ordinary_model",
+      "semanticRole": "subject",
+      "required": true
+    }
+  ],
+  "props": [
+    { "id": "shield", "name": "Left-arm shield", "primitive": "shield" },
+    { "id": "wrist-blade", "name": "Right wrist-mounted short sword prosthetic", "primitive": "sword" }
+  ],
+  "shots": [
+    {
+      "id": "mv3-shot-01",
+      "shotNumber": "01",
+      "name": "H1 newborn hand creature",
+      "description": "Five finger limbs and eye stalk. Asset contract: Hand_Monster_v3.glb as ordinary_model. Panorama linkage: pano_ruins. Required outputs: creature-final.png.",
+      "locationId": "ruins",
+      "subjects": ["hand-monster"],
+      "blocking": [
+        { "subject": "hand-monster", "placement": { "type": "location_slot", "slot": "center" } }
+      ],
+      "camera": {
+        "template": "medium",
+        "subjects": ["hand-monster"],
+        "angle": "front",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["hand-monster"],
+        "notes": [
+          "Place the creature near ruins_platform as a hand-sized newborn, not a generic spider.",
+          "Use a low close camera that clearly reads the five finger-derived limbs and long thin eye stalk.",
+          "Keep the ruins geometry aligned to the existing styled panorama.",
+          "Hide corridor and armory geometry in this shot using shot-specific visibility only.",
+          "Target a 16:9 composition with roughly 28–38 degree FOV.",
+          "Use Hand_Monster_v3.glb as ordinary_model and produce creature-final.png."
+        ]
+      }
+    },
+    {
+      "id": "mv3-shot-02",
+      "shotNumber": "02",
+      "name": "Sprint chase toward armory",
+      "description": "Three-second chase at t=0 and t=3. Asset contract: Roman Joseph Amputated.glb as saved_rig_character with Roman Joseph Amputated.fsrig; Hand_Monster_v3.glb as ordinary_model. Panorama linkage: none. Required outputs: chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4.",
+      "locationId": "corridor",
+      "subjects": ["joseph-amputated", "hand-monster"],
+      "blocking": [
+        { "subject": "joseph-amputated", "placement": { "type": "location_slot", "slot": "background" } },
+        { "subject": "hand-monster", "placement": { "type": "relative", "anchor": "joseph-amputated", "relation": "behind" } }
+      ],
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph-amputated", "hand-monster"],
+        "angle": "three_quarter",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["joseph-amputated", "hand-monster"],
+        "notes": [
+          "Create a 3.0-second chase with keyframes at t=0 and t=3; a t=1.5 keyframe is encouraged but not mandatory.",
+          "Joseph begins near corridor_background and runs toward corridor_foreground/armory direction on two legs.",
+          "The creature starts about 1–1.5 meters behind and remains visibly in pursuit.",
+          "Joseph must read as J2 amputated: right stump, no sword prosthetic, right eyepatch, two legs.",
+          "Use a side-on or three-quarter tracking camera that keeps both subjects readable.",
+          "Do not link a styled panorama because none is calibrated for the corridor.",
+          "Hide ruins and armory geometry using shot-specific visibility only.",
+          "Use Roman Joseph Amputated.glb as saved_rig_character with Roman Joseph Amputated.fsrig; Hand_Monster_v3.glb as ordinary_model.",
+          "Produce chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4."
+        ]
+      },
+      "motion": {
+        "durationSeconds": 3,
+        "renderControlVideo": true,
+        "keyframes": [
+          {
+            "timeSeconds": 0,
+            "camera": { "position": [101.2, 1.6, -2.0], "target": [100, 0.9, -5.8], "fovDegrees": 50 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, -5.3] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -6.5] } }
+            ]
+          },
+          {
+            "timeSeconds": 1.5,
+            "camera": { "position": [101.2, 1.6, 3.3], "target": [100, 0.9, -0.5], "fovDegrees": 50 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 0] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -1.2] } }
+            ]
+          },
+          {
+            "timeSeconds": 3,
+            "camera": { "position": [101.2, 1.6, 8.6], "target": [100, 0.9, 4.8], "fovDegrees": 50 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 5.3] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, 4.1] } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "mv3-shot-03",
+      "shotNumber": "03",
+      "name": "J3 battle-ready stance",
+      "description": "Shield and wrist blade. Asset contract: Roman Joseph Final.glb as saved_rig_character with Roman Joseph Final.fsrig. Panorama linkage: pano_armory. Required outputs: fighter-final.png.",
+      "locationId": "armory",
+      "subjects": ["joseph-final", "shield", "wrist-blade"],
+      "blocking": [
+        { "subject": "joseph-final", "placement": { "type": "location_slot", "slot": "center" } },
+        { "subject": "shield", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "behind" } },
+        { "subject": "wrist-blade", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "beside" } }
+      ],
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph-final"],
+        "angle": "front",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["joseph-final"],
+        "visibleProps": ["shield", "wrist-blade"],
+        "notes": [
+          "Place Joseph at armory_center in a readable full-body battle-ready stance.",
+          "Continuity: right eyepatch, right wrist-mounted short sword/prosthetic, shield on left arm, two legs.",
+          "Use built-in character geometry for the shield/blade when available; otherwise create simple primitives without modifying the base set.",
+          "Keep the armory geometry aligned to the existing styled panorama.",
+          "Hide ruins and corridor geometry using shot-specific visibility only.",
+          "Target a 16:9 composition with roughly 28–38 degree FOV.",
+          "Use Roman Joseph Final.glb as saved_rig_character with Roman Joseph Final.fsrig and produce fighter-final.png."
+        ]
+      }
+    }
+  ]
+}

@@ -150,6 +150,34 @@ describe('shot environment contracts', () => {
     if (prepared.ok) expect(prepared.prepared.nextProject.shots[0]?.linkedPanoId).toBe(pano.id);
   });
 
+  it('uses manifest panorama routing and emits an explicit unlink without persisted production configuration', () => {
+    const { project, pano } = preparedProject();
+    project.workflow.production = undefined;
+    const manifest: PrevisProductionManifestV1 = {
+      version: 2,
+      project: { name: 'Manifest routing', aspectRatio: '16:9' },
+      locations: [
+        { id: 'ruins', name: 'Ruins', template: 'ruins', panoIds: [pano.id], defaultPanoId: pano.id },
+        { id: 'corridor', name: 'Corridor', template: 'corridor', panoIds: [], defaultPanoId: null },
+      ],
+      cast: [],
+      shots: [
+        { id: 'shot.ruins', shotNumber: '01', name: 'Ruins', description: 'Ruins', locationId: 'ruins', subjects: [], camera: { template: 'wide', subjects: [] } },
+        { id: 'shot.corridor', shotNumber: '02', name: 'Corridor', description: 'Corridor', locationId: 'corridor', subjects: [], camera: { template: 'wide', subjects: [] } },
+      ],
+    };
+    const context = createEmptyCompiledContext();
+    context.locationOrigins.ruins = [0, 0, 0];
+    context.locationOrigins.corridor = [0, 0, 0];
+    const commands = compileShotList(manifest, context, { presenceProject: project })
+      .flatMap((batch) => batch.plan.commands)
+      .filter((command) => command.op === 'shot.setPanorama');
+    expect(commands).toEqual([
+      { op: 'shot.setPanorama', shot: { ref: 'shot_01' }, pano: { id: pano.id } },
+      { op: 'shot.setPanorama', shot: { ref: 'shot_02' }, pano: null },
+    ]);
+  });
+
   it('measures projected ownership colors and gates coverage/fallback', () => {
     const pixels = new Uint8Array([
       0, 255, 255, 255, // cyan covered

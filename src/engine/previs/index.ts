@@ -16,6 +16,7 @@ export * from './castCompiler';
 export * from './propCompiler';
 export * from './productionCompiler';
 export * from './productionConfiguration';
+export * from './productionCompileBindings';
 export * from './entityCapability';
 export * from './shotPresence';
 export * from './shotEnvironment';

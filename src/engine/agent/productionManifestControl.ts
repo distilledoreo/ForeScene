@@ -181,6 +181,7 @@ export async function bindAgentManifestAssets(input: {
   const manifestIds = new Set([
     ...parsed.manifest.cast.map((entry) => entry.id),
     ...(parsed.manifest.props ?? []).map((entry) => entry.id),
+    ...(parsed.manifest.assets ?? []).map((entry) => entry.id),
     ...parsed.manifest.locations.map((entry) => entry.id),
   ]);
   const missingBindings = Object.keys(input.bindings).filter((key) => !manifestIds.has(key));

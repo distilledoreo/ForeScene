@@ -20,6 +20,7 @@ export function compileBenchmarkProductionManifest(
   spec: BenchmarkSpecV1,
   specPath: string,
 ): PrevisProductionManifestV1 {
+  if (spec.productionManifest) return structuredClone(spec.productionManifest);
   const assets = (spec.assets ?? []).map((asset) => {
     const source = resolveBenchmarkAssetPath(specPath, asset.path);
     if (asset.kind === 'panorama') {

@@ -18,12 +18,16 @@ export interface BenchmarkRunLayout {
   logsDir: string;
   specPath: string;
   briefPath: string;
+  doctorPath: string;
+  qualityPath: string;
   gitPath: string;
   hashesPath: string;
   timingPath: string;
   validationPath: string;
+  v3ValidationPath: string;
   visualPath: string;
   reportPath: string;
+  v3ReportPath: string;
 }
 
 export async function createBenchmarkRunLayout(runRoot: string): Promise<BenchmarkRunLayout> {
@@ -40,12 +44,16 @@ export async function createBenchmarkRunLayout(runRoot: string): Promise<Benchma
     logsDir: path.join(resolvedRoot, 'logs'),
     specPath: path.join(resolvedRoot, 'harness', 'spec.json'),
     briefPath: path.join(resolvedRoot, 'harness', 'brief.json'),
+    doctorPath: path.join(resolvedRoot, 'harness', 'doctor.json'),
+    qualityPath: path.join(resolvedRoot, 'harness', 'quality.json'),
     gitPath: path.join(resolvedRoot, 'harness', 'git.json'),
     hashesPath: path.join(resolvedRoot, 'hashes.json'),
     timingPath: path.join(resolvedRoot, 'timing.json'),
     validationPath: path.join(resolvedRoot, 'validation.json'),
+    v3ValidationPath: path.join(resolvedRoot, 'validation-report.json'),
     visualPath: path.join(resolvedRoot, 'harness', 'visual.json'),
     reportPath: path.join(resolvedRoot, 'report.json'),
+    v3ReportPath: path.join(resolvedRoot, 'run-report.json'),
   };
   await mkdir(layout.harnessDir, { recursive: true });
   await mkdir(layout.profileDir, { recursive: true });

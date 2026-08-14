@@ -104,6 +104,7 @@ export interface ProductionRunOptions {
   updateManifest?: boolean;
   initializeOnly?: boolean;
   outputDir?: string;
+  finalProjectPath?: string;
   skipPackage?: boolean;
   profileDir?: string;
   allowHeavyCharacterImports?: boolean;
@@ -153,6 +154,7 @@ export interface ProductionRunResult {
     contactSheetHtml?: string;
     reviewArtifacts?: string[];
     package?: string;
+    finalProject?: string;
     validation?: string;
   };
 

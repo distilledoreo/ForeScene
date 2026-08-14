@@ -49,6 +49,10 @@ export interface BenchmarkSpecV1 {
   requiredCliCapabilities: string[];
   basePackage?: string;
   assets?: Array<{ id: string; path: string; kind: 'glb' | 'fsrig' | 'panorama' | 'other' }>;
+  /** Harness-owned normalized manifest for frozen benchmark formats. */
+  productionManifest?: import('../../src/engine/previs/manifest').PrevisProductionManifestV1;
+  /** Complete benchmark artifact contract, including reports and project backups. */
+  requiredArtifacts?: string[];
 }
 
 export interface BenchmarkCandidateBrief {
@@ -67,6 +71,11 @@ export interface BenchmarkCandidateBrief {
   outputDir: string;
   projectPackage?: string;
   productionManifest?: string;
+  benchmarkContract?: string;
+  cliDocumentation?: string;
+  finalProjectPath?: string;
+  qualityEvidence?: string;
+  requiredArtifacts?: string[];
   shots: BenchmarkShotSpec[];
 }
 

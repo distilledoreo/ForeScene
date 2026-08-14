@@ -95,6 +95,14 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
     'project.aspectRatio',
     errors,
   ) as PrevisAspectRatio | undefined;
+  const operatingMode = projectRecord.operatingMode === undefined
+    ? undefined
+    : readEnum(
+      projectRecord.operatingMode,
+      ['greenfield', 'existing-project-refinement'] as const,
+      'project.operatingMode',
+      errors,
+    );
 
   let frameRate: number | undefined;
   if (projectRecord.frameRate !== undefined) {
@@ -130,6 +138,11 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const assets = root.assets === undefined
     ? undefined
     : parseAssets(root.assets, assetIds, errors, warnings);
+  const subjectAssetIds = new Set(
+    (assets ?? [])
+      .filter((asset) => asset.semanticRole === 'subject' || asset.semanticRole === 'character')
+      .map((asset) => asset.id),
+  );
   if (cast.length === 0 && (assets?.length ?? 0) === 0) {
     errors.push(previsError(
       PREVIS_DIAGNOSTIC_CODES.emptyField,
@@ -145,6 +158,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
       castIds,
       propIds,
       assetIds,
+      subjectAssetIds,
       shotIds,
       shotNumbers,
     },
@@ -163,6 +177,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
       aspectRatio,
       ...(projectDescription !== undefined ? { description: projectDescription } : {}),
       ...(frameRate !== undefined ? { frameRate } : {}),
+      ...(operatingMode !== undefined ? { operatingMode } : {}),
     },
     locations,
     cast,
@@ -221,6 +236,27 @@ function parseLocations(
       `${path}.template`,
       errors,
     ) as PrevisLocationTemplate | undefined;
+    let panoIds: string[] | undefined;
+    if (record.panoIds !== undefined) {
+      if (!Array.isArray(record.panoIds)) {
+        errors.push(previsError(
+          PREVIS_DIAGNOSTIC_CODES.invalidType,
+          'panoIds must be an array of panorama ids.',
+          { path: `${path}.panoIds` },
+        ));
+      } else {
+        panoIds = record.panoIds.flatMap((panoId, panoIndex) => {
+          const parsed = readNonemptyString(panoId, `${path}.panoIds[${panoIndex}]`, errors);
+          return parsed ? [parsed] : [];
+        });
+      }
+    }
+    let defaultPanoId: string | null | undefined;
+    if (record.defaultPanoId === null) {
+      defaultPanoId = null;
+    } else if (record.defaultPanoId !== undefined) {
+      defaultPanoId = readNonemptyString(record.defaultPanoId, `${path}.defaultPanoId`, errors);
+    }
 
     if (template === 'custom_blueprint') {
       errors.push(previsError(
@@ -306,6 +342,8 @@ function parseLocations(
         id,
         name,
         template,
+        ...(panoIds !== undefined ? { panoIds } : {}),
+        ...(defaultPanoId !== undefined || record.defaultPanoId === null ? { defaultPanoId } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(dimensions !== undefined ? { dimensions } : {}),
         ...(features !== undefined ? { features } : {}),
@@ -620,6 +658,7 @@ function parseShots(
     castIds: Set<string>;
     propIds: Set<string>;
     assetIds: Set<string>;
+    subjectAssetIds: Set<string>;
     shotIds: Set<string>;
     shotNumbers: Set<string>;
   },
@@ -727,7 +766,7 @@ function parseShots(
           : parseStringArray(req.notes, `${path}.requirements.notes`, errors, false);
 
         for (const subject of visibleSubjects ?? []) {
-          if (!ids.castIds.has(subject)) {
+          if (!ids.castIds.has(subject) && !ids.subjectAssetIds.has(subject)) {
             errors.push(previsError(
               PREVIS_DIAGNOSTIC_CODES.unknownReference,
               `Unknown visibleSubjects entry "${subject}".`,
@@ -779,7 +818,7 @@ function parseShots(
 function parseShotMotion(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisShotMotion | undefined {
@@ -839,7 +878,7 @@ function parseShotMotion(
 function parseMotionStaging(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisShotMotionKeyframe['staging'] {
@@ -856,7 +895,7 @@ function parseMotionStaging(
     }
     const item = entry as Record<string, unknown>;
     const subject = readNonemptyString(item.subject, `${itemPath}.subject`, errors);
-    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${subject}".`, { path: `${itemPath}.subject` }));
+    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject) && !ids.assetIds?.has(subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${subject}".`, { path: `${itemPath}.subject` }));
     const visible = item.visible === undefined ? undefined : Boolean(item.visible);
     if (item.visible !== undefined && typeof item.visible !== 'boolean') errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'visible must be a boolean.', { path: `${itemPath}.visible` }));
     let transform: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] } | undefined;

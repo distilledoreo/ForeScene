@@ -11,6 +11,7 @@ export interface GitIdentityRecord {
   dirty: boolean;
   porcelain: string;
   expectedCommit: string;
+  expectedCommitIsAncestor?: boolean;
   allowDirty: boolean;
 }
 
@@ -24,11 +25,22 @@ export async function gitIdentity(cwd = repoRoot()): Promise<GitIdentityRecord> 
     const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd });
     const commit = commitRaw.trim();
     const porcelain = status.trim();
+    const expectedCommit = (process.env.FORESCENE_BENCHMARK_EXPECTED_COMMIT ?? commit).trim();
+    let expectedCommitIsAncestor = expectedCommit === commit;
+    if (!expectedCommitIsAncestor && expectedCommit) {
+      try {
+        await execFileAsync('git', ['merge-base', '--is-ancestor', expectedCommit, commit], { cwd });
+        expectedCommitIsAncestor = true;
+      } catch {
+        expectedCommitIsAncestor = false;
+      }
+    }
     return {
       commit,
       dirty: porcelain.length > 0,
       porcelain,
-      expectedCommit: (process.env.FORESCENE_BENCHMARK_EXPECTED_COMMIT ?? commit).trim(),
+      expectedCommit,
+      expectedCommitIsAncestor,
       allowDirty: allowDirtyWorkingTree(),
     };
   } catch (error) {
@@ -39,9 +51,9 @@ export async function gitIdentity(cwd = repoRoot()): Promise<GitIdentityRecord> 
 }
 
 export function enforceGitIdentity(record: GitIdentityRecord): BenchmarkFailure | undefined {
-  if (record.expectedCommit && record.commit !== record.expectedCommit) {
+  if (record.expectedCommit && record.commit !== record.expectedCommit && !record.expectedCommitIsAncestor) {
     return environmentFailure(
-      `ForeScene HEAD ${record.commit} does not match expected commit ${record.expectedCommit}.`,
+      `ForeScene HEAD ${record.commit} is not the expected commit ${record.expectedCommit} or a clean descendant of it.`,
     );
   }
   if (record.dirty && !record.allowDirty) {

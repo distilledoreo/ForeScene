@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
+import { createDefaultProject, createLandmark, createSceneObject } from '../src/domain/defaults';
 import type { ProductionConfiguration, Vec3 } from '../src/domain/types';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import { compileCastPhase, compilePropsPhase, createEmptyCompiledContext } from '../src/engine/previs/locationCompiler';
 import {
   buildProductionCompileEntityBindings,
   buildProductionCompileLocationBindings,
+  inferExistingProjectLocationBindings,
 } from '../src/engine/previs/productionCompileBindings';
 import { compileProduction } from '../src/engine/previs/productionCompiler';
 import {
@@ -85,6 +86,43 @@ function vec3Distance(a: Vec3, b: Vec3): number {
 }
 
 describe('production compile group bindings', () => {
+  it('binds landmarked existing-project locations without replacement geometry', () => {
+    const project = createDefaultProject();
+    const ruins = createSceneObject('floor');
+    ruins.transform.position = [0, 0, 0];
+    const armory = createSceneObject('floor');
+    armory.transform.position = [100, 0, 0];
+    const lockedGlobalGround = createSceneObject('floor');
+    lockedGlobalGround.name = 'Ground Slab';
+    lockedGlobalGround.locked = true;
+    lockedGlobalGround.transform.position = [0, 0, 0];
+    project.scene.objects = [ruins, armory, lockedGlobalGround];
+    project.landmarks = [
+      { ...createLandmark(1, [0, 1.2, 0]), name: 'ruins_center' },
+      { ...createLandmark(2, [0, 1.2, -4]), name: 'ruins_platform' },
+      { ...createLandmark(3, [100, 1.2, 0]), name: 'armory_center' },
+    ];
+    const input = manifest({
+      project: { name: 'Existing set', aspectRatio: '16:9', operatingMode: 'existing-project-refinement' },
+      locations: [
+        { id: 'ruins', name: 'Ruins', template: 'ruins' },
+        { id: 'armory', name: 'Armory', template: 'armory' },
+      ],
+      shots: [{ ...manifest().shots[0]!, locationId: 'ruins' }],
+    });
+
+    const locationBindings = inferExistingProjectLocationBindings(project, input);
+    const compiled = compileProduction(input, { locationBindings, presenceProject: project });
+
+    expect(Object.keys(locationBindings)).toEqual(['ruins', 'armory']);
+    expect(locationBindings.ruins?.objectIds).toEqual([ruins.id]);
+    expect(locationBindings.armory?.objectIds).toEqual([armory.id]);
+    expect(Object.values(locationBindings).flatMap((binding) => binding.objectIds)).not.toContain(lockedGlobalGround.id);
+    expect(compiled.locations.plan.commands).toEqual([]);
+    expect(compiled.context.locationOrigins.ruins).toEqual([0, 1.2, 0]);
+    expect(compiled.context.locationAnchors.ruins?.platform).toEqual([0, 1.2, -4]);
+  });
+
   it('resolves prepared group bindings for compile phases', () => {
     const { project, table, tableTop } = preparedMultipartProject();
     const bindings = buildProductionCompileEntityBindings(project);
@@ -174,6 +212,67 @@ describe('production compile group bindings', () => {
     const originalDistance = vec3Distance(table.transform.position, tableTop.transform.position);
     const keyframedDistance = vec3Distance(memberTransforms[0]!.position, memberTransforms[1]!.position);
     expect(keyframedDistance).toBeCloseTo(originalDistance, 4);
+  });
+
+  it('uses live imported-model bounds and preserves multipart offsets in static and motion staging', () => {
+    const project = createDefaultProject();
+    project.workflow.production = undefined;
+    const palm = createSceneObject('box');
+    palm.dimensions = [1, 0.5, 1];
+    palm.transform.position = [0, 0.25, 0];
+    const finger = createSceneObject('box');
+    finger.dimensions = [0.2, 0.2, 1];
+    finger.transform.position = [0.6, 0.6, 0];
+    project.scene.objects.push(palm, finger);
+    const input = manifest({
+      cast: [],
+      props: [],
+      assets: [{ id: 'hand-monster', type: 'imported_model', semanticRole: 'subject' }],
+      shots: [{
+        id: 'shot.monster',
+        shotNumber: '01',
+        name: 'Monster',
+        description: 'Imported multipart monster',
+        locationId: 'location.interior',
+        subjects: ['hand-monster'],
+        blocking: [{ subject: 'hand-monster', placement: { type: 'location_slot', slot: 'center' } }],
+        camera: { template: 'close_up', subjects: ['hand-monster'] },
+        motion: {
+          durationSeconds: 1,
+          keyframes: [{
+            timeSeconds: 0,
+            staging: [{ subject: 'hand-monster', transform: { position: [2, 0, 3] } }],
+          }, {
+            timeSeconds: 1,
+            staging: [{ subject: 'hand-monster', transform: { position: [2, 0, 4] } }],
+          }],
+        },
+      }],
+    });
+    const context = createEmptyCompiledContext();
+    context.locationOrigins['location.interior'] = [0, 0, 0];
+    context.entities['assets.hand-monster'] = {
+      objectId: palm.id,
+      objectIds: [palm.id, finger.id],
+      groupId: 'asset.hand-monster',
+    };
+    const batch = compileShotBatch(input, context, input.shots, 0, { presenceProject: project });
+    expect(batch.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(batch.shotResults['01']?.camera?.target[1]).toBeLessThan(1);
+    const staticTransforms = batch.plan.commands
+      .filter((command) => command.op === 'shot.stageObject' && command.visible && command.transform)
+      .map((command) => command.op === 'shot.stageObject' ? command.transform! : undefined)
+      .filter((transform): transform is NonNullable<typeof transform> => Boolean(transform));
+    expect(staticTransforms).toHaveLength(2);
+    expect(staticTransforms[0]!.position).not.toEqual(staticTransforms[1]!.position);
+
+    const timeline = batch.plan.commands.find((command) => command.op === 'shot.timeline.replace');
+    const motionTransforms = timeline?.op === 'shot.timeline.replace'
+      ? (timeline.keyframes[0]?.objects ?? []).flatMap((entry) => entry.transform ? [entry.transform] : [])
+      : [];
+    expect(motionTransforms).toHaveLength(2);
+    expect(motionTransforms[0]!.position).not.toEqual(motionTransforms[1]!.position);
+    expect(Math.min(...motionTransforms.map((transform) => transform.position[1]))).toBeGreaterThanOrEqual(0);
   });
 
   it('compiles group-only prepared locations without template geometry', () => {

@@ -1,5 +1,9 @@
 # ForeScene Benchmark Harness V3
 
+For the frozen panorama-triad candidate benchmark, use Benchmark V3-Lite and
+read [the V3-Lite flow](../docs/benchmark-v3-lite.md). The commands below are
+the older generic V3 fixture interface retained for reliability coverage.
+
 The candidate model must **not** administer this experiment. This repository-owned
 harness owns mechanical bookkeeping. The candidate owns previs.
 
@@ -28,7 +32,43 @@ npm run benchmark:run -- --spec benchmarks/three-shot.json --skip-live --skip-ca
 npm run benchmark:run -- --spec benchmarks/three-shot.json --url http://127.0.0.1:3000 --candidate '<your agent command>'
 ```
 
+For the frozen panorama-triad benchmark, run:
+
+```bash
+npm run benchmark:run -- --input-root "C:\path\to\music-video-v2-panorama-triad" --run-root "C:\fresh\MV3-Lite-NN" --url https://forescene.example --candidate production
+```
+
+Do **not** pass `--spec` with `--candidate production`: any `--spec` argument
+routes into the legacy V3 lifecycle runner, not the frozen V3-Lite contract.
+
+The legacy harness also accepts the frozen external
+`music-video-v2-panorama-triad/shot-manifest.json` format directly. It adapts
+that specification at the harness boundary, copies its canonical neutral base
+package, and writes a validated production manifest before candidate launch:
+
+```bash
+npm run benchmark:run -- --spec "C:\path\to\music-video-v2-panorama-triad\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --prepare-only
+```
+
+Run `npm run benchmark:doctor -- --input-root ...` to gate the frozen
+V3-Lite path before launching a candidate.
+
+Use `--candidate production` for the repository-owned production path. It opens
+the prepared neutral package and launches `agent:production` as structured
+process arguments, so Windows paths containing spaces do not pass through a
+nested shell command.
+
+The adapter preserves the frozen three-shot requirements and full artifact
+contract. `Hand_Monster_v3.glb` remains an ordinary imported model; the Joseph
+assets remain saved-rig characters. The candidate does not translate either
+manifest format.
+
 `--prepare-only` writes the run layout, git identity, and candidate brief, then exits 0 without collecting artifacts. Use it to smoke the harness. Without `--prepare-only`, missing stills/MP4s are a `MODEL_FAILURE`.
+
+When `FORESCENE_BENCHMARK_EXPECTED_COMMIT` is set, preparation accepts that
+stabilization commit or a clean descendant containing later harness fixes. An
+unrelated commit and every dirty working tree still fail closed; `git.json`
+records both expected and actual identities.
 
 Live cold-open / incremental / recovery steps call `agent:inspect`, `agent:save`, and `agent:open` against `--url`. Pass `--skip-live` in unit tests.
 

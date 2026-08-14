@@ -1656,6 +1656,19 @@ async function main() {
     const mode = args.mode === 'delivery' || args.mode === 'previs'
       ? args.mode
       : 'rapid-review';
+    if (process.env.FORESCENE_BENCHMARK === '1' && process.env.FORESCENE_BENCHMARK_PROJECT_PACKAGE) {
+      // Benchmark setup is part of this single documented candidate command.
+      // It opens the frozen base once, then the production run owns all model
+      // mutations and exports in the same isolated profile.
+      await runOpenProject({
+        url: args.url,
+        headless: args.headless,
+        writeAccess: args.writeAccess,
+        persistWrite: args.persistWrite,
+        profile: args.profile,
+        file: process.env.FORESCENE_BENCHMARK_PROJECT_PACKAGE,
+      });
+    }
     const result = await runProduction({
       manifestPath: args.manifest,
       url: args.url,
@@ -1673,6 +1686,7 @@ async function main() {
       autoRepair: args.autoRepair,
       maxRepairPasses: args.maxRepairPasses,
       timeBudgetSeconds: args.timeBudgetSeconds,
+      finalProjectPath: args.finalProject,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

@@ -161,6 +161,7 @@ export interface PrevisProductionManifestV1 {
     description?: string;
     aspectRatio: PrevisAspectRatio;
     frameRate?: number;
+    operatingMode?: 'greenfield' | 'existing-project-refinement';
   };
   locations: PrevisLocationDefinition[];
   cast: PrevisCharacterDefinition[];
@@ -174,6 +175,10 @@ export interface PrevisLocationDefinition {
   name: string;
   description?: string;
   template: PrevisLocationTemplate;
+  /** Prepared panorama ids available for this location. */
+  panoIds?: string[];
+  /** Panorama to link for shots here; null explicitly keeps the shot unlinked. */
+  defaultPanoId?: string | null;
   dimensions?: {
     width?: number;
     depth?: number;
