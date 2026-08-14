@@ -12,6 +12,7 @@ import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
 import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/benchmark/git';
 import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
+import { candidateWorkingDirectory } from '../scripts/benchmark/run';
 import { BenchmarkClock, classifyCliPhase, emptyClassifyState, ingestCliLogs, summarizeBenchmarkTiming } from '../scripts/benchmark/timing';
 import { extractAgentEnvelopes } from '../scripts/agent/runDocumentedCli';
 import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
@@ -339,6 +340,19 @@ describe('benchmark harness v3', () => {
     expect(parsed.specId).toBe('three-shot');
     expect(parsed.runRoot).toBe(runRoot);
   }, 30_000);
+
+  it('launches repository CLI commands from the ForeScene checkout, not the candidate workspace', () => {
+    expect(path.resolve(candidateWorkingDirectory())).toBe(repoRoot);
+    expect(path.resolve(candidateWorkingDirectory())).not.toBe(path.resolve(os.tmpdir(), 'candidate-workspace'));
+    const npmExec = process.env.npm_execpath;
+    const packageName = execFileSync(npmExec ? process.execPath : 'npm.cmd', npmExec
+      ? [npmExec, 'pkg', 'get', 'name']
+      : ['pkg', 'get', 'name'], {
+      cwd: candidateWorkingDirectory(),
+      encoding: 'utf8',
+    }).trim();
+    expect(JSON.parse(packageName)).toBe('forescene');
+  });
 
   it('grades visual-preflight metrics without requiring camera coordinates', async () => {
     const spec = await loadBenchmarkSpec(path.join(repoRoot, 'benchmarks/three-shot.json'));

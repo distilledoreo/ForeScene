@@ -63,6 +63,10 @@ function runCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, timeou
   });
 }
 
+export function candidateWorkingDirectory(): string {
+  return repoRoot();
+}
+
 async function writeReport(
   layout: BenchmarkRunLayout,
   spec: BenchmarkSpecV1,
@@ -123,7 +127,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   if (!args.skipCandidate && args.candidate) {
     clock.start('invoke-candidate', 'candidate');
-    const result = await runCommand(args.candidate, prepared.layout.workDir, {
+    const result = await runCommand(args.candidate, candidateWorkingDirectory(), {
       ...process.env,
       FORESCENE_BENCHMARK: '1',
       FORESCENE_BENCHMARK_BRIEF: prepared.layout.briefPath,
