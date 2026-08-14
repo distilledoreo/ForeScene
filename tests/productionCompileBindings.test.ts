@@ -92,7 +92,11 @@ describe('production compile group bindings', () => {
     ruins.transform.position = [0, 0, 0];
     const armory = createSceneObject('floor');
     armory.transform.position = [100, 0, 0];
-    project.scene.objects = [ruins, armory];
+    const lockedGlobalGround = createSceneObject('floor');
+    lockedGlobalGround.name = 'Ground Slab';
+    lockedGlobalGround.locked = true;
+    lockedGlobalGround.transform.position = [0, 0, 0];
+    project.scene.objects = [ruins, armory, lockedGlobalGround];
     project.landmarks = [
       { ...createLandmark(1, [0, 1.2, 0]), name: 'ruins_center' },
       { ...createLandmark(2, [0, 1.2, -4]), name: 'ruins_platform' },
@@ -113,6 +117,7 @@ describe('production compile group bindings', () => {
     expect(Object.keys(locationBindings)).toEqual(['ruins', 'armory']);
     expect(locationBindings.ruins?.objectIds).toEqual([ruins.id]);
     expect(locationBindings.armory?.objectIds).toEqual([armory.id]);
+    expect(Object.values(locationBindings).flatMap((binding) => binding.objectIds)).not.toContain(lockedGlobalGround.id);
     expect(compiled.locations.plan.commands).toEqual([]);
     expect(compiled.context.locationOrigins.ruins).toEqual([0, 1.2, 0]);
     expect(compiled.context.locationAnchors.ruins?.platform).toEqual([0, 1.2, -4]);

@@ -38,7 +38,7 @@ export function inferExistingProjectLocationBindings(
   const bindings: Record<string, ProductionCompileLocationBinding> = {};
   for (const entry of centers) {
     const objectIds = project.scene.objects
-      .filter((object) => object.type !== 'sun_marker' && object.category !== 'helper')
+      .filter((object) => !object.locked && object.type !== 'sun_marker' && object.category !== 'helper')
       .filter((object) => {
         const position = object.transform.position;
         const ownDistance = Math.hypot(position[0] - entry.center[0], position[2] - entry.center[2]);
