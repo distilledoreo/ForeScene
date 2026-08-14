@@ -25,6 +25,8 @@ npm run agent:package -- --write --output artifacts/package.zip
 npm run agent:analyze-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig
 npm run agent:import-character -- --file path/to/actor.glb --rig-package path/to/actor.fsrig --rig-mode saved-rig --name "Actor" --write
 npm run agent:import-model -- --file path/to/set.glb --write
+npm run agent:shot-panorama -- --shot 02 --pano pano_id --write
+npm run agent:shot-panorama -- --shot 02 --pano null --write
 npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
 npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
 npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json

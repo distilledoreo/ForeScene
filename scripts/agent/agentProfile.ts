@@ -2,9 +2,11 @@
  * Explicit Agent CLI browser-profile resolution.
  *
  * Stateful commands must pass --profile. The default
- * `.forescene-agent/browser-profile` path is refused even when named explicitly.
+ * `.forescene-agent/browser-profile` path is refused even when named explicitly,
+ * including descendants and filesystem aliases that resolve to it.
  */
 
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { AgentCliUsageError } from './cliResult';
 import { resolveForeSceneRepoRoot } from './repoRoot';
@@ -32,6 +34,29 @@ function normalizePath(value: string): string {
   return path.normalize(value).replace(/[\\/]+$/, '');
 }
 
+function pathsEqual(left: string, right: string): boolean {
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function isSameOrInside(candidate: string, root: string): boolean {
+  if (pathsEqual(candidate, root)) return true;
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return process.platform === 'win32'
+    ? candidate.toLowerCase().startsWith(prefix.toLowerCase())
+    : candidate.startsWith(prefix);
+}
+
+function realpathIfExists(value: string): string {
+  try {
+    if (existsSync(value)) return normalizePath(realpathSync(value));
+  } catch {
+    // Fall through to the lexical path when the filesystem cannot resolve it.
+  }
+  return normalizePath(value);
+}
+
 export function resolveAgentProfilePath(
   explicit: string | undefined,
   repoRoot: string = resolveForeSceneRepoRoot(),
@@ -46,7 +71,10 @@ export function isDefaultAgentProfilePath(
   candidate: string,
   repoRoot: string = resolveForeSceneRepoRoot(),
 ): boolean {
-  return normalizePath(candidate) === defaultAgentProfilePath(repoRoot);
+  const forbidden = defaultAgentProfilePath(repoRoot);
+  const lexical = normalizePath(candidate);
+  if (isSameOrInside(lexical, forbidden)) return true;
+  return isSameOrInside(realpathIfExists(candidate), realpathIfExists(forbidden));
 }
 
 export function requireExplicitAgentProfile(

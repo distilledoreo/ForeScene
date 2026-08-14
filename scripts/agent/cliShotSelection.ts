@@ -90,7 +90,7 @@ export interface CliCommandShotUsage {
  * Call this before opening the browser so multi-id values cannot be truncated.
  */
 export function resolveCliCommandShotUsage(command: string, selection: CliShotSelection): CliCommandShotUsage {
-  if (command === 'frame' || command === 'video') {
+  if (command === 'frame' || command === 'video' || command === 'shot-panorama') {
     const shotId = requireSingleShotId(command, selection);
     return {
       shotId,

@@ -27,6 +27,7 @@ export interface AgentCliArgs {
   screenshot?: string;
   input?: string;
   file?: string;
+  pano?: string;
   rigPackage?: string;
   proxy?: string;
   replacement?: string;
@@ -143,6 +144,8 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.consentToken = argv[++index];
     } else if (token === '--profile') {
       args.profile = argv[++index];
+    } else if (token === '--pano') {
+      args.pano = argv[++index];
     } else if (token === '--batch') {
       args.batch = argv[++index];
     } else if (token === '--approve') {

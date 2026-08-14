@@ -208,4 +208,29 @@ describe('project persist and backup durability', () => {
     expect(compared.ok).toBe(false);
     expect(compared.mismatches.join(' ')).toMatch(/model binary/);
   });
+
+  it('fails closed on extra inventory or a rebound imported-model asset', () => {
+    const expected: DurableProjectEvidence = {
+      projectId: 'p',
+      shots: [{ id: 'shot_a', panoramaBinding: 'linked', linkedPanoId: 'pano' }],
+      objects: [{ id: 'ordinary-cube', type: 'imported_model', modelAssetId: 'mesh' }],
+      modelAssets: [{ id: 'mesh', present: true }],
+    };
+    const extraShot = compareDurableProjectEvidence(expected, {
+      ...expected,
+      shots: [
+        ...expected.shots,
+        { id: 'shot_extra', panoramaBinding: 'omitted', linkedPanoId: undefined },
+      ],
+    });
+    expect(extraShot.ok).toBe(false);
+    expect(extraShot.mismatches.join(' ')).toMatch(/unexpected shot shot_extra/);
+
+    const rebound = compareDurableProjectEvidence(expected, {
+      ...expected,
+      objects: [{ id: 'ordinary-cube', type: 'imported_model', modelAssetId: 'other-mesh' }],
+    });
+    expect(rebound.ok).toBe(false);
+    expect(rebound.mismatches.join(' ')).toMatch(/modelAssetId/);
+  });
 });

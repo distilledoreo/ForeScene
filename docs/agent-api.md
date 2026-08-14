@@ -131,6 +131,11 @@ await foreScene.setShotPanorama({ shotId, panoId: 'pano_…' });
 await foreScene.setShotPanorama({ shot: { shotNumber: '02' }, panoId: null }); // durable unlink
 ```
 
+```bash
+npm run agent:shot-panorama -- --shot 01 --pano pano_… --write --profile ./run-profile
+npm run agent:shot-panorama -- --shot 02 --pano null --write --profile ./run-profile
+```
+
 Atomically updates `linkedPanoId`, `panoCrop`, active panorama state, and persistence.
 `panoId: null` writes `linkedPanoId: null` (not a missing field). Hydrate, reopen, and
 export/import preserve that unlink and do **not** reattach the canonical panorama.

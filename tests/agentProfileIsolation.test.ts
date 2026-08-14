@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import os from 'node:os';
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +48,25 @@ describe('Agent CLI profile isolation', () => {
     expect(() => requireExplicitAgentProfile(path.join('.forescene-agent', 'browser-profile'), repoRoot)).toThrow(/Refusing default/);
     expect(isDefaultAgentProfilePath(defaultPath, repoRoot)).toBe(true);
     expect(resolveAgentProfilePath(undefined, repoRoot)).toBeUndefined();
+  });
+
+  it('refuses descendants and realpath aliases of the default profile', async () => {
+    const fakeRoot = await mkdtemp(path.join(os.tmpdir(), 'forescene-profile-root-'));
+    const forbidden = path.join(fakeRoot, '.forescene-agent', 'browser-profile');
+    await mkdir(forbidden, { recursive: true });
+    try {
+      expect(() => requireExplicitAgentProfile(path.join(forbidden, 'Default'), fakeRoot)).toThrow(/Refusing default/);
+      expect(isDefaultAgentProfilePath(path.join(forbidden, 'Cache'), fakeRoot)).toBe(true);
+      const alias = path.join(fakeRoot, 'alias-profile');
+      try {
+        await symlink(forbidden, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch {
+        return;
+      }
+      expect(() => requireExplicitAgentProfile(alias, fakeRoot)).toThrow(/Refusing default/);
+    } finally {
+      await rm(fakeRoot, { recursive: true, force: true });
+    }
   });
 
   it('live CLI inspect with the default profile path is refused', () => {

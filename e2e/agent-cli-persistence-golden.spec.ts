@@ -45,7 +45,7 @@ function objectsOf(document: Record<string, unknown>): Array<Record<string, unkn
 
 function assertAuthoredState(
   document: Record<string, unknown>,
-  ids: { shotA: string; shotB: string; panoId: string },
+  ids: { shotA: string; shotB: string; panoId: string; objectId: string; modelAssetId: string },
 ) {
   const shots = shotsOf(document);
   const shotA = shots.find((shot) => shot.id === ids.shotA || shot.shotNumber === ids.shotA);
@@ -55,9 +55,10 @@ function assertAuthoredState(
   expect(shotA!.linkedPanoId).toBe(ids.panoId);
   expect(Object.prototype.hasOwnProperty.call(shotB!, 'linkedPanoId')).toBe(true);
   expect(shotB!.linkedPanoId).toBeNull();
-  const imported = objectsOf(document).filter((object) => object.type === 'imported_model');
-  expect(imported.length, 'expected an imported_model').toBeGreaterThan(0);
-  expect(imported.every((object) => object.type === 'imported_model')).toBe(true);
+  const imported = objectsOf(document).find((object) => object.id === ids.objectId);
+  expect(imported, `imported object ${ids.objectId} missing`).toBeTruthy();
+  expect(imported!.type).toBe('imported_model');
+  expect(imported!.modelAssetId).toBe(ids.modelAssetId);
 }
 
 test.describe('Agent CLI persistence golden @heavy @agent-cli', () => {
@@ -134,25 +135,41 @@ test.describe('Agent CLI persistence golden @heavy @agent-cli', () => {
     const panoId = importedPano.affectedObjectIds?.[0] ?? (typeof panoPayload.panoId === 'string' ? panoPayload.panoId : undefined);
     expect(panoId, 'import-panorama must return a panorama id').toBeTruthy();
 
-    assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+    const importedModel = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
       command: 'import-model',
       args: ['--file', glbFile, '--write'],
       profile: profileDir,
       ...common,
       timeoutMs: 240_000,
     }));
+    const importPayload = asRecord(importedModel.result);
+    const objectRefs = Array.isArray(importPayload.objectRefs)
+      ? importPayload.objectRefs.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      : [];
+    const importedObjectId = (typeof objectRefs[0]?.id === 'string' ? objectRefs[0].id : undefined)
+      ?? importedModel.affectedObjectIds?.[0];
+    expect(importedObjectId, 'import-model must return the imported object id').toBeTruthy();
 
-    const linkPlan = path.join(workDir, 'link-and-null.json');
-    await writeFile(linkPlan, `${JSON.stringify({
-      version: 1,
-      commands: [
-        { op: 'shot.setPanorama', shot: { id: shotAId }, pano: { id: panoId } },
-        { op: 'shot.setPanorama', shot: { id: shotBId }, pano: null },
-      ],
-    }, null, 2)}\n`);
+    const afterImport = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'inspect',
+      args: ['--document'],
+      profile: profileDir,
+      ...common,
+    }));
+    const importedObject = objectsOf(documentOf(afterImport)).find((object) => object.id === importedObjectId);
+    expect(importedObject?.type).toBe('imported_model');
+    const importedModelAssetId = typeof importedObject?.modelAssetId === 'string' ? importedObject.modelAssetId : undefined;
+    expect(importedModelAssetId, 'imported object must retain a modelAssetId').toBeTruthy();
+
     assertSuccessfulEnvelope(await runDocumentedAgentCommand({
-      command: 'apply',
-      args: ['--plan', linkPlan, '--write'],
+      command: 'shot-panorama',
+      args: ['--shot', shotAId, '--pano', panoId!, '--write'],
+      profile: profileDir,
+      ...common,
+    }));
+    assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'shot-panorama',
+      args: ['--shot', shotBId, '--pano', 'null', '--write'],
       profile: profileDir,
       ...common,
     }));
@@ -173,7 +190,14 @@ test.describe('Agent CLI persistence golden @heavy @agent-cli', () => {
       profile: profileDir,
       ...common,
     }));
-    assertAuthoredState(documentOf(sameProfile), { shotA: shotAId, shotB: shotBId, panoId: panoId! });
+    const authoredIds = {
+      shotA: shotAId,
+      shotB: shotBId,
+      panoId: panoId!,
+      objectId: importedObjectId!,
+      modelAssetId: importedModelAssetId!,
+    };
+    assertAuthoredState(documentOf(sameProfile), authoredIds);
 
     const zip = await JSZip.loadAsync(await readFile(backupPath));
     const manifestEntry = zip.file('project.json');
@@ -187,7 +211,9 @@ test.describe('Agent CLI persistence golden @heavy @agent-cli', () => {
     const rawA = rawShots.find((shot) => shot.id === shotAId);
     expect(rawA?.linkedPanoId).toBe(panoId);
     const rawObjects = objectsOf(rawProject);
-    expect(rawObjects.some((object) => object.type === 'imported_model')).toBe(true);
+    const rawImported = rawObjects.find((object) => object.id === importedObjectId);
+    expect(rawImported?.type).toBe('imported_model');
+    expect(rawImported?.modelAssetId).toBe(importedModelAssetId);
     const modelEntries = Object.keys(zip.files).filter((name) => name.startsWith('model-assets/') && !zip.files[name]?.dir);
     expect(modelEntries.length).toBeGreaterThan(0);
     const modelBytes = await zip.file(modelEntries[0]!)!.async('uint8array');
@@ -205,7 +231,17 @@ test.describe('Agent CLI persistence golden @heavy @agent-cli', () => {
       profile: freshProfileDir,
       ...common,
     }));
-    assertAuthoredState(documentOf(freshInspect), { shotA: shotAId, shotB: shotBId, panoId: panoId! });
+    assertAuthoredState(documentOf(freshInspect), authoredIds);
     expect(freshInspect.profile).not.toBe(sameProfile.profile);
+
+    const stillPath = path.join(packagesDir, 'shot-a.clay.png');
+    const framed = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'frame',
+      args: ['--shot', shotAId, '--mode', 'clay', '--output', stillPath],
+      profile: freshProfileDir,
+      ...common,
+    }));
+    expect(framed.operation).toMatch(/render\.frame\.clay/);
+    expect((await stat(stillPath)).size).toBeGreaterThan(32);
   });
 });

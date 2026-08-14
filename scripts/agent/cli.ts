@@ -15,6 +15,8 @@
  *   npm run agent:analyze-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig
  *   npm run agent:import-character -- --file actor.glb --rig-package actor.fsrig --rig-mode saved-rig --name "Actor" --write
  *   npm run agent:import-model -- --file set.glb --write
+ *   npm run agent:shot-panorama -- --shot 02 --pano pano_id --write
+ *   npm run agent:shot-panorama -- --shot 02 --pano null --write
  *   npm run agent:replace-proxy -- --proxy proxy-id --replacement model-id --shots 08,09 --output artifacts/refinement/swap.json --write
  *   npm run agent:render-passes -- --shots 01,02 --output artifacts/reviews/batch-01
  *   npm run agent:plan-exports -- --shots 01,02 --output artifacts/preflight/deliverables-plan.json
@@ -298,6 +300,36 @@ async function runPanoramaImport(options: {
         name: input.name,
       });
     }, { name: options.name });
+    printJson(result);
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
+async function runShotPanorama(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  shotId: string;
+  pano: string;
+}) {
+  requireExplicitWrite('agent:shot-panorama', options.writeAccess);
+  const panoId = options.pano === 'null' || options.pano === '' ? null : options.pano;
+  const looksLikeShotNumber = /^\d+$/.test(options.shotId.trim());
+  await withSession({ ...options, command: 'shot-panorama' }, async (session) => {
+    const result = await session.page.evaluate(async (input) => (
+      window.foreScene!.setShotPanorama({
+        shot: input.looksLikeShotNumber
+          ? { shotNumber: input.shotId }
+          : { id: input.shotId },
+        panoId: input.panoId,
+      })
+    ), {
+      shotId: options.shotId,
+      panoId,
+      looksLikeShotNumber,
+    });
     printJson(result);
     if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
   });
@@ -1295,6 +1327,23 @@ async function main() {
       file: args.file,
       name: args.name,
       profile: args.profile,
+    });
+    return;
+  }
+
+  if (args.command === 'shot-panorama') {
+    const usage = resolveCliCommandShotUsage('shot-panorama', args.shotSelection);
+    if (args.pano === undefined) {
+      throw new AgentCliUsageError('shot-panorama requires --pano <pano-id> or --pano null.');
+    }
+    await runShotPanorama({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      shotId: usage.shotId!,
+      pano: args.pano,
     });
     return;
   }

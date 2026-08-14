@@ -31,6 +31,7 @@ export const AGENT_CLI_COMMANDS = [
   'import-character',
   'import-model',
   'import-panorama',
+  'shot-panorama',
   'replace-proxy',
   'help',
 ] as const;
@@ -83,6 +84,7 @@ export function buildAgentCliHelpDocument() {
       visualPreflight: 'Same --shot/--shots contract as verify.',
       frame: 'Exactly one --shot (or a single --shots value). Additional ids are rejected before the browser opens.',
       video: 'Exactly one --shot (or a single --shots value). Additional ids are rejected before the browser opens.',
+      shotPanorama: 'Exactly one --shot (id or shot number) plus `--pano <id>` or `--pano null` for a durable unlink.',
       assetContract: 'Optional single --shot. Omit the flag for the whole project. Multiple ids are rejected. The API remains inspectAssetPoseContract({ shotId? }).',
       package: 'Optional --shot/--shots. Omitted packages every shot. An explicit empty selection is rejected by the export API.',
     },

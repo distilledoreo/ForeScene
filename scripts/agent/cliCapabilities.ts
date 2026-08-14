@@ -202,6 +202,18 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     write: true,
   },
   {
+    id: 'shot.setPanorama',
+    label: 'Link or unlink a shot panorama',
+    cliCommand: 'shot-panorama',
+    cli: true,
+    ui: true,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: true,
+    notes: '--shot <id-or-number> --pano <id|null>',
+  },
+  {
     id: 'proxy.replace',
     label: 'Replace proxy with imported model',
     cliCommand: 'replace-proxy',

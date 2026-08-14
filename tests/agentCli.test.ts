@@ -51,6 +51,7 @@ describe('agent CLI discovery', () => {
       'operations',
       'capabilities',
       'import-panorama',
+      'shot-panorama',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
     expect(help.checks.assetPoseContract).toMatch(/asset-contract/);
@@ -78,6 +79,7 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:operations']).toContain('operations');
     expect(packageJson.scripts?.['agent:frame']).toContain('frame');
     expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
+    expect(packageJson.scripts?.['agent:shot-panorama']).toContain('shot-panorama');
     expect(packageJson.scripts?.['agent:video']).toContain('video');
   });
 
@@ -233,6 +235,11 @@ describe('agent CLI public surface', () => {
     const save = parseAgentCliArgs(['save', '--output', 'show.fsp', '--write']);
     expect(save.command).toBe('save');
     expect(save.output).toBe('show.fsp');
+
+    const linkPano = parseAgentCliArgs(['shot-panorama', '--shot', '02', '--pano', 'null', '--write']);
+    expect(linkPano.command).toBe('shot-panorama');
+    expect(linkPano.pano).toBe('null');
+    expect(resolveCliCommandShotUsage(linkPano.command, linkPano.shotSelection).shotId).toBe('02');
 
     const inspect = parseAgentCliArgs(['inspect', '--document']);
     expect(inspect.document).toBe(true);

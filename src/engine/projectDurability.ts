@@ -116,6 +116,7 @@ export function compareDurableProjectEvidence(
   }
 
   const actualShots = new Map(actual.shots.map((shot) => [shot.id, shot]));
+  const expectedShotIds = new Set(expected.shots.map((shot) => shot.id));
   for (const shot of expected.shots) {
     const found = actualShots.get(shot.id);
     if (!found) {
@@ -134,8 +135,14 @@ export function compareDurableProjectEvidence(
       mismatches.push(`shot ${shot.id} linkedPanoId ${String(shot.linkedPanoId)} → ${String(found.linkedPanoId)}`);
     }
   }
+  for (const shot of actual.shots) {
+    if (!expectedShotIds.has(shot.id)) {
+      mismatches.push(`unexpected shot ${shot.id}`);
+    }
+  }
 
   const actualObjects = new Map(actual.objects.map((object) => [object.id, object]));
+  const expectedObjectIds = new Set(expected.objects.map((object) => object.id));
   for (const object of expected.objects) {
     const found = actualObjects.get(object.id);
     if (!found) {
@@ -147,6 +154,16 @@ export function compareDurableProjectEvidence(
     }
     if (object.type === 'imported_model' && found.type !== 'imported_model') {
       mismatches.push(`object ${object.id} is no longer imported_model`);
+    }
+    if (object.modelAssetId !== found.modelAssetId) {
+      mismatches.push(
+        `object ${object.id} modelAssetId ${String(object.modelAssetId)} → ${String(found.modelAssetId)}`,
+      );
+    }
+  }
+  for (const object of actual.objects) {
+    if (!expectedObjectIds.has(object.id)) {
+      mismatches.push(`unexpected object ${object.id}`);
     }
   }
 
