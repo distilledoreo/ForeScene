@@ -407,10 +407,19 @@ describe('benchmark harness v3', () => {
     expect(enforceGitIdentity({
       commit: 'aaa',
       expectedCommit: 'bbb',
+      expectedCommitIsAncestor: false,
       dirty: false,
       porcelain: '',
       allowDirty: false,
     })?.class).toBe('ENVIRONMENT_FAILURE');
+    expect(enforceGitIdentity({
+      commit: 'descendant',
+      expectedCommit: 'stabilization',
+      expectedCommitIsAncestor: true,
+      dirty: false,
+      porcelain: '',
+      allowDirty: false,
+    })).toBeUndefined();
     expect(enforceGitIdentity({
       commit: 'aaa',
       expectedCommit: 'aaa',

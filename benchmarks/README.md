@@ -44,6 +44,11 @@ manifest format.
 
 `--prepare-only` writes the run layout, git identity, and candidate brief, then exits 0 without collecting artifacts. Use it to smoke the harness. Without `--prepare-only`, missing stills/MP4s are a `MODEL_FAILURE`.
 
+When `FORESCENE_BENCHMARK_EXPECTED_COMMIT` is set, preparation accepts that
+stabilization commit or a clean descendant containing later harness fixes. An
+unrelated commit and every dirty working tree still fail closed; `git.json`
+records both expected and actual identities.
+
 Live cold-open / incremental / recovery steps call `agent:inspect`, `agent:save`, and `agent:open` against `--url`. Pass `--skip-live` in unit tests.
 
 The harness writes `harness/brief.json`:
