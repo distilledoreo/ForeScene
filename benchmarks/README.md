@@ -1,5 +1,9 @@
 # ForeScene Benchmark Harness V3
 
+For the frozen panorama-triad candidate benchmark, use Benchmark V3-Lite and
+read [the V3-Lite flow](../docs/benchmark-v3-lite.md). The commands below are
+the older generic V3 fixture interface retained for reliability coverage.
+
 The candidate model must **not** administer this experiment. This repository-owned
 harness owns mechanical bookkeeping. The candidate owns previs.
 

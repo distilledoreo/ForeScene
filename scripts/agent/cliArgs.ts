@@ -8,6 +8,28 @@ import {
   emptyCliShotSelection,
   type CliShotSelection,
 } from './cliShotSelection';
+import { readFileSync } from 'node:fs';
+
+function benchmarkBrief(): Partial<{
+  productionManifest: string;
+  projectPackage: string;
+  finalProjectPath: string;
+  outputDir: string;
+}> {
+  const briefPath = process.env.FORESCENE_BENCHMARK_BRIEF;
+  if (!briefPath) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(briefPath, 'utf8')) as Record<string, unknown>;
+    return {
+      ...(typeof parsed.productionManifest === 'string' ? { productionManifest: parsed.productionManifest } : {}),
+      ...(typeof parsed.projectPackage === 'string' ? { projectPackage: parsed.projectPackage } : {}),
+      ...(typeof parsed.finalProjectPath === 'string' ? { finalProjectPath: parsed.finalProjectPath } : {}),
+      ...(typeof parsed.outputDir === 'string' ? { outputDir: parsed.outputDir } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
 
 export interface AgentCliArgs {
   command: string;
@@ -64,8 +86,15 @@ export interface AgentCliArgs {
 }
 
 export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
+  const brief = benchmarkBrief();
   const args: AgentCliArgs = {
     command: argv[0] ?? 'inspect',
+    url: process.env.FORESCENE_URL,
+    manifest: process.env.FORESCENE_BENCHMARK_MANIFEST ?? brief.productionManifest,
+    output: process.env.FORESCENE_OUTPUT ?? brief.outputDir,
+    finalProject: process.env.FORESCENE_BENCHMARK_FINAL_PROJECT ?? brief.finalProjectPath,
+    file: process.env.FORESCENE_BENCHMARK_PROJECT_PACKAGE ?? brief.projectPackage,
+    profile: process.env.FORESCENE_PROFILE,
     headless: false,
     writeAccess: false,
     persistWrite: false,

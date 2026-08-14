@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "music-video-v2-panorama-triad-v3-lite",
+  "benchmarkId": "music-video-v2-panorama-triad",
+  "manifest": "production-manifest.json",
+  "manifestSha256": "1a08dade033ca265beacca1c568e027a3d18c6122b1170f13d8b8b4589e996e8",
+  "basePackage": "seed/what_im_fighting_for_panorama_triad_base.fsp",
+  "requiredArtifacts": [
+    "creature-final.png",
+    "chase-start.png",
+    "chase-mid.png",
+    "chase-end.png",
+    "chase-motion.mp4",
+    "fighter-final.png",
+    "contact-sheet.png",
+    "final-project.fsp",
+    "run-report.json",
+    "validation-report.json"
+  ],
+  "requiredStills": [
+    "creature-final.png",
+    "chase-start.png",
+    "chase-mid.png",
+    "chase-end.png",
+    "fighter-final.png",
+    "contact-sheet.png"
+  ],
+  "requiredMotion": [
+    "chase-motion.mp4"
+  ],
+  "shots": [
+    {
+      "id": "mv3-shot-01",
+      "shotNumber": "01",
+      "name": "H1 newborn hand creature",
+      "description": "Five finger limbs and eye stalk. Asset contract: Hand_Monster_v3.glb as ordinary_model. Panorama linkage: pano_ruins. Required outputs: creature-final.png.",
+      "intent": "still",
+      "requiredSubjects": ["hand-monster"],
+      "stillArtifacts": ["creature-final.png"]
+    },
+    {
+      "id": "mv3-shot-02",
+      "shotNumber": "02",
+      "name": "Sprint chase toward armory",
+      "description": "Three-second chase at t=0 and t=3. Asset contract: Roman Joseph Amputated.glb as saved_rig_character with Roman Joseph Amputated.fsrig; Hand_Monster_v3.glb as ordinary_model. Panorama linkage: none. Required outputs: chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4.",
+      "intent": "motion-required",
+      "requiredSubjects": ["joseph-amputated", "hand-monster"],
+      "stillArtifacts": ["chase-start.png", "chase-mid.png", "chase-end.png"],
+      "motionArtifacts": ["chase-motion.mp4"]
+    },
+    {
+      "id": "mv3-shot-03",
+      "shotNumber": "03",
+      "name": "J3 battle-ready stance",
+      "description": "Shield and wrist blade. Asset contract: Roman Joseph Final.glb as saved_rig_character with Roman Joseph Final.fsrig. Panorama linkage: pano_armory. Required outputs: fighter-final.png.",
+      "intent": "still",
+      "requiredSubjects": ["joseph-final", "shield", "wrist-blade"],
+      "stillArtifacts": ["fighter-final.png"]
+    }
+  ],
+  "quality": {
+    "hardExecutionFailure": false,
+    "evidenceFile": "quality-report.json",
+    "missingEvidence": "not-graded"
+  }
+}

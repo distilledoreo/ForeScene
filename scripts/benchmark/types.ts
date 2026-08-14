@@ -71,6 +71,10 @@ export interface BenchmarkCandidateBrief {
   outputDir: string;
   projectPackage?: string;
   productionManifest?: string;
+  benchmarkContract?: string;
+  cliDocumentation?: string;
+  finalProjectPath?: string;
+  qualityEvidence?: string;
   requiredArtifacts?: string[];
   shots: BenchmarkShotSpec[];
 }

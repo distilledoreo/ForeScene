@@ -1,0 +1,176 @@
+{
+  "version": 2,
+  "project": {
+    "name": "music-video-v2-panorama-triad",
+    "operatingMode": "existing-project-refinement",
+    "description": "Frozen music-video-v2 panorama-triad production contract. Preserve the imported environment-only base.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "ruins",
+      "name": "Roman ruins",
+      "description": "Use the existing environment at landmark ruins_platform. Styled panorama: pano_ruins.",
+      "template": "ruins"
+    },
+    {
+      "id": "corridor",
+      "name": "Roman ruins corridor",
+      "description": "Use the existing environment at landmark corridor_center. Styled panorama: none. No corridor panorama.",
+      "template": "corridor"
+    },
+    {
+      "id": "armory",
+      "name": "Armory",
+      "description": "Use the existing environment at landmark armory_center. Styled panorama: pano_armory.",
+      "template": "armory"
+    }
+  ],
+  "cast": [
+    {
+      "id": "joseph-amputated",
+      "name": "Joseph J2 Amputated",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Amputated.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Amputated.fsrig"
+    },
+    {
+      "id": "joseph-final",
+      "name": "Joseph J3 Final",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Final.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Final.fsrig"
+    }
+  ],
+  "assets": [
+    {
+      "id": "hand-monster",
+      "type": "imported_model",
+      "source": "assets/Hand_Monster_v3.glb",
+      "importMode": "ordinary_model",
+      "semanticRole": "subject",
+      "required": true
+    }
+  ],
+  "props": [
+    { "id": "shield", "name": "Left-arm shield", "primitive": "shield" },
+    { "id": "wrist-blade", "name": "Right wrist-mounted short sword prosthetic", "primitive": "sword" }
+  ],
+  "shots": [
+    {
+      "id": "mv3-shot-01",
+      "shotNumber": "01",
+      "name": "H1 newborn hand creature",
+      "description": "Five finger limbs and eye stalk. Asset contract: Hand_Monster_v3.glb as ordinary_model. Panorama linkage: pano_ruins. Required outputs: creature-final.png.",
+      "locationId": "ruins",
+      "subjects": ["hand-monster"],
+      "blocking": [
+        { "subject": "hand-monster", "placement": { "type": "location_slot", "slot": "center" } }
+      ],
+      "camera": {
+        "template": "close_up",
+        "subjects": ["hand-monster"],
+        "angle": "front",
+        "lensClass": "wide"
+      },
+      "requirements": {
+        "visibleSubjects": ["hand-monster"],
+        "notes": [
+          "Five finger limbs and eye stalk.",
+          "Use panorama pano_ruins for this shot.",
+          "Use Hand_Monster_v3.glb as ordinary_model.",
+          "Produce creature-final.png."
+        ]
+      }
+    },
+    {
+      "id": "mv3-shot-02",
+      "shotNumber": "02",
+      "name": "Sprint chase toward armory",
+      "description": "Three-second chase at t=0 and t=3. Asset contract: Roman Joseph Amputated.glb as saved_rig_character with Roman Joseph Amputated.fsrig; Hand_Monster_v3.glb as ordinary_model. Panorama linkage: none. Required outputs: chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4.",
+      "locationId": "corridor",
+      "subjects": ["joseph-amputated", "hand-monster"],
+      "blocking": [
+        { "subject": "joseph-amputated", "placement": { "type": "location_slot", "slot": "background" } },
+        { "subject": "hand-monster", "placement": { "type": "relative", "anchor": "joseph-amputated", "relation": "behind" } }
+      ],
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph-amputated", "hand-monster"],
+        "angle": "three_quarter",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["joseph-amputated", "hand-monster"],
+        "notes": [
+          "Three-second chase at t=0 and t=3.",
+          "Use panorama none for this shot.",
+          "Use Roman Joseph Amputated.glb as saved_rig_character with Roman Joseph Amputated.fsrig; Hand_Monster_v3.glb as ordinary_model.",
+          "Produce chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4."
+        ]
+      },
+      "motion": {
+        "durationSeconds": 3,
+        "renderControlVideo": true,
+        "keyframes": [
+          {
+            "timeSeconds": 0,
+            "camera": { "position": [95.5, 1.8, -5.3], "target": [100, 1, -5.9], "fovDegrees": 35 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, -5.3] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -6.5] } }
+            ]
+          },
+          {
+            "timeSeconds": 1.5,
+            "camera": { "position": [95.5, 1.8, 0], "target": [100, 1, -0.6], "fovDegrees": 35 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 0] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -1.2] } }
+            ]
+          },
+          {
+            "timeSeconds": 3,
+            "camera": { "position": [95.5, 1.8, 5.3], "target": [100, 1, 4.7], "fovDegrees": 35 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 5.3] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, 4.1] } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "mv3-shot-03",
+      "shotNumber": "03",
+      "name": "J3 battle-ready stance",
+      "description": "Shield and wrist blade. Asset contract: Roman Joseph Final.glb as saved_rig_character with Roman Joseph Final.fsrig. Panorama linkage: pano_armory. Required outputs: fighter-final.png.",
+      "locationId": "armory",
+      "subjects": ["joseph-final", "shield", "wrist-blade"],
+      "blocking": [
+        { "subject": "joseph-final", "placement": { "type": "location_slot", "slot": "center" } },
+        { "subject": "shield", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "behind" } },
+        { "subject": "wrist-blade", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "beside" } }
+      ],
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph-final"],
+        "angle": "front",
+        "lensClass": "normal"
+      },
+      "requirements": {
+        "visibleSubjects": ["joseph-final"],
+        "visibleProps": ["shield", "wrist-blade"],
+        "notes": [
+          "Shield and wrist blade.",
+          "Use panorama pano_armory for this shot.",
+          "Use Roman Joseph Final.glb as saved_rig_character with Roman Joseph Final.fsrig.",
+          "Produce fighter-final.png."
+        ]
+      }
+    }
+  ]
+}
