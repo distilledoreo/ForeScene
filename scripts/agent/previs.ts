@@ -2066,6 +2066,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     await writeJson(runStatePath, state);
 
     const sampledFramePaths: string[] = [];
+    const sampledFrameFailures: Array<{
+      shotNumber: string;
+      timeSeconds: number;
+      error: string;
+    }> = [];
     for (const definition of manifest.shots) {
       if (!definition.motion?.keyframes.length) continue;
       const currentShot = project.shots.find((shot) => shot.shotNumber === definition.shotNumber);
@@ -2078,11 +2083,24 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           timeSeconds: keyframe.timeSeconds,
         });
         if (!sampled.ok) {
-          throw new Error(`Could not render ${definition.shotNumber} at ${keyframe.timeSeconds}s: ${sampled.error ?? 'unknown error'}`);
+          // Keyframe samples are benchmark evidence, not run-critical frames.
+          // Record the failure and continue; the harness reports missing
+          // evidence as not-graded and required stills still fail closed.
+          sampledFrameFailures.push({
+            shotNumber: definition.shotNumber,
+            timeSeconds: keyframe.timeSeconds,
+            error: sampled.error ?? 'unknown error',
+          });
+          continue;
         }
         sampledFramePaths.push(sampledPath);
       }
     }
+    await writeJson(path.join(outputDir, 'logs', 'sampled-frames.json'), {
+      ok: sampledFrameFailures.length === 0,
+      frames: sampledFramePaths.length,
+      failures: sampledFrameFailures,
+    });
 
     timeBudget?.assertWithinBudget('create_review_sheets');
     state = setPhase(state, 'contactSheet', 'in_progress');

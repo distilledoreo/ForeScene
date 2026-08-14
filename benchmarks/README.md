@@ -30,10 +30,18 @@ Candidates must not create `run-benchmark.ts`, `open-package.ts`, or
 npm run benchmark:run -- --spec benchmarks/three-shot.json --prepare-only
 npm run benchmark:run -- --spec benchmarks/three-shot.json --skip-live --skip-candidate
 npm run benchmark:run -- --spec benchmarks/three-shot.json --url http://127.0.0.1:3000 --candidate '<your agent command>'
-npm run benchmark:run -- --spec "C:\path\to\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --url https://forescene.example --candidate production
 ```
 
-The harness also accepts the frozen external
+For the frozen panorama-triad benchmark, run:
+
+```bash
+npm run benchmark:run -- --input-root "C:\path\to\music-video-v2-panorama-triad" --run-root "C:\fresh\MV3-Lite-NN" --url https://forescene.example --candidate production
+```
+
+Do **not** pass `--spec` with `--candidate production`: any `--spec` argument
+routes into the legacy V3 lifecycle runner, not the frozen V3-Lite contract.
+
+The legacy harness also accepts the frozen external
 `music-video-v2-panorama-triad/shot-manifest.json` format directly. It adapts
 that specification at the harness boundary, copies its canonical neutral base
 package, and writes a validated production manifest before candidate launch:
@@ -41,6 +49,9 @@ package, and writes a validated production manifest before candidate launch:
 ```bash
 npm run benchmark:run -- --spec "C:\path\to\music-video-v2-panorama-triad\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --prepare-only
 ```
+
+Run `npm run benchmark:doctor -- --input-root ...` to gate the frozen
+V3-Lite path before launching a candidate.
 
 Use `--candidate production` for the repository-owned production path. It opens
 the prepared neutral package and launches `agent:production` as structured

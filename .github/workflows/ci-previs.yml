@@ -82,6 +82,7 @@ jobs:
           npm run agent:previs -- \
             --manifest examples/previs/minimal-dialogue.json \
             --url http://127.0.0.1:4173 \
+            --profile artifacts/previs-smoke/browser-profile \
             --write \
             --reset-project \
             --headless \
