@@ -71,6 +71,8 @@ export interface BenchmarkCandidateBrief {
 
 export interface BenchmarkFailure {
   class: BenchmarkFailureClass;
+  /** Distinguishes application defects from transient infra inside INFRASTRUCTURE_FAILURE. */
+  code?: string;
   operation?: string;
   message: string;
   details?: unknown;

@@ -71,5 +71,6 @@ export function failureFromInvocation(invocation: AgentCliInvocation, fallbackOp
     operation: envelope?.operation ?? fallbackOperation,
     message,
     exitCode: invocation.code,
+    code: envelope?.error?.code,
   });
 }

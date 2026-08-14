@@ -3,6 +3,11 @@
  */
 
 import { projectDownloadFileName } from '../../config/brand';
+import {
+  inspectProjectBackupBytes,
+  persistAndVerifyProject,
+  verifyBackupMatchesProject,
+} from '../projectDurability';
 import { createProjectPackage, validateProjectPackage } from '../projectIO';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -64,9 +69,33 @@ export async function exportAgentProjectBackup(input: {
     };
   }
 
+  const liveProject = useProjectStore.getState().project;
   let verified;
   try {
-    verified = await flushProject('Verified save before agent project backup export');
+    const persistResult = await persistAndVerifyProject({
+      liveProject,
+      persist: async () => {
+        const flushed = await flushProject('Verified save before agent project backup export');
+        if (!flushed) return undefined;
+        return { project: flushed.project, revisionId: flushed.revision.id };
+      },
+    });
+    if (!persistResult.ok || !persistResult.project) {
+      return {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError(
+          'application_defect',
+          persistResult.mismatches.length > 0
+            ? `Persist/rehydrate mismatch: ${persistResult.mismatches.join('; ')}`
+            : 'No verified project revision is available after persist.',
+        )],
+      };
+    }
+    verified = {
+      project: persistResult.project,
+      revision: { id: persistResult.revisionId ?? '' },
+    };
   } catch (error) {
     return {
       ok: false,
@@ -77,17 +106,22 @@ export async function exportAgentProjectBackup(input: {
       )],
     };
   }
-  if (!verified) {
-    return {
-      ok: false,
-      status: 'failed',
-      diagnostics: [agentError('backup_no_revision', 'No verified project revision is available.')],
-    };
-  }
 
   try {
     const blob = await createProjectPackage(verified.project);
     await validateProjectPackage(blob);
+    const inspected = await inspectProjectBackupBytes(await blob.arrayBuffer());
+    const identity = verifyBackupMatchesProject(inspected, liveProject);
+    if (!identity.ok) {
+      return {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError(
+          'application_defect',
+          `Backup package identity mismatch vs live project: ${identity.mismatches.join('; ')}`,
+        )],
+      };
+    }
     const fileName = projectDownloadFileName(verified.project.name);
     const artifact = registerAgentArtifact({
       blob,

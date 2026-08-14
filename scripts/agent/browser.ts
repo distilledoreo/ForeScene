@@ -4,17 +4,17 @@
  */
 
 import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from '@playwright/test';
 import {
   isChromiumProfileLockError,
   recoverChromiumProfileLocks,
   type BrowserProfileRecovery,
 } from './browserProfile';
+import { defaultAgentProfilePath, isDefaultAgentProfilePath, resolveAgentProfilePath } from './agentProfile';
 import { resolveForeSceneRepoRoot } from './repoRoot';
 
 export const REPO_ROOT = resolveForeSceneRepoRoot();
-export const AGENT_PROFILE_DIR = path.resolve(REPO_ROOT, '.forescene-agent/browser-profile');
+export const AGENT_PROFILE_DIR = defaultAgentProfilePath(REPO_ROOT);
 
 export interface AgentBrowserOptions {
   url?: string;
@@ -109,11 +109,16 @@ export async function openAgentBrowser(
   const viewport = options.viewport ?? { width: 1600, height: 1000 };
   const persistWrite = options.persistWrite === true;
   const writeAccess = options.writeAccess === true || persistWrite;
-  const profileDir = options.profileDir
-    ? (path.isAbsolute(options.profileDir)
-      ? options.profileDir
-      : path.resolve(REPO_ROOT, options.profileDir))
-    : AGENT_PROFILE_DIR;
+  const profileDir = resolveAgentProfilePath(options.profileDir, REPO_ROOT);
+  if (!profileDir) {
+    throw new Error(
+      'Stateful Agent CLI operations require an explicit --profile. '
+      + `The default ${AGENT_PROFILE_DIR} path is refused.`,
+    );
+  }
+  if (isDefaultAgentProfilePath(profileDir, REPO_ROOT)) {
+    throw new Error(`Refusing default Agent CLI profile: ${profileDir}`);
+  }
 
   await mkdir(profileDir, { recursive: true });
   let profileRecovery = await recoverChromiumProfileLocks(profileDir);

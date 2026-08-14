@@ -35,6 +35,8 @@ export interface AgentCliEnvelope {
   warnings: AgentCliWarning[];
   error?: AgentCliErrorObject;
   profileRecovery?: unknown;
+  /** Resolved explicit browser profile path when the command used one. */
+  profile?: string;
   result: unknown;
 }
 
@@ -43,6 +45,7 @@ export interface CliStdoutContext {
   operationId?: string;
   startedAt: number;
   profileRecovery?: unknown;
+  profile?: string;
 }
 
 export class AgentCliUsageError extends Error {
@@ -183,6 +186,7 @@ export function wrapAgentCliStdout(context: CliStdoutContext, value: unknown): A
   };
   if (context.operationId) envelope.operationId = context.operationId;
   if (context.profileRecovery) envelope.profileRecovery = context.profileRecovery;
+  if (context.profile) envelope.profile = context.profile;
   const projectId = extractProjectId(payload);
   const revisionId = extractRevisionId(payload);
   const affectedObjectIds = extractAffectedObjectIds(payload);
@@ -210,6 +214,7 @@ export function envelopeFromError(
       operationId: context.operationId,
       durationMs: Math.max(0, Date.now() - context.startedAt),
       warnings: [],
+      ...(context.profile ? { profile: context.profile } : {}),
       error: {
         code: usage ? 'usage_error' : 'operation_failed',
         message,

@@ -54,6 +54,10 @@ import {
   toCliArtifactTransfer,
   type AgentArtifactTransferTelemetry,
 } from './artifactIo';
+import {
+  agentCliCommandRequiresProfile,
+  requireExplicitAgentProfile,
+} from './agentProfile';
 import { parseAgentCliArgs } from './cliArgs';
 import {
   buildAgentCliCapabilitiesDocument,
@@ -1210,6 +1214,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
   cliStdout.operation = commandToOperationName(args.command);
+  if (agentCliCommandRequiresProfile(args.command)) {
+    args.profile = requireExplicitAgentProfile(args.profile);
+    cliStdout.profile = args.profile;
+  }
   printErr(
     `[agent] command=${args.command}`
     + (args.rigMode ? ` rigMode=${args.rigMode}` : '')

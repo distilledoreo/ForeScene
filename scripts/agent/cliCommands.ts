@@ -64,7 +64,8 @@ export function buildAgentCliHelpDocument() {
     },
     projectLifecycle: {
       open: '`open --file <package.fsp> --write` stages the package and calls openProjectPackage.',
-      save: '`save --output <package.fsp> --write` exports a verified `.fsp` backup.',
+      save: '`save --output <package.fsp> --write` flushes, rehydrates, then exports a verified `.fsp` backup whose embedded project.json and binaries are inspected.',
+      profile: 'Stateful commands require `--profile <dir>`. The default `.forescene-agent/browser-profile` is refused. The resolved path is recorded on the CLI envelope.',
     },
     operations: {
       lifecycle: 'requested → accepted → running → progress → completed | failed | cancelled',

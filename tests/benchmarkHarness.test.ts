@@ -59,7 +59,34 @@ describe('benchmark harness v3', () => {
     });
     expect(failure.class).toBe('INFRASTRUCTURE_FAILURE');
     expect(failure.operation).toBe('character.importSavedRig');
+    expect(failure.code).toBeUndefined();
     expect(isStopTheRun(failure)).toBe(true);
+  });
+
+  it('classifies persist/export/rehydrate/package mismatches as application defects, not model failures', () => {
+    const persist = classifyCliFailure({
+      operation: 'project.save',
+      message: 'Persist/rehydrate mismatch: shot shot_b panoramaBinding explicit_null → linked',
+    });
+    expect(persist.class).toBe('INFRASTRUCTURE_FAILURE');
+    expect(persist.code).toBe('application_defect');
+    expect(persist.class).not.toBe('MODEL_FAILURE');
+
+    const backup = classifyCliFailure({
+      operation: 'project.backup',
+      code: 'application_defect',
+      message: 'Backup package identity mismatch vs live project: model binary mesh is missing',
+    });
+    expect(backup.class).toBe('INFRASTRUCTURE_FAILURE');
+    expect(backup.code).toBe('application_defect');
+
+    const disconnect = classifyCliFailure({
+      operation: 'project.inspect',
+      message: 'orphaned chromium / browser closed during inspect',
+    });
+    expect(disconnect.class).toBe('INFRASTRUCTURE_FAILURE');
+    expect(disconnect.code).toBeUndefined();
+    expect(isStopTheRun(persist)).toBe(true);
   });
 
   it('flags candidate-created glue scripts and window.foreScene helpers', async () => {

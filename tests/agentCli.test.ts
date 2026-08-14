@@ -288,7 +288,7 @@ describe('agent CLI public surface', () => {
 
   it('keeps docs/agent-capability-matrix.md generated from the CLI catalog', () => {
     const onDisk = readFileSync(path.join(repoRoot, 'docs/agent-capability-matrix.md'), 'utf8');
-    expect(onDisk).toBe(renderCapabilityMatrixMarkdown());
+    expect(onDisk.replace(/\r\n/g, '\n')).toBe(renderCapabilityMatrixMarkdown().replace(/\r\n/g, '\n'));
   });
 
   it('wraps command payloads in a stable JSON envelope', () => {
