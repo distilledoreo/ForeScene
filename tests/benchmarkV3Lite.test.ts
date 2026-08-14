@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { createBenchmarkRunLayout } from '../scripts/benchmark/layout';
-import { loadV3LiteContract } from '../scripts/benchmark/v3LiteContract';
+import { loadV3LiteContract, v3LiteManifestSha256 } from '../scripts/benchmark/v3LiteContract';
 import { runV3LiteDoctor } from '../scripts/benchmark/v3LiteDoctor';
 import { prepareV3LiteRun, runV3Lite } from '../scripts/benchmark/v3LiteRun';
 import { gradeV3LiteQuality } from '../scripts/benchmark/v3LiteQuality';
@@ -59,6 +59,34 @@ describe('ForeScene Benchmark V3-Lite', () => {
     expect(loaded.manifest.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
     expect(loaded.manifest.shots[1]?.motion?.keyframes).toHaveLength(3);
     expect(loaded.manifest.assets?.[0]?.source).toBe('assets/Hand_Monster_v3.glb');
+  });
+
+  it('uses one manifest identity for LF and CRLF while rejecting semantic edits', async () => {
+    const manifest = JSON.parse(await readFile(path.join(repoRoot, 'benchmarks/panorama-triad-v3-lite/production-manifest.json'), 'utf8')) as Record<string, unknown>;
+    const contract = JSON.parse(await readFile(contractPath, 'utf8')) as Record<string, unknown>;
+    const testRoot = await (await import('node:fs/promises')).mkdtemp(path.join(os.tmpdir(), 'forescene-v3-lite-hash-'));
+    const lfRoot = path.join(testRoot, 'lf');
+    const crlfRoot = path.join(testRoot, 'crlf');
+    const changedRoot = path.join(testRoot, 'changed');
+    await mkdir(lfRoot, { recursive: true });
+    await mkdir(crlfRoot, { recursive: true });
+    await mkdir(changedRoot, { recursive: true });
+    const manifestText = JSON.stringify(manifest, null, 2);
+    const writeFixture = async (root: string, text: string) => {
+      await writeFile(path.join(root, 'manifest.json'), text, 'utf8');
+      await writeFile(path.join(root, 'contract.json'), `${JSON.stringify({ ...contract, manifest: 'manifest.json' }, null, 2)}\n`, 'utf8');
+    };
+    await writeFixture(lfRoot, `${manifestText}\n`);
+    await writeFixture(crlfRoot, `${manifestText.replaceAll('\n', '\r\n')}\r\n`);
+    const lfLoaded = await loadV3LiteContract(path.join(lfRoot, 'contract.json'));
+    const crlfLoaded = await loadV3LiteContract(path.join(crlfRoot, 'contract.json'));
+    expect(lfLoaded.contract.manifestSha256).toBe(v3LiteManifestSha256(manifest));
+    expect(crlfLoaded.contract.manifestSha256).toBe(lfLoaded.contract.manifestSha256);
+
+    const changed = JSON.parse(JSON.stringify(manifest)) as { shots: Array<{ description: string }> };
+    changed.shots[0]!.description += ' semantic edit';
+    await writeFixture(changedRoot, `${JSON.stringify(changed, null, 2).replaceAll('\n', '\r\n')}\r\n`);
+    await expect(loadV3LiteContract(path.join(changedRoot, 'contract.json'))).rejects.toThrow(/does not match/);
   });
 
   it('blocks candidate launch when doctor finds a deterministic required-asset failure', async () => {

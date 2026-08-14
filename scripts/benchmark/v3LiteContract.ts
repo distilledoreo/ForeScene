@@ -37,6 +37,27 @@ function asString(value: unknown, field: string): string {
   return value;
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  if (typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  throw new Error('Frozen production manifest contains a non-JSON value.');
+}
+
+/**
+ * Hash the parsed manifest semantics, rather than its checkout-dependent bytes.
+ * Object key order and LF/CRLF representation therefore do not change identity;
+ * any parsed value or array ordering change still changes the hash.
+ */
+export function v3LiteManifestSha256(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+}
+
 function parseContract(value: unknown): V3LiteContract {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('V3-Lite contract must be an object.');
   const record = value as Partial<V3LiteContract>;
@@ -111,11 +132,11 @@ export async function loadV3LiteContract(contractPath: string): Promise<LoadedV3
   const contract = parseContract(raw);
   const manifestPath = path.resolve(path.dirname(resolvedContractPath), contract.manifest);
   const manifestBytes = await readFile(manifestPath);
-  const manifestHash = createHash('sha256').update(manifestBytes).digest('hex');
+  const manifestRaw = JSON.parse(manifestBytes.toString('utf8')) as unknown;
+  const manifestHash = v3LiteManifestSha256(manifestRaw);
   if (manifestHash !== contract.manifestSha256) {
     throw new Error(`Checked-in production manifest hash ${manifestHash} does not match frozen contract ${contract.manifestSha256}.`);
   }
-  const manifestRaw = JSON.parse(manifestBytes.toString('utf8')) as unknown;
   const parsed = parsePrevisProductionManifest(manifestRaw);
   if (!parsed.manifest || parsed.errors.length > 0) {
     throw new Error(`Frozen production manifest is invalid: ${parsed.errors.map((error) => error.message).join('; ')}`);

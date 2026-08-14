@@ -14,6 +14,9 @@ The manifest is production-schema input, not a generated translation of a
 benchmark schema. The external frozen input root supplies the immutable base
 package and assets. The doctor resolves those paths immediately before the
 candidate and writes the normalized manifest into the fresh run root.
+The contract SHA-256 is computed from canonical parsed JSON, so LF/CRLF
+checkout conversion does not change identity while semantic manifest edits
+still fail closed.
 
 ## Doctor
 
