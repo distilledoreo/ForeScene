@@ -39,8 +39,10 @@ interface PrevisProductionManifestV1 {
 type. A nonhumanoid GLB with `type: "imported_model"` and
 `semanticRole: "subject"` stays an ordinary imported model. Preflight checks
 source existence and hash, and rejects a missing rig only for assets declared
-as characters. Benchmark prepare writes this generated manifest so the
-candidate does not translate schemas.
+as characters. During `agent:previs`, required ordinary model assets are
+imported, bound to their manifest IDs, and staged as shot subjects or props
+without entering the character-analysis or rigging path. Benchmark prepare
+writes this generated manifest so the candidate does not translate schemas.
 
 Cast entries may be built-in semantic mannequins or imported characters. An
 imported character source is resolved relative to the manifest file, analyzed,

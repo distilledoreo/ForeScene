@@ -779,7 +779,7 @@ function parseShots(
 function parseShotMotion(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisShotMotion | undefined {
@@ -839,7 +839,7 @@ function parseShotMotion(
 function parseMotionStaging(
   value: unknown,
   path: string,
-  ids: { castIds: Set<string>; propIds: Set<string> },
+  ids: { castIds: Set<string>; propIds: Set<string>; assetIds?: Set<string> },
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisShotMotionKeyframe['staging'] {
@@ -856,7 +856,7 @@ function parseMotionStaging(
     }
     const item = entry as Record<string, unknown>;
     const subject = readNonemptyString(item.subject, `${itemPath}.subject`, errors);
-    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${subject}".`, { path: `${itemPath}.subject` }));
+    if (subject && !ids.castIds.has(subject) && !ids.propIds.has(subject) && !ids.assetIds?.has(subject)) errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `Unknown motion subject "${subject}".`, { path: `${itemPath}.subject` }));
     const visible = item.visible === undefined ? undefined : Boolean(item.visible);
     if (item.visible !== undefined && typeof item.visible !== 'boolean') errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, 'visible must be a boolean.', { path: `${itemPath}.visible` }));
     let transform: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] } | undefined;

@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { expectedObjectTypeForAsset, preflightProductionAssets } from '../src/engine/previs/assetPreflight';
 import { parsePrevisProductionManifest } from '../src/engine/previs/manifestValidation';
+import { compileProduction } from '../src/engine/previs/productionCompiler';
+import { compileShotList } from '../src/engine/previs/shotCompiler';
 import { compileAndPreflightBenchmarkInput } from '../scripts/benchmark/compileProductionInput';
 import type { BenchmarkSpecV1 } from '../scripts/benchmark/types';
 
@@ -52,6 +54,38 @@ describe('production asset preflight', () => {
     expect(preflight.ok).toBe(true);
     expect(preflight.assets[0]?.expectedObjectType).toBe('imported_model');
     expect(preflight.assets[0]?.sourceSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('resolves and stages an ordinary imported-model asset as a shot subject', () => {
+    const parsed = parsePrevisProductionManifest(baseManifest([{
+      id: 'hand-monster',
+      type: 'imported_model',
+      source: './Hand_Monster.glb',
+      importMode: 'ordinary_model',
+      semanticRole: 'subject',
+      required: true,
+    }]));
+    expect(parsed.errors).toEqual([]);
+
+    const compiled = compileProduction(parsed.manifest!);
+    const batches = compileShotList(parsed.manifest!, {
+      ...compiled.context,
+      entities: {
+        ...compiled.context.entities,
+        'assets.hand-monster': {
+          objectId: 'obj_hand_monster',
+          objectIds: ['obj_hand_monster'],
+          refs: { obj_hand_monster: 'obj_hand_monster' },
+        },
+      },
+    });
+
+    expect(batches[0]?.diagnostics).toEqual([]);
+    expect(batches[0]?.plan.commands).toContainEqual(expect.objectContaining({
+      op: 'shot.stageObject',
+      object: { id: 'obj_hand_monster' },
+      visible: true,
+    }));
   });
 
   it('rejects a missing required source before mutation and does not invent a character', async () => {

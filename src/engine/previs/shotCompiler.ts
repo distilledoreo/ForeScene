@@ -478,6 +478,41 @@ function compileSingleShot(
     }
   }
 
+  for (const asset of manifest.assets ?? []) {
+    if (asset.type !== 'imported_model' && asset.type !== 'primitive_proxy') continue;
+    const entityMapping = context.entities[`assets.${asset.id}`];
+    if (!entityMapping) continue;
+    const inShot = shot.subjects.includes(asset.id) || visibleIds.has(asset.id);
+    const blocking = blockingResults[asset.id];
+    if (inShot) {
+      const position = subjectPositions[asset.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
+      const transform = {
+        position: [position[0], 0, position[2]] as Vec3,
+        rotation: [...(blocking?.rotation ?? [0, 0, 0])] as Vec3,
+        scale: [1, 1, 1] as Vec3,
+      };
+      effectiveStaticTransforms[asset.id] = transform;
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('asset', asset.id),
+        project: options.presenceProject,
+        visible: true,
+        transform,
+      });
+    } else {
+      appendManifestEntityStageCommands({
+        commands,
+        shotTarget,
+        mapping: entityMapping,
+        fallbackRef: previsRef('asset', asset.id),
+        project: options.presenceProject,
+        visible: false,
+      });
+    }
+  }
+
   // Hide inactive location geometry via staging when possible — location objects
   // are architecture (stagingRole set). Stage visibility for other locations' floors etc.
   for (const location of manifest.locations) {
@@ -536,8 +571,13 @@ function compileSingleShot(
             ...(keyframe.staging?.flatMap((staging) => {
               const castMapping = context.entities[`cast.${staging.subject}`];
               const propMapping = context.entities[`props.${staging.subject}`];
-              const mapping = castMapping ?? propMapping;
-              const prefix = manifest.cast.some((item) => item.id === staging.subject) ? 'cast' : 'prop';
+              const assetMapping = context.entities[`assets.${staging.subject}`];
+              const mapping = castMapping ?? propMapping ?? assetMapping;
+              const prefix = manifest.cast.some((item) => item.id === staging.subject)
+                ? 'cast'
+                : (manifest.props ?? []).some((item) => item.id === staging.subject)
+                  ? 'prop'
+                  : 'asset';
               const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
               return buildKeyframeStagingObjects({
                 mapping,

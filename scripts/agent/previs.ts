@@ -558,6 +558,24 @@ async function importManifestCharacter(
   return { sourcePath, result };
 }
 
+async function importManifestModelAsset(
+  page: Page,
+  sourcePath: string,
+  consentToken?: string,
+) {
+  await page.locator('[data-agent-model-import-input]').setInputFiles(sourcePath);
+  return page.evaluate(async (input) => {
+    const fileInput = document.querySelector('[data-agent-model-import-input]') as HTMLInputElement | null;
+    const file = fileInput?.files?.[0];
+    if (!file) throw new Error('Model file was not staged in the browser.');
+    return window.foreScene!.importModel({
+      file,
+      mode: 'separate',
+      consentToken: input.consentToken,
+    });
+  }, { consentToken });
+}
+
 async function analyzeManifestSavedRigCharacter(
   page: Page,
   asset: ResolvedManifestCharacterAsset,
@@ -633,6 +651,7 @@ function subjectNameMap(manifest: PrevisProductionManifestV1): Record<string, st
   const map: Record<string, string> = {};
   for (const character of manifest.cast) map[character.id] = character.name;
   for (const prop of manifest.props ?? []) map[prop.id] = prop.name;
+  for (const asset of manifest.assets ?? []) map[asset.id] = asset.id;
   return map;
 }
 
@@ -1221,6 +1240,110 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         importedCharacters: importedResults,
       });
       state = setPhase(state, 'cast', 'complete');
+      await writeJson(runStatePath, state);
+    }
+
+    const importedModelResults: Array<{
+      id: string;
+      sourcePath?: string;
+      sourceSha256?: string;
+      ok: boolean;
+      objectIds?: string[];
+      reused?: boolean;
+      warnings?: string[];
+      diagnostics?: unknown[];
+    }> = [];
+    for (const asset of assetPreflight.assets) {
+      if (asset.expectedObjectType !== 'imported_model') continue;
+      const entityKey = `assets.${asset.id}`;
+      const existing = state.entities[entityKey];
+      if (existing?.objectId) {
+        importedModelResults.push({
+          id: asset.id,
+          sourcePath: asset.sourcePath,
+          sourceSha256: asset.sourceSha256,
+          ok: true,
+          objectIds: existing.objectIds ?? [existing.objectId],
+          reused: true,
+        });
+        continue;
+      }
+      if (!asset.sourcePath) {
+        if (!asset.required) continue;
+        importedModelResults.push({ id: asset.id, ok: false });
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), importedModelResults);
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          error: `Imported model asset "${asset.id}" has no resolved source path.`,
+        };
+      }
+      const result = await importManifestModelAsset(
+        session.page,
+        asset.sourcePath,
+        options.allowHeavyCharacterImports ? 'allow-heavy-model-imports' : undefined,
+      );
+      const objectIds = result.objectRefs?.map((ref) => ref.id).filter(Boolean) ?? [];
+      importedModelResults.push({
+        id: asset.id,
+        sourcePath: asset.sourcePath,
+        sourceSha256: asset.sourceSha256,
+        ok: result.ok && objectIds.length > 0,
+        objectIds,
+        warnings: result.warnings,
+        diagnostics: result.diagnostics,
+      });
+      if (!result.ok || objectIds.length === 0) {
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), importedModelResults);
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: result.diagnostics,
+          error: `Imported model asset "${asset.id}" failed.`,
+        };
+      }
+      state = upsertEntity(state, entityKey, {
+        objectId: objectIds[0],
+        objectIds,
+        ...(objectIds.length > 1 ? { groupId: `asset.${asset.id}` } : {}),
+        refs: Object.fromEntries(objectIds.map((id) => [id, id])),
+        sourceSha256: asset.sourceSha256,
+      });
+    }
+    if (importedModelResults.length > 0) {
+      const bindings = Object.fromEntries(
+        importedModelResults.flatMap((result) => result.objectIds?.[0] ? [[result.id, result.objectIds[0]]] : []),
+      );
+      const bindingResult = Object.keys(bindings).length > 0
+        ? await session.page.evaluate(async (input) => window.foreScene!.bindManifestAssets(input), {
+          manifest,
+          bindings,
+        })
+        : undefined;
+      await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+        importedModels: importedModelResults,
+        bindingResult,
+      });
+      if (bindingResult && !bindingResult.ok) {
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: bindingResult.diagnostics,
+          error: 'Imported model asset binding failed.',
+        };
+      }
       await writeJson(runStatePath, state);
     }
 
