@@ -110,6 +110,8 @@ export interface PrevisCliOptions {
   maxRepairPasses?: number;
   timeBudgetSeconds?: number;
   skipControlVideos?: boolean;
+  /** Export a verified .fsp backup before the production session closes. */
+  finalProjectPath?: string;
 }
 
 export interface PrevisCliResult {
@@ -135,6 +137,8 @@ export interface PrevisCliResult {
   reviewArtifacts?: string[];
   package?: string;
   packageTransfer?: AgentArtifactTransferTelemetry;
+  finalProject?: string;
+  finalProjectTransfer?: AgentArtifactTransferTelemetry;
   artifactPaths?: string[];
   diagnostics?: unknown[];
   timing?: ProductionRunTiming;
@@ -221,6 +225,7 @@ async function renderCleanShotFrame(
     profile?: RenderProfile;
     renderSession?: PersistentRenderSession;
     shotNumber?: string;
+    timeSeconds?: number;
   },
 ): Promise<{
   ok: boolean;
@@ -293,6 +298,7 @@ async function renderCleanShotFrame(
   const result = await page.evaluate(async (payload) => {
     return window.foreScene!.renderShotFrame({
       shotId: payload.shotId,
+      timeSeconds: payload.timeSeconds,
       appearance: payload.appearance,
       peopleVariant: payload.peopleVariant,
       content: payload.content,
@@ -301,6 +307,7 @@ async function renderCleanShotFrame(
     });
   }, {
     shotId,
+    timeSeconds: options?.timeSeconds,
     appearance: profile.appearance,
     peopleVariant: profile.peopleVariant,
     content: profile.content,
@@ -2023,6 +2030,25 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     state = setPhase(state, 'validation', 'complete');
     await writeJson(runStatePath, state);
 
+    const sampledFramePaths: string[] = [];
+    for (const definition of manifest.shots) {
+      if (!definition.motion?.keyframes.length) continue;
+      const currentShot = project.shots.find((shot) => shot.shotNumber === definition.shotNumber);
+      if (!currentShot) continue;
+      for (const [index, keyframe] of definition.motion.keyframes.entries()) {
+        const sampledPath = path.join(outputDir, 'shots', `${definition.shotNumber}-sample-${index}.png`);
+        const sampled = await renderCleanShotFrame(session.page, currentShot.id, sampledPath, {
+          profile: renderProfile,
+          shotNumber: definition.shotNumber,
+          timeSeconds: keyframe.timeSeconds,
+        });
+        if (!sampled.ok) {
+          throw new Error(`Could not render ${definition.shotNumber} at ${keyframe.timeSeconds}s: ${sampled.error ?? 'unknown error'}`);
+        }
+        sampledFramePaths.push(sampledPath);
+      }
+    }
+
     timeBudget?.assertWithinBudget('create_review_sheets');
     state = setPhase(state, 'contactSheet', 'in_progress');
     const sheetEntries = manifest.shots.map((shot) => {
@@ -2182,6 +2208,20 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       state = setPhase(state, 'package', 'skipped');
     }
 
+    let finalProjectPath: string | undefined;
+    let finalProjectTransfer: AgentArtifactTransferTelemetry | undefined;
+    if (options.finalProjectPath) {
+      const backup = await session.page.evaluate(async () => (
+        window.foreScene!.exportProjectBackup({ download: false })
+      ));
+      if (!backup.ok || !backup.artifact?.artifactId) {
+        throw new Error(backup.diagnostics?.[0]?.message ?? 'Final project backup did not return an artifact.');
+      }
+      const saved = await saveAgentArtifactToFile(session.page, backup.artifact.artifactId, options.finalProjectPath);
+      finalProjectPath = saved.savedPath;
+      finalProjectTransfer = toCliArtifactTransfer(saved);
+    }
+
     timing.repairMs = repairMs;
     timing.reviewMs = Date.now() - validationStartedAt;
     timing.totalMs = Date.now() - runStartedAt;
@@ -2200,6 +2240,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       htmlPath,
       path.join(outputDir, 'logs', 'production-review-artifacts.json'),
       packagePath,
+      finalProjectPath,
+      ...sampledFramePaths,
       path.join(outputDir, 'validation.json'),
     ].filter((value): value is string => Boolean(value));
 
@@ -2241,6 +2283,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
       packageTransfer,
+      finalProject: finalProjectPath,
+      finalProjectTransfer,
       artifactPaths,
       manifestHash,
       runStatePath,

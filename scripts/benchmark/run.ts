@@ -91,41 +91,19 @@ export function productionCandidateInvocations(input: {
   manifest?: BenchmarkSpecV1['productionManifest'];
 }): CandidateInvocation[] {
   const shared = ['--url', input.url, '--profile', input.profileDir];
-  const invocations = [
+  return [
     npmScriptInvocation('agent:open', ['--file', input.projectPackage, ...shared, '--write']),
     npmScriptInvocation('agent:production', [
       '--manifest', input.productionManifest,
       ...shared,
       '--output', input.outputDir,
+      '--final-project', input.finalProjectPath,
       '--write',
       '--mode', 'delivery',
       '--max-repair-passes', String(input.repairBudget),
       '--allow-heavy-character-imports',
     ]),
   ];
-  for (const shot of input.shots ?? []) {
-    const motionTimes = input.manifest?.shots
-      .find((definition) => definition.shotNumber === shot.shotNumber)
-      ?.motion?.keyframes.map((keyframe) => keyframe.timeSeconds);
-    for (const [index, artifact] of shot.stillArtifacts.entries()) {
-      const time = motionTimes && motionTimes.length > 0
-        ? motionTimes[Math.min(index, motionTimes.length - 1)]
-        : undefined;
-      invocations.push(npmScriptInvocation('agent:frame', [
-        '--shot', shot.shotNumber,
-        ...(time !== undefined ? ['--time', String(time)] : []),
-        '--mode', 'clay',
-        '--output', path.join(input.outputDir, artifact),
-        ...shared,
-      ]));
-    }
-  }
-  invocations.push(npmScriptInvocation('agent:save', [
-    '--output', input.finalProjectPath,
-    ...shared,
-    '--write',
-  ]));
-  return invocations;
 }
 
 async function materializeProductionArtifacts(input: {
@@ -134,7 +112,12 @@ async function materializeProductionArtifacts(input: {
 }): Promise<void> {
   for (const shot of input.spec.shots) {
     for (const artifact of shot.stillArtifacts) {
-      await copyFile(path.join(input.layout.artifactDir, artifact), path.join(input.layout.runRoot, artifact));
+      const artifactIndex = shot.stillArtifacts.indexOf(artifact);
+      const source = shot.intent === 'motion-required'
+        ? path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}-sample-${artifactIndex}.png`)
+        : path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}.png`);
+      await copyFile(source, path.join(input.layout.artifactDir, artifact));
+      await copyFile(source, path.join(input.layout.runRoot, artifact));
     }
     for (const artifact of shot.motionArtifacts ?? []) {
       const generated = path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}.mp4`);

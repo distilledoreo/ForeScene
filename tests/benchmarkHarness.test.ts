@@ -389,20 +389,15 @@ describe('benchmark harness v3', () => {
       },
     };
     const invocations = productionCandidateInvocations(paths);
-    expect(invocations).toHaveLength(6);
+    expect(invocations).toHaveLength(2);
     for (const value of Object.values(paths).filter((item): item is string => typeof item === 'string')) {
       expect(invocations.some((invocation) => invocation.args.includes(value))).toBe(true);
     }
     expect(invocations.flatMap((invocation) => invocation.args).some((arg) => /^['\"]|['\"]$/.test(arg))).toBe(false);
     expect(invocations[0]?.args).toContain('agent:open');
     expect(invocations[1]?.args).toContain('agent:production');
-    expect(invocations.slice(2, 5).map((invocation) => invocation.args)).toEqual([
-      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '0', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-start.png']),
-      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '1.5', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-mid.png']),
-      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '3', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-end.png']),
-    ]);
-    expect(invocations.at(-1)?.args).toEqual(expect.arrayContaining([
-      'agent:save', '--output', paths.finalProjectPath,
+    expect(invocations[1]?.args).toEqual(expect.arrayContaining([
+      'agent:production', '--final-project', paths.finalProjectPath,
     ]));
   });
 

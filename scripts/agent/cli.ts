@@ -1673,6 +1673,7 @@ async function main() {
       autoRepair: args.autoRepair,
       maxRepairPasses: args.maxRepairPasses,
       timeBudgetSeconds: args.timeBudgetSeconds,
+      finalProjectPath: args.finalProject,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

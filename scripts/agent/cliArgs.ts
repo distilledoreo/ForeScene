@@ -23,6 +23,7 @@ export interface AgentCliArgs {
   skipPackage: boolean;
   workspace?: string;
   output?: string;
+  finalProject?: string;
   packagePath?: string;
   screenshot?: string;
   input?: string;
@@ -116,6 +117,8 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.workspace = argv[++index];
     } else if (token === '--output') {
       args.output = argv[++index];
+    } else if (token === '--final-project') {
+      args.finalProject = argv[++index];
     } else if (token === '--package') {
       args.packagePath = argv[++index];
     } else if (token === '--screenshot') {
