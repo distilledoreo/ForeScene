@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
+import { createDefaultProject, createLandmark, createSceneObject } from '../src/domain/defaults';
 import type { ProductionConfiguration, Vec3 } from '../src/domain/types';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import { compileCastPhase, compilePropsPhase, createEmptyCompiledContext } from '../src/engine/previs/locationCompiler';
 import {
   buildProductionCompileEntityBindings,
   buildProductionCompileLocationBindings,
+  inferExistingProjectLocationBindings,
 } from '../src/engine/previs/productionCompileBindings';
 import { compileProduction } from '../src/engine/previs/productionCompiler';
 import {
@@ -85,6 +86,38 @@ function vec3Distance(a: Vec3, b: Vec3): number {
 }
 
 describe('production compile group bindings', () => {
+  it('binds landmarked existing-project locations without replacement geometry', () => {
+    const project = createDefaultProject();
+    const ruins = createSceneObject('floor');
+    ruins.transform.position = [0, 0, 0];
+    const armory = createSceneObject('floor');
+    armory.transform.position = [100, 0, 0];
+    project.scene.objects = [ruins, armory];
+    project.landmarks = [
+      { ...createLandmark(1, [0, 1.2, 0]), name: 'ruins_center' },
+      { ...createLandmark(2, [0, 1.2, -4]), name: 'ruins_platform' },
+      { ...createLandmark(3, [100, 1.2, 0]), name: 'armory_center' },
+    ];
+    const input = manifest({
+      project: { name: 'Existing set', aspectRatio: '16:9', operatingMode: 'existing-project-refinement' },
+      locations: [
+        { id: 'ruins', name: 'Ruins', template: 'ruins' },
+        { id: 'armory', name: 'Armory', template: 'armory' },
+      ],
+      shots: [{ ...manifest().shots[0]!, locationId: 'ruins' }],
+    });
+
+    const locationBindings = inferExistingProjectLocationBindings(project, input);
+    const compiled = compileProduction(input, { locationBindings, presenceProject: project });
+
+    expect(Object.keys(locationBindings)).toEqual(['ruins', 'armory']);
+    expect(locationBindings.ruins?.objectIds).toEqual([ruins.id]);
+    expect(locationBindings.armory?.objectIds).toEqual([armory.id]);
+    expect(compiled.locations.plan.commands).toEqual([]);
+    expect(compiled.context.locationOrigins.ruins).toEqual([0, 1.2, 0]);
+    expect(compiled.context.locationAnchors.ruins?.platform).toEqual([0, 1.2, -4]);
+  });
+
   it('resolves prepared group bindings for compile phases', () => {
     const { project, table, tableTop } = preparedMultipartProject();
     const bindings = buildProductionCompileEntityBindings(project);

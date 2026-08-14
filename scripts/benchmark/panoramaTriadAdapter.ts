@@ -143,6 +143,7 @@ export function adaptFrozenPanoramaTriadSpec(
     version: 2,
     project: {
       name: source.benchmarkId,
+      operatingMode: 'existing-project-refinement',
       description: `Frozen benchmark ${source.version}. Repair budget: 2 autonomous repair rounds. Preserve the imported environment-only base.`,
       aspectRatio: '16:9',
       frameRate: 24,

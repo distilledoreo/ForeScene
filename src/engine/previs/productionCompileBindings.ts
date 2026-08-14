@@ -3,6 +3,7 @@
  */
 
 import type { LocationProject, Vec3 } from '../../domain/types';
+import type { PrevisProductionManifestV1 } from './manifest';
 import { resolveProductionBindingObjectIds } from './productionConfiguration';
 
 export type ProductionCompileEntityBinding =
@@ -14,6 +15,60 @@ export interface ProductionCompileLocationBinding {
   objectIds: string[];
   anchors: Record<string, Vec3>;
   blockerObjectIds: string[];
+}
+
+function normalizedBindingKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/** Bind a landmarked existing set without authoring replacement geometry. */
+export function inferExistingProjectLocationBindings(
+  project: LocationProject,
+  manifest: PrevisProductionManifestV1,
+): Record<string, ProductionCompileLocationBinding> {
+  const landmarks = project.landmarks.map((landmark) => ({
+    landmark,
+    key: normalizedBindingKey(landmark.name),
+  }));
+  const centers = manifest.locations.flatMap((location) => {
+    const prefix = `${normalizedBindingKey(location.id)}_`;
+    const center = landmarks.find((entry) => entry.key === `${prefix}center`);
+    return center ? [{ location, prefix, center: center.landmark.position }] : [];
+  });
+  const bindings: Record<string, ProductionCompileLocationBinding> = {};
+  for (const entry of centers) {
+    const objectIds = project.scene.objects
+      .filter((object) => object.type !== 'sun_marker' && object.category !== 'helper')
+      .filter((object) => {
+        const position = object.transform.position;
+        const ownDistance = Math.hypot(position[0] - entry.center[0], position[2] - entry.center[2]);
+        return centers.every((candidate) => {
+          if (candidate.location.id === entry.location.id) return true;
+          const otherDistance = Math.hypot(position[0] - candidate.center[0], position[2] - candidate.center[2]);
+          return ownDistance <= otherDistance;
+        });
+      })
+      .map((object) => object.id);
+    const anchors = Object.fromEntries(
+      landmarks
+        .filter((candidate) => candidate.key.startsWith(entry.prefix))
+        .map((candidate) => [
+          candidate.key.slice(entry.prefix.length),
+          [...candidate.landmark.position] as Vec3,
+        ]),
+    );
+    if (objectIds.length === 0 || !anchors.center) continue;
+    const blockerObjectIds = project.scene.objects
+      .filter((object) => objectIds.includes(object.id) && object.type !== 'floor')
+      .map((object) => object.id);
+    bindings[entry.location.id] = {
+      locationId: entry.location.id,
+      objectIds,
+      anchors,
+      blockerObjectIds,
+    };
+  }
+  return bindings;
 }
 
 export function buildProductionCompileEntityBindings(

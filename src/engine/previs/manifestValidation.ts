@@ -95,6 +95,14 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
     'project.aspectRatio',
     errors,
   ) as PrevisAspectRatio | undefined;
+  const operatingMode = projectRecord.operatingMode === undefined
+    ? undefined
+    : readEnum(
+      projectRecord.operatingMode,
+      ['greenfield', 'existing-project-refinement'] as const,
+      'project.operatingMode',
+      errors,
+    );
 
   let frameRate: number | undefined;
   if (projectRecord.frameRate !== undefined) {
@@ -163,6 +171,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
       aspectRatio,
       ...(projectDescription !== undefined ? { description: projectDescription } : {}),
       ...(frameRate !== undefined ? { frameRate } : {}),
+      ...(operatingMode !== undefined ? { operatingMode } : {}),
     },
     locations,
     cast,

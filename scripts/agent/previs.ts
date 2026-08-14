@@ -38,6 +38,7 @@ import {
   inspectShotCompositionError,
   createInitialRunState,
   firstIncompletePhase,
+  inferExistingProjectLocationBindings,
   preflightProductionAssets,
   hashPrevisManifest,
   isCanonicalFrame,
@@ -1078,7 +1079,31 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         .map(([shotNumber]) => shotNumber),
     );
 
-    const compiled = compileProduction(manifest, { skipShotNumbers: skipShots });
+    const preparedProject = manifest.project.operatingMode === 'existing-project-refinement'
+      ? await session.page.evaluate(() => window.foreScene!.getProjectDocument())
+      : undefined;
+    const locationBindings = preparedProject
+      ? inferExistingProjectLocationBindings(preparedProject, manifest)
+      : undefined;
+    if (preparedProject) {
+      const unboundLocations = manifest.locations.filter((location) => !locationBindings?.[location.id]);
+      if (unboundLocations.length > 0) {
+        await writeJson(runStatePath, state);
+        return {
+          ok: false,
+          phase: 'locations',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          error: `Existing-project refinement could not bind prepared locations: ${unboundLocations.map((item) => item.id).join(', ')}.`,
+        };
+      }
+    }
+    const compiled = compileProduction(manifest, {
+      skipShotNumbers: skipShots,
+      locationBindings,
+      presenceProject: preparedProject,
+    });
     await writeJson(path.join(outputDir, 'logs', 'compile.json'), {
       ok: compiled.ok,
       diagnostics: compiled.diagnostics,
@@ -1332,18 +1357,6 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         importedModels: importedModelResults,
         bindingResult,
       });
-      if (bindingResult && !bindingResult.ok) {
-        await writeJson(runStatePath, state);
-        return {
-          ok: false,
-          phase: 'props',
-          projectId: state.projectId,
-          manifestHash,
-          runStatePath,
-          diagnostics: bindingResult.diagnostics,
-          error: 'Imported model asset binding failed.',
-        };
-      }
       await writeJson(runStatePath, state);
     }
 

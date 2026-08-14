@@ -161,6 +161,7 @@ export interface PrevisProductionManifestV1 {
     description?: string;
     aspectRatio: PrevisAspectRatio;
     frameRate?: number;
+    operatingMode?: 'greenfield' | 'existing-project-refinement';
   };
   locations: PrevisLocationDefinition[];
   cast: PrevisCharacterDefinition[];

@@ -78,6 +78,7 @@ describe('benchmark harness v3', () => {
     expect(spec.requiredArtifacts).toContain('final-project.fsp');
     expect(spec.shots.map((shot) => shot.shotNumber)).toEqual(['01', '02', '03']);
     expect(spec.shots[1]?.intent).toBe('motion-required');
+    expect(spec.productionManifest?.project.operatingMode).toBe('existing-project-refinement');
     expect(spec.productionManifest?.assets?.find((asset) => asset.id === 'hand-monster')).toMatchObject({
       type: 'imported_model',
       importMode: 'ordinary_model',
