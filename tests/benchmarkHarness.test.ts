@@ -365,17 +365,45 @@ describe('benchmark harness v3', () => {
       productionManifest: 'C:\\Benchmark Runs\\MV3-09\\harness\\production-manifest.json',
       profileDir: 'C:\\Benchmark Runs\\MV3-09\\profile',
       outputDir: 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts',
+      finalProjectPath: 'C:\\Benchmark Runs\\MV3-09\\final-project.fsp',
       url: 'https://forescene.example',
       repairBudget: 2,
+      shots: [{
+        id: 'mv3-shot-02', shotNumber: '02', name: 'Chase', description: 'Chase',
+        intent: 'motion-required' as const, requiredSubjects: ['lead'],
+        stillArtifacts: ['chase-start.png', 'chase-mid.png', 'chase-end.png'],
+        motionArtifacts: ['chase-motion.mp4'],
+      }],
+      manifest: {
+        version: 2 as const,
+        project: { name: 'Benchmark', aspectRatio: '16:9' as const },
+        locations: [], cast: [],
+        shots: [{
+          id: 'mv3-shot-02', shotNumber: '02', name: 'Chase', description: 'Chase',
+          locationId: 'corridor', subjects: ['lead'], blocking: [],
+          camera: { template: 'full' as const, subjects: ['lead'] },
+          motion: { durationSeconds: 3, keyframes: [
+            { timeSeconds: 0 }, { timeSeconds: 1.5 }, { timeSeconds: 3 },
+          ] },
+        }],
+      },
     };
     const invocations = productionCandidateInvocations(paths);
-    expect(invocations).toHaveLength(2);
+    expect(invocations).toHaveLength(6);
     for (const value of Object.values(paths).filter((item): item is string => typeof item === 'string')) {
       expect(invocations.some((invocation) => invocation.args.includes(value))).toBe(true);
     }
     expect(invocations.flatMap((invocation) => invocation.args).some((arg) => /^['\"]|['\"]$/.test(arg))).toBe(false);
     expect(invocations[0]?.args).toContain('agent:open');
     expect(invocations[1]?.args).toContain('agent:production');
+    expect(invocations.slice(2, 5).map((invocation) => invocation.args)).toEqual([
+      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '0', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-start.png']),
+      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '1.5', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-mid.png']),
+      expect.arrayContaining(['agent:frame', '--shot', '02', '--time', '3', '--output', 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts\\chase-end.png']),
+    ]);
+    expect(invocations.at(-1)?.args).toEqual(expect.arrayContaining([
+      'agent:save', '--output', paths.finalProjectPath,
+    ]));
   });
 
   it('grades visual-preflight metrics without requiring camera coordinates', async () => {

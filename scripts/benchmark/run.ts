@@ -5,7 +5,7 @@
  *   npm run benchmark:run -- --spec benchmarks/three-shot.json --candidate '<candidate command>'
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -84,11 +84,14 @@ export function productionCandidateInvocations(input: {
   productionManifest: string;
   profileDir: string;
   outputDir: string;
+  finalProjectPath: string;
   url: string;
   repairBudget: number;
+  shots?: BenchmarkSpecV1['shots'];
+  manifest?: BenchmarkSpecV1['productionManifest'];
 }): CandidateInvocation[] {
   const shared = ['--url', input.url, '--profile', input.profileDir];
-  return [
+  const invocations = [
     npmScriptInvocation('agent:open', ['--file', input.projectPackage, ...shared, '--write']),
     npmScriptInvocation('agent:production', [
       '--manifest', input.productionManifest,
@@ -100,6 +103,51 @@ export function productionCandidateInvocations(input: {
       '--allow-heavy-character-imports',
     ]),
   ];
+  for (const shot of input.shots ?? []) {
+    const motionTimes = input.manifest?.shots
+      .find((definition) => definition.shotNumber === shot.shotNumber)
+      ?.motion?.keyframes.map((keyframe) => keyframe.timeSeconds);
+    for (const [index, artifact] of shot.stillArtifacts.entries()) {
+      const time = motionTimes && motionTimes.length > 0
+        ? motionTimes[Math.min(index, motionTimes.length - 1)]
+        : undefined;
+      invocations.push(npmScriptInvocation('agent:frame', [
+        '--shot', shot.shotNumber,
+        ...(time !== undefined ? ['--time', String(time)] : []),
+        '--mode', 'clay',
+        '--output', path.join(input.outputDir, artifact),
+        ...shared,
+      ]));
+    }
+  }
+  invocations.push(npmScriptInvocation('agent:save', [
+    '--output', input.finalProjectPath,
+    ...shared,
+    '--write',
+  ]));
+  return invocations;
+}
+
+async function materializeProductionArtifacts(input: {
+  spec: BenchmarkSpecV1;
+  layout: BenchmarkRunLayout;
+}): Promise<void> {
+  for (const shot of input.spec.shots) {
+    for (const artifact of shot.stillArtifacts) {
+      await copyFile(path.join(input.layout.artifactDir, artifact), path.join(input.layout.runRoot, artifact));
+    }
+    for (const artifact of shot.motionArtifacts ?? []) {
+      const generated = path.join(input.layout.artifactDir, 'shots', `${shot.shotNumber}.mp4`);
+      await copyFile(generated, path.join(input.layout.artifactDir, artifact));
+      await copyFile(generated, path.join(input.layout.runRoot, artifact));
+    }
+  }
+  const contactSheet = path.join(input.layout.artifactDir, 'contact-sheet.png');
+  await copyFile(contactSheet, path.join(input.layout.runRoot, 'contact-sheet.png'));
+}
+
+async function isNonemptyFile(filePath: string): Promise<boolean> {
+  return stat(filePath).then((value) => value.isFile() && value.size > 0).catch(() => false);
 }
 
 function runInvocation(
@@ -217,14 +265,19 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       FORESCENE_OUTPUT: prepared.layout.artifactDir,
     };
     const timeoutMs = Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000;
-    const result = args.candidate === 'production'
+    const finalProjectPath = path.join(prepared.layout.runRoot, 'final-project.fsp');
+    const structuredProduction = args.candidate === 'production';
+    const result = structuredProduction
       ? await runProductionCandidate(productionCandidateInvocations({
           projectPackage: prepared.layout.projectDir + path.sep + path.basename(spec.basePackage!),
           productionManifest: path.join(prepared.layout.harnessDir, 'production-manifest.json'),
           profileDir: prepared.layout.profileDir,
           outputDir: prepared.layout.artifactDir,
+          finalProjectPath,
           url: args.url ?? process.env.FORESCENE_URL ?? '',
           repairBudget: spec.repairBudget,
+          shots: spec.shots,
+          manifest: spec.productionManifest,
         }), candidateEnv, timeoutMs)
       : await runCommand(args.candidate, candidateWorkingDirectory(), candidateEnv, timeoutMs);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), result.stdout);
@@ -248,11 +301,30 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       await writeReport(prepared.layout, spec, clock, failure);
       return 1;
     }
+    if (structuredProduction) {
+      try {
+        await materializeProductionArtifacts({ spec, layout: prepared.layout });
+      } catch (error) {
+        const failure: BenchmarkFailure = {
+          class: 'HARNESS_FAILURE',
+          operation: 'candidate.materialize',
+          message: error instanceof Error ? error.message : String(error),
+        };
+        clock.stop('run');
+        await writeReport(prepared.layout, spec, clock, failure);
+        return 1;
+      }
+    }
   }
 
   clock.start('collect-artifacts');
   const collected = await collectBenchmarkRun({ spec, layout: prepared.layout, clock });
   clock.stop('collect-artifacts');
+  if (collected.failure) {
+    clock.stop('run');
+    await writeReport(prepared.layout, spec, clock, collected.failure);
+    return 1;
+  }
 
   const brief = JSON.parse(await readFile(prepared.layout.briefPath, 'utf8')) as BenchmarkCandidateBrief;
   const liveUrl = args.url ?? brief.url;
@@ -269,10 +341,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     clock.stop('cold-open');
   } else {
     clock.start('cold-open', 'forescene');
+    const finalProjectPath = path.join(prepared.layout.runRoot, 'final-project.fsp');
+    const lifecycleProject = await isNonemptyFile(finalProjectPath)
+      ? finalProjectPath
+      : brief.projectPackage;
     const live = await runLiveLifecycle({
       layout: prepared.layout,
       url: liveUrl,
-      projectPackage: brief.projectPackage,
+      projectPackage: lifecycleProject,
       clock,
     });
     await writeLifecycleRecords(prepared.layout, live.records);
