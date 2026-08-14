@@ -138,6 +138,11 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const assets = root.assets === undefined
     ? undefined
     : parseAssets(root.assets, assetIds, errors, warnings);
+  const subjectAssetIds = new Set(
+    (assets ?? [])
+      .filter((asset) => asset.semanticRole === 'subject' || asset.semanticRole === 'character')
+      .map((asset) => asset.id),
+  );
   if (cast.length === 0 && (assets?.length ?? 0) === 0) {
     errors.push(previsError(
       PREVIS_DIAGNOSTIC_CODES.emptyField,
@@ -153,6 +158,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
       castIds,
       propIds,
       assetIds,
+      subjectAssetIds,
       shotIds,
       shotNumbers,
     },
@@ -629,6 +635,7 @@ function parseShots(
     castIds: Set<string>;
     propIds: Set<string>;
     assetIds: Set<string>;
+    subjectAssetIds: Set<string>;
     shotIds: Set<string>;
     shotNumbers: Set<string>;
   },
@@ -736,7 +743,7 @@ function parseShots(
           : parseStringArray(req.notes, `${path}.requirements.notes`, errors, false);
 
         for (const subject of visibleSubjects ?? []) {
-          if (!ids.castIds.has(subject)) {
+          if (!ids.castIds.has(subject) && !ids.subjectAssetIds.has(subject)) {
             errors.push(previsError(
               PREVIS_DIAGNOSTIC_CODES.unknownReference,
               `Unknown visibleSubjects entry "${subject}".`,

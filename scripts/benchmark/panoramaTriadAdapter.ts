@@ -91,7 +91,7 @@ function benchmarkShot(shot: FrozenShot): BenchmarkShotSpec {
 
 function productionShot(shot: FrozenShot): PrevisShotDefinition {
   const subjects = requiredSubjects(shot.shotNumber);
-  const visibleSubjects = subjects.filter((id) => id.startsWith('joseph-'));
+  const visibleSubjects = subjects.filter((id) => id !== 'shield' && id !== 'wrist-blade');
   const visibleProps = subjects.filter((id) => id === 'shield' || id === 'wrist-blade');
   const chaseMotion: PrevisShotDefinition['motion'] = shot.shotNumber === '02'
     ? {

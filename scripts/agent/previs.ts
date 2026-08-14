@@ -53,6 +53,7 @@ import {
   upsertEntity,
   upsertShotState,
   buildSubjectBoundsForRepair,
+  buildSubjectIdentityMap,
   solidBlockersForRepair,
   validateShotFrame,
   rankFrameValidation,
@@ -352,7 +353,9 @@ async function renderControlVideo(
     resolutionPreset: '1080p',
     appearance: 'clay',
     contentMode: 'full_scene',
-    attachToShot: true,
+    // This runner owns the file artifact. Attaching here can race timeline
+    // persistence and incorrectly turn a valid render into stale_revision.
+    attachToShot: false,
     download: false,
   }), shotId);
   if (!result.ok) {
@@ -646,14 +649,6 @@ async function resetProjectOnPage(
     ...payload,
     resetAuthorization: 'reset-project',
   }), input);
-}
-
-function subjectNameMap(manifest: PrevisProductionManifestV1): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const character of manifest.cast) map[character.id] = character.name;
-  for (const prop of manifest.props ?? []) map[prop.id] = prop.name;
-  for (const asset of manifest.assets ?? []) map[asset.id] = asset.id;
-  return map;
 }
 
 function resolveMappingIds(
@@ -1696,7 +1691,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const validationStartedAt = Date.now();
       state = setPhase(state, 'validation', 'in_progress');
     let project = await session.page.evaluate(() => window.foreScene!.getProjectDocument()) as LocationProject;
-    const names = subjectNameMap(manifest);
+    const names = buildSubjectIdentityMap(manifest, state);
     const validationResults: FrameValidationResult[] = [];
     let previousCamera: CameraData | undefined;
 

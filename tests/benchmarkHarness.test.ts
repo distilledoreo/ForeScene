@@ -101,6 +101,11 @@ describe('benchmark harness v3', () => {
       importMode: 'ordinary_model',
       semanticRole: 'subject',
     });
+    expect(spec.productionManifest?.shots[0]?.requirements?.visibleSubjects).toEqual(['hand-monster']);
+    expect(spec.productionManifest?.shots[1]?.requirements?.visibleSubjects).toEqual([
+      'joseph-amputated',
+      'hand-monster',
+    ]);
     expect(spec.productionManifest?.cast).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'joseph-amputated', type: 'imported_character', rigMode: 'saved-rig' }),
       expect.objectContaining({ id: 'joseph-final', type: 'imported_character', rigMode: 'saved-rig' }),

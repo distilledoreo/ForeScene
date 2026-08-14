@@ -1397,6 +1397,44 @@ describe('render pipeline versioning', () => {
 });
 
 describe('composition telemetry builder', () => {
+  it('resolves an imported semantic subject through its prepared object ID', () => {
+    const project = createDefaultProject() as LocationProject;
+    const monster = makeHuman('obj_mssxh6qb_enjc33', 'Hand_Monster_Textured', [0, 0, 0]);
+    project.scene.objects = [monster];
+    const shot = makeShot(makeCamera({
+      position: [0, 1.5, 3],
+      target: [0, 1.1, 0],
+      fovDegrees: 40,
+    }), '01');
+    project.shots = [shot];
+    const shotDefinition = definition({
+      shotNumber: '01',
+      subjects: ['hand-monster'],
+      camera: { template: 'medium', subjects: ['hand-monster'] },
+      requirements: { visibleSubjects: ['hand-monster'] },
+    });
+    const subjectNames = { 'hand-monster': monster.id };
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: shotDefinition,
+      subjectNames,
+    });
+    const result = validateShotFrame({
+      project,
+      shot,
+      definition: shotDefinition,
+      frameExists: true,
+      frameByteSize: 4096,
+      subjectNames,
+      telemetry,
+      fromCanonicalRenderer: true,
+    });
+
+    expect(telemetry.subjects['hand-monster']).toBeTruthy();
+    expect(result.issues.some((issue) => issue.code === 'required_subject_missing')).toBe(false);
+  });
+
   it('indexes secondary visible humans even when primary already has landmarks', () => {
     const project = createDefaultProject() as LocationProject;
     const alex = makeHuman('alex-id', 'Alex', [0, 0, 0]);

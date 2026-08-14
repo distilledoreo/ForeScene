@@ -76,6 +76,24 @@ export interface PrevisShotRunState {
   lastError?: string;
 }
 
+/** Resolve manifest semantic IDs to concrete scene object IDs from preparation. */
+export function buildSubjectIdentityMap(
+  manifest: PrevisProductionManifestV1,
+  state: Pick<PrevisRunState, 'entities'>,
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const character of manifest.cast) {
+    map[character.id] = state.entities[`cast.${character.id}`]?.objectId ?? character.name;
+  }
+  for (const prop of manifest.props ?? []) {
+    map[prop.id] = state.entities[`props.${prop.id}`]?.objectId ?? prop.name;
+  }
+  for (const asset of manifest.assets ?? []) {
+    map[asset.id] = state.entities[`assets.${asset.id}`]?.objectId ?? asset.id;
+  }
+  return map;
+}
+
 export interface PrevisRunState {
   version: 1;
   /**

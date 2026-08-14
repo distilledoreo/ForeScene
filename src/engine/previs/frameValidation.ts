@@ -797,6 +797,7 @@ function findSubjectObject(
     const exact = project.scene.objects.find((object) => (
       object.name === candidate
       || object.name.toLowerCase() === candidate.toLowerCase()
+      || object.id === candidate
     ));
     if (exact) return exact;
   }

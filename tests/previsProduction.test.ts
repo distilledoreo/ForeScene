@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertManifestHashCompatible,
   applyManifestUpdateToRunState,
+  buildSubjectIdentityMap,
   compileProduction,
   createBlankGrayboxProject,
   createInitialRunState,
@@ -28,6 +29,40 @@ function loadExample(name: string) {
 }
 
 describe('previs production manifest', () => {
+  it('maps imported semantic subjects to their prepared scene object IDs', () => {
+    const parsed = parsePrevisProductionManifest({
+      version: 2,
+      project: { name: 'Identity map', aspectRatio: '16:9' },
+      locations: [{ id: 'ruins', name: 'Ruins', description: 'Existing ruins', template: 'ruins' }],
+      cast: [],
+      assets: [{
+        id: 'hand-monster',
+        type: 'imported_model',
+        source: 'Hand_Monster_v3.glb',
+        semanticRole: 'subject',
+      }],
+      shots: [{
+        id: 'shot-01', shotNumber: '01', name: 'Monster', description: 'Monster close-up',
+        locationId: 'ruins', subjects: ['hand-monster'], blocking: [],
+        camera: { template: 'close_up', subjects: ['hand-monster'] },
+      }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const state = createInitialRunState({
+      manifestHash: hashPrevisManifest(manifest),
+      shotNumbers: manifest.shots.map((shot) => shot.shotNumber),
+    });
+    state.entities['assets.hand-monster'] = {
+      objectId: 'obj_mssxh6qb_enjc33',
+      objectIds: ['obj_mssxh6qb_enjc33', 'obj_child'],
+      groupId: 'asset.hand-monster',
+    };
+
+    expect(buildSubjectIdentityMap(manifest, state)).toMatchObject({
+      'hand-monster': 'obj_mssxh6qb_enjc33',
+    });
+  });
   it('parses the minimal dialogue fixture', () => {
     const result = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
     expect(result.errors).toEqual([]);
