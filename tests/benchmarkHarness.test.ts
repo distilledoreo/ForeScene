@@ -12,7 +12,7 @@ import { findForbiddenCandidateFiles } from '../scripts/benchmark/forbidden';
 import { enforceGitIdentity, unauthorizedRepoModifications } from '../scripts/benchmark/git';
 import { incrementalMutationPlan, skippedLiveLifecycle } from '../scripts/benchmark/lifecycle';
 import { parseBenchmarkSpec, loadBenchmarkSpec } from '../scripts/benchmark/spec';
-import { candidateWorkingDirectory } from '../scripts/benchmark/run';
+import { candidateWorkingDirectory, productionCandidateInvocations } from '../scripts/benchmark/run';
 import { BenchmarkClock, classifyCliPhase, emptyClassifyState, ingestCliLogs, summarizeBenchmarkTiming } from '../scripts/benchmark/timing';
 import { extractAgentEnvelopes } from '../scripts/agent/runDocumentedCli';
 import { gradeVisualDiagnostics } from '../scripts/benchmark/visualGrade';
@@ -352,6 +352,25 @@ describe('benchmark harness v3', () => {
       encoding: 'utf8',
     }).trim();
     expect(JSON.parse(packageName)).toBe('forescene');
+  });
+
+  it('passes spaced Windows benchmark paths as structured production arguments', () => {
+    const paths = {
+      projectPackage: 'C:\\Benchmark Runs\\MV3-09\\project\\neutral.fsp',
+      productionManifest: 'C:\\Benchmark Runs\\MV3-09\\harness\\production-manifest.json',
+      profileDir: 'C:\\Benchmark Runs\\MV3-09\\profile',
+      outputDir: 'C:\\Benchmark Runs\\MV3-09\\work\\artifacts',
+      url: 'https://forescene.example',
+      repairBudget: 2,
+    };
+    const invocations = productionCandidateInvocations(paths);
+    expect(invocations).toHaveLength(2);
+    for (const value of Object.values(paths).filter((item): item is string => typeof item === 'string')) {
+      expect(invocations.some((invocation) => invocation.args.includes(value))).toBe(true);
+    }
+    expect(invocations.flatMap((invocation) => invocation.args).some((arg) => /^['\"]|['\"]$/.test(arg))).toBe(false);
+    expect(invocations[0]?.args).toContain('agent:open');
+    expect(invocations[1]?.args).toContain('agent:production');
   });
 
   it('grades visual-preflight metrics without requiring camera coordinates', async () => {

@@ -26,6 +26,7 @@ Candidates must not create `run-benchmark.ts`, `open-package.ts`, or
 npm run benchmark:run -- --spec benchmarks/three-shot.json --prepare-only
 npm run benchmark:run -- --spec benchmarks/three-shot.json --skip-live --skip-candidate
 npm run benchmark:run -- --spec benchmarks/three-shot.json --url http://127.0.0.1:3000 --candidate '<your agent command>'
+npm run benchmark:run -- --spec "C:\path\to\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --url https://forescene.example --candidate production
 ```
 
 The harness also accepts the frozen external
@@ -36,6 +37,11 @@ package, and writes a validated production manifest before candidate launch:
 ```bash
 npm run benchmark:run -- --spec "C:\path\to\music-video-v2-panorama-triad\shot-manifest.json" --run-root "C:\fresh\MV3-Benchmark-NN" --prepare-only
 ```
+
+Use `--candidate production` for the repository-owned production path. It opens
+the prepared neutral package and launches `agent:production` as structured
+process arguments, so Windows paths containing spaces do not pass through a
+nested shell command.
 
 The adapter preserves the frozen three-shot requirements and full artifact
 contract. `Hand_Monster_v3.glb` remains an ordinary imported model; the Joseph

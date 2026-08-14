@@ -67,6 +67,86 @@ export function candidateWorkingDirectory(): string {
   return repoRoot();
 }
 
+interface CandidateInvocation {
+  executable: string;
+  args: string[];
+}
+
+function npmScriptInvocation(script: string, args: string[]): CandidateInvocation {
+  const npmExec = process.env.npm_execpath;
+  return npmExec
+    ? { executable: process.execPath, args: [npmExec, 'run', script, '--', ...args] }
+    : { executable: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: ['run', script, '--', ...args] };
+}
+
+export function productionCandidateInvocations(input: {
+  projectPackage: string;
+  productionManifest: string;
+  profileDir: string;
+  outputDir: string;
+  url: string;
+  repairBudget: number;
+}): CandidateInvocation[] {
+  const shared = ['--url', input.url, '--profile', input.profileDir];
+  return [
+    npmScriptInvocation('agent:open', ['--file', input.projectPackage, ...shared, '--write']),
+    npmScriptInvocation('agent:production', [
+      '--manifest', input.productionManifest,
+      ...shared,
+      '--output', input.outputDir,
+      '--write',
+      '--mode', 'delivery',
+      '--max-repair-passes', String(input.repairBudget),
+      '--allow-heavy-character-imports',
+    ]),
+  ];
+}
+
+function runInvocation(
+  invocation: CandidateInvocation,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(invocation.executable, invocation.args, { cwd, env, shell: false });
+    let stdout = '';
+    let stderr = '';
+    const timer = timeoutMs
+      ? setTimeout(() => {
+        child.kill('SIGINT');
+        stderr += `\nCandidate exceeded ${timeoutMs}ms`;
+      }, timeoutMs)
+      : undefined;
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', (error) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: 1, stdout, stderr: `${stderr}${error.message}\n` });
+    });
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+async function runProductionCandidate(
+  invocations: CandidateInvocation[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let stdout = '';
+  let stderr = '';
+  for (const invocation of invocations) {
+    const result = await runInvocation(invocation, candidateWorkingDirectory(), env, timeoutMs);
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.code !== 0) return { code: result.code, stdout, stderr };
+  }
+  return { code: 0, stdout, stderr };
+}
+
 async function writeReport(
   layout: BenchmarkRunLayout,
   spec: BenchmarkSpecV1,
@@ -127,7 +207,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
   if (!args.skipCandidate && args.candidate) {
     clock.start('invoke-candidate', 'candidate');
-    const result = await runCommand(args.candidate, candidateWorkingDirectory(), {
+    const candidateEnv = {
       ...process.env,
       FORESCENE_BENCHMARK: '1',
       FORESCENE_BENCHMARK_BRIEF: prepared.layout.briefPath,
@@ -135,7 +215,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       FORESCENE_URL: args.url ?? process.env.FORESCENE_URL ?? '',
       FORESCENE_PROFILE: prepared.layout.profileDir,
       FORESCENE_OUTPUT: prepared.layout.artifactDir,
-    }, Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000);
+    };
+    const timeoutMs = Number(process.env.FORESCENE_BENCHMARK_CANDIDATE_TIMEOUT_MS) || 60 * 60_000;
+    const result = args.candidate === 'production'
+      ? await runProductionCandidate(productionCandidateInvocations({
+          projectPackage: prepared.layout.projectDir + path.sep + path.basename(spec.basePackage!),
+          productionManifest: path.join(prepared.layout.harnessDir, 'production-manifest.json'),
+          profileDir: prepared.layout.profileDir,
+          outputDir: prepared.layout.artifactDir,
+          url: args.url ?? process.env.FORESCENE_URL ?? '',
+          repairBudget: spec.repairBudget,
+        }), candidateEnv, timeoutMs)
+      : await runCommand(args.candidate, candidateWorkingDirectory(), candidateEnv, timeoutMs);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), result.stdout);
     await writeFile(path.join(prepared.layout.logsDir, 'candidate.stderr.log'), result.stderr);
     ingestCliLogs(clock, {
