@@ -102,6 +102,7 @@ export function StyledPanoImportButton({
         type="file"
         accept="image/png,image/jpeg,image/webp"
         className="hidden"
+        data-styled-pano-import-input
         onChange={(event) => void importFile(event.target.files?.[0])}
       />
       <div className="space-y-1.5">

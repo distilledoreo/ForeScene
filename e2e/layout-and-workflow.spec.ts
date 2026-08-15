@@ -698,7 +698,7 @@ test.describe('@heavy @webkit-gpu projected optimizer and second capture', () =>
     await page.locator('[data-reference-settings-gear]').click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
-    await drawer.locator('[data-projected-style-advanced] summary').click();
+    await drawer.locator('[data-projected-style-advanced] > summary').click();
     const optimizer = drawer.locator('[data-coverage-optimizer]');
     await optimizer.evaluate((element) => {
       element.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -886,8 +886,9 @@ test.describe('@heavy @webkit-gpu projected optimizer and second capture', () =>
     const attachedResponse = await page.request.get('/attached-canonical-reference.png');
     expect(attachedResponse.ok()).toBe(true);
     const attachedBytes = await attachedResponse.body();
-    const importInput = page.locator('input[type="file"][accept*="image"]').first();
-    await importInput.setInputFiles({
+    const importButton = page.locator('[data-styled-pano-import]').first();
+    await expect(importButton).toHaveAttribute('data-import-mode', 'add_secondary');
+    await page.locator('[data-styled-pano-import-input]').first().setInputFiles({
       name: 'second-capture.png',
       mimeType: 'image/png',
       buffer: Buffer.from(attachedBytes),

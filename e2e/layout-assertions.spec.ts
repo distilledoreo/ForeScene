@@ -56,7 +56,8 @@ test.describe('@responsive layout visibility and overflow', () => {
     await assertNoHorizontalOverflow(page);
   });
 
-  test('Shots workspace: primary capture chrome required and on-screen', async ({ page }) => {
+  // Linux SW WebKit flakes on Shots/WebGL mount — same canary policy as @webkit-gpu smoke.
+  test('@webkit-gpu Shots workspace: primary capture chrome required and on-screen', async ({ page }) => {
     await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
@@ -87,7 +88,7 @@ test.describe('@responsive layout visibility and overflow', () => {
     await assertNoHorizontalOverflow(page);
   });
 
-  test('settings drawer opens and fits onscreen without covering shutter', async ({ page }) => {
+  test('@webkit-gpu settings drawer opens and fits onscreen without covering shutter', async ({ page }) => {
     await enterStudio(page);
     await dismissOverlays(page);
     await goToWorkspace(page, 'Shots', '[data-shots-camera-shell]');
