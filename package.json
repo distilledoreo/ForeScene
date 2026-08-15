@@ -55,6 +55,8 @@
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "benchmark:doctor": "tsx scripts/benchmark/doctor.ts",
     "benchmark:run": "tsx scripts/benchmark/entry.ts",
+    "benchmark:agent": "tsx scripts/benchmark/v3AgentRun.ts",
+    "benchmark:compare": "tsx scripts/benchmark/v3AgentCompare.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
     "test:e2e:smoke": "playwright test --project=desktop-chromium --grep \"@smoke\"",
