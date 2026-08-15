@@ -16,6 +16,7 @@ import { goToWorkspace, workspaceTab } from './workspace-navigation';
  *
  * Tag taxonomy (see CI workflows):
  * @heavy — multi-step save/import, GLB, multi-shot, video authoring (main/nightly)
+ * @webkit-gpu — F1–F3 open Shots capture chrome (canary-only on Linux SW WebKit)
  *
  * F1 uses full page.reload + IndexedDB recovery (not backup import as recover).
  * F2 covers backup export → reopen.
@@ -87,7 +88,7 @@ async function importMultiNodeGltf(page: Page) {
   await expect(dialog).toBeHidden();
 }
 
-test.describe('@heavy F1 save → reload → recover → export', () => {
+test.describe('@heavy @webkit-gpu F1 save → reload → recover → export', () => {
   test('mutates project, waits for verified save, full reload recovers revision, then exports', async ({ page }) => {
     test.setTimeout(240_000);
     await enterStudioWorkspace(page);
@@ -131,7 +132,7 @@ test.describe('@heavy F1 save → reload → recover → export', () => {
   });
 });
 
-test.describe('@heavy F2 import geometry → transform → capture → backup → reopen', () => {
+test.describe('@heavy @webkit-gpu F2 import geometry → transform → capture → backup → reopen', () => {
   test('imports multi-node glTF, moves object, captures, reopens from backup', async ({ page }) => {
     test.setTimeout(180_000);
     await enterStudioWorkspace(page);
@@ -186,7 +187,7 @@ test.describe('@heavy F2 import geometry → transform → capture → backup �
   });
 });
 
-test.describe('@heavy F3 multiple shots + people export modes', () => {
+test.describe('@heavy @webkit-gpu F3 multiple shots + people export modes', () => {
   test('creates independent shots, sets people mode, surfaces package settings', async ({ page }) => {
     test.setTimeout(180_000);
     await enterStudioWorkspace(page);

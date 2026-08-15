@@ -192,7 +192,7 @@ jobs:
           path: dist/
       - run: npx playwright install --with-deps webkit
       # No Chromium-only visual baselines on WebKit.
-      # Exclude @webkit-gpu: Linux SW WebKit capture/transition paths are canary-only (see ci.yml).
+      # Exclude @webkit-gpu: Linux SW WebKit cannot mount Shots/WebGL capture (canary in ci.yml).
       - run: npx playwright test --project=desktop-webkit --grep-invert "@visual|@webkit-gpu"
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
