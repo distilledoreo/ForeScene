@@ -227,9 +227,46 @@ export const createProjectSlice: StateCreator<
     });
   },
 
-  applyShotTimelineProject: (project) => set(() => ({
-    project: touchProject(ensureProjectExportConfiguration(project)),
-  })),
+  applyShotTimelineProject: (project) => set((state) => {
+    const nextProject = touchProject(ensureProjectExportConfiguration(project));
+    if (history.isShotCameraHistoryRestoring()) {
+      return { project: nextProject };
+    }
+
+    let historyByShotId = state.shotCameraHistoryByShotId;
+    let batchCaptured = state.shotCameraHistoryBatchCaptured;
+    const previousById = new Map(state.project.shots.map((shot) => [shot.id, shot]));
+
+    for (const nextShot of nextProject.shots) {
+      const previous = previousById.get(nextShot.id);
+      if (!previous) continue;
+      const cameraChanged = !cameraDataEqual(previous.camera, nextShot.camera);
+      const keyframesChanged = !cameraKeyframesEqual(
+        previous.cameraKeyframes,
+        nextShot.cameraKeyframes,
+      );
+      if (!cameraChanged && !keyframesChanged) continue;
+
+      const mode: ShotCameraHistoryMode = state.shotCameraHistoryBatchDepth > 0 ? 'batch' : 'step';
+      if (mode === 'batch' && batchCaptured) continue;
+
+      historyByShotId = withShotCameraHistoryStacks(
+        historyByShotId,
+        nextShot.id,
+        pushShotCameraHistoryPast(
+          getShotCameraHistoryStacks(historyByShotId, nextShot.id),
+          { camera: previous.camera, cameraKeyframes: previous.cameraKeyframes },
+        ),
+      );
+      if (mode === 'batch') batchCaptured = true;
+    }
+
+    return {
+      project: nextProject,
+      shotCameraHistoryByShotId: historyByShotId,
+      shotCameraHistoryBatchCaptured: batchCaptured,
+    };
+  }),
 
   updateProjectInfo: (updates) => set((state) => ({
     project: touchProject({ ...state.project, ...updates }),

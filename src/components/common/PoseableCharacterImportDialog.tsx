@@ -269,6 +269,31 @@ export function PoseableCharacterImportDialog({
       }}
       title="Import poseable character"
       size="lg"
+      scrollBody
+      footer={(
+        <>
+          <button
+            type="button"
+            className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary hover:bg-surface-muted"
+            onClick={() => {
+              abortRef.current?.abort();
+              onClose();
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!file || busy || (importMode === 'preserveExistingRig' && !mappingValidation?.ok)}
+            onClick={() => void importSelected()}
+            className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            data-poseable-import-confirm
+          >
+            <UserRound className="h-4 w-4" />
+            {rigFile ? 'Import with rig' : importMode === 'preserveExistingRig' ? 'Import using existing rig' : 'Import character'}
+          </button>
+        </>
+      )}
     >
       <div className="space-y-4" data-poseable-character-import-dialog>
         <p className="text-sm text-secondary">
@@ -492,29 +517,6 @@ export function PoseableCharacterImportDialog({
             {progress}
           </p>
         )}
-
-        <div className="flex flex-wrap justify-end gap-2 border-t border-subtle pt-3">
-          <button
-            type="button"
-            className="rounded-xl border border-subtle px-3 py-2 text-sm font-semibold text-secondary hover:bg-surface-muted"
-            onClick={() => {
-              abortRef.current?.abort();
-              onClose();
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!file || busy || (importMode === 'preserveExistingRig' && !mappingValidation?.ok)}
-            onClick={() => void importSelected()}
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            data-poseable-import-confirm
-          >
-            <UserRound className="h-4 w-4" />
-            {rigFile ? 'Import with rig' : importMode === 'preserveExistingRig' ? 'Import using existing rig' : 'Import character'}
-          </button>
-        </div>
       </div>
       {mappingAnalysis && (
         <ImportedRigMappingDialog

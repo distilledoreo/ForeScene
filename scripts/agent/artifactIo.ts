@@ -101,9 +101,9 @@ export function resolveArtifactTransferPlan(input: {
 }
 
 /**
- * Sequential disk sink. Each chunk is written before the next is accepted,
- * `write()` waits for `'drain'` when the stream signals backpressure, and
- * `abort()` closes the stream then removes any partial file.
+ * Sequential disk sink. Each chunk is flushed (write callback + drain)
+ * before the next is accepted, and `abort()` closes the stream then
+ * removes any partial file.
  */
 export function createSequentialFileSink(
   filePath: string,
@@ -134,10 +134,43 @@ export function createSequentialFileSink(
       throw new ArtifactTransferError('Artifact file sink is closed.');
     }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let writeReturned = false;
+      let needsDrain = false;
+      let callbackFired = false;
+      const finish = (error?: Error | null) => {
+        if (settled) return;
+        if (error) {
+          settled = true;
+          reject(error);
+          return;
+        }
+        if (writeReturned && callbackFired && !needsDrain) {
+          settled = true;
+          resolve();
+        }
+      };
+      const onError = (error: Error) => finish(error);
+      stream.once('error', onError);
+      const ready = stream.write(buffer, (error) => {
+        callbackFired = true;
+        stream.off('error', onError);
+        finish(error);
+      });
+      needsDrain = !ready;
+      writeReturned = true;
+      if (needsDrain) {
+        void once(stream, 'drain').then(() => {
+          needsDrain = false;
+          finish();
+        }, (error: Error) => finish(error));
+      } else {
+        finish();
+      }
+    });
     byteLength += buffer.length;
     chunkCount += 1;
-    const ready = stream.write(buffer);
-    if (!ready) await once(stream, 'drain');
   };
 
   return {
@@ -162,6 +195,7 @@ export function createSequentialFileSink(
     async abort(): Promise<void> {
       failed = true;
       closed = true;
+      await writeQueue.catch(() => undefined);
       stream.destroy();
       await finished(stream).catch(() => undefined);
       await unlink(filePath).catch(() => undefined);

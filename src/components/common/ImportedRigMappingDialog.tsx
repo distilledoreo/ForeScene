@@ -34,7 +34,7 @@ export function ImportedRigMappingDialog({
     ...(path ? { [jointId]: path } : { [jointId]: undefined }),
   }));
   return (
-    <Modal open={open} onClose={onCancel} title="Review imported rig mapping" size="lg">
+    <Modal open={open} onClose={onCancel} title="Review imported rig mapping" size="lg" scrollBody>
       <div className="space-y-3" data-imported-rig-mapping-dialog>
         <p className="text-xs text-secondary">
           Profile: <strong>{profile}</strong> · confidence {(confidence * 100).toFixed(0)}%. Select a unique source bone for every required joint.

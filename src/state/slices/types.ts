@@ -31,7 +31,7 @@ export type ShotCameraHistoryMode = 'step' | 'batch' | 'silent';
 export interface ProjectSliceState {
   project: LocationProject;
   setProject: (project: LocationProject) => void;
-  /** Apply a domain transaction without resetting the active UI/session state. */
+  /** Apply a domain transaction without resetting the active UI/session state. Records shot-camera history when camera or keyframes change. */
   applyShotTimelineProject: (project: LocationProject) => void;
   updateProjectInfo: (updates: Pick<LocationProject, 'name'> | Partial<Pick<LocationProject, 'name' | 'description'>>) => void;
   updateProjectSettings: (updates: Partial<LocationProject['settings']>) => void;

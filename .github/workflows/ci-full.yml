@@ -192,7 +192,8 @@ jobs:
           path: dist/
       - run: npx playwright install --with-deps webkit
       # No Chromium-only visual baselines on WebKit.
-      - run: npx playwright test --project=desktop-webkit --grep-invert @visual
+      # Exclude @webkit-gpu: Linux SW WebKit capture/transition paths are canary-only (see ci.yml).
+      - run: npx playwright test --project=desktop-webkit --grep-invert "@visual|@webkit-gpu"
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
           FULL_REGRESSION: '1'

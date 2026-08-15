@@ -224,5 +224,55 @@ describe('shot camera store history', () => {
     const afterRedo = useProjectStore.getState().project.shots.find((s) => s.id === shotId)!;
     expect(afterRedo.cameraKeyframes.map((k) => k.id)).toEqual(['kf-start', 'kf-mid', 'kf-end']);
   });
+
+  it('records camera and keyframe history for timeline project applies', () => {
+    useProjectStore.setState({
+      project: createDefaultProject(),
+      selectedShotId: undefined,
+      shotCameraHistoryByShotId: {},
+    });
+    const shot = useProjectStore.getState().project.shots[0];
+    useProjectStore.getState().selectShot(shot.id);
+
+    const start = {
+      id: 'kf-start',
+      label: 'Start',
+      timeSeconds: 0,
+      camera: { ...shot.camera, position: [0, 1.6, 0] as [number, number, number] },
+    };
+    const end = {
+      id: 'kf-end',
+      label: 'End',
+      timeSeconds: 3,
+      camera: { ...shot.camera, position: [3, 1.6, 0] as [number, number, number] },
+    };
+
+    useProjectStore.getState().applyShotTimelineProject({
+      ...useProjectStore.getState().project,
+      shots: useProjectStore.getState().project.shots.map((item) => (
+        item.id === shot.id
+          ? { ...item, camera: start.camera, cameraKeyframes: [start] }
+          : item
+      )),
+    });
+    useProjectStore.getState().applyShotTimelineProject({
+      ...useProjectStore.getState().project,
+      shots: useProjectStore.getState().project.shots.map((item) => (
+        item.id === shot.id
+          ? { ...item, camera: end.camera, cameraKeyframes: [start, end] }
+          : item
+      )),
+    });
+
+    expect(useProjectStore.getState().project.shots.find((item) => item.id === shot.id)?.cameraKeyframes)
+      .toHaveLength(2);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
+    const afterUndo = useProjectStore.getState().project.shots.find((item) => item.id === shot.id)!;
+    expect(afterUndo.cameraKeyframes.map((keyframe) => keyframe.id)).toEqual(['kf-start']);
+    expect(afterUndo.camera.position).toEqual(start.camera.position);
+    expect(useProjectStore.getState().undoShotCamera()).toBe(true);
+    const afterSecondUndo = useProjectStore.getState().project.shots.find((item) => item.id === shot.id)!;
+    expect(afterSecondUndo.cameraKeyframes).toEqual([]);
+  });
 });
 

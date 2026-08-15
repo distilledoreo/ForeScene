@@ -72,7 +72,7 @@ function multiNodeGltfBuffer() {
  * @responsive  — layout, overflow, menus, drawers (tablet + phone PR)
  * @visual      — screenshot baselines
  * @heavy       — optimizer, projected, MP4, multi-import, video authoring (main/nightly)
- * @webkit-gpu  — WebGL/Shots capture paths that crash Linux Playwright WebKit (canary only)
+ * @webkit-gpu  — WebGL/Shots capture paths that crash Linux Playwright WebKit (canary only; also on GPU-heavy @heavy suites)
  */
 test.describe('@responsive layout and core chrome', () => {
   test('header actions stay in viewport', async ({ page }, testInfo) => {
@@ -414,7 +414,7 @@ test.describe('@smoke workflow path', () => {
   });
 });
 
-test.describe('@heavy video authoring', () => {
+test.describe('@heavy @webkit-gpu video authoring', () => {
   test('video progressive capture finishes two poses then next shot', async ({ page }) => {
     test.setTimeout(120_000);
     await enterStudio(page);
@@ -568,7 +568,7 @@ test.describe('@heavy video authoring', () => {
   });
 });
 
-test.describe('@heavy projected optimizer and second capture', () => {
+test.describe('@heavy @webkit-gpu projected optimizer and second capture', () => {
   test('projected occlusion unmounts cleanly into Export without a crash', async ({ page }) => {
     test.setTimeout(180_000);
 
@@ -698,7 +698,12 @@ test.describe('@heavy projected optimizer and second capture', () => {
     await page.locator('[data-reference-settings-gear]').click();
     const drawer = page.getByRole('dialog', { name: 'Reference Settings' });
     await expect(drawer).toBeVisible();
-    await page.locator('[data-coverage-optimizer] summary').click();
+    await drawer.locator('[data-projected-style-advanced] summary').click();
+    const optimizer = drawer.locator('[data-coverage-optimizer]');
+    await optimizer.evaluate((element) => {
+      element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    });
+    await optimizer.locator('summary').click();
 
     const floorRegionToggle = drawer.getByRole('switch', {
       name: 'Restrict optimizer to an analysis region',
