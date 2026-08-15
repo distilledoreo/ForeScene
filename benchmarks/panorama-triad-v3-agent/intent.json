@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "shots": [
+    {
+      "shotNumber": "01",
+      "title": "H1 newborn hand creature",
+      "assignment": "The hand-monster H1 has just come into being among the ruins. It should read as a newborn hand-derived creature: five finger limbs and a long thin eye stalk, not a generic spider. Keep the creature readable and roughly hand-sized.",
+      "continuity": [
+        "This is H1, the newborn hand creature.",
+        "No human characters appear in this shot."
+      ],
+      "locationNote": "The ruins location has a calibrated panorama. Treat that as the associated environment; do not invent a different place.",
+      "requiredSubjects": ["hand-monster"],
+      "deliverables": ["creature-final.png"]
+    },
+    {
+      "shotNumber": "02",
+      "title": "Sprint chase toward armory",
+      "assignment": "Joseph J2 is fleeing toward the armory. H1 pursues roughly 1-1.5 m behind. Both must remain readable throughout the shot.",
+      "continuity": [
+        "Joseph is J2 amputated: right eyepatch and right-hand amputation.",
+        "No wrist sword yet.",
+        "Joseph runs on two legs."
+      ],
+      "locationNote": "The corridor has no calibrated panorama. Do not pretend a styled panorama is aligned to this space.",
+      "durationSeconds": 3,
+      "requiredSubjects": ["joseph-amputated", "hand-monster"],
+      "deliverables": ["chase-start.png", "chase-mid.png", "chase-end.png", "chase-motion.mp4"]
+    },
+    {
+      "shotNumber": "03",
+      "title": "J3 battle-ready stance",
+      "assignment": "Joseph J3 stands battle-ready in the armory. The shield and wrist blade must stay readable with him.",
+      "continuity": [
+        "Right eyepatch remains.",
+        "Right wrist-mounted short sword prosthetic is now present.",
+        "Shield on the left arm.",
+        "Two legs."
+      ],
+      "locationNote": "The armory has a calibrated panorama. Keep Joseph in this location.",
+      "requiredSubjects": ["joseph-final", "shield", "wrist-blade"],
+      "deliverables": ["fighter-final.png"]
+    }
+  ]
+}

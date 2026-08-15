@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "shots": [
+    {
+      "shotNumber": "01",
+      "camera": {
+        "template": "wide",
+        "subjects": ["hand-monster"],
+        "angle": "front",
+        "lensClass": "wide"
+      },
+      "blocking": [
+        { "subject": "hand-monster", "placement": { "type": "location_slot", "slot": "foreground" } }
+      ]
+    },
+    {
+      "shotNumber": "02",
+      "camera": {
+        "template": "full",
+        "subjects": ["joseph-amputated", "hand-monster"],
+        "angle": "front",
+        "lensClass": "wide"
+      },
+      "blocking": [
+        { "subject": "joseph-amputated", "placement": { "type": "location_slot", "slot": "entrance" } },
+        { "subject": "hand-monster", "placement": { "type": "relative", "anchor": "joseph-amputated", "relation": "behind" } }
+      ],
+      "motion": {
+        "durationSeconds": 3,
+        "renderControlVideo": true,
+        "keyframes": [
+          {
+            "timeSeconds": 0,
+            "camera": { "position": [100, 1.5, -1.0], "target": [100, 0.95, -4.2], "fovDegrees": 40 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, -4.0] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -5.4] } }
+            ]
+          },
+          {
+            "timeSeconds": 1.5,
+            "camera": { "position": [100, 1.5, 4.2], "target": [100, 0.95, 1.0], "fovDegrees": 40 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 1.0] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, -0.4] } }
+            ]
+          },
+          {
+            "timeSeconds": 3,
+            "camera": { "position": [100, 1.5, 9.4], "target": [100, 0.95, 6.2], "fovDegrees": 40 },
+            "staging": [
+              { "subject": "joseph-amputated", "transform": { "position": [100, 0.875, 6.0] } },
+              { "subject": "hand-monster", "transform": { "position": [100, 0, 4.6] } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "shotNumber": "03",
+      "camera": {
+        "template": "medium",
+        "subjects": ["joseph-final"],
+        "angle": "front",
+        "lensClass": "normal"
+      },
+      "blocking": [
+        { "subject": "joseph-final", "placement": { "type": "location_slot", "slot": "foreground" } },
+        { "subject": "shield", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "beside" } },
+        { "subject": "wrist-blade", "placement": { "type": "relative", "anchor": "joseph-final", "relation": "in_front_of" } }
+      ]
+    }
+  ]
+}
