@@ -22,9 +22,13 @@ export type PrevisShotValidationStatus =
   | 'skipped';
 
 /** Bump when the render artifact contract changes (UI screenshots → clean clay, etc.). */
-export const PREVIS_RENDER_PIPELINE_VERSION = 2;
+export const PREVIS_RENDER_PIPELINE_VERSION = 3;
 
-export type PrevisRenderSource = 'canonical_clay_renderer' | 'ui_screenshot' | 'unknown';
+export type PrevisRenderSource =
+  | 'canonical_clay_renderer'
+  | 'canonical_projected_renderer'
+  | 'ui_screenshot'
+  | 'unknown';
 
 export interface PrevisEntityMapping {
   objectIds?: string[];
@@ -264,9 +268,10 @@ export function migrateRenderProfileChange(
   return { state: next, invalidated: true, previousFingerprint };
 }
 
-/** True only when provenance is explicitly the canonical clay renderer. */
+/** True only when provenance is explicitly a canonical ForeScene renderer. */
 export function isCanonicalFrame(shot: PrevisShotRunState | undefined): boolean {
-  return shot?.renderSource === 'canonical_clay_renderer'
+  return (shot?.renderSource === 'canonical_clay_renderer'
+    || shot?.renderSource === 'canonical_projected_renderer')
     && shot.render === 'complete'
     && Boolean(shot.framePath);
 }

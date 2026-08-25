@@ -29,6 +29,7 @@ import {
 } from './cameraSolver';
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
+import { inferNativeActionPose, resolveReadableMotionCamera } from './actionIntent';
 import { defaultPropDimensions } from './propDimensions';
 import {
   deriveDynamicObjectUniverse,
@@ -457,7 +458,9 @@ function compileSingleShot(
       || visibleIds.has(character.id);
     const isVisible = visibleIds.has(character.id);
     const blocking = blockingResults[character.id];
-    const requestedPose = requestedPoseBySubject[character.id] ?? character.defaultPose;
+    const requestedPose = requestedPoseBySubject[character.id]
+      ?? character.defaultPose
+      ?? inferNativeActionPose(shot, character.id);
     const pose = resolveCompilerPose(character.id, requestedPose)
       ?? (!options.presenceProject?.workflow.production ? blocking?.posePreset : undefined);
 
@@ -634,7 +637,7 @@ function compileSingleShot(
       durationSeconds: shot.motion.durationSeconds,
       keyframes: shot.motion.keyframes.map((keyframe) => ({
         timeSeconds: keyframe.timeSeconds,
-        camera: keyframe.camera ?? {},
+        camera: resolveReadableMotionCamera(shot, keyframe) ?? {},
         ...(() => {
           const animatedObjects = [
             ...(keyframe.staging?.flatMap((staging) => {
@@ -647,7 +650,13 @@ function compileSingleShot(
                 : (manifest.props ?? []).some((item) => item.id === staging.subject)
                   ? 'prop'
                   : 'asset';
-              const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
+              const inferredPose = manifest.cast.some((item) => item.id === staging.subject)
+                ? inferNativeActionPose(shot, staging.subject, shot.motion!.keyframes.indexOf(keyframe))
+                : undefined;
+              const resolvedPose = resolveCompilerPose(
+                staging.subject,
+                staging.posePreset ?? inferredPose,
+              );
               const stagedAssetDimensions = assetMapping
                 ? manifestAssetDimensions(manifest, context, options.presenceProject, staging.subject)
                 : undefined;

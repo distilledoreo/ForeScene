@@ -21,7 +21,7 @@ import {
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
-import { degreesToRadians } from './sync';
+import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
 
 export type SceneVisualTheme = 'light' | 'dark';
 
@@ -344,6 +344,20 @@ export function buildScene(
   }
 
   const useProjected = options.appearance === 'projected' && Boolean(options.projected?.texture);
+  if (useProjected && options.projected) {
+    // Projection styles the authored geometry, but it cannot fill rays where
+    // the graybox has no surface. Use the same equirect panorama as the scene
+    // background so calibrated environment imagery remains visible instead of
+    // exposing the renderer's white clear color through every opening.
+    options.projected.texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = options.projected.texture;
+    scene.backgroundIntensity = options.projected.settings.exposure;
+    scene.backgroundRotation.set(
+      degreesToRadians(options.projected.rotation[0] ?? 0),
+      degreesToRadians(panoYawToThreeJsYawDegrees(options.projected.rotation[1] ?? 0)),
+      degreesToRadians(options.projected.rotation[2] ?? 0),
+    );
+  }
 
   for (const object of project.scene.objects) {
     if (!object.visible) continue;
@@ -420,6 +434,11 @@ export function resolveObjectMaterial(
 export function shouldReceiveProjectedStyle(object: SceneObject): boolean {
   if (object.category === 'helper' || object.category === 'landmark') return false;
   if (object.type === 'sun_marker' || object.type === 'human_dummy') return false;
+  // Imported models carry authored materials and textures. Projecting the
+  // environment panorama over them destroys production-asset identity (and
+  // previously turned multipart creatures into white silhouettes).
+  if (object.type === 'imported_model') return false;
+  if (object.stagingRole === 'person' || object.stagingRole === 'prop') return false;
   return true;
 }
 

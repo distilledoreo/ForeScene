@@ -11,6 +11,7 @@ import type { PrevisProductionManifestV1, PrevisShotDefinition } from './manifes
 import type { ProductionBindingMode } from './productionBindingMode';
 import { resolvePrevisPosePresetId } from './posePresets';
 import { getHumanPosePreset } from '../humanPosePresets';
+import { inferNativeActionPose } from './actionIntent';
 
 export type ProductionConfigurationDiagnosticCode =
   | 'missing_binding'
@@ -80,6 +81,7 @@ export function getProductionConfiguration(project: LocationProject): Production
 export function deriveShotActionContracts(
   definition: PrevisShotDefinition,
   options: {
+    poseableEntityIds?: ReadonlySet<string>;
     resolvePose?: (entityId: string, requestedPose: string) => {
       resolvedPose?: string;
       relationship: import('../../domain/types').PoseResolutionRelationship;
@@ -96,9 +98,14 @@ export function deriveShotActionContracts(
       : { relationship: 'contradictory' as const, requiresReview: true };
   });
   const actions: ShotActionContract[] = [];
+  const poseableEntityIds = options.poseableEntityIds ?? new Set<string>();
   for (const blocking of definition.blocking ?? []) {
-    if (!blocking.pose) continue;
-    const resolution = resolvePose(blocking.subject, blocking.pose);
+    const requestedPose = blocking.pose
+      ?? (!definition.motion && poseableEntityIds.has(blocking.subject)
+        ? inferNativeActionPose(definition, blocking.subject)
+        : undefined);
+    if (!requestedPose) continue;
+    const resolution = resolvePose(blocking.subject, requestedPose);
     actions.push({
       actionId: `${definition.id}:${blocking.subject}:static-pose`,
       entityId: blocking.subject,
@@ -106,7 +113,7 @@ export function deriveShotActionContracts(
       durationSeconds: 0,
       samples: [{
         timeSeconds: 0,
-        requestedPose: blocking.pose,
+        requestedPose,
         ...(resolution.resolvedPose ? { resolvedPose: resolution.resolvedPose } : {}),
         poseRelationship: resolution.relationship,
         requiresReview: resolution.requiresReview,
@@ -116,26 +123,31 @@ export function deriveShotActionContracts(
 
   if (!definition.motion) return actions;
   const samplesByEntity = new Map<string, ShotActionContract['samples']>();
-  for (const keyframe of definition.motion.keyframes) {
+  for (const [keyframeIndex, keyframe] of definition.motion.keyframes.entries()) {
     for (const staging of keyframe.staging ?? []) {
+      const inferredPose = poseableEntityIds.has(staging.subject)
+        ? inferNativeActionPose(definition, staging.subject, keyframeIndex)
+        : undefined;
       if (
         staging.visible === undefined
         && !staging.transform?.position
         && !staging.transform?.rotation
         && !staging.posePreset
+        && !inferredPose
       ) continue;
       const samples = samplesByEntity.get(staging.subject) ?? [];
-      const resolution = staging.posePreset
-        ? resolvePose(staging.subject, staging.posePreset)
+      const requestedPose = staging.posePreset ?? inferredPose;
+      const resolution = requestedPose
+        ? resolvePose(staging.subject, requestedPose)
         : undefined;
       samples.push({
         timeSeconds: keyframe.timeSeconds,
         ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
         ...(staging.transform?.position ? { position: [...staging.transform.position] } : {}),
         ...(staging.transform?.rotation ? { rotation: [...staging.transform.rotation] } : {}),
-        ...(staging.posePreset
+        ...(requestedPose
           ? {
-              requestedPose: staging.posePreset,
+              requestedPose,
               ...(resolution?.resolvedPose ? { resolvedPose: resolution.resolvedPose } : {}),
               ...(resolution
                 ? {

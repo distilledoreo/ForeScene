@@ -10,6 +10,7 @@ export interface RenderSessionShotJob {
   framePath: string;
   locationId?: string;
   timeSeconds?: number;
+  appearance?: RenderProfile['appearance'];
   debugUiPath?: string;
   /** Capture a successful UI screenshot only when an operator explicitly asks. */
   captureDebugUi?: boolean;
@@ -35,6 +36,7 @@ export interface RenderSessionFrameResult {
   revisionId?: string;
   error?: string;
   fromCanonicalRenderer: boolean;
+  source?: 'canonical_clay_renderer' | 'canonical_projected_renderer';
   renderProfileId: string;
   renderFingerprint?: string;
 }
@@ -95,6 +97,7 @@ export function buildRenderInputFromProfile(
   profile: RenderProfile,
   shotId: string,
   timeSeconds?: number,
+  appearance: RenderProfile['appearance'] = profile.appearance,
 ): {
   shotId: string;
   timeSeconds?: number;
@@ -107,7 +110,7 @@ export function buildRenderInputFromProfile(
   return {
     shotId,
     timeSeconds,
-    appearance: profile.appearance,
+    appearance,
     peopleVariant: profile.peopleVariant,
     content: profile.content,
     ...(profile.overrideDimensions

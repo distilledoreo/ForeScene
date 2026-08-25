@@ -69,6 +69,8 @@ import {
   type ShotCompositionTelemetry,
   type RenderProfile,
   DELIVERY_PROFILE,
+  resolveRenderAppearanceForShot,
+  resolveEmbeddedPropIntents,
   resolveRenderProfileForMode,
   renderProfileFingerprint,
   computeRenderFingerprint,
@@ -228,6 +230,7 @@ async function renderCleanShotFrame(
     renderSession?: PersistentRenderSession;
     shotNumber?: string;
     timeSeconds?: number;
+    appearance?: RenderProfile['appearance'];
   },
 ): Promise<{
   ok: boolean;
@@ -244,6 +247,7 @@ async function renderCleanShotFrame(
   revisionId?: string;
   error?: string;
   fromCanonicalRenderer: boolean;
+  source?: 'canonical_clay_renderer' | 'canonical_projected_renderer';
 }> {
   if (options?.renderSession) {
     const result = await options.renderSession.renderShot({
@@ -252,6 +256,7 @@ async function renderCleanShotFrame(
       framePath,
       debugUiPath: options.debugUiPath,
       captureDebugUi: options.captureDebugUi,
+      appearance: options.appearance,
     });
     return {
       ok: result.ok,
@@ -261,6 +266,7 @@ async function renderCleanShotFrame(
       revisionId: result.revisionId,
       error: result.error,
       fromCanonicalRenderer: result.fromCanonicalRenderer,
+      source: result.source,
     };
   }
 
@@ -310,7 +316,7 @@ async function renderCleanShotFrame(
   }, {
     shotId,
     timeSeconds: options?.timeSeconds,
-    appearance: profile.appearance,
+    appearance: options?.appearance ?? profile.appearance,
     peopleVariant: profile.peopleVariant,
     content: profile.content,
     ...(profile.overrideDimensions
@@ -347,7 +353,11 @@ async function renderCleanShotFrame(
     height: result.height,
     pixelStats: result.pixelStats,
     revisionId: result.revisionId,
-    fromCanonicalRenderer: result.source === 'canonical_clay_renderer',
+    fromCanonicalRenderer: result.source === 'canonical_clay_renderer'
+      || result.source === 'canonical_projected_renderer',
+    source: result.source === 'canonical_projected_renderer'
+      ? 'canonical_projected_renderer'
+      : 'canonical_clay_renderer',
   };
 }
 
@@ -355,12 +365,13 @@ async function renderControlVideo(
   page: Page,
   shotId: string,
   videoPath: string,
+  appearance: RenderProfile['appearance'],
 ): Promise<{ ok: boolean; assetId?: string; error?: string; transfer?: AgentArtifactTransferTelemetry }> {
   const result = await page.evaluate(async (id) => window.foreScene!.renderShotVideo({
     shotId: id,
     mode: 'render',
     resolutionPreset: '1080p',
-    appearance: 'clay',
+    appearance,
     contentMode: 'full_scene',
     // This runner owns the file artifact. Attaching here can race timeline
     // persistence and incorrectly turn a valid render into stale_revision.
@@ -802,7 +813,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
-  const manifest = parsed.manifest;
+  const embeddedPropResolution = resolveEmbeddedPropIntents(parsed.manifest);
+  const manifest = embeddedPropResolution.manifest;
+  await writeJson(path.join(outputDir, 'logs', 'derived-semantic-intents.json'), {
+    embeddedProps: embeddedPropResolution.derived,
+  });
   const consentToken = options.allowHeavyCharacterImports
     ? 'agent:previs:allow-heavy-character-imports'
     : undefined;
@@ -1781,6 +1796,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           locationId: definition.locationId,
           framePath: path.join(outputDir, 'shots', `${definition.shotNumber}.png`),
           renderFingerprint: renderFingerprint?.key,
+          appearance: currentShot
+            ? resolveRenderAppearanceForShot(renderProfile, currentShot)
+            : renderProfile.appearance,
         });
       }
 
@@ -1841,7 +1859,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           state = upsertShotState(state, frame.shotNumber, {
             render: 'complete',
             framePath: frame.framePath,
-            renderSource: 'canonical_clay_renderer',
+            renderSource: frame.source,
             renderFingerprint: frame.renderFingerprint,
             renderCacheHit: false,
             pixelStats: frame.pixelStats,
@@ -1877,7 +1895,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             continue;
           }
           try {
-            const video = await renderControlVideo(session.page, shotId, videoPath);
+            const videoShot = renderProject.shots.find((item) => item.id === shotId);
+            const videoAppearance = videoShot
+              ? resolveRenderAppearanceForShot(renderProfile, videoShot)
+              : renderProfile.appearance;
+            const video = await renderControlVideo(session.page, shotId, videoPath, videoAppearance);
             await writeJson(path.join(outputDir, 'logs', `video-${definition.shotNumber}.json`), video);
             if (!video.ok) throw new Error(video.error ?? 'Control video render failed.');
             controlVideosRendered += 1;
@@ -2044,6 +2066,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
             renderSession,
             shotNumber: definition.shotNumber,
+            appearance: resolveRenderAppearanceForShot(renderProfile, shot),
           },
         );
         if (!reframe.ok || !reframe.fromCanonicalRenderer) {
@@ -2135,6 +2158,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
               debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
               renderSession,
               shotNumber: definition.shotNumber,
+              appearance: resolveRenderAppearanceForShot(renderProfile, shot),
             },
           );
           if (rollbackFrame.ok && rollbackFrame.fromCanonicalRenderer) {
@@ -2189,7 +2213,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         state = upsertShotState(state, definition.shotNumber, {
           render: 'complete',
           framePath,
-          renderSource: 'canonical_clay_renderer',
+          renderSource: reframe.source,
           pixelStats: finalPixelStats,
           repairAttempts,
           renderFingerprint: computeRenderFingerprint({
@@ -2260,6 +2284,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           profile: renderProfile,
           shotNumber: definition.shotNumber,
           timeSeconds: keyframe.timeSeconds,
+          appearance: resolveRenderAppearanceForShot(renderProfile, currentShot),
         });
         if (!sampled.ok) {
           // Keyframe samples are benchmark evidence, not run-critical frames.
@@ -2446,7 +2471,19 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     let packagePath: string | undefined;
     let packageTransfer: AgentArtifactTransferTelemetry | undefined;
     let packageFailed = false;
-    if (!skipPackage && !timeBudget?.isExpired()) {
+    const blockingReviewBeforePackage = mode !== 'rapid-review'
+      && validationResults.some((item) => item.status !== 'passed');
+    if (!skipPackage && blockingReviewBeforePackage) {
+      packageFailed = true;
+      state = setPhase(state, 'package', 'failed');
+      await writeJson(path.join(outputDir, 'logs', 'package-blocked-by-review.json'), {
+        reason: 'Production-integrity packaging requires every shot validation to pass.',
+        shots: validationResults
+          .filter((item) => item.status !== 'passed')
+          .map((item) => ({ shotNumber: item.shotNumber, status: item.status })),
+      });
+      await writeJson(runStatePath, state);
+    } else if (!skipPackage && !timeBudget?.isExpired()) {
       timeBudget?.assertWithinBudget('finalize');
       state = setPhase(state, 'package', 'in_progress');
       const pack = await session.page.evaluate(async () => {
@@ -2530,7 +2567,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     });
 
     const summary: PrevisCliResult = {
-      ok: !missingFrames && !missingControlVideos && failed === 0 && !packageFailed,
+      ok: !missingFrames
+        && !missingControlVideos
+        && failed === 0
+        && !packageFailed
+        && (mode === 'rapid-review' || reviewRequiredShotIds.length === 0),
       projectId: state.projectId,
       shotsRequested: manifest.shots.length,
       shotsCreated,

@@ -23,6 +23,7 @@ import { resolvePoseableRigForObject } from '../poseableRigPackage';
 import type { PrevisProductionManifestV1 } from './manifest';
 import { getProductionConfiguration, isRenderableProductionObject, resolveProductionBindingObjectIds } from './productionConfiguration';
 import { isExactPrevisPoseAlias, resolvePrevisPosePresetId } from './posePresets';
+import { inferNativeActionPose } from './actionIntent';
 
 export type EntityCapabilityReadiness =
   | 'ready'
@@ -391,6 +392,15 @@ function requirementsFromManifest(
     }
   }
   for (const shot of manifest.shots) {
+    for (const character of manifest.cast) {
+      if (inferNativeActionPose(shot, character.id)) {
+        mergeRequirements(target, character.id, {
+          poseable: true,
+          deforming: true,
+          ...(shot.motion ? { timelinePoseable: true } : {}),
+        }, shot.id);
+      }
+    }
     for (const blocking of shot.blocking ?? []) {
       if (blocking.pose) {
         mergeRequirements(target, blocking.subject, {

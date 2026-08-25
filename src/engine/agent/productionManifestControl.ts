@@ -410,6 +410,7 @@ function buildManifestProductionConfiguration(input: {
       }];
     });
     const actions = deriveShotActionContracts(definition, {
+      poseableEntityIds: new Set(input.manifest.cast.map((entry) => entry.id)),
       resolvePose: (entityId, requestedPose) => resolveProductionPose({
         project: input.project,
         entityId,

@@ -70,6 +70,39 @@ function validPreparedProject() {
 }
 
 describe('production configuration validation', () => {
+  it('turns unambiguous authored action language into persisted exact native poses', () => {
+    const definition = manifest().shots[0]!;
+    definition.name = 'Sprint chase';
+    definition.blocking = [{
+      subject: 'cast.lead',
+      placement: { type: 'location_slot', slot: 'center' },
+    }];
+    definition.motion = {
+      durationSeconds: 2,
+      keyframes: [{
+        timeSeconds: 0,
+        staging: [{ subject: 'cast.lead', transform: { position: [0, 0.875, 0] } }],
+      }, {
+        timeSeconds: 2,
+        staging: [{ subject: 'cast.lead', transform: { position: [0, 0.875, 4] } }],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition, {
+      poseableEntityIds: new Set(['cast.lead']),
+    });
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'timeline',
+      samples: [
+        { requestedPose: 'walk-contact-left', resolvedPose: 'walk-contact-left', requiresReview: false },
+        { requestedPose: 'walk-contact-right', resolvedPose: 'walk-contact-right', requiresReview: false },
+      ],
+    });
+  });
+
   it('derives persistent static-pose and timeline action intent from a shot manifest', () => {
     const definition = manifest().shots[0]!;
     definition.blocking = [{
