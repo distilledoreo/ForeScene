@@ -9,6 +9,7 @@ import {
   createBlankGrayboxProject,
   createInitialRunState,
   compileCastPhaseWithPersistedEntities,
+  compilePropsPhaseWithPersistedEntities,
   diffPrevisManifests,
   firstIncompletePhase,
   hashPrevisManifest,
@@ -413,6 +414,50 @@ describe('previs compilers', () => {
     expect(rebuilt.importedCharacters?.map((entry) => entry.entityKey)).toEqual(['cast.joseph']);
   });
 
+  it('recompiles primitive props without mistaking planned refs for live entities', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+
+    expect(compiled.props.context.entities['props.table']?.objectId).toBe('prop_table');
+    const rebuilt = compilePropsPhaseWithPersistedEntities(
+      manifest,
+      compiled.cast.context,
+      {},
+    );
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.context.entities['props.table']?.objectId).toBe('prop_table');
+  });
+
+  it('recompiles embedded props against the persisted live cast without proxy geometry', () => {
+    const input = loadExample('minimal-dialogue.json') as Record<string, unknown>;
+    input.props = [{
+      id: 'shield',
+      name: 'Alex shield',
+      primitive: 'shield',
+      embeddedIn: { subject: 'alex', joint: 'leftHand' },
+    }];
+    const parsed = parsePrevisProductionManifest(input);
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+    const liveAlex = {
+      objectId: 'obj_live_alex',
+      refs: { obj_live_alex: 'obj_live_alex' },
+    };
+
+    const rebuilt = compilePropsPhaseWithPersistedEntities(
+      manifest,
+      compiled.cast.context,
+      { 'cast.alex': liveAlex },
+    );
+
+    expect(rebuilt.plan.commands).toEqual([]);
+    expect(rebuilt.context.entities['props.shield']).toEqual(liveAlex);
+  });
+
   it('merges partial motion transforms with each actor\'s static shot transform', () => {
     const input = structuredClone(loadExample('minimal-dialogue.json')) as {
       shots: Array<Record<string, unknown>>;
@@ -445,7 +490,11 @@ describe('previs compilers', () => {
     expect(staticStage?.op).toBe('shot.stageObject');
     expect(timeline?.op).toBe('shot.timeline.replace');
     if (staticStage?.op !== 'shot.stageObject' || timeline?.op !== 'shot.timeline.replace') return;
+    const inheritedTransform = timeline.keyframes[0]!.objects?.find((entry) => (
+      'ref' in entry.object && entry.object.ref === 'cast_alex'
+    ))?.transform;
     const animatedTransform = timeline.keyframes[1]!.objects?.[0]?.transform;
+    expect(inheritedTransform).toEqual(staticStage.transform);
     expect(animatedTransform).toEqual({
       position: staticStage.transform!.position,
       rotation: [0, 1, 0],

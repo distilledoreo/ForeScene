@@ -49,6 +49,20 @@ export const PREVIS_POSE_ALIASES: Record<string, string> = {
   ...Object.fromEntries(HUMAN_POSE_PRESETS.map((preset) => [preset.id, preset.id])),
 };
 
+/**
+ * Semantic names whose native mapping preserves the complete authored intent.
+ * More expressive aliases (running, defensive, holding, and so on) remain
+ * approximate and require an explicit production substitution approval.
+ */
+export const EXACT_PREVIS_POSE_ALIASES = new Set([
+  'standing-neutral',
+  'standing-alert',
+]);
+
+export function isExactPrevisPoseAlias(pose: string): boolean {
+  return EXACT_PREVIS_POSE_ALIASES.has(pose);
+}
+
 export function isSupportedPrevisPosePreset(pose: string): boolean {
   return Boolean(PREVIS_POSE_ALIASES[pose] || getHumanPosePreset(pose));
 }

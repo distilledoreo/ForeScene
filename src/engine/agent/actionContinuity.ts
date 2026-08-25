@@ -67,6 +67,9 @@ function entityCenterAtTime(input: {
 }
 
 function sampleAtTime(action: ShotActionContract, timeSeconds: number): ShotActionSample | undefined {
+  // Static blocking is durable shot intent, not a zero-duration event. It must
+  // hold at every camera sample in a moving shot.
+  if (action.mode === 'static_pose') return action.samples[0];
   return action.samples.find((sample) => (
     Math.abs(sample.timeSeconds - timeSeconds) <= TIME_EPSILON_SECONDS
   ));

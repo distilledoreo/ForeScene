@@ -131,6 +131,16 @@ describe('production entity capabilities', () => {
     project.workflow.production = productionFor('lead', object.id);
 
     expect(resolveProductionPose({ project, entityId: 'lead', requestedPose: 'walking' }).relationship).toBe('exact');
+    expect(resolveProductionPose({ project, entityId: 'lead', requestedPose: 'standing-neutral' })).toMatchObject({
+      resolvedPose: 'neutral',
+      relationship: 'exact',
+      requiresReview: false,
+    });
+    expect(resolveProductionPose({ project, entityId: 'lead', requestedPose: 'standing-alert' })).toMatchObject({
+      resolvedPose: 'standing-relaxed',
+      relationship: 'exact',
+      requiresReview: false,
+    });
     expect(resolveProductionPose({ project, entityId: 'lead', requestedPose: 'running' })).toMatchObject({
       resolvedPose: 'walk-contact-left',
       relationship: 'approximate',
@@ -184,4 +194,3 @@ describe('production entity capabilities', () => {
     expect(profile.rigidTransformable).toBe(true);
   });
 });
-

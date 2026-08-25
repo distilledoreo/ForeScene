@@ -306,9 +306,17 @@ function buildManifestProductionConfiguration(input: {
     const prepared = preparedLocations[definition.id];
     const previous = existing?.locations[definition.id];
     if (!prepared && !previous) continue;
+    const manifestDefinesPanoIds = definition.panoIds !== undefined;
+    const manifestDefinesDefaultPano = Object.prototype.hasOwnProperty.call(
+      definition,
+      'defaultPanoId',
+    );
+    const configuredDefaultPanoId = manifestDefinesDefaultPano
+      ? definition.defaultPanoId
+      : previous?.defaultPanoId;
     const panoIds = [...new Set([
-      ...(definition.panoIds ?? []),
-      ...(typeof definition.defaultPanoId === 'string' ? [definition.defaultPanoId] : []),
+      ...(manifestDefinesPanoIds ? definition.panoIds ?? [] : previous?.panoIds ?? []),
+      ...(typeof configuredDefaultPanoId === 'string' ? [configuredDefaultPanoId] : []),
     ])];
     locations[definition.id] = prepared
       ? {
@@ -321,8 +329,8 @@ function buildManifestProductionConfiguration(input: {
           ])),
           blockerObjectIds: prepared.blockerObjectIds.filter((objectId) => !boundDynamicObjectIds.has(objectId)),
           ...(panoIds.length > 0 ? { panoIds } : {}),
-          ...(typeof definition.defaultPanoId === 'string'
-            ? { defaultPanoId: definition.defaultPanoId }
+          ...(typeof configuredDefaultPanoId === 'string'
+            ? { defaultPanoId: configuredDefaultPanoId }
             : {}),
         }
       : structuredClone(previous!);
@@ -338,12 +346,20 @@ function buildManifestProductionConfiguration(input: {
     const contractId = shot?.id ?? definition.id;
     const entityIds = [...new Set([
       ...definition.subjects,
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
       ...(definition.requirements?.visibleSubjects ?? []),
+      ...(definition.requirements?.visibleProps ?? []),
+    ])];
+    const visibleEntityIds = [...new Set([
+      ...(definition.requirements?.visibleSubjects ?? definition.subjects),
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
       ...(definition.requirements?.visibleProps ?? []),
     ])];
     const expectedVisibleObjectIds: string[] = [];
     const expectedVisibleGroupIds: string[] = [];
-    for (const entityId of entityIds) {
+    for (const entityId of visibleEntityIds) {
       const binding = bindings[entityId];
       if (binding?.kind === 'object') expectedVisibleObjectIds.push(binding.objectId);
       if (binding?.kind === 'group') expectedVisibleGroupIds.push(binding.groupId);
@@ -353,15 +369,26 @@ function buildManifestProductionConfiguration(input: {
       expectedVisibleGroupIds: [...new Set(expectedVisibleGroupIds)],
     };
     const location = input.manifest.locations.find((candidate) => candidate.id === definition.locationId);
-    const environment = location && locations[location.id]
-      ? {
-          locationId: location.id,
-          ...(location.defaultPanoId === null
-            ? { expectNoPanorama: true, requireProjection: false }
-            : typeof location.defaultPanoId === 'string'
-              ? { expectedPanoId: location.defaultPanoId, requireProjection: true }
-              : {}),
-        }
+    const preparedLocation = location ? locations[location.id] : undefined;
+    const preparedPanoId = preparedLocation?.defaultPanoId ?? preparedLocation?.panoIds?.[0];
+    const manifestExplicitlyUnlinksPanorama = location?.defaultPanoId === null;
+    const greenfieldWithoutPanorama = Boolean(location)
+      && input.manifest.project.operatingMode !== 'existing-project-refinement'
+      && !preparedPanoId;
+    const environment = location && preparedLocation
+      ? manifestExplicitlyUnlinksPanorama || greenfieldWithoutPanorama
+        ? {
+            locationId: location.id,
+            expectNoPanorama: true,
+            requireProjection: false,
+          }
+        : preparedPanoId
+          ? {
+              locationId: location.id,
+              expectedPanoId: preparedPanoId,
+              requireProjection: true,
+            }
+          : undefined
       : undefined;
     const capabilityRequirements = entityIds.flatMap((entityId) => {
       const binding = bindings[entityId];
@@ -390,6 +417,32 @@ function buildManifestProductionConfiguration(input: {
         shotId: definition.id,
       }),
     });
+    const requireCompleteAssembly = [
+      'establishing',
+      'wide',
+      'full',
+      'two_shot',
+      'insert',
+      'profile',
+      'low_angle',
+      'high_angle',
+      'overhead',
+    ].includes(definition.camera.template);
+    const compositionSubjects = [...new Set([
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
+    ])]
+      .filter((entityId) => Boolean(bindings[entityId]))
+      .map((entityId) => ({
+        entityId,
+        completeAssemblyInFrame: requireCompleteAssembly,
+      }));
+    const occlusionIntent = definition.camera.foregroundSubject && definition.camera.subjects[0]
+      ? [{
+          foregroundEntityId: definition.camera.foregroundSubject,
+          backgroundEntityId: definition.camera.subjects[0],
+        }]
+      : undefined;
     shotContracts[contractId] = {
       presence: {
         ...presenceState,
@@ -405,6 +458,14 @@ function buildManifestProductionConfiguration(input: {
           : {}),
       },
       ...(environment ? { environment } : {}),
+      ...(compositionSubjects.length > 0
+        ? {
+            composition: {
+              subjects: compositionSubjects,
+              ...(occlusionIntent ? { occlusionIntent } : {}),
+            },
+          }
+        : {}),
       ...(capabilityRequirements.length > 0 ? { capabilityRequirements } : {}),
       ...(actions.length > 0 ? { actions } : {}),
     };

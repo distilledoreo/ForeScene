@@ -612,7 +612,7 @@ describe('agent API robustness', () => {
       version: 1 as const,
       project: { name: 'Demo', aspectRatio: '16:9' },
       cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
-      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room', defaultPanoId: null }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
       shots: [{
         id: 'shot_1',
         shotNumber: '001',
@@ -664,8 +664,15 @@ describe('agent API robustness', () => {
           locationId: 'loc',
           expectNoPanorama: true,
         }),
+        composition: {
+          subjects: [{ entityId: 'hero', completeAssemblyInFrame: false }],
+        },
       }),
     ]);
+    expect(validateAgentProductionConfiguration({ manifest })).toMatchObject({
+      ok: true,
+      diagnostics: [],
+    });
   });
 
   it('accepts a production asset id when binding an imported model', async () => {

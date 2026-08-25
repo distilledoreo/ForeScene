@@ -477,6 +477,24 @@ export function compilePropsPhase(
   };
 }
 
+/**
+ * Recompile props during a resumable agent run using only persisted live
+ * entities. The full production compile context already contains plan-local
+ * prop refs, so carrying those mappings into the apply phase would suppress
+ * the real creates and persist refs that never existed in the scene.
+ */
+export function compilePropsPhaseWithPersistedEntities(
+  manifest: PrevisProductionManifestV1,
+  context: CompiledProductionContext,
+  persistedEntities: Record<string, PrevisEntityMapping>,
+  options: CompilePhaseOptions = {},
+): CompilePhaseResult {
+  return compilePropsPhase(manifest, {
+    ...context,
+    entities: { ...persistedEntities },
+  }, options);
+}
+
 function mapPropPrimitive(prop: PrevisPropDefinition): {
   type: 'box' | 'column' | 'terrain_mass' | 'background_card';
   dimensions: [number, number, number];

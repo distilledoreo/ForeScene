@@ -2,7 +2,11 @@
  * Shot-list batch compiler — semantic shots → Agent API plans.
  */
 
-import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../agent/protocol';
+import type {
+  AgentTimelineObjectInput,
+  ForeSceneAgentCommand,
+  ForeSceneAgentPlan,
+} from '../agent/protocol';
 import type { LocationProject, ShotPresenceContract, Transform, Vec3 } from '../../domain/types';
 import { resolveManifestEntityMemberTransforms } from './manifestEntityTransforms';
 import {
@@ -445,6 +449,7 @@ function compileSingleShot(
     ...(shot.camera.foregroundSubject ? [shot.camera.foregroundSubject] : []),
     ...(shot.requirements?.visibleProps ?? []),
   ]);
+  const shotStagingCommandStart = commands.length;
 
   for (const character of manifest.cast) {
     const entityMapping = context.entities[`cast.${character.id}`];
@@ -609,6 +614,20 @@ function compileSingleShot(
   }
 
   if (shot.motion) {
+    // Timeline object snapshots are absolute. Seed every keyframe with the
+    // shot's authored static staging so a camera-only move cannot fall back to
+    // project-wide parked transforms after persistence or presence repair.
+    const staticTimelineObjects = mergeTimelineObjects(commands
+      .slice(shotStagingCommandStart)
+      .flatMap((command): AgentTimelineObjectInput[] => command.op === 'shot.stageObject'
+        ? [{
+            object: command.object,
+            ...(command.transform ? { transform: command.transform } : {}),
+            ...(command.visible !== undefined ? { visible: command.visible } : {}),
+            ...(command.humanPose ? { humanPose: command.humanPose } : {}),
+            ...(command.posePreset ? { posePreset: command.posePreset } : {}),
+          }]
+        : []));
     commands.push({
       op: 'shot.timeline.replace',
       shot: shotTarget,
@@ -617,7 +636,7 @@ function compileSingleShot(
         timeSeconds: keyframe.timeSeconds,
         camera: keyframe.camera ?? {},
         ...(() => {
-          const objects = [
+          const animatedObjects = [
             ...(keyframe.staging?.flatMap((staging) => {
               const castMapping = context.entities[`cast.${staging.subject}`];
               const propMapping = context.entities[`props.${staging.subject}`];
@@ -649,6 +668,10 @@ function compileSingleShot(
               visible: closedWorldPresence.expectedVisibleObjectIds.has(objectId),
             })) ?? []),
           ];
+          const objects = mergeTimelineObjects([
+            ...staticTimelineObjects,
+            ...animatedObjects,
+          ]);
           return objects.length > 0 ? { objects } : {};
         })(),
       })),
@@ -675,6 +698,22 @@ function compileSingleShot(
       fovDegrees: cameraSolve.camera.fovDegrees,
     },
   };
+}
+
+function mergeTimelineObjects(
+  entries: readonly AgentTimelineObjectInput[],
+): AgentTimelineObjectInput[] {
+  const merged = new Map<string, AgentTimelineObjectInput>();
+  for (const entry of entries) {
+    const key = JSON.stringify(entry.object);
+    const previous = merged.get(key);
+    merged.set(key, {
+      ...(previous ?? {}),
+      ...entry,
+      object: entry.object,
+    });
+  }
+  return [...merged.values()];
 }
 
 function resolveCompilerPresence(

@@ -31,6 +31,31 @@ describe('project workflow logic', () => {
     expect(parsed.scene.objects[0].name).toBe(project.scene.objects[0].name);
   });
 
+  it('preserves inherited versus explicit-empty keyframe staging across save/load', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    shot.cameraKeyframes = [
+      {
+        id: 'keyframe-inherit',
+        label: 'Inherit shot staging',
+        timeSeconds: 0,
+        camera: structuredClone(shot.camera),
+      },
+      {
+        id: 'keyframe-build',
+        label: 'Use build poses',
+        timeSeconds: 2,
+        camera: structuredClone(shot.camera),
+        objectOverrides: {},
+      },
+    ];
+
+    const parsed = parseProject(serializeProject(project));
+
+    expect(parsed.shots[0]!.cameraKeyframes[0]!.objectOverrides).toBeUndefined();
+    expect(parsed.shots[0]!.cameraKeyframes[1]!.objectOverrides).toEqual({});
+  });
+
   it('does not serialize unreferenced image, video, or model registry entries', () => {
     const project = createDefaultProject();
     const referenced = createPanoAsset({

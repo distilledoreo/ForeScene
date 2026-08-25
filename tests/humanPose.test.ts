@@ -176,6 +176,13 @@ describe('poseable character foundation', () => {
     expect(humanPosesEqual(cloneHumanPose(start), start)).toBe(true);
   });
 
+  it('preserves a shared semantic preset through an in-between timeline sample', () => {
+    const neutral = applyHumanPosePreset('neutral');
+    const mid = interpolateHumanPose(undefined, neutral, neutral, 0.5);
+
+    expect(mid?.presetId).toBe('neutral');
+  });
+
   it('preserves explicit neutral poses through snapshot, save/reload, and interpolation', () => {
     const project = createDefaultProject();
     const human = project.scene.objects.find((object) => object.type === 'human_dummy');

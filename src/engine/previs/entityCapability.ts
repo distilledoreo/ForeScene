@@ -22,7 +22,7 @@ import { REQUIRED_IMPORTED_HUMANOID_JOINTS } from '../importedRig/analyzeSkeleto
 import { resolvePoseableRigForObject } from '../poseableRigPackage';
 import type { PrevisProductionManifestV1 } from './manifest';
 import { getProductionConfiguration, isRenderableProductionObject, resolveProductionBindingObjectIds } from './productionConfiguration';
-import { resolvePrevisPosePresetId } from './posePresets';
+import { isExactPrevisPoseAlias, resolvePrevisPosePresetId } from './posePresets';
 
 export type EntityCapabilityReadiness =
   | 'ready'
@@ -570,6 +570,16 @@ export function resolveProductionPose(input: {
       relationship: 'contradictory',
       requiresReview: true,
       reason: `Pose "${requestedPose}" has no deterministic native or approved resolution.`,
+    };
+  }
+  if (isExactPrevisPoseAlias(requestedPose)) {
+    return {
+      entityId,
+      ...(shotId ? { shotId } : {}),
+      requestedPose,
+      resolvedPose,
+      relationship: 'exact',
+      requiresReview: false,
     };
   }
   return {

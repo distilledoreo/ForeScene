@@ -117,7 +117,9 @@ export const IMPORTED_HUMANOID_LANDMARK_HEIGHT: Record<HumanLandmark, number> = 
 };
 
 const SOLID_TYPES = new Set([
-  'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
+  // A doorway is authored opening geometry. Its conservative object AABB
+  // spans the opening and must not occlude subjects visible through it.
+  'wall', 'box', 'column', 'arch', 'stairs', 'terrain_mass', 'background_card',
 ]);
 
 export function buildShotCompositionTelemetry(params: {

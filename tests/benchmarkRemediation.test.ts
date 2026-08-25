@@ -441,6 +441,52 @@ describe('benchmark remediation', () => {
     expect(result.checks.find((check) => check.id === 'ground_contact')?.status).toBe('passed');
     expect(result.checks.find((check) => check.id === 'action_continuity')?.status).toBe('passed');
 
+    shot.cameraKeyframes = [
+      {
+        id: 'kf-start',
+        label: 'Start',
+        timeSeconds: 0,
+        camera: structuredClone(shot.camera),
+        easing: 'linear',
+      },
+      {
+        id: 'kf-end',
+        label: 'End',
+        timeSeconds: 1,
+        camera: structuredClone(shot.camera),
+        easing: 'linear',
+      },
+    ];
+    project.workflow.production!.shotContracts[shot.id]!.actions = [{
+      actionId: 'shot-1:actor:timeline-pose',
+      entityId: 'actor',
+      mode: 'timeline',
+      durationSeconds: 1,
+      samples: [{
+        timeSeconds: 0.5,
+        requestedPose: 'standing-alert',
+        resolvedPose: 'elbows-bent',
+      }],
+    }];
+    const timelineMismatch = inspectShotVisualPreflight({ project, shotId: shot.id });
+    expect(timelineMismatch.sampleTimesSeconds).toContain(0.5);
+    expect(timelineMismatch.checks.find((check) => check.id === 'action_continuity')?.status).toBe('failed');
+
+    project.workflow.production!.shotContracts[shot.id]!.actions = [{
+      actionId: 'shot-1:actor:static-pose',
+      entityId: 'actor',
+      mode: 'static_pose',
+      durationSeconds: 0,
+      samples: [{
+        timeSeconds: 0,
+        requestedPose: 'standing-neutral',
+        resolvedPose: 'neutral',
+      }],
+    }];
+
+    const heldStaticPose = inspectShotVisualPreflight({ project, shotId: shot.id, timeSeconds: 1 });
+    expect(heldStaticPose.checks.find((check) => check.id === 'action_continuity')?.status).toBe('passed');
+
     project.workflow.production!.shotContracts[shot.id]!.actions![0]!.samples[0]!.resolvedPose = 'elbows-bent';
     const mismatch = inspectShotVisualPreflight({ project, shotId: shot.id });
     expect(mismatch.checks.find((check) => check.id === 'action_continuity')?.status).toBe('failed');

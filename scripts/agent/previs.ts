@@ -32,7 +32,7 @@ import {
   buildShotCompositionTelemetry,
   compileProduction,
   compileCastPhaseWithPersistedEntities,
-  compilePropsPhase,
+  compilePropsPhaseWithPersistedEntities,
   compileShotList,
   contactSheetHtml,
   buildProductionReviewArtifacts,
@@ -1506,10 +1506,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     if (state.phases.props !== 'complete') {
       // Re-resolve props after imported cast assets have concrete ids. This is
       // required for zero-command semantic aliases such as embedded props.
-      const propCompilation = compilePropsPhase(manifest, {
-        ...compiled.props.context,
-        entities: { ...compiled.props.context.entities, ...state.entities },
-      });
+      const propCompilation = compilePropsPhaseWithPersistedEntities(
+        manifest,
+        compiled.cast.context,
+        state.entities,
+      );
       let applied: Awaited<ReturnType<typeof applyPlanOnPage>> | undefined;
       if (propCompilation.plan.commands.length > 0) {
         state = setPhase(state, 'props', 'in_progress');
