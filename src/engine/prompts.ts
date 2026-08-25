@@ -1,4 +1,5 @@
 import { Landmark, LocationProject, Shot } from '../domain/types';
+import { shotExpectsNoPanorama } from './previs/shotEnvironment';
 
 const DEFAULT_GRAYBOX_CREATIVE_BRIEF = 'Describe the look you want: style, time of day, materials, and mood.';
 
@@ -52,9 +53,10 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
   const canonicalPano = project.panoRefs.find((pano) => pano.isCanonical);
   const grayboxPano = project.panoRefs.find((pano) => pano.type === 'graybox_render');
   const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
-  const hasGlobalReference = Boolean(shot.exportSettings.includeFullPano && canonicalPano);
-  const hasGrayboxPano = Boolean(shot.exportSettings.includeGrayboxPano && grayboxPano);
-  const hasPanoCrop = Boolean(shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop);
+  const omitPanoramaReferences = shotExpectsNoPanorama(project, shot);
+  const hasGlobalReference = Boolean(!omitPanoramaReferences && shot.exportSettings.includeFullPano && canonicalPano);
+  const hasGrayboxPano = Boolean(!omitPanoramaReferences && shot.exportSettings.includeGrayboxPano && grayboxPano);
+  const hasPanoCrop = Boolean(!omitPanoramaReferences && shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop);
   const hasCameraMoveReferenceFrames = Boolean(
     shot.exportSettings.includeCameraMoveReferenceFrames
     && shot.cameraKeyframes.length >= 2,
@@ -132,7 +134,7 @@ export function generateImagePrompt(project: LocationProject, shot: Shot): strin
   ].filter(Boolean).join('\n');
 }
 
-export function generateVideoPrompt(shot: Shot): string {
+export function generateVideoPrompt(shot: Shot, project?: LocationProject): string {
   const hasCameraMove = shot.cameraKeyframes.length >= 2
     && (
       Boolean(shot.assets.cameraMoveVideoAssetId)
@@ -143,7 +145,10 @@ export function generateVideoPrompt(shot: Shot): string {
     && shot.exportSettings.depth.includeCameraMoveVideo !== false
     && shot.cameraKeyframes.length >= 2,
   );
-  const hasCubemap = Boolean(shot.exportSettings.includeCubemap);
+  const hasCubemap = Boolean(
+    shot.exportSettings.includeCubemap
+    && (!project || !shotExpectsNoPanorama(project, shot)),
+  );
   return [
     'Animate from the provided base frame while preserving the same environment, camera direction, landmarks, materials, lighting, and layout.',
     hasCameraMove

@@ -71,6 +71,14 @@ export function getShotEnvironmentContract(
   return undefined;
 }
 
+/** Explicit production instruction that this shot must not consume panorama references. */
+export function shotExpectsNoPanorama(
+  project: LocationProject,
+  shot: Pick<Shot, 'id' | 'shotNumber' | 'productionShotId'>,
+): boolean {
+  return getShotEnvironmentContract(project, shot)?.expectNoPanorama === true;
+}
+
 /**
  * Resolve the explicit panorama for a prepared location.
  *

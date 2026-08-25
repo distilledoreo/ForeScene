@@ -76,7 +76,7 @@ export function buildShotMetadata(project: LocationProject, shot: Shot, linkedPa
     landmarks: project.landmarks.filter((landmark) => shot.landmarkIds.includes(landmark.id)),
     prompts: {
       image: generateImagePrompt(project, shot),
-      video: generateVideoPrompt(shot),
+      video: generateVideoPrompt(shot, project),
       negative: shot.promptOverrides.negativePrompt || '',
     },
   };
