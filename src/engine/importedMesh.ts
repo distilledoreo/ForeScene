@@ -177,25 +177,22 @@ export function resetImportedMeshCacheForTests() {
 }
 
 function acquireGeometry(asset: ProjectAsset): THREE.BufferGeometry {
-  const cached = geometryCache.get(asset.id);
-  if (cached && cached.assetUri === asset.uri) {
+  // A durable save may rekey an imported model from its transient import URI
+  // to an immutable recovery-resource URI while the live viewport still owns
+  // the old geometry. Keep those identities side by side until their own
+  // references drain instead of turning the export rebuild into a placeholder.
+  const cacheKey = `${asset.id}\u0000${asset.uri}`;
+  const cached = geometryCache.get(cacheKey);
+  if (cached) {
     if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
     cached.disposeTimer = undefined;
     cached.references += 1;
     return cached.geometry;
   }
-  if (cached) {
-    if (cached.references > 0) {
-      throw new Error('The imported mesh asset changed while it was in use.');
-    }
-    if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
-    cached.geometry.dispose();
-    geometryCache.delete(asset.id);
-  }
 
   const geometry = decodeGeometry(asset);
-  geometry.userData.panorefImportedCacheKey = asset.id;
-  geometryCache.set(asset.id, {
+  geometry.userData.panorefImportedCacheKey = cacheKey;
+  geometryCache.set(cacheKey, {
     assetUri: asset.uri,
     geometry,
     references: 1,

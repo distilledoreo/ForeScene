@@ -179,6 +179,39 @@ describe('texture-free model conversion', () => {
     disposeScene(rebuiltScene);
   });
 
+  it('keeps a durable URI rekey renderable while the live viewport still holds the import URI', async () => {
+    const result = await importModelJob({
+      kind: 'file',
+      file: file([
+        'o Panel\n',
+        'v 0 0 0\n',
+        'v 1 0 0\n',
+        'v 0 1 0\n',
+        'f 1 2 3\n',
+      ], 'panel.obj', 'text/plain'),
+    }, { mode: 'separate' });
+    const item = result.items[0]!;
+    const liveProject = createDefaultProject();
+    liveProject.scene.objects = [item.object];
+    liveProject.assets.assets[item.asset.id] = item.asset;
+    const liveScene = buildScene(liveProject, { showHelpers: false });
+
+    const durable = encodePackedGrayboxMesh(
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      new Uint32Array([0, 1, 2]),
+    );
+    const exportProject = structuredClone(liveProject);
+    exportProject.assets.assets[item.asset.id]!.uri = durable.uri;
+    const exportScene = buildScene(exportProject, { showHelpers: false });
+    const exported = exportScene.getObjectByName(item.object.name)!;
+
+    expect(exported.userData.missingAssetPlaceholder).not.toBe(true);
+    expect((exported as THREE.Mesh).geometry).toBeTruthy();
+
+    disposeScene(exportScene);
+    disposeScene(liveScene);
+  });
+
   it('strips glTF material and texture references before conversion', async () => {
     const binary = new ArrayBuffer(44);
     new Float32Array(binary, 0, 9).set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
