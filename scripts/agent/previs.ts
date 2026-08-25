@@ -367,17 +367,17 @@ async function renderControlVideo(
   videoPath: string,
   appearance: RenderProfile['appearance'],
 ): Promise<{ ok: boolean; assetId?: string; error?: string; transfer?: AgentArtifactTransferTelemetry }> {
-  const result = await page.evaluate(async (id) => window.foreScene!.renderShotVideo({
+  const result = await page.evaluate(async ({ id, resolvedAppearance }) => window.foreScene!.renderShotVideo({
     shotId: id,
     mode: 'render',
     resolutionPreset: '1080p',
-    appearance,
+    appearance: resolvedAppearance,
     contentMode: 'full_scene',
     // This runner owns the file artifact. Attaching here can race timeline
     // persistence and incorrectly turn a valid render into stale_revision.
     attachToShot: false,
     download: false,
-  }), shotId);
+  }), { id: shotId, resolvedAppearance: appearance });
   if (!result.ok) {
     return { ok: false, error: result.diagnostics?.[0]?.message ?? 'Control video render failed.' };
   }

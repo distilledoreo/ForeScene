@@ -21,7 +21,7 @@ function actionText(shot: PrevisShotDefinition): string {
 export function inferNativeActionPose(
   shot: PrevisShotDefinition,
   subjectId: string,
-  keyframeIndex?: number,
+  _keyframeIndex?: number,
 ): string | undefined {
   const text = actionText(shot);
   const hasSubjectMotion = Boolean(shot.motion?.keyframes.some((keyframe) => (
@@ -29,12 +29,16 @@ export function inferNativeActionPose(
   )));
 
   if (hasSubjectMotion && /\b(sprint|running|run|chase|flee|pursu(?:e|it|ing))\b/.test(text)) {
-    return (keyframeIndex ?? 0) % 2 === 0 ? 'walk-contact-left' : 'walk-contact-right';
+    // A stable contact silhouette remains readable while the authored subject
+    // transform supplies locomotion. Alternating endpoint presets can create a
+    // destructive in-between on fitted production rigs even when both endpoint
+    // poses are individually valid.
+    return 'walk-contact-left';
   }
   if (hasSubjectMotion && /\b(walk|walking|march|advance)\b/.test(text)) {
-    return (keyframeIndex ?? 0) % 2 === 0 ? 'walk-contact-left' : 'walk-contact-right';
+    return 'walk-contact-left';
   }
-  if (/\b(battle[- ]ready|combat[- ]ready|defensive stance|guard stance)\b/.test(text)) {
+  if (/\b(defensive stance|guard stance)\b/.test(text)) {
     return 'elbows-bent';
   }
   if (/\b(kneel|kneeling|crouch|crouching)\b/.test(text)) return 'crouching';

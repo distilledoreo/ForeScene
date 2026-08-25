@@ -212,7 +212,7 @@ describe('texture-free model conversion', () => {
     disposeScene(liveScene);
   });
 
-  it('strips glTF material and texture references before conversion', async () => {
+  it('preserves texture-free material identity while removing texture references', async () => {
     const binary = new ArrayBuffer(44);
     new Float32Array(binary, 0, 9).set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     new Uint16Array(binary, 36, 3).set([0, 1, 2]);
@@ -229,7 +229,13 @@ describe('texture-free model conversion', () => {
       ],
       images: [{ uri: 'data:image/png;base64,not-decoded' }],
       textures: [{ source: 0 }],
-      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      materials: [{
+        name: 'Skin Procedural',
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.4, 0.2, 0.1, 1],
+          baseColorTexture: { index: 0 },
+        },
+      }],
       meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
       nodes: [{ mesh: 0 }],
       scenes: [{ nodes: [0] }],
@@ -242,8 +248,13 @@ describe('texture-free model conversion', () => {
     }, { mode: 'separate' });
 
     expect(result.items[0].object.importedModel?.triangleCount).toBe(1);
-    expect(result.warnings.join(' ')).toContain('Removed');
+    expect(result.warnings.join(' ')).toContain('texture-free color identity');
     expect(result.items[0].asset.uri).not.toContain('not-decoded');
+    expect(result.items[0].object).toMatchObject({
+      surfaceStyle: 'solid',
+      color: '#aa7c59',
+    });
+    expect(result.items[0].asset.metadata?.sourceMaterialName).toBe('Skin Procedural');
   });
 
   it('keeps canonical mesh assets through undo and prunes only on saved deletion', () => {

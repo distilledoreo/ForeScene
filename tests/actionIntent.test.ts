@@ -38,10 +38,18 @@ function chase(): PrevisShotDefinition {
 }
 
 describe('action intent', () => {
-  it('derives alternating exact locomotion silhouettes', () => {
+  it('derives a stable exact locomotion silhouette across timeline interpolation', () => {
     const shot = chase();
     expect(inferNativeActionPose(shot, 'runner', 0)).toBe('walk-contact-left');
-    expect(inferNativeActionPose(shot, 'runner', 1)).toBe('walk-contact-right');
+    expect(inferNativeActionPose(shot, 'runner', 1)).toBe('walk-contact-left');
+  });
+
+  it('does not invent an articulated pose for an asset-authored battle-ready stance', () => {
+    const shot = chase();
+    shot.name = 'Battle-ready stance';
+    shot.description = 'The equipped fighter holds position.';
+    delete shot.motion;
+    expect(inferNativeActionPose(shot, 'runner')).toBeUndefined();
   });
 
   it('adds a bounded lateral offset to a collinear multi-subject tracking camera', () => {

@@ -98,7 +98,7 @@ describe('production configuration validation', () => {
       mode: 'timeline',
       samples: [
         { requestedPose: 'walk-contact-left', resolvedPose: 'walk-contact-left', requiresReview: false },
-        { requestedPose: 'walk-contact-right', resolvedPose: 'walk-contact-right', requiresReview: false },
+        { requestedPose: 'walk-contact-left', resolvedPose: 'walk-contact-left', requiresReview: false },
       ],
     });
   });
