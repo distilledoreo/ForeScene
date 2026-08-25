@@ -28,6 +28,9 @@
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
  *   npm run agent:visual-preflight -- --shots 01,02
  *   npm run agent:asset-contract
+ *   npm run agent:world-preview -- --shots 01,02
+ *   npm run agent:world-mock -- --shots 01,02
+ *   npm run agent:world-depth -- --shot 02 --time 1.5 --resolution 640x360 --output artifacts/depth.npy
  *   npm run agent:verify -- --json
  *   npm run agent:frame -- --shot 01 --mode projected --output artifacts/01.projected.png
  *
@@ -149,6 +152,18 @@ function resolveFrameContent(value?: string): 'full_scene' | 'characters_only' |
     return value === 'full' ? 'full_scene' : value;
   }
   throw new AgentCliUsageError('--content must be full_scene, characters_only, or full.');
+}
+
+function resolveImageDimensions(value?: string): { width?: number; height?: number } {
+  if (!value) return {};
+  const match = /^(\d+)x(\d+)$/i.exec(value.trim());
+  if (!match) throw new AgentCliUsageError('--resolution must be WIDTHxHEIGHT (for example 640x360).');
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new AgentCliUsageError('--resolution dimensions must be positive integers.');
+  }
+  return { width, height };
 }
 
 function parseArgs(argv: string[]) {
@@ -609,7 +624,7 @@ async function runSaveProject(options: {
     ));
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
-    if (result.ok && result.artifact?.artifactId) {
+    if (result.ok && 'artifact' in result && result.artifact?.artifactId) {
       const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
       savedPath = saved.savedPath;
       transfer = toCliArtifactTransfer(saved);
@@ -860,7 +875,7 @@ async function withSession<T>(
   const operation = beginCliOperation({
     type: options.command ? commandToOperationName(options.command) : cliStdout.operation,
     profile: options.profile,
-    onCancel: () => abortScope.dispose(),
+    onCancel: () => abortScope.abort(),
   });
   cliStdout.operationId = operation.record.operationId;
   let session: AgentBrowserSession | undefined;
@@ -1252,6 +1267,120 @@ async function runAssetContract(options: {
   });
 }
 
+async function runGenerativeWorldBoundary(options: {
+  command: 'world-preview' | 'world-mock';
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  requestedShots?: string[];
+  output?: string;
+}) {
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(({ command, requestedShots }) => {
+      const api = window.foreScene!;
+      const summaries = api.listShots();
+      let shotIds: string[] | undefined;
+      if (requestedShots !== undefined) {
+        const resolved: string[] = [];
+        const unmatched: string[] = [];
+        for (const requested of requestedShots) {
+          const shot = summaries.find((candidate) => (
+            candidate.id === requested || candidate.shotNumber === requested
+          ));
+          if (!shot) unmatched.push(requested);
+          else if (!resolved.includes(shot.id)) resolved.push(shot.id);
+        }
+        if (requestedShots.length === 0 || unmatched.length > 0) {
+          return {
+            ok: false,
+            diagnostics: [{
+              severity: 'error' as const,
+              code: 'target_not_found',
+              message: requestedShots.length === 0
+                ? 'An explicit shot selection cannot be empty.'
+                : `Unknown shot id(s) or number(s): ${unmatched.join(', ')}.`,
+            }],
+          };
+        }
+        shotIds = resolved;
+      }
+      return command === 'world-preview'
+        ? api.previewGenerativeWorldRequest({ shotIds })
+        : api.runMockGenerativeWorldBackend({ shotIds });
+    }, {
+      command: options.command,
+      requestedShots: options.requestedShots,
+    });
+    if (options.output) {
+      const output = path.resolve(options.output);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+      printJson({ ...result, output });
+    } else {
+      printJson(result);
+    }
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
+async function runGenerativeWorldDepth(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  requestedShot: string;
+  timeSeconds?: number;
+  resolution?: string;
+  output: string;
+}) {
+  const dimensions = resolveImageDimensions(options.resolution);
+  await withSession(options, async (session) => {
+    const result = await session.page.evaluate(async (input) => {
+      const api = window.foreScene!;
+      const shot = api.listShots().find((candidate) => (
+        candidate.id === input.requestedShot || candidate.shotNumber === input.requestedShot
+      ));
+      if (!shot) {
+        return {
+          ok: false,
+          status: 'failed' as const,
+          shotId: input.requestedShot,
+          revisionId: api.getStatus().revisionId,
+          width: input.width ?? 0,
+          height: input.height ?? 0,
+          diagnostics: [{
+            severity: 'error' as const,
+            code: 'target_not_found',
+            message: `Unknown shot id or number: ${input.requestedShot}.`,
+          }],
+        };
+      }
+      return api.renderGenerativeWorldDepthPrior({
+        shotId: shot.id,
+        timeSeconds: input.timeSeconds,
+        width: input.width,
+        height: input.height,
+      });
+    }, {
+      requestedShot: options.requestedShot,
+      timeSeconds: options.timeSeconds,
+      ...dimensions,
+    });
+    let savedPath: string | undefined;
+    let transfer: AgentArtifactTransferTelemetry | undefined;
+    if (result.ok && 'artifact' in result && result.artifact?.artifactId) {
+      const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
+      savedPath = saved.savedPath;
+      transfer = toCliArtifactTransfer(saved);
+    }
+    printJson({ ...result, savedPath, transfer });
+    if (!result.ok || !savedPath) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
@@ -1618,6 +1747,37 @@ async function main() {
     return;
   }
 
+  if (args.command === 'world-preview' || args.command === 'world-mock') {
+    await runGenerativeWorldBoundary({
+      command: args.command,
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      requestedShots: toOptionalRequestedShotIds(args.shotSelection),
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'world-depth') {
+    const usage = resolveCliCommandShotUsage('world-depth', args.shotSelection);
+    if (!args.output) throw new AgentCliUsageError('world-depth requires --output <depth.npy>.');
+    await runGenerativeWorldDepth({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      requestedShot: usage.shotId!,
+      timeSeconds: args.timeSeconds,
+      resolution: args.resolution,
+      output: args.output,
+    });
+    return;
+  }
+
   if (args.command === 'run') {
     if (!args.plan) throw new Error('--plan is required for run');
     requireExplicitWrite('run', args.writeAccess);
@@ -1669,27 +1829,52 @@ async function main() {
         file: process.env.FORESCENE_BENCHMARK_PROJECT_PACKAGE,
       });
     }
-    const result = await runProduction({
-      manifestPath: args.manifest,
-      url: args.url,
-      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
-      writeAccess: args.writeAccess,
-      persistWrite: args.persistWrite,
-      resetProject: args.resetProject,
-      updateManifest: args.updateManifest,
-      initializeOnly: args.initializeOnly,
-      outputDir: args.output ?? 'artifacts/production',
-      skipPackage: args.skipPackage,
-      profileDir: args.profile,
-      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
-      mode,
-      autoRepair: args.autoRepair,
-      maxRepairPasses: args.maxRepairPasses,
-      timeBudgetSeconds: args.timeBudgetSeconds,
-      finalProjectPath: args.finalProject,
+    let cancellationObserved = false;
+    const productionOperation = beginCliOperation({
+      type: commandToOperationName('production'),
+      profile: args.profile,
+      message: 'Production orchestration requested.',
+      onCancel: () => { cancellationObserved = true; },
     });
-    printJson(result);
-    if (!result.ok) process.exitCode = 1;
+    cliStdout.operationId = productionOperation.record.operationId;
+    activeCliOperation = productionOperation;
+    await productionOperation.start('Production orchestration in progress.');
+    try {
+      const result = await runProduction({
+        manifestPath: args.manifest,
+        url: args.url,
+        headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+        writeAccess: args.writeAccess,
+        persistWrite: args.persistWrite,
+        resetProject: args.resetProject,
+        updateManifest: args.updateManifest,
+        initializeOnly: args.initializeOnly,
+        outputDir: args.output ?? 'artifacts/production',
+        skipPackage: args.skipPackage,
+        profileDir: args.profile,
+        allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+        mode,
+        autoRepair: args.autoRepair,
+        maxRepairPasses: args.maxRepairPasses,
+        timeBudgetSeconds: args.timeBudgetSeconds,
+        finalProjectPath: args.finalProject,
+      });
+      if (cancellationObserved || productionOperation.record.cancelRequested) {
+        await productionOperation.cancel('Production cancellation was requested.');
+      } else if (result.ok) {
+        await productionOperation.complete(`Production ${result.status}.`);
+      } else {
+        await productionOperation.fail(result.error ?? `Production ${result.status}.`);
+      }
+      printJson(result);
+      if (!result.ok) process.exitCode = 1;
+    } catch (error) {
+      await productionOperation.fail(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      if (activeCliOperation === productionOperation) activeCliOperation = undefined;
+      productionOperation.dispose();
+    }
     return;
   }
 

@@ -22,6 +22,7 @@ import { touchProject } from '../src/state/slices/touchProject';
 import { setAgentShotPanorama } from '../src/engine/agent/shotPanorama';
 import { orientAgentObjectToward, snapAgentObjectToFloor } from '../src/engine/agent/spatialPrimitives';
 import { getShotEffectiveState } from '../src/engine/agent/spatialShotState';
+import { mergeFrameValidationWithVisualPreflight } from '../src/engine/previs/frameValidation';
 
 function installMockDestructiveMutation() {
   useProjectSafetyStore.getState().setRunDestructiveProjectMutation(async (_reason, mutation) => {
@@ -224,7 +225,7 @@ describe('benchmark remediation', () => {
       },
     });
     shot.metadata = { environmentOnly: true };
-    const project = touchProject({
+    const project: LocationProject = touchProject({
       ...createDefaultProject(),
       scene: { ...createDefaultProject().scene, objects: [floor, wall] },
       shots: [shot],
@@ -349,6 +350,123 @@ describe('benchmark remediation', () => {
     expect(optedIn.ok).toBe(false);
     expect(optedIn.gateStatus).toBe('warning');
     expect(optedIn.checks.find((check) => check.id === 'subject_visibility')?.status).toBe('warning');
+  });
+
+  it('scores persisted production groups as one subject and excludes their bound location set', () => {
+    const floor = createSceneObject('floor', 1);
+    floor.dimensions = [20, 0.1, 20];
+    const actor = createSceneObject('human_dummy', 1, [-0.8, 0.875, 0]);
+    const partA = createSceneObject('imported_model', 1, [0.7, 0.25, 0]);
+    const partB = createSceneObject('imported_model', 2, [1.1, 0.25, 0]);
+    partA.dimensions = [0.5, 0.5, 0.5];
+    partB.dimensions = [0.5, 0.5, 0.5];
+    partA.category = 'helper';
+    partB.category = 'helper';
+    const setPiece = createSceneObject('imported_model', 3, [0, 1, -2]);
+    setPiece.category = 'architecture';
+    const shot = createShot({
+      index: 1,
+      camera: {
+        position: [0, 1.5, 6],
+        target: [0, 0.9, 0],
+        fovDegrees: 50,
+        aspectRatio: 16 / 9,
+        near: 0.1,
+        far: 100,
+      },
+    });
+    shot.objectOverrides = {
+      [actor.id]: {
+        humanPose: { version: 1, joints: {}, presetId: 'neutral' },
+      },
+    };
+    const project: LocationProject = touchProject({
+      ...createDefaultProject(),
+      scene: {
+        ...createDefaultProject().scene,
+        objects: [floor, actor, partA, partB, setPiece],
+        objectGroups: {
+          creature: { id: 'creature', name: 'Creature', objectIds: [partA.id, partB.id] },
+        },
+      },
+      shots: [shot],
+      workflow: {
+        ...createDefaultProject().workflow,
+        production: {
+          schemaVersion: 1,
+          bindings: {
+            actor: { kind: 'object', objectId: actor.id },
+            monster: { kind: 'group', groupId: 'creature' },
+            corridor: { kind: 'location', locationId: 'corridor' },
+          },
+          locations: {
+            corridor: {
+              id: 'corridor',
+              objectIds: [floor.id, setPiece.id],
+              objectGroupIds: [],
+              anchors: {},
+              blockerObjectIds: [],
+            },
+          },
+          shotContracts: {
+            [shot.id]: {
+              presence: {
+                expectedVisibleObjectIds: [actor.id],
+                expectedVisibleGroupIds: ['creature'],
+                allowUnspecifiedDynamicObjects: false,
+              },
+              environment: { locationId: 'corridor' },
+              actions: [{
+                actionId: 'shot-1:actor:static-pose',
+                entityId: 'actor',
+                mode: 'static_pose',
+                durationSeconds: 0,
+                samples: [{
+                  timeSeconds: 0,
+                  requestedPose: 'standing-neutral',
+                  resolvedPose: 'neutral',
+                }],
+              }],
+            },
+          },
+        },
+      },
+    });
+
+    const result = inspectShotVisualPreflight({ project, shotId: shot.id });
+
+    expect(result.subjects.map((subject) => subject.objectId)).toEqual([actor.id, 'creature']);
+    expect(result.unresolvedVisibleObjectIds).toEqual([]);
+    expect(result.checks.find((check) => check.id === 'subject_visibility')?.status).toBe('passed');
+    expect(result.checks.find((check) => check.id === 'ground_contact')?.status).toBe('passed');
+    expect(result.checks.find((check) => check.id === 'action_continuity')?.status).toBe('passed');
+
+    project.workflow.production!.shotContracts[shot.id]!.actions![0]!.samples[0]!.resolvedPose = 'elbows-bent';
+    const mismatch = inspectShotVisualPreflight({ project, shotId: shot.id });
+    expect(mismatch.checks.find((check) => check.id === 'action_continuity')?.status).toBe('failed');
+
+    project.workflow.production!.shotContracts[shot.id]!.actions![0]!.samples[0] = {
+      timeSeconds: 0,
+      requestedPose: 'standing-neutral',
+      resolvedPose: 'neutral',
+      poseRelationship: 'approximate',
+      requiresReview: true,
+    };
+    const unapproved = inspectShotVisualPreflight({ project, shotId: shot.id });
+    expect(unapproved.checks.find((check) => check.id === 'action_continuity')).toMatchObject({
+      status: 'failed',
+      measured: { reviewRequiredCount: 1 },
+    });
+    const merged = mergeFrameValidationWithVisualPreflight({
+      shotNumber: shot.shotNumber,
+      status: 'passed',
+      issues: [],
+    }, unapproved);
+    expect(merged.status).toBe('failed');
+    expect(merged.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'visual_preflight_action_continuity' }),
+    ]));
+    expect(merged.visualPreflight).toBe(unapproved);
   });
 
   it('fails an ordinary shot that has candidate subjects but infers none', () => {

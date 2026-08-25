@@ -52,9 +52,13 @@ describe('agent CLI discovery', () => {
       'capabilities',
       'import-panorama',
       'shot-panorama',
+      'world-preview',
+      'world-mock',
+      'world-depth',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
     expect(help.checks.assetPoseContract).toMatch(/asset-contract/);
+    expect(help.checks.generativeWorldBoundary).toMatch(/HY-World 2/);
     expect(help.checks.repairCandidates).toMatch(/previs/);
     expect(help.checks.provenance).toMatch(/provenance/);
     expect(help.checks.recoveryResources).toMatch(/package/);
@@ -81,6 +85,9 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
     expect(packageJson.scripts?.['agent:shot-panorama']).toContain('shot-panorama');
     expect(packageJson.scripts?.['agent:video']).toContain('video');
+    expect(packageJson.scripts?.['agent:world-preview']).toContain('world-preview');
+    expect(packageJson.scripts?.['agent:world-mock']).toContain('world-mock');
+    expect(packageJson.scripts?.['agent:world-depth']).toContain('world-depth');
   });
 
   it('prints machine-readable help from the live CLI', () => {

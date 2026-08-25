@@ -20,6 +20,10 @@ import type {
 } from './protocol';
 import { inspectAgentShotDiagnostics } from './shotDiagnostics';
 import { getShotEffectiveState } from './spatialShotState';
+import {
+  getProductionConfiguration,
+} from '../previs/productionConfiguration';
+import { inspectShotActionContinuity } from './actionContinuity';
 
 const MIN_VISIBLE_FRACTION = 0.08;
 const MIN_COVERAGE = 0.01;
@@ -121,6 +125,8 @@ export function resolveVisualPreflightSubjectPolicy(input: {
   allowUnresolvedSetDressing?: boolean;
   /** Object ids actually scored as subjects. When omitted, candidates are treated as identified. */
   scoredSubjectIds?: string[];
+  /** Persisted production-location objects are explicit environment, not unresolved dressing. */
+  environmentObjectIds?: string[];
 }): {
   environmentOnly: boolean;
   allowUnresolvedSetDressing: boolean;
@@ -142,9 +148,10 @@ export function resolveVisualPreflightSubjectPolicy(input: {
   const identified = new Set(
     input.scoredSubjectIds !== undefined ? input.scoredSubjectIds : candidateSubjectIds,
   );
+  const environmentIds = new Set(input.environmentObjectIds ?? []);
   const unresolvedVisibleObjectIds = explicit
     ? []
-    : listVisibleRenderableObjectIds(input.objects).filter((id) => !identified.has(id));
+    : listVisibleRenderableObjectIds(input.objects).filter((id) => !identified.has(id) && !environmentIds.has(id));
   return {
     environmentOnly: explicit,
     allowUnresolvedSetDressing,
@@ -218,13 +225,34 @@ function evaluateVisualPreflightAtTime(input: {
   const presentIds = new Set(subjects.map((subject) => subject.objectId));
   const missingSubjectIds = (requestedSubjectIds ?? []).filter((id) => !presentIds.has(id));
   const missingRequested = missingSubjectIds.length > 0;
+  const configuration = getProductionConfiguration(project);
+  const productionContract = configuration.shotContracts[shot.id];
+  const productionLocations = Object.values(configuration.locations);
+  const environmentObjectIds = productionLocations.length > 0
+    ? productionLocations.flatMap((location) => [
+        ...location.objectIds,
+        ...location.objectGroupIds.flatMap((groupId) => (
+          project.scene.objectGroups?.[groupId]?.objectIds ?? []
+        )),
+      ])
+    : [];
+  const scoredSubjectIds = [...new Set([
+    ...subjects.flatMap((subject) => (
+      project.scene.objectGroups?.[subject.objectId]?.objectIds ?? [subject.objectId]
+    )),
+    ...(productionContract?.presence?.expectedVisibleObjectIds ?? []),
+    ...(productionContract?.presence?.expectedVisibleGroupIds.flatMap((groupId) => (
+      project.scene.objectGroups?.[groupId]?.objectIds ?? []
+    )) ?? []),
+  ])];
   const policy = resolveVisualPreflightSubjectPolicy({
     shot: effectiveShot,
     objects: effectiveObjects,
     requestedSubjectIds,
     environmentOnly: input.environmentOnly,
     allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
-    scoredSubjectIds: subjects.map((subject) => subject.objectId),
+    scoredSubjectIds,
+    environmentObjectIds,
   });
   const unresolvedVisible = !policy.environmentOnly
     && policy.unresolvedVisibleObjectIds.length > 0
@@ -381,6 +409,34 @@ function evaluateVisualPreflightAtTime(input: {
     },
   });
 
+  const actionContinuity = inspectShotActionContinuity({
+    project,
+    shot,
+    timeSeconds: diagnosticsResult.sampledTimeSeconds ?? input.timeSeconds ?? 0,
+  });
+  if (actionContinuity) {
+    checks.push({
+      id: 'action_continuity',
+      status: statusFromFailed(!actionContinuity.ok, actionContinuity.expectedCount === 0),
+      message: actionContinuity.ok
+        ? 'Persisted action intent matches the shot-effective timeline state.'
+        : actionContinuity.expectedCount === 0
+          ? 'Persisted action intent has no sample at this preflight time.'
+        : actionContinuity.reviewRequiredCount > 0
+          ? 'Persisted action intent includes an unapproved approximate pose substitution.'
+          : 'Shot-effective pose, visibility, or trajectory diverges from persisted action intent.',
+      measured: {
+        expectedCount: actionContinuity.expectedCount,
+        matchedCount: actionContinuity.matchedCount,
+        missingBindingCount: actionContinuity.missingBindingCount,
+        poseMismatchCount: actionContinuity.poseMismatchCount,
+        trajectoryMismatchCount: actionContinuity.trajectoryMismatchCount,
+        visibilityMismatchCount: actionContinuity.visibilityMismatchCount,
+        reviewRequiredCount: actionContinuity.reviewRequiredCount,
+      },
+    });
+  }
+
   return {
     checks,
     subjects,
@@ -505,6 +561,9 @@ export function inspectShotVisualPreflight(input: {
     }
   }
 
+  const configuration = getProductionConfiguration(input.project);
+  const productionContract = configuration.shotContracts[shot.id];
+  const productionLocations = Object.values(configuration.locations);
   const policy = resolveVisualPreflightSubjectPolicy({
     shot,
     objects: getShotEffectiveState(input.project, shot.id, input.timeSeconds)?.objects
@@ -512,7 +571,23 @@ export function inspectShotVisualPreflight(input: {
     requestedSubjectIds: input.subjectIds,
     environmentOnly: input.environmentOnly,
     allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
-    scoredSubjectIds: allSubjects.map((subject) => subject.objectId),
+    scoredSubjectIds: [...new Set([
+      ...allSubjects.flatMap((subject) => (
+        input.project.scene.objectGroups?.[subject.objectId]?.objectIds ?? [subject.objectId]
+      )),
+      ...(productionContract?.presence?.expectedVisibleObjectIds ?? []),
+      ...(productionContract?.presence?.expectedVisibleGroupIds.flatMap((groupId) => (
+        input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
+      )) ?? []),
+    ])],
+    environmentObjectIds: productionLocations.length > 0
+      ? productionLocations.flatMap((location) => [
+          ...location.objectIds,
+          ...location.objectGroupIds.flatMap((groupId) => (
+            input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
+          )),
+        ])
+      : [],
   });
   const gateStatus = visualGateStatusFromChecks(checks, missingSubjectIds.size);
 

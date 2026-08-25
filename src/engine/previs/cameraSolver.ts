@@ -43,6 +43,8 @@ export interface SubjectBounds {
   position: Vec3;
   /** Optional facing yaw in radians (0 = +Z). */
   yawRadians?: number;
+  /** The complete AABB must remain in frame (for multipart/non-human assemblies). */
+  requireCompleteAssembly?: boolean;
 }
 
 /**
@@ -149,7 +151,8 @@ function solveGenericTemplate(input: CameraSolveInput): CameraSolveResult {
   const aimY = group.min[1] + subjectHeight * aimHeightFraction(template);
   const target: Vec3 = [centroid[0], aimY, centroid[2]];
 
-  const cropFrac = cropHeightFraction(profile);
+  const requireCompleteAssembly = primary.some((subject) => subject.requireCompleteAssembly);
+  const cropFrac = requireCompleteAssembly ? 1 : cropHeightFraction(profile);
   const cropHeight = subjectHeight * cropFrac;
   const distance = distanceForCrop({
     cropHeight,
@@ -251,6 +254,7 @@ function solveGenericTemplate(input: CameraSolveInput): CameraSolveResult {
     measuredCoverage: best.primaryHeightCoverage,
     hideBlockerIds,
     notes: notes.length > 0 ? notes : undefined,
+    hardPass: best.hardPass,
   };
 }
 
@@ -938,7 +942,9 @@ function buildCandidates(params: {
   primary: SubjectBounds[];
   profile: FramingProfile;
 }): Array<{ position: Vec3; target: Vec3 }> {
-  const yawOffsets = yawOffsetsForAngle(params.angle);
+  const yawOffsets = params.primary.length > 1
+    ? [...new Set([...yawOffsetsForAngle(params.angle), 70, -70, 90, -90])]
+    : yawOffsetsForAngle(params.angle);
   const candidates: Array<{ position: Vec3; target: Vec3 }> = [];
 
   if (params.template === 'overhead') {
@@ -961,7 +967,9 @@ function buildCandidates(params: {
   ];
   const targetHeightOffsets = [0, params.subjectHeight * 0.05, -params.subjectHeight * 0.04];
   const horizontalOffsets = [0, 0.2, -0.2];
-  const distScales = [0.8, 1.0, 1.2, 1.4];
+  // Deep assemblies can place their camera-facing surface much closer than
+  // their centroid. Search far enough back to fit the complete projected AABB.
+  const distScales = [0.8, 1.0, 1.2, 1.4, 1.8, 2.2, 2.8];
 
   for (const yawDeg of yawOffsets) {
     for (const distScale of distScales) {
@@ -1245,6 +1253,17 @@ function scoreCandidate(params: {
       if (bounds.clipped && params.template !== 'close_up' && params.template !== 'extreme_close_up') {
         score -= 15;
       }
+      const completeRequired = subject.requireCompleteAssembly === true
+        || params.template === 'full'
+        || params.template === 'wide'
+        || params.template === 'establishing';
+      if (
+        completeRequired
+        && (bounds.behindCamera || bounds.clipped || bounds.visible.areaCoverage <= 0.001)
+      ) {
+        hardPass = false;
+        score -= 180;
+      }
       if (occlusion.faceOccluded) score -= 45;
       if (occlusion.occludedSampleRatio > 0.3) score -= 30;
 
@@ -1264,6 +1283,32 @@ function scoreCandidate(params: {
         && bounds.areaCoverage > primaryArea * 0.35
       ) {
         score -= 40 + (bounds.areaCoverage / primaryArea) * 20;
+      }
+    }
+  }
+
+  // A generic full/wide shot may still have multiple declared subjects. Keep
+  // them separately readable instead of accepting a depth-axis pile-up.
+  if (params.primary.length > 1 && params.template !== 'two_shot') {
+    const entries = params.primary
+      .map((subject) => subjectScores[subject.id])
+      .filter((entry): entry is SubjectScore => Boolean(entry));
+    if (entries.length !== params.primary.length || entries.some((entry) => (
+      entry.behindCamera || entry.areaCoverage <= 0.005
+    ))) {
+      hardPass = false;
+      score -= 180;
+    } else {
+      const centers = entries.map((entry) => entry.centerX);
+      const separation = Math.max(...centers) - Math.min(...centers);
+      const largest = Math.max(...entries.map((entry) => entry.areaCoverage));
+      const smallest = Math.max(0.0001, Math.min(...entries.map((entry) => entry.areaCoverage)));
+      const ratio = largest / smallest;
+      if (separation < 0.08 || ratio > 4) {
+        hardPass = false;
+        score -= 140 + Math.max(0, 0.08 - separation) * 500 + Math.max(0, ratio - 4) * 20;
+      } else {
+        score += Math.min(30, separation * 80);
       }
     }
   }
@@ -1435,6 +1480,7 @@ export function subjectBoundsFromPlacement(params: {
   width?: number;
   depth?: number;
   yawRadians?: number;
+  requireCompleteAssembly?: boolean;
 }): SubjectBounds {
   const height = params.height ?? 1.75;
   const width = params.width ?? 0.55;
@@ -1455,6 +1501,7 @@ export function subjectBoundsFromPlacement(params: {
     max,
     position: params.position,
     yawRadians: params.yawRadians,
+    requireCompleteAssembly: params.requireCompleteAssembly,
   };
 }
 

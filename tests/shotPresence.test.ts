@@ -102,6 +102,21 @@ describe('closed-world shot presence', () => {
     ]));
   });
 
+  it('treats prepared-location set dressing as static unless it is explicitly bound as dynamic', () => {
+    const { project, prop } = preparedProject();
+    project.workflow.production!.locations.room = {
+      id: 'room',
+      objectIds: [prop.id],
+      objectGroupIds: [],
+      anchors: {},
+      blockerObjectIds: [],
+    };
+    expect(deriveDynamicObjectUniverse(project).map((item) => item.objectId)).not.toContain(prop.id);
+
+    project.workflow.production!.bindings.heroProp = { kind: 'object', objectId: prop.id };
+    expect(deriveDynamicObjectUniverse(project).map((item) => item.objectId)).toContain(prop.id);
+  });
+
   it('resolves keyframed presence expectations across timeline samples', () => {
     const contract = {
       expectedVisibleObjectIds: ['lead'],

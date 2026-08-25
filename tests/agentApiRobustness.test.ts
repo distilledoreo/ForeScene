@@ -612,7 +612,7 @@ describe('agent API robustness', () => {
       version: 1 as const,
       project: { name: 'Demo', aspectRatio: '16:9' },
       cast: [{ id: 'hero', name: 'Hero', type: 'human_dummy', height: 1.75, defaultPose: 'standing-neutral' }],
-      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room' }],
+      locations: [{ id: 'loc', name: 'Loc', template: 'interior_room', defaultPanoId: null }],
       shots: [{
         id: 'shot_1',
         shotNumber: '001',
@@ -624,7 +624,20 @@ describe('agent API robustness', () => {
       }],
     };
     const heroObject = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'human_dummy');
+    const wall = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'wall');
     expect(heroObject).toBeTruthy();
+    expect(wall).toBeTruthy();
+
+    const location = await defineAgentProductionLocation({
+      location: {
+        id: 'loc',
+        objectIds: [wall!.id],
+        objectGroupIds: [],
+        anchors: {},
+        blockerObjectIds: [wall!.id],
+      },
+    });
+    expect(location.ok).toBe(true);
 
     const bound = await bindAgentManifestAssets({
       manifest,
@@ -635,6 +648,24 @@ describe('agent API robustness', () => {
     expect(status.manifestBound).toBe(true);
     expect(status.bindingCount).toBe(1);
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.hero).toBe(heroObject!.id);
+    const production = useProjectStore.getState().project.workflow.production!;
+    expect(production.bindings).toMatchObject({
+      hero: { kind: 'object', objectId: heroObject!.id },
+      loc: { kind: 'location', locationId: 'loc' },
+    });
+    expect(production.locations.loc?.objectIds).toEqual([wall!.id]);
+    expect(Object.values(production.shotContracts)).toEqual([
+      expect.objectContaining({
+        presence: expect.objectContaining({
+          expectedVisibleObjectIds: [heroObject!.id],
+          allowUnspecifiedDynamicObjects: false,
+        }),
+        environment: expect.objectContaining({
+          locationId: 'loc',
+          expectNoPanorama: true,
+        }),
+      }),
+    ]);
   });
 
   it('accepts a production asset id when binding an imported model', async () => {
@@ -661,14 +692,36 @@ describe('agent API robustness', () => {
       }],
     };
     const object = useProjectStore.getState().project.scene.objects[0]!;
+    const secondPart = createSceneObject('box');
+    useProjectStore.setState((state) => ({
+      project: {
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          objects: [...state.project.scene.objects, secondPart],
+        },
+      },
+    }));
+    const group = await createAgentObjectGroup({
+      name: 'Hand monster assembly',
+      objectIds: [object.id, secondPart.id],
+    });
+    expect(group.ok).toBe(true);
 
     const bound = await bindAgentManifestAssets({
       manifest,
       bindings: { 'hand-monster': object.id },
+      groupBindings: { 'hand-monster': group.groupId! },
     });
 
     expect(bound.ok).toBe(true);
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.['hand-monster']).toBe(object.id);
+    expect(useProjectStore.getState().project.workflow.production?.bindings['hand-monster']).toEqual({
+      kind: 'group',
+      groupId: group.groupId,
+    });
+    expect(Object.values(useProjectStore.getState().project.workflow.production?.shotContracts ?? {})[0]?.presence)
+      .toMatchObject({ expectedVisibleGroupIds: [group.groupId] });
   });
 
   it('persists typed production bindings and validates a prepared location', async () => {

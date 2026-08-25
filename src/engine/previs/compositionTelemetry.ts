@@ -2,6 +2,7 @@
  * Per-shot composition telemetry for validation, repair, and Grok feedback.
  */
 
+import * as THREE from 'three';
 import type {
   Bounds3,
   CameraData,
@@ -26,6 +27,7 @@ import {
 } from './screenProjection';
 import type { HumanLandmark } from './framingProfiles';
 import { HUMAN_LANDMARK_HEIGHT } from './framingProfiles';
+import { getProductionConfiguration } from './productionConfiguration';
 import {
   resolvePoseableHumanoidTelemetry,
   type RigTelemetryLandmarkSource,
@@ -172,16 +174,25 @@ export function buildShotCompositionTelemetry(params: {
     });
 
   for (const key of matchKeys) {
-    const object = findObjectBySubjectKey(resolved.scene.objects, key, params.subjectNames);
-    if (!object || object.visible === false) {
+    const subjectObjects = findObjectsBySubjectKey(resolved, key, params.subjectNames)
+      .filter((object) => object.visible !== false);
+    if (subjectObjects.length === 0) {
       subjects[key] = {
         bounds: emptySubjectBounds(),
         visible: false,
       };
       continue;
     }
-    indexedObjectIds.add(object.id);
-    subjects[key] = describeSubject(object, matrices, width, height, shot.camera.position, solidBlockersAll, resolved.assets);
+    for (const object of subjectObjects) indexedObjectIds.add(object.id);
+    subjects[key] = describeSubjectAssembly(
+      subjectObjects,
+      matrices,
+      width,
+      height,
+      shot.camera.position,
+      solidBlockersAll,
+      resolved.assets,
+    );
   }
 
   // Index every remaining visible human by name (and id if needed), deduped by object id.
@@ -223,6 +234,50 @@ export function buildShotCompositionTelemetry(params: {
   };
 }
 
+function describeSubjectAssembly(
+  objects: SceneObject[],
+  matrices: ReturnType<typeof buildCameraMatrices>,
+  width: number,
+  height: number,
+  cameraPosition: Vec3,
+  solidBlockers: Array<{ objectId: string; min: Vec3; max: Vec3 }>,
+  assets: LocationProject['assets'],
+): ShotCompositionSubject {
+  if (objects.length === 1) {
+    return describeSubject(objects[0]!, matrices, width, height, cameraPosition, solidBlockers, assets);
+  }
+  const boxes = objects.map(objectWorldAabb);
+  const min: Vec3 = [
+    Math.min(...boxes.map((box) => box.min[0])),
+    Math.min(...boxes.map((box) => box.min[1])),
+    Math.min(...boxes.map((box) => box.min[2])),
+  ];
+  const max: Vec3 = [
+    Math.max(...boxes.map((box) => box.max[0])),
+    Math.max(...boxes.map((box) => box.max[1])),
+    Math.max(...boxes.map((box) => box.max[2])),
+  ];
+  const proxy: SceneObject = {
+    ...objects[0]!,
+    id: `assembly:${objects.map((object) => object.id).join(',')}`,
+    name: `${objects[0]!.name} assembly`,
+    type: 'imported_model',
+    dimensions: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
+    transform: {
+      position: [
+        (min[0] + max[0]) / 2,
+        (min[1] + max[1]) / 2,
+        (min[2] + max[2]) / 2,
+      ],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+    },
+    metadata: undefined,
+    poseableCharacter: undefined,
+  };
+  return describeSubject(proxy, matrices, width, height, cameraPosition, solidBlockers, assets);
+}
+
 /** Project one scene object for composition / diagnostics (any renderable type). */
 export function describeSceneObjectComposition(params: {
   project: LocationProject;
@@ -256,14 +311,15 @@ export function describeSceneObjectComposition(params: {
 }
 
 export function objectWorldAabb(object: SceneObject): { min: Vec3; max: Vec3 } {
-  const hx = (object.dimensions[0] * object.transform.scale[0]) / 2;
-  const hy = (object.dimensions[1] * object.transform.scale[1]) / 2;
-  const hz = (object.dimensions[2] * object.transform.scale[2]) / 2;
-  const c = object.transform.position;
-  return {
-    min: [c[0] - hx, c[1] - hy, c[2] - hz],
-    max: [c[0] + hx, c[1] + hy, c[2] + hz],
-  };
+  const half: Vec3 = [
+    object.dimensions[0] / 2,
+    object.dimensions[1] / 2,
+    object.dimensions[2] / 2,
+  ];
+  return localBoundsToWorldAabb(object, {
+    min: [-half[0], -half[1], -half[2]],
+    max: [half[0], half[1], half[2]],
+  });
 }
 
 function describeSubject(
@@ -335,6 +391,16 @@ function describeSubject(
     blockers: solidBlockers,
     excludeObjectIds: new Set([object.id]),
   });
+  const completeAssemblyInFrame = importedHumanoid && landmarks?.headTop && landmarks.feet
+    ? landmarks.headTop.inFrame
+      && landmarks.feet.inFrame
+      // Rig landmarks prevent a conservative depth-AABB corner from falsely
+      // declaring vertical crop; retain horizontal and gross-size safeguards
+      // so genuinely oversized accessories still fail.
+      && bounds.unclipped.widthCoverage <= 1.1
+      && bounds.unclipped.heightCoverage <= 1.25
+      && !bounds.behindCamera
+    : projectedBoundsWithinSafeFrame(bounds, 0.05);
 
   return {
     bounds,
@@ -349,7 +415,7 @@ function describeSubject(
       inFrame: projectedFoot.inFrame,
     },
     feetY: projectedFoot.y / height,
-    completeAssemblyInFrame: !bounds.behindCamera && !bounds.clipped && bounds.visible.areaCoverage > 0,
+    completeAssemblyInFrame,
     upperBodyBounds,
     landmarks,
     ...(importedHumanoid ? {
@@ -361,6 +427,15 @@ function describeSubject(
     occlusionRatio: occlusion.occludedSampleRatio,
     faceOccluded: occlusion.faceOccluded,
   };
+}
+
+function projectedBoundsWithinSafeFrame(bounds: ProjectedBounds, normalizedMargin: number): boolean {
+  if (bounds.behindCamera || bounds.visible.areaCoverage <= 0) return false;
+  const ndcMargin = normalizedMargin * 2;
+  return bounds.ndc.minX >= -1 - ndcMargin
+    && bounds.ndc.maxX <= 1 + ndcMargin
+    && bounds.ndc.minY >= -1 - ndcMargin
+    && bounds.ndc.maxY <= 1 + ndcMargin;
 }
 
 function isImportedHumanoid(object: SceneObject): boolean {
@@ -435,21 +510,28 @@ function isFiniteVec3(value: unknown): value is Vec3 {
 }
 
 function localBoundsToWorld(object: SceneObject, local: Bounds3): Bounds3 {
-  const position = object.transform.position;
-  const scale = object.transform.scale;
-  const scaledMin: Vec3 = [local.min[0] * scale[0], local.min[1] * scale[1], local.min[2] * scale[2]];
-  const scaledMax: Vec3 = [local.max[0] * scale[0], local.max[1] * scale[1], local.max[2] * scale[2]];
+  return localBoundsToWorldAabb(object, local);
+}
+
+/** Transform every corner before rebuilding the axis-aligned world envelope. */
+function localBoundsToWorldAabb(object: SceneObject, local: Bounds3): Bounds3 {
+  const matrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(...object.transform.position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(object.transform.rotation[0]),
+      THREE.MathUtils.degToRad(object.transform.rotation[1]),
+      THREE.MathUtils.degToRad(object.transform.rotation[2]),
+      'XYZ',
+    )),
+    new THREE.Vector3(...object.transform.scale),
+  );
+  const world = new THREE.Box3(
+    new THREE.Vector3(...local.min),
+    new THREE.Vector3(...local.max),
+  ).applyMatrix4(matrix);
   return {
-    min: [
-      position[0] + Math.min(scaledMin[0], scaledMax[0]),
-      position[1] + Math.min(scaledMin[1], scaledMax[1]),
-      position[2] + Math.min(scaledMin[2], scaledMax[2]),
-    ],
-    max: [
-      position[0] + Math.max(scaledMin[0], scaledMax[0]),
-      position[1] + Math.max(scaledMin[1], scaledMax[1]),
-      position[2] + Math.max(scaledMin[2], scaledMax[2]),
-    ],
+    min: [world.min.x, world.min.y, world.min.z],
+    max: [world.max.x, world.max.y, world.max.z],
   };
 }
 
@@ -534,6 +616,33 @@ function findObjectBySubjectKey(
   return objects.find((object) => (
     candidates.some((candidate) => object.name.toLowerCase().includes(candidate.toLowerCase()))
   ));
+}
+
+function findObjectsBySubjectKey(
+  project: LocationProject,
+  subjectId: string,
+  subjectNames?: Record<string, string>,
+): SceneObject[] {
+  const configuration = getProductionConfiguration(project);
+  const binding = [
+    subjectId,
+    `cast.${subjectId}`,
+    `prop.${subjectId}`,
+    `assets.${subjectId}`,
+  ].map((key) => configuration.bindings[key]).find(Boolean);
+  if (binding?.kind === 'object') {
+    const object = project.scene.objects.find((candidate) => candidate.id === binding.objectId);
+    return object ? [object] : [];
+  }
+  if (binding?.kind === 'group') {
+    const objectIds = project.scene.objectGroups?.[binding.groupId]?.objectIds ?? [];
+    return objectIds.flatMap((objectId) => {
+      const object = project.scene.objects.find((candidate) => candidate.id === objectId);
+      return object ? [object] : [];
+    });
+  }
+  const object = findObjectBySubjectKey(project.scene.objects, subjectId, subjectNames);
+  return object ? [object] : [];
 }
 
 function humanOcclusionSamples(

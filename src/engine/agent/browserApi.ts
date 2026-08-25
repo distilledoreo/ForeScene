@@ -300,6 +300,11 @@ import {
   listAgentArtifacts,
   persistAgentArtifact,
 } from './artifactRegistry';
+import {
+  previewAgentGenerativeWorldRequest,
+  renderAgentGenerativeWorldDepthPrior,
+  runAgentMockGenerativeWorldBackend,
+} from './generativeWorldControl';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -1873,6 +1878,18 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     inspectProductionConfiguration() {
       return inspectAgentProductionConfiguration();
+    },
+
+    previewGenerativeWorldRequest(input) {
+      return previewAgentGenerativeWorldRequest(input);
+    },
+
+    runMockGenerativeWorldBackend(input) {
+      return runAgentMockGenerativeWorldBackend(input);
+    },
+
+    renderGenerativeWorldDepthPrior(input) {
+      return renderAgentGenerativeWorldDepthPrior(input);
     },
 
     validateProductionConfiguration(input) {

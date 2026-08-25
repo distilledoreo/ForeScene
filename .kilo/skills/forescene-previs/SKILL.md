@@ -422,6 +422,9 @@ Useful documented CLI commands when inspecting a live session:
 - `npm run agent:frame -- --shot <id> --mode clay --output <png>` — clean PNG and pixel stats.
 - `npm run agent:verify` — idle/busy plus visual and health gates; not proof that a frame is visually ready.
 - `npm run agent:cancel` / `npm run agent:operations` — stop or list CLI operations without killing Chromium.
+- `npm run agent:world-preview -- --shots <ids> --output <request.json>` — emit backend-neutral semantic/camera priors without invoking external inference.
+- `npm run agent:world-mock -- --shots <ids> --output <result.json>` — exercise the generative-world contract deterministically; mock output is schema evidence only.
+- `npm run agent:world-depth -- --shot <id> --time <seconds> --resolution <WIDTHxHEIGHT> --output <depth.npy>` — render a clean-plate, top-left row-major NumPy float32 camera-Z prior in metres; zero means no geometry.
 
 Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes. Parse stdout envelopes; do not scrape stderr for success.
 

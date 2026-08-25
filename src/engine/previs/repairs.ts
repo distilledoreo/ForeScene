@@ -52,7 +52,7 @@ export const REPAIR_PRIORITY: string[][] = [
   ['frame_blank', 'render_not_ready'],
   ['camera_inside_geometry', 'wall_dominant', 'subject_occluded', 'subject_face_occluded', 'ots_primary_obstructed'],
   ['subject_out_of_frame', 'required_subject_hidden', 'ots_foreground_missing'],
-  ['framing_too_loose', 'framing_too_tight', 'subject_too_small', 'subject_too_large', 'ots_foreground_too_small', 'ots_foreground_too_large'],
+  ['required_subject_incomplete_framing', 'framing_too_loose', 'framing_too_tight', 'subject_too_small', 'subject_too_large', 'ots_foreground_too_small', 'ots_foreground_too_large'],
   ['headroom_excessive', 'head_clipped', 'crop_landmark_clipped'],
   ['unwanted_subject_dominant', 'primary_off_center', 'subjects_overlapping', 'character_underground'],
 ];
@@ -159,6 +159,7 @@ export function buildRepairPlan(params: {
       break;
     }
     case 'subject_too_large':
+    case 'required_subject_incomplete_framing':
     case 'framing_too_tight': {
       const anchor = applyAnchorSpanCameraRepair(camera, primaryIssue, template)
         ?? (primaryTelemetry && template

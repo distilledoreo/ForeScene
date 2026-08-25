@@ -18,6 +18,9 @@ export const AGENT_CLI_COMMANDS = [
   'verify',
   'visual-preflight',
   'asset-contract',
+  'world-preview',
+  'world-mock',
+  'world-depth',
   'run',
   'previs',
   'production',
@@ -48,6 +51,7 @@ export function buildAgentCliHelpDocument() {
     checks: {
       visualPreflight: 'collectVisualPreflightValidation via `visual-preflight` or `verify`. Omitted --shots validates every shot. Explicit --shot/--shots is passed through; unknown or empty explicit selection fails, and unmatched ids appear in the JSON result and provenance. visualPreflight: [] is never a passed gate. Empty projects omit the visual gate (skipped).',
       assetPoseContract: 'inspectAssetPoseContract via `asset-contract` or `verify`. `asset-contract` accepts one optional --shot (API shotId); omit the flag for the whole project. Multiple ids are rejected.',
+      generativeWorldBoundary: '`world-preview` emits the backend-neutral request plus HY-World 2 camera-prior JSON; `world-mock` exercises the deterministic adapter without running external inference; `world-depth` emits a raw float32 camera-Z .npy prior.',
       repairCandidates: 'begin/evaluate/commitBestShotRepairCandidate inside `previs` repair',
       provenance: 'getStatus().provenance on verify, package, previs, and video (per-invocation runId, retries, cancelled, revision-bound validation)',
       resumeCancel: 'Ctrl+C / SIGINT or `npm run agent:cancel -- --operation <id>` cancels package, video, still, and character-import jobs; previs resumes from run-state.json',
@@ -86,6 +90,8 @@ export function buildAgentCliHelpDocument() {
       video: 'Exactly one --shot (or a single --shots value). Additional ids are rejected before the browser opens.',
       shotPanorama: 'Exactly one --shot (id or shot number) plus `--pano <id>` or `--pano null` for a durable unlink.',
       assetContract: 'Optional single --shot. Omit the flag for the whole project. Multiple ids are rejected. The API remains inspectAssetPoseContract({ shotId? }).',
+      generativeWorld: 'Optional --shot/--shots accepts exact ids or production shot numbers. Omitted selects every shot; explicit empty or unknown selection fails.',
+      worldDepth: 'Exactly one --shot (id or production shot number), optional --time and WIDTHxHEIGHT --resolution, plus required --output <depth.npy>.',
       package: 'Optional --shot/--shots. Omitted packages every shot. An explicit empty selection is rejected by the export API.',
     },
     artifactRetrieval: {

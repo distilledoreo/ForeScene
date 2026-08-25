@@ -2,6 +2,7 @@
  * Shot diagnostics for the Agent API — deterministic visibility / framing checks.
  */
 
+import * as THREE from 'three';
 import type { LocationProject, SceneObject, Shot } from '../../domain/types';
 import { resolveShotLinkedPano } from '../sync';
 import { resolveProjectForShot } from '../shotSceneState';
@@ -9,6 +10,7 @@ import {
   buildShotCompositionTelemetry,
   describeSceneObjectComposition,
 } from '../previs/compositionTelemetry';
+import { selectionBounds } from '../buildSelection';
 import { sampleShotTimeline } from '../shotTimeline';
 import type { AgentShotDiagnostics, AgentShotDiagnosticsSubject, AgentSubjectDisplacement } from './protocol';
 import {
@@ -25,6 +27,10 @@ import {
   agentError,
   agentWarning,
 } from './diagnostics';
+import {
+  getProductionConfiguration,
+  resolveProductionBindingObjectIds,
+} from '../previs/productionConfiguration';
 
 function frameVisibleFraction(
   bounds: { behindCamera: boolean; areaCoverage?: number; unclipped?: { areaCoverage: number }; visible?: { areaCoverage: number } },
@@ -104,6 +110,92 @@ function buildSubjectDiagnostic(
   };
 }
 
+function buildProductionGroupDiagnostic(
+  project: LocationProject,
+  shotForInspect: Shot,
+  _entityId: string,
+  groupId: string,
+  effectiveObjects: SceneObject[],
+): AgentShotDiagnosticsSubject | undefined {
+  const group = project.scene.objectGroups?.[groupId];
+  if (!group) return undefined;
+  const members = group.objectIds.flatMap((objectId) => {
+    const object = effectiveObjects.find((candidate) => candidate.id === objectId);
+    return object && object.visible !== false ? [object] : [];
+  });
+  if (members.length === 0) return undefined;
+  const union = selectionBounds(members);
+  const size = union.getSize(new THREE.Vector3());
+  const center = union.getCenter(new THREE.Vector3());
+  const aggregate: SceneObject = {
+    ...members[0]!,
+    id: groupId,
+    name: group.name,
+    type: 'box',
+    dimensions: [size.x, size.y, size.z],
+    transform: {
+      position: [center.x, center.y, center.z],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+    },
+    poseableCharacter: undefined,
+    humanPose: undefined,
+  };
+  const telemetry = describeSceneObjectComposition({
+    project,
+    shot: shotForInspect,
+    object: aggregate,
+  });
+  const floorY = identifyFloorY(project, members[0]!.transform.position, effectiveObjects);
+  const groundClearanceMeters = Math.min(
+    ...members.map((object) => signedGroundClearanceMeters(object, floorY)),
+  );
+  return {
+    objectId: groupId,
+    screenCoverage: telemetry.bounds.areaCoverage,
+    visibleFraction: frameVisibleFraction(telemetry.bounds, telemetry.occlusionRatio),
+    groundClearanceMeters,
+    occlusionRatio: telemetry.occlusionRatio,
+    behindCamera: telemetry.bounds.behindCamera,
+    clipped: telemetry.bounds.clipped,
+    humanLandmarks: telemetry.landmarks,
+  };
+}
+
+function productionContractSubjects(input: {
+  project: LocationProject;
+  shot: Shot;
+  shotForInspect: Shot;
+  effectiveObjects: SceneObject[];
+}): AgentShotDiagnosticsSubject[] | undefined {
+  const configuration = getProductionConfiguration(input.project);
+  const contract = configuration.shotContracts[input.shot.id];
+  if (!contract?.presence) return undefined;
+  const subjects: AgentShotDiagnosticsSubject[] = [];
+  const effectiveById = new Map(input.effectiveObjects.map((object) => [object.id, object]));
+  for (const objectId of contract.presence.expectedVisibleObjectIds) {
+    const object = effectiveById.get(objectId);
+    if (object && object.visible !== false) {
+      subjects.push(buildSubjectDiagnostic(input.project, input.shotForInspect, object, input.effectiveObjects));
+    }
+  }
+  for (const groupId of contract.presence.expectedVisibleGroupIds) {
+    const entity = Object.entries(configuration.bindings).find(([, binding]) => (
+      binding.kind === 'group' && binding.groupId === groupId
+    ));
+    if (!entity) continue;
+    const diagnostic = buildProductionGroupDiagnostic(
+      input.project,
+      input.shotForInspect,
+      entity[0],
+      groupId,
+      input.effectiveObjects,
+    );
+    if (diagnostic) subjects.push(diagnostic);
+  }
+  return subjects;
+}
+
 function inferDiagnosticSubjectIds(
   shot: Shot,
   telemetry: ReturnType<typeof buildShotCompositionTelemetry>,
@@ -148,15 +240,23 @@ export function inspectAgentShotDiagnostics(params: {
   const resolvedObjects = resolveProjectForShot(project, shotForInspect).scene.objects;
   const resolvedById = new Map(resolvedObjects.map((object) => [object.id, object]));
 
+  const productionSubjects = params.subjectIds?.length
+    ? undefined
+    : productionContractSubjects({
+        project,
+        shot,
+        shotForInspect,
+        effectiveObjects: resolvedObjects,
+      });
   const subjectIds = params.subjectIds?.length
     ? params.subjectIds
     : inferDiagnosticSubjectIds(shotForInspect, telemetry, resolvedObjects);
 
-  const subjects: AgentShotDiagnosticsSubject[] = [];
+  const subjects: AgentShotDiagnosticsSubject[] = productionSubjects ?? [];
   const diagnostics: import('./diagnostics').AgentDiagnostic[] = [];
   const expectedSubjectIds = params.subjectIds?.length ? [...params.subjectIds] : undefined;
 
-  for (const objectId of subjectIds) {
+  for (const objectId of productionSubjects ? [] : subjectIds) {
     const sceneObject = resolvedById.get(objectId);
     if (!sceneObject) {
       diagnostics.push(agentError(
@@ -197,7 +297,15 @@ export function inspectAgentShotDiagnostics(params: {
     cameraIntersectsSolidGeometry: cameraIntersectsSolidGeometry(project, shotForInspect),
     cameraInsideEnvironmentBounds: insideEnvironment,
     cameraDisplacementMeters: cameraDisplacementMeters(shot),
-    subjectDisplacements: subjectDisplacements(project, shot, subjectIds),
+    subjectDisplacements: subjectDisplacements(
+      project,
+      shot,
+      productionSubjects
+        ? [...new Set(Object.values(getProductionConfiguration(project).bindings).flatMap((binding) => (
+            resolveProductionBindingObjectIds(project, binding)
+          )))]
+        : subjectIds,
+    ),
     expectedSubjectIds,
     diagnostics,
   };

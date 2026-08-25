@@ -86,6 +86,35 @@ describe('previs production manifest', () => {
     ]);
   });
 
+  it('parses embedded prop aliases and validates their host joint', () => {
+    const input = loadExample('minimal-dialogue.json') as Record<string, unknown>;
+    input.props = [{
+      id: 'shield',
+      name: 'Shield embedded in Alex',
+      primitive: 'shield',
+      embeddedIn: { subject: 'alex', joint: 'leftHand' },
+    }];
+    const valid = parsePrevisProductionManifest(input);
+    expect(valid.errors).toEqual([]);
+    expect(valid.manifest?.props?.[0]?.embeddedIn).toEqual({
+      subject: 'alex',
+      joint: 'leftHand',
+    });
+
+    const invalid = structuredClone(input) as Record<string, unknown>;
+    invalid.props = [{
+      id: 'shield',
+      name: 'Broken embedded shield',
+      primitive: 'shield',
+      embeddedIn: { subject: 'missing-host', joint: 'not-a-joint' },
+    }];
+    const rejected = parsePrevisProductionManifest(invalid);
+    expect(rejected.errors.map((error) => error.code)).toEqual(expect.arrayContaining([
+      'unknown_reference',
+      'unsupported_value',
+    ]));
+  });
+
   it('parses the music-video fixture with two locations', () => {
     const result = parsePrevisProductionManifest(loadExample('music-video-graybox.json'));
     expect(result.errors).toEqual([]);

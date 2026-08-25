@@ -35,6 +35,9 @@ implementation.
 | Save / export project backup | `project.save` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cancel a running CLI operation | `operation.cancel` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | List CLI operations | `operation.list` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Preview backend-neutral generative-world request and HY-World 2 camera priors | `world.request.preview` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Run deterministic generative-world backend mock | `world.backend.mockRun` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Render raw NumPy float32 camera-Z depth prior | `world.depth.render` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Preview mutation plan | `project.previewPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Apply plan | `project.applyPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Analyze character | `character.analyze` | ✅ | ✅ | ✅ | ✅ | ✅ |

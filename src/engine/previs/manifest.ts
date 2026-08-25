@@ -3,7 +3,7 @@
  * Grok makes semantic decisions; ForeScene compiles geometry.
  */
 
-import type { Vec3 } from '../../domain/types';
+import type { HumanJointId, Vec3 } from '../../domain/types';
 
 export const PREVIS_MANIFEST_VERSION = 1 as const;
 export const PREVIS_MANIFEST_VERSIONS = [1, 2] as const;
@@ -223,6 +223,11 @@ export interface PrevisPropDefinition {
   primitive: PrevisPropPrimitive;
   dimensions?: [number, number, number];
   color?: string;
+  /** Semantic geometry already authored inside a host character asset. */
+  embeddedIn?: {
+    subject: string;
+    joint?: HumanJointId;
+  };
 }
 
 export interface PrevisShotDefinition {

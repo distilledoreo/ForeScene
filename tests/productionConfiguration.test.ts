@@ -4,6 +4,7 @@ import type { ProductionConfiguration } from '../src/domain/types';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import {
   classifyProductionObject,
+  deriveShotActionContracts,
   validateProductionConfiguration,
 } from '../src/engine/previs/productionConfiguration';
 
@@ -69,6 +70,56 @@ function validPreparedProject() {
 }
 
 describe('production configuration validation', () => {
+  it('derives persistent static-pose and timeline action intent from a shot manifest', () => {
+    const definition = manifest().shots[0]!;
+    definition.blocking = [{
+      subject: 'cast.lead',
+      placement: { type: 'location_slot', slot: 'center' },
+      pose: 'shield-ready',
+    }];
+    definition.motion = {
+      durationSeconds: 2,
+      keyframes: [{
+        timeSeconds: 0,
+        staging: [{
+          subject: 'cast.lead',
+          posePreset: 'walk-contact-left',
+          transform: { position: [0, 0.875, 0] },
+        }],
+      }, {
+        timeSeconds: 2,
+        staging: [{
+          subject: 'cast.lead',
+          posePreset: 'walk-contact-right',
+          transform: { position: [0, 0.875, 4] },
+        }],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition);
+
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'static_pose',
+      samples: [{ requestedPose: 'shield-ready', resolvedPose: 'elbows-bent' }],
+    });
+    expect(actions[1]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'timeline',
+      durationSeconds: 2,
+      samples: [
+        { timeSeconds: 0, resolvedPose: 'walk-contact-left', position: [0, 0.875, 0] },
+        { timeSeconds: 2, resolvedPose: 'walk-contact-right', position: [0, 0.875, 4] },
+      ],
+    });
+    expect(actions[0]!.samples[0]).toMatchObject({
+      poseRelationship: 'approximate',
+      requiresReview: true,
+    });
+    expect(actions[1]!.samples.every((sample) => sample.poseRelationship === 'exact')).toBe(true);
+  });
+
   it('accepts prepared object, group, and location bindings', () => {
     const project = validPreparedProject();
     const result = validateProductionConfiguration(project, manifest());
@@ -76,6 +127,23 @@ describe('production configuration validation', () => {
     expect(result.ok).toBe(true);
     expect(result.diagnostics).toEqual([]);
     expect(result.checkedEntityIds).toEqual(['cast.lead', 'prop.table', 'location.interior']);
+  });
+
+  it('allows declared embedded props to alias their host production object', () => {
+    const project = validPreparedProject();
+    const heroId = (project.workflow.production!.bindings['cast.lead'] as { kind: 'object'; objectId: string }).objectId;
+    project.workflow.production!.bindings['prop.table'] = { kind: 'object', objectId: heroId };
+    const embeddedManifest = manifest();
+    embeddedManifest.props = [{
+      id: 'prop.table',
+      name: 'Embedded table fixture',
+      primitive: 'box',
+      embeddedIn: { subject: 'cast.lead', joint: 'leftHand' },
+    }];
+
+    const result = validateProductionConfiguration(project, embeddedManifest);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it('reports missing and stale binding targets before compilation', () => {
@@ -142,6 +210,27 @@ describe('production configuration validation', () => {
     const result = validateProductionConfiguration(project, manifest());
     expect(result.ok).toBe(false);
     expect(result.diagnostics.some((item) => item.code === 'required_poseable_asset_static')).toBe(true);
+  });
+
+  it('rejects malformed action intent and actions for unbound entities', () => {
+    const project = validPreparedProject();
+    project.workflow.production!.shotContracts['shot.001'] = {
+      actions: [{
+        actionId: 'shot.001:missing:timeline',
+        entityId: 'cast.missing',
+        mode: 'timeline',
+        durationSeconds: 1,
+        samples: [{ timeSeconds: 2, requestedPose: 'walking' }],
+      }],
+    };
+
+    const result = validateProductionConfiguration(project, manifest());
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'action_binding_missing',
+      'action_contract_invalid',
+    ]));
   });
 
   it('derives dynamic classification from prepared object semantics', () => {

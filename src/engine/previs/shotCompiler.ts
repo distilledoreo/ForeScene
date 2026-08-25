@@ -202,34 +202,35 @@ function compileSingleShot(
     }
   }
 
-  const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).map(([id, position]) => {
+  const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).flatMap(([id, position]) => {
     const character = characterById(manifest, id);
     const prop = (manifest.props ?? []).find((item) => item.id === id);
+    if (prop?.embeddedIn) return [];
     const blocking = blockingResults[id];
     // Yaw from staging rotation (Y axis degrees → radians).
     const yawRadians = blocking?.rotation
       ? (blocking.rotation[1] * Math.PI) / 180
       : undefined;
     if (character) {
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         position,
         height: character.height ?? 1.75,
         width: 0.55,
         depth: 0.55,
         yawRadians,
-      });
+      })];
     }
     if (prop) {
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         position,
         width: dims[0],
         height: dims[1],
         depth: dims[2],
         yawRadians,
-      });
+      })];
     }
     const importedAsset = manifest.assets?.find((item) => (
       item.id === id && (item.type === 'imported_model' || item.type === 'primitive_proxy')
@@ -237,7 +238,7 @@ function compileSingleShot(
     if (importedAsset) {
       const assetDimensions = manifestAssetDimensions(manifest, context, options.presenceProject, id)
         ?? [1.3, 1.3, 1.3] as Vec3;
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         // Imported-model blocking positions are floor contacts. Keep camera
         // bounds aligned with the grounded transform emitted below instead of
@@ -247,9 +248,10 @@ function compileSingleShot(
         height: assetDimensions[1],
         depth: assetDimensions[2],
         yawRadians,
-      });
+        requireCompleteAssembly: true,
+      })];
     }
-    return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
+    return [subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians })];
   });
 
   const locationBlockers = resolveLocationBlockers(
@@ -490,6 +492,11 @@ function compileSingleShot(
     const entityMapping = context.entities[`props.${prop.id}`];
     const inShot = visibleIds.has(prop.id);
     const blocking = blockingResults[prop.id];
+    if (prop.embeddedIn) {
+      // Visibility and transforms are owned by the host character. The prop's
+      // production binding aliases that same renderable object/group.
+      continue;
+    }
     if (inShot) {
       const position = subjectPositions[prop.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);

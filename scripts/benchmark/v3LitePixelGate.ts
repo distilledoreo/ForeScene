@@ -39,6 +39,12 @@ const GRAY_CHROMA_MAX = 18;
 const MOSTLY_GRAY_RATIO = 0.9;
 const MOSTLY_GRAY_UNIQUE_COLORS = 18;
 const MOSTLY_GRAY_VARIANCE = 0.012;
+// This is deliberately a catastrophic-crop threshold, not a general close-up
+// rule. Ordinary close framing may crop accessories; an assembly several times
+// larger than the frame cannot still count as verified subject readability.
+const SEVERE_UNCLIPPED_WIDTH = 1.25;
+const SEVERE_UNCLIPPED_HEIGHT = 1.5;
+const SEVERE_UNCLIPPED_AREA = 1.5;
 const SUBJECT_FAILURE_CODES = new Set([
   'required_subject_missing',
   'required_subject_hidden',
@@ -108,6 +114,98 @@ function subjectVisibleFromComposition(
   const record = asRecord(matched);
   if (!record || typeof record.visible !== 'boolean') return undefined;
   return record.visible;
+}
+
+function matchedSubjectFromComposition(
+  composition: unknown,
+  subjectId: string,
+): Record<string, unknown> | undefined {
+  const subjects = asRecord(asRecord(composition)?.subjects);
+  if (!subjects) return undefined;
+  const direct = asRecord(subjects[subjectId]);
+  return direct ?? asRecord(Object.entries(subjects).find(([key]) => (
+    key.toLowerCase() === subjectId.toLowerCase()
+    || key.toLowerCase().includes(subjectId.toLowerCase())
+  ))?.[1]);
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+interface CompositionFramingFailure {
+  code: 'required_subject_behind_camera' | 'required_subject_severely_out_of_frame' | 'required_subject_incomplete_framing';
+  message: string;
+  measured: Record<string, number | string | boolean | undefined>;
+}
+
+/**
+ * Convert composition telemetry into deterministic evidence only when it proves
+ * a framing contradiction. Missing/partial telemetry stays unverified elsewhere;
+ * it never invents a pass or failure.
+ */
+export function requiredSubjectFramingFailure(
+  composition: unknown,
+  subjectId: string,
+): CompositionFramingFailure | undefined {
+  const subject = matchedSubjectFromComposition(composition, subjectId);
+  if (!subject) return undefined;
+  const bounds = asRecord(subject.bounds);
+  const bodyBounds = asRecord(subject.bodyBounds) ?? bounds;
+  const assemblyBounds = asRecord(subject.assemblyBounds) ?? bounds;
+  const unclipped = asRecord(assemblyBounds?.unclipped);
+  const widthCoverage = finiteNumber(unclipped?.widthCoverage);
+  const heightCoverage = finiteNumber(unclipped?.heightCoverage);
+  const areaCoverage = finiteNumber(unclipped?.areaCoverage);
+  const bodyClipped = bodyBounds?.clipped === true;
+  const assemblyClipped = assemblyBounds?.clipped === true;
+  const completeAssemblyInFrame = typeof subject.completeAssemblyInFrame === 'boolean'
+    ? subject.completeAssemblyInFrame
+    : undefined;
+  const compositionRecord = asRecord(composition);
+  const blockers = Array.isArray(compositionRecord?.blockers) ? compositionRecord.blockers : [];
+  const dominantBlockerArea = blockers.reduce((largest, blocker) => (
+    Math.max(largest, finiteNumber(asRecord(blocker)?.projectedArea) ?? 0)
+  ), 0);
+  const measured = {
+    subject: subjectId,
+    bodyClipped,
+    assemblyClipped,
+    completeAssemblyInFrame,
+    unclippedWidthCoverage: widthCoverage,
+    unclippedHeightCoverage: heightCoverage,
+    unclippedAreaCoverage: areaCoverage,
+    blockerCount: blockers.length,
+    dominantBlockerArea,
+  };
+
+  if (bounds?.behindCamera === true || bodyBounds?.behindCamera === true || assemblyBounds?.behindCamera === true) {
+    return {
+      code: 'required_subject_behind_camera',
+      message: `Required subject "${subjectId}" is behind the camera according to composition telemetry.`,
+      measured,
+    };
+  }
+
+  const severelyOutOfFrame = (widthCoverage !== undefined && widthCoverage > SEVERE_UNCLIPPED_WIDTH)
+    || (heightCoverage !== undefined && heightCoverage > SEVERE_UNCLIPPED_HEIGHT)
+    || (areaCoverage !== undefined && areaCoverage > SEVERE_UNCLIPPED_AREA);
+  if (severelyOutOfFrame) {
+    return {
+      code: 'required_subject_severely_out_of_frame',
+      message: `Required subject "${subjectId}" extends catastrophically beyond the frame; presence alone does not prove readable composition.`,
+      measured,
+    };
+  }
+
+  if (completeAssemblyInFrame === false && bodyClipped) {
+    return {
+      code: 'required_subject_incomplete_framing',
+      message: `Required subject "${subjectId}" has a clipped body and incomplete assembly in composition telemetry.`,
+      measured,
+    };
+  }
+  return undefined;
 }
 
 function validationIssuesForShot(validation: unknown, shotNumber: string): Array<{ code?: string; subject?: string }> {
@@ -223,18 +321,19 @@ export async function evaluateV3LitePixelGate(
         && (issue.subject === subjectId || issue.subject === undefined)
       ));
       const visible = subjectVisibleFromComposition(composition, subjectId);
-      if (validationHit || visible === false) {
+      const framingFailure = requiredSubjectFramingFailure(composition, subjectId);
+      if (validationHit || visible === false || framingFailure) {
         checks.push(check({
           id: `pixel.${artifact}.subject.${subjectId}`,
           artifact,
           status: 'failed',
-          code: validationHit?.code ?? 'required_subject_not_visible',
-          message: `${artifact} does not show required subject "${subjectId}".`,
-          measured: {
-            shotNumber: shot.shotNumber,
-            subject: subjectId,
-            compositionVisible: visible,
-          },
+          code: validationHit?.code ?? framingFailure?.code ?? 'required_subject_not_visible',
+          message: framingFailure?.message ?? `${artifact} does not show required subject "${subjectId}".`,
+          measured: framingFailure?.measured ?? {
+              shotNumber: shot.shotNumber,
+              subject: subjectId,
+              compositionVisible: visible,
+            },
         }));
       } else if (visible === true) {
         checks.push(check({

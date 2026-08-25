@@ -12,8 +12,10 @@ import {
   AGENT_OPERATIONS_DIR,
   beginCliOperation,
   characterImportPhaseProgress,
+  readCliOperationRecord,
   requestCliOperationCancel,
 } from '../scripts/agent/cliOperation';
+import { createCliAbortScope } from '../scripts/agent/cliAbort';
 
 describe('Chromium profile lock recovery', () => {
   it('parses hostname-pid lock targets', () => {
@@ -88,6 +90,47 @@ describe('CLI operation lifecycle', () => {
     expect(result.signaled).toBe(false);
     expect(await operation.isCancelRequested()).toBe(true);
     operation.dispose();
+  });
+
+  it('does not overwrite a completed operation with a late cleanup cancellation', async () => {
+    const operation = beginCliOperation({
+      type: 'project.inspect',
+      heartbeatMs: 10_000,
+    });
+    await operation.start();
+    await operation.complete('Inspect completed.');
+    await operation.cancel('Late cancellation from cleanup.');
+
+    expect(operation.record).toMatchObject({
+      state: 'completed',
+      progress: 1,
+      message: 'Inspect completed.',
+      cancelRequested: false,
+    });
+    await expect(readCliOperationRecord(operation.record.operationId)).resolves.toMatchObject({
+      state: 'completed',
+      message: 'Inspect completed.',
+      cancelRequested: false,
+    });
+  });
+
+  it('separates listener cleanup from explicit abort notification', () => {
+    let cleanupNotifications = 0;
+    const cleanupScope = createCliAbortScope({
+      onAbort: () => { cleanupNotifications += 1; },
+    });
+    cleanupScope.dispose();
+    expect(cleanupScope.signal.aborted).toBe(false);
+    expect(cleanupNotifications).toBe(0);
+
+    let abortNotifications = 0;
+    const abortScope = createCliAbortScope({
+      onAbort: () => { abortNotifications += 1; },
+    });
+    abortScope.abort();
+    expect(abortScope.signal.aborted).toBe(true);
+    expect(abortNotifications).toBe(1);
+    abortScope.dispose();
   });
 
   it('maps saved-rig import phases onto a 0-1 progress value', () => {

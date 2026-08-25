@@ -18,6 +18,8 @@ import {
   getShotCompositionContract,
   verifyShotCompositionConstraints,
 } from './compositionConstraints';
+import { getProductionConfiguration } from './productionConfiguration';
+import type { AgentVisualPreflightResult } from '../agent/protocol';
 
 export type FrameValidationStatus = 'passed' | 'warning' | 'failed' | 'needs_review';
 
@@ -37,6 +39,42 @@ export interface FrameValidationResult {
   template?: string;
   issues: FrameValidationIssue[];
   telemetry?: ShotCompositionTelemetry;
+  /** Final Agent visual gate evaluated after any structural repair attempts. */
+  visualPreflight?: AgentVisualPreflightResult;
+}
+
+/** Make the reusable Agent visual gate a production postcondition. */
+export function mergeFrameValidationWithVisualPreflight(
+  result: FrameValidationResult,
+  visualPreflight: AgentVisualPreflightResult,
+): FrameValidationResult {
+  const blockingChecks = visualPreflight.checks.filter((check) => check.status !== 'passed');
+  const issues: FrameValidationIssue[] = blockingChecks.map((check) => ({
+    code: `visual_preflight_${check.id}`,
+    message: check.message,
+    ...(check.measured ? { measured: check.measured } : {}),
+  }));
+  if (!visualPreflight.ok && issues.length === 0) {
+    issues.push({
+      code: 'visual_preflight_failed',
+      message: visualPreflight.diagnostics[0]?.message ?? 'The final Agent visual preflight did not pass.',
+    });
+  }
+  const hasFailedCheck = blockingChecks.some((check) => check.status === 'failed')
+    || visualPreflight.gateStatus === 'failed';
+  const hasWarningCheck = blockingChecks.some((check) => check.status === 'warning')
+    || visualPreflight.gateStatus === 'warning';
+  const status = hasFailedCheck
+    ? 'failed'
+    : hasWarningCheck && result.status === 'passed'
+      ? 'warning'
+      : result.status;
+  return {
+    ...result,
+    status,
+    issues: [...result.issues, ...issues],
+    visualPreflight,
+  };
 }
 
 export interface ValidateShotFrameInput {
@@ -238,6 +276,31 @@ export function validateShotFrame(input: ValidateShotFrameInput): FrameValidatio
         subject: subjectId,
       });
     }
+
+    const productionBinding = [
+      subjectId,
+      `cast.${subjectId}`,
+      `prop.${subjectId}`,
+      `assets.${subjectId}`,
+    ].map((key) => getProductionConfiguration(project).bindings[key]).find(Boolean);
+    const requiresCompleteAssembly = productionBinding?.kind === 'group'
+      || template === 'full'
+      || template === 'wide'
+      || template === 'establishing';
+    if (requiresCompleteAssembly && subject.completeAssemblyInFrame === false) {
+      issues.push({
+        code: 'required_subject_incomplete_framing',
+        message: `Required subject "${subjectId}" is only partially framed.`,
+        subject: subjectId,
+        measuredCoverage: subject.assemblyBounds?.unclipped.heightCoverage,
+        expected: { completeAssemblyInFrame: true },
+        measured: {
+          completeAssemblyInFrame: false,
+          heightCoverage: subject.assemblyBounds?.unclipped.heightCoverage,
+          widthCoverage: subject.assemblyBounds?.unclipped.widthCoverage,
+        },
+      });
+    }
   }
 
   for (const propId of definition.requirements?.visibleProps ?? []) {
@@ -326,6 +389,7 @@ export const FAILURE_CODES = new Set<string>([
   'frame_missing',
   'frame_blank',
   'required_subject_missing',
+  'required_subject_incomplete_framing',
   'render_not_ready',
   'unexpected_dynamic_object',
   'expected_dynamic_object_missing',
@@ -861,6 +925,7 @@ export function isRepairableIssue(code: string): boolean {
     'subject_too_small',
     'subject_too_large',
     'subject_out_of_frame',
+    'required_subject_incomplete_framing',
     'camera_inside_geometry',
     'character_underground',
     'subjects_overlapping',

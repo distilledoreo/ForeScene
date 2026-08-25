@@ -89,6 +89,31 @@ describe('shot environment contracts', () => {
     ]));
   });
 
+  it('persists and verifies an explicit no-panorama environment contract', () => {
+    const { project, shot } = preparedProject();
+    project.workflow.production!.locations.interior.defaultPanoId = undefined;
+    project.workflow.production!.locations.interior.panoIds = [];
+    project.workflow.production!.shotContracts[shot.id]!.environment = {
+      locationId: 'interior',
+      expectNoPanorama: true,
+      requireProjection: false,
+    };
+    shot.linkedPanoId = null;
+
+    expect(inspectShotEnvironment(project, shot)).toMatchObject({
+      ok: true,
+      contractPresent: true,
+      locationId: 'interior',
+      actualPanoId: undefined,
+      requireProjection: false,
+    });
+
+    shot.linkedPanoId = 'pano_unexpected';
+    expect(inspectShotEnvironment(project, shot).diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'wrong_panorama_linked' }),
+    ]));
+  });
+
   it('emits an executable panorama-routing command during shot compilation', () => {
     const { project, pano } = preparedProject();
     const manifest: PrevisProductionManifestV1 = {

@@ -32,6 +32,7 @@ import {
   buildShotCompositionTelemetry,
   compileProduction,
   compileCastPhaseWithPersistedEntities,
+  compilePropsPhase,
   compileShotList,
   contactSheetHtml,
   buildProductionReviewArtifacts,
@@ -56,6 +57,7 @@ import {
   buildSubjectIdentityMap,
   solidBlockersForRepair,
   validateShotFrame,
+  mergeFrameValidationWithVisualPreflight,
   rankFrameValidation,
   isValidationRankImproved,
   extractFramingMetrics,
@@ -585,6 +587,79 @@ async function importManifestModelAsset(
       consentToken: input.consentToken,
     });
   }, { consentToken });
+}
+
+async function ensureImportedModelAssemblyGroup(
+  page: Page,
+  assetId: string,
+  objectIds: string[],
+  preferredGroupId?: string,
+): Promise<{ ok: boolean; groupId?: string; diagnostics?: unknown[] }> {
+  if (objectIds.length <= 1) return { ok: true };
+  return page.evaluate(async (input) => {
+    const project = window.foreScene!.getProjectDocument();
+    const groups = project.scene.objectGroups ?? {};
+    let existing = input.preferredGroupId ? groups[input.preferredGroupId] : undefined;
+    if (!existing) {
+      for (const group of Object.values(groups)) {
+        if (group.objectIds.length !== input.objectIds.length) continue;
+        let sameMembers = true;
+        for (const objectId of group.objectIds) {
+          if (!input.objectIds.includes(objectId)) {
+            sameMembers = false;
+            break;
+          }
+        }
+        if (sameMembers) {
+          existing = group;
+          break;
+        }
+      }
+    }
+    if (existing) return { ok: true, groupId: existing.id };
+    const created = await window.foreScene!.createObjectGroup({
+      name: `${input.assetId} assembly`,
+      objectIds: input.objectIds,
+    });
+    return {
+      ok: created.ok,
+      groupId: created.groupId,
+      diagnostics: created.diagnostics,
+    };
+  }, { assetId, objectIds, preferredGroupId });
+}
+
+function collectManifestSemanticBindings(
+  manifest: PrevisProductionManifestV1,
+  state: PrevisRunState,
+): { bindings: Record<string, string>; groupBindings: Record<string, string> } {
+  const bindings: Record<string, string> = {};
+  const groupBindings: Record<string, string> = {};
+  const entities = [
+    ...manifest.cast.map((entry) => ({ id: entry.id, key: `cast.${entry.id}` })),
+    ...(manifest.props ?? []).map((entry) => ({ id: entry.id, key: `props.${entry.id}` })),
+    ...(manifest.assets ?? []).map((entry) => ({ id: entry.id, key: `assets.${entry.id}` })),
+  ];
+  for (const entity of entities) {
+    const mapping = state.entities[entity.key];
+    if (mapping?.objectId) bindings[entity.id] = mapping.objectId;
+    if (mapping?.groupId) groupBindings[entity.id] = mapping.groupId;
+  }
+  return { bindings, groupBindings };
+}
+
+async function synchronizeManifestProductionConfiguration(
+  page: Page,
+  manifest: PrevisProductionManifestV1,
+  state: PrevisRunState,
+) {
+  const semantic = collectManifestSemanticBindings(manifest, state);
+  return page.evaluate(async (input) => {
+    const bound = await window.foreScene!.bindManifestAssets(input);
+    const configuration = window.foreScene!.inspectProductionConfiguration();
+    const validation = window.foreScene!.validateProductionConfiguration({ manifest: input.manifest });
+    return { bound, configuration, validation };
+  }, { manifest, ...semantic });
 }
 
 async function analyzeManifestSavedRigCharacter(
@@ -1276,6 +1351,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       sourceSha256?: string;
       ok: boolean;
       objectIds?: string[];
+      groupId?: string;
       reused?: boolean;
       warnings?: string[];
       diagnostics?: unknown[];
@@ -1285,12 +1361,40 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const entityKey = `assets.${asset.id}`;
       const existing = state.entities[entityKey];
       if (existing?.objectId) {
+        const objectIds = existing.objectIds ?? [existing.objectId];
+        const assembly = await ensureImportedModelAssemblyGroup(
+          session.page,
+          asset.id,
+          objectIds,
+          existing.groupId,
+        );
+        if (!assembly.ok) {
+          await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+            importedModels: importedModelResults,
+            assembly,
+          });
+          return {
+            ok: false,
+            phase: 'props',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: assembly.diagnostics,
+            error: `Imported model asset "${asset.id}" could not restore its persistent assembly group.`,
+          };
+        }
+        state = upsertEntity(state, entityKey, {
+          ...existing,
+          objectIds,
+          ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
+        });
         importedModelResults.push({
           id: asset.id,
           sourcePath: asset.sourcePath,
           sourceSha256: asset.sourceSha256,
           ok: true,
-          objectIds: existing.objectIds ?? [existing.objectId],
+          objectIds,
+          ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
           reused: true,
         });
         continue;
@@ -1337,6 +1441,26 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           error: `Imported model asset "${asset.id}" failed.`,
         };
       }
+      const assembly = await ensureImportedModelAssemblyGroup(session.page, asset.id, objectIds);
+      if (!assembly.ok) {
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+          importedModels: importedModelResults,
+          assembly,
+        });
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: assembly.diagnostics,
+          error: `Imported model asset "${asset.id}" could not create a persistent assembly group.`,
+        };
+      }
+      importedModelResults[importedModelResults.length - 1] = {
+        ...importedModelResults.at(-1)!,
+        ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
+      };
       if (asset.semanticRole === 'subject') {
         const roleApplied = await applyPlanOnPage(session.page, {
           version: 1,
@@ -1367,32 +1491,29 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       state = upsertEntity(state, entityKey, {
         objectId: objectIds[0],
         objectIds,
-        ...(objectIds.length > 1 ? { groupId: `asset.${asset.id}` } : {}),
+        ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
         refs: Object.fromEntries(objectIds.map((id) => [id, id])),
         sourceSha256: asset.sourceSha256,
       });
     }
     if (importedModelResults.length > 0) {
-      const bindings = Object.fromEntries(
-        importedModelResults.flatMap((result) => result.objectIds?.[0] ? [[result.id, result.objectIds[0]]] : []),
-      );
-      const bindingResult = Object.keys(bindings).length > 0
-        ? await session.page.evaluate(async (input) => window.foreScene!.bindManifestAssets(input), {
-          manifest,
-          bindings,
-        })
-        : undefined;
       await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
         importedModels: importedModelResults,
-        bindingResult,
       });
       await writeJson(runStatePath, state);
     }
 
     if (state.phases.props !== 'complete') {
-      if (compiled.props.plan.commands.length > 0) {
+      // Re-resolve props after imported cast assets have concrete ids. This is
+      // required for zero-command semantic aliases such as embedded props.
+      const propCompilation = compilePropsPhase(manifest, {
+        ...compiled.props.context,
+        entities: { ...compiled.props.context.entities, ...state.entities },
+      });
+      let applied: Awaited<ReturnType<typeof applyPlanOnPage>> | undefined;
+      if (propCompilation.plan.commands.length > 0) {
         state = setPhase(state, 'props', 'in_progress');
-        const applied = await applyPlanOnPage(session.page, compiled.props.plan);
+        applied = await applyPlanOnPage(session.page, propCompilation.plan);
         await writeJson(path.join(outputDir, 'logs', 'scene-props.json'), applied);
         if (!applied.ok) {
           state = setPhase(state, 'props', 'failed');
@@ -1407,14 +1528,41 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             error: 'Props apply failed.',
           };
         }
-        for (const [key, mapping] of Object.entries(compiled.context.entities)) {
-          if (key.startsWith('props.')) {
-            state = upsertEntity(state, key, resolveMappingIds(mapping, applied.summary?.createdRefs));
-          }
+      }
+      for (const [key, mapping] of Object.entries(propCompilation.context.entities)) {
+        if (key.startsWith('props.')) {
+          state = upsertEntity(state, key, resolveMappingIds(mapping, applied?.summary?.createdRefs));
         }
       }
       state = setPhase(state, 'props', 'complete');
       await writeJson(runStatePath, state);
+    }
+
+    // Persist the resolved semantic universe before shot compilation so the
+    // compiler can author closed-world visibility from durable contracts.
+    const preShotSemanticSync = await synchronizeManifestProductionConfiguration(
+      session.page,
+      manifest,
+      state,
+    );
+    await writeJson(
+      path.join(outputDir, 'logs', 'production-configuration-pre-shot.json'),
+      preShotSemanticSync,
+    );
+    if (!preShotSemanticSync.bound.ok || !preShotSemanticSync.validation.ok) {
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        phase: 'shots',
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        diagnostics: [
+          ...preShotSemanticSync.bound.diagnostics,
+          ...preShotSemanticSync.validation.diagnostics,
+        ],
+        error: 'Resolved production semantics could not be prepared before shot compilation.',
+      };
     }
 
     // Re-compile shots against resolved entity ids from run-state.
@@ -1559,6 +1707,29 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     }
     state = setPhase(state, 'shots', 'complete');
     await writeJson(runStatePath, state);
+
+    const semanticSync = await synchronizeManifestProductionConfiguration(
+      session.page,
+      manifest,
+      state,
+    );
+    await writeJson(path.join(outputDir, 'logs', 'production-configuration.json'), semanticSync);
+    if (!semanticSync.bound.ok || !semanticSync.validation.ok) {
+      state = setPhase(state, 'shots', 'failed');
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        phase: 'shots',
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        diagnostics: [
+          ...semanticSync.bound.diagnostics,
+          ...semanticSync.validation.diagnostics,
+        ],
+        error: 'Compiled production semantics did not persist as a valid prepared configuration.',
+      };
+    }
     timing.compilationMs = Date.now() - compilationStartedAt;
 
     timeBudget?.assertWithinBudget('render_review_frames');
@@ -2041,6 +2212,13 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
         state = upsertShotState(state, definition.shotNumber, { repairAttempts });
       }
+
+      const finalVisualPreflight = await session.page.evaluate((shotId) => (
+        window.foreScene!.inspectShotVisualPreflight({
+          shotId,
+        })
+      ), shot.id);
+      finalResult = mergeFrameValidationWithVisualPreflight(finalResult, finalVisualPreflight);
 
       previousCamera = shot.camera;
       validationResults.push(finalResult);

@@ -62,6 +62,11 @@ import type {
   ProductionGateState,
 } from '../previs/productionGates';
 import type { ApprovedLayoutRevision } from '../previs/stillLayoutApproval';
+import type {
+  GenerativeWorldRequestV1,
+  GenerativeWorldResultV1,
+  HyWorld2CameraPriorFile,
+} from '../generativeWorldBoundary';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -952,7 +957,8 @@ export type AgentVisualPreflightCheckId =
   | 'ground_contact'
   | 'camera_direction'
   | 'cropping'
-  | 'motion_continuity';
+  | 'motion_continuity'
+  | 'action_continuity';
 
 export interface AgentVisualPreflightCheck {
   id: AgentVisualPreflightCheckId;
@@ -2027,6 +2033,37 @@ export interface AgentModelImportResult {
   diagnostics?: AgentDiagnostic[];
 }
 
+export interface AgentGenerativeWorldPreviewResult {
+  ok: boolean;
+  request?: GenerativeWorldRequestV1;
+  hyWorld2CameraPrior?: HyWorld2CameraPriorFile;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentGenerativeWorldMockResult {
+  ok: boolean;
+  request?: GenerativeWorldRequestV1;
+  result?: GenerativeWorldResultV1;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentGenerativeWorldDepthResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId: string;
+  requestedTimeSeconds?: number;
+  sampledTimeSeconds?: number;
+  revisionId: string;
+  width: number;
+  height: number;
+  encoding?: 'npy-float32-linear-camera-z';
+  invalidDepthValue?: 0;
+  nearMeters?: number;
+  farMeters?: number;
+  artifact?: AgentArtifactHandle;
+  diagnostics: AgentDiagnostic[];
+}
+
 export interface ForeSceneBrowserApi {
   readonly apiVersion: typeof FORESCENE_AGENT_API_VERSION;
 
@@ -2047,6 +2084,21 @@ export interface ForeSceneBrowserApi {
   };
   describeOperation(operation: string): AgentOperationDescription | undefined;
   getAgentSchema(): AgentSchemaDocument;
+
+  previewGenerativeWorldRequest(input?: {
+    shotIds?: string[];
+    desiredRepresentations?: Array<'mesh' | '3dgs'>;
+  }): AgentGenerativeWorldPreviewResult;
+  runMockGenerativeWorldBackend(input?: {
+    shotIds?: string[];
+    desiredRepresentations?: Array<'mesh' | '3dgs'>;
+  }): AgentGenerativeWorldMockResult;
+  renderGenerativeWorldDepthPrior(input: {
+    shotId: string;
+    timeSeconds?: number;
+    width?: number;
+    height?: number;
+  }): Promise<AgentGenerativeWorldDepthResult>;
 
   inspectProject(): AgentProjectInspection;
   listMissingAssets(): AgentMissingAssetSummary[];
@@ -2301,7 +2353,11 @@ export interface ForeSceneBrowserApi {
 
   // Production manifest compiler
   validateProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult;
-  bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): Promise<AgentProductionManifestValidateResult>;
+  bindManifestAssets(input: {
+    manifest: unknown;
+    bindings: Record<string, string>;
+    groupBindings?: Record<string, string>;
+  }): Promise<AgentProductionManifestValidateResult>;
   inspectProductionConfiguration(): AgentProductionConfigurationInspection;
   validateProductionConfiguration(input: { manifest: unknown }): AgentProductionConfigurationValidationResult;
   bindProductionEntity(input: { entityId: string; binding: ProductionEntityBinding }): Promise<AgentProductionConfigurationMutationResult>;

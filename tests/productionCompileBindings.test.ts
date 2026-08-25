@@ -86,6 +86,37 @@ function vec3Distance(a: Vec3, b: Vec3): number {
 }
 
 describe('production compile group bindings', () => {
+  it('aliases embedded props to their prepared host without authoring or restaging proxy geometry', () => {
+    const embedded = manifest({
+      props: [{
+        id: 'prop.shield',
+        name: 'Embedded shield',
+        primitive: 'shield',
+        embeddedIn: { subject: 'cast.lead', joint: 'leftHand' },
+      }],
+      shots: [{
+        ...manifest().shots[0]!,
+        requirements: { visibleProps: ['prop.shield'] },
+      }],
+    });
+    const cast = compileCastPhase(embedded, createEmptyCompiledContext());
+    const props = compilePropsPhase(embedded, cast.context);
+
+    expect(props.plan.commands).toEqual([]);
+    expect(props.context.entities['props.prop.shield']).toEqual(
+      props.context.entities['cast.cast.lead'],
+    );
+
+    const batch = compileShotBatch(embedded, props.context, embedded.shots, 0);
+    const visibleHostStages = batch.plan.commands.filter((command) => (
+      command.op === 'shot.stageObject'
+      && command.visible === true
+      && 'ref' in command.object
+      && command.object.ref === props.context.entities['cast.cast.lead']?.objectId
+    ));
+    expect(visibleHostStages).toHaveLength(1);
+  });
+
   it('binds landmarked existing-project locations without replacement geometry', () => {
     const project = createDefaultProject();
     const ruins = createSceneObject('floor');
