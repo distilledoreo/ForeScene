@@ -80,11 +80,11 @@ export function inferRigidLocomotionRotation(
 }
 
 /** Local forward lean after facing travel, in degrees. */
-export const RIGID_LOCOMOTION_LEAN_DEGREES = 28;
+export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Lateral tracking offset for locomotion, in meters. */
-export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 2;
+export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 2.5;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
