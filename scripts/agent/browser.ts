@@ -8,6 +8,7 @@ import { chromium, type BrowserContext, type Page } from '@playwright/test';
 import {
   isChromiumProfileLockError,
   recoverChromiumProfileLocks,
+  terminateChromiumProfileOwner,
   type BrowserProfileRecovery,
 } from './browserProfile';
 import { defaultAgentProfilePath, isDefaultAgentProfilePath, resolveAgentProfilePath } from './agentProfile';
@@ -15,6 +16,7 @@ import { resolveForeSceneRepoRoot } from './repoRoot';
 
 export const REPO_ROOT = resolveForeSceneRepoRoot();
 export const AGENT_PROFILE_DIR = defaultAgentProfilePath(REPO_ROOT);
+export const BROWSER_LAUNCH_TIMEOUT_MS = 45_000;
 
 export interface AgentBrowserOptions {
   url?: string;
@@ -35,6 +37,49 @@ export interface AgentBrowserSession {
   profileDir: string;
   profileRecovery: BrowserProfileRecovery;
   close: () => Promise<void>;
+}
+
+export class BrowserLaunchTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Chromium did not establish an agent browser context within ${timeoutMs}ms.`);
+    this.name = 'BrowserLaunchTimeoutError';
+  }
+}
+
+export async function withBrowserLaunchDeadline<T>(
+  launch: () => Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => Promise<void>,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const timeoutError = new BrowserLaunchTimeoutError(timeoutMs);
+  const launchPromise = launch();
+  const guardedLaunch = launchPromise.then((value) => {
+    if (timedOut) throw timeoutError;
+    return value;
+  });
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      void onTimeout()
+        .catch(() => undefined)
+        .finally(() => reject(timeoutError));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([guardedLaunch, deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    // A timed-out Playwright promise may reject after its browser is terminated.
+    void launchPromise.catch(() => undefined);
+  }
+}
+
+function isRecoverableBrowserLaunchError(error: unknown): boolean {
+  if (error instanceof BrowserLaunchTimeoutError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /browser.*(closed|crash)|target.*closed|process.*(exited|closed)|connection.*closed/i.test(message);
 }
 
 export async function resolveForeSceneUrl(explicit?: string): Promise<string> {
@@ -129,25 +174,33 @@ export async function openAgentBrowser(
     process.stderr.write(`[agent] ${profileRecovery.message}\n`);
   }
 
+  const launch = () => withBrowserLaunchDeadline(
+    () => chromium.launchPersistentContext(profileDir, {
+      headless,
+      viewport,
+      timeout: BROWSER_LAUNCH_TIMEOUT_MS,
+    }),
+    BROWSER_LAUNCH_TIMEOUT_MS,
+    async () => {
+      const cleanup = await terminateChromiumProfileOwner(profileDir);
+      process.stderr.write(
+        `[agent] chromium-launch-timeout profile=${profileDir} owner=${cleanup.ownerPid ?? 'unknown'} terminated=${cleanup.terminated ? '1' : '0'}\n`,
+      );
+    },
+  );
+
   let context: BrowserContext;
   try {
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless,
-      viewport,
-    });
+    context = await launch();
   } catch (error) {
-    if (!isChromiumProfileLockError(error)) throw error;
-    profileRecovery = await recoverChromiumProfileLocks(profileDir);
-    if (profileRecovery.blocked) {
-      throw new Error(profileRecovery.message);
-    }
-    if (profileRecovery.recovered) {
-      process.stderr.write(`[agent] ${profileRecovery.message}\n`);
-    }
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless,
-      viewport,
-    });
+    if (!isChromiumProfileLockError(error) && !isRecoverableBrowserLaunchError(error)) throw error;
+    const cleanup = await terminateChromiumProfileOwner(profileDir);
+    profileRecovery = cleanup.recovery;
+    if (profileRecovery.blocked) throw new Error(profileRecovery.message);
+    process.stderr.write(
+      `[agent] chromium-launch-retry profile=${profileDir} reason=${error instanceof Error ? error.name : 'unknown'} owner=${cleanup.ownerPid ?? 'unknown'}\n`,
+    );
+    context = await launch();
   }
 
   process.stderr.write(

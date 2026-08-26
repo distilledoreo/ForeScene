@@ -23,5 +23,23 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "strict": true
-  }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "e2e/**/*.ts",
+    "vite.config.ts",
+    "vitest.*.config.ts",
+    "playwright.config.ts"
+  ],
+  "exclude": [
+    "artifacts",
+    "dist",
+    "node_modules",
+    "output",
+    "test-results"
+  ]
 }
