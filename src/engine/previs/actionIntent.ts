@@ -83,12 +83,12 @@ export function inferRigidLocomotionRotation(
 export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
-/** Lateral offset for locomotion, in meters. Stays inside a 4 m corridor. */
-export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 1.2;
-/** Fraction of authored along-path dolly kept so stills show travel. */
-export const READABLE_LOCOMOTION_CAMERA_TRACKING = 0.85;
-/** Minimum vertical FOV so a lagged chase still keeps the lean in frame. */
-export const READABLE_LOCOMOTION_CAMERA_FOV_DEGREES = 56;
+/** Locked side-on covering distance so the pack travels through frame. */
+export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 7;
+/** Height of the locked covering camera, in meters. */
+export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.8;
+/** Vertical FOV for the locked covering camera, in degrees. */
+export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 80;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -159,9 +159,9 @@ function quaternionToEulerXyzDegrees(q: { x: number; y: number; z: number; w: nu
 
 /**
  * Keep multiple moving subjects readable when an authored tracking camera is
- * nearly collinear with their path. Lateral offset stays bounded. Locomotion
- * cameras also lag the authored along-path dolly so start/mid/end stills are
- * not the same tracked silhouette against a hidden wall.
+ * nearly collinear with their path. Non-locomotion shots only get a bounded
+ * lateral nudge. Locomotion shots use one locked covering camera so travel
+ * reads as the pack moving through the frame instead of a tracked freeze.
  */
 export function resolveReadableMotionCamera(
   shot: PrevisShotDefinition,
@@ -195,6 +195,29 @@ export function resolveReadableMotionCamera(
   const forward = travel ?? view;
   if (!forward) return camera;
   const lateral: Vec3 = [forward[2], 0, -forward[0]];
+
+  if (isLocomotionAction(shot) && primarySamples.length >= 2) {
+    const pathMid: Vec3 = [
+      (primarySamples[0]![0] + primarySamples[primarySamples.length - 1]![0]) / 2,
+      camera.target[1],
+      (primarySamples[0]![2] + primarySamples[primarySamples.length - 1]![2]) / 2,
+    ];
+    const authoredSide = (camera.position[0] - pathMid[0]) * lateral[0]
+      + (camera.position[2] - pathMid[2]) * lateral[2];
+    const sign = authoredSide < 0 ? -1 : 1;
+    const position: Vec3 = [
+      pathMid[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+      READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
+      pathMid[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+    ];
+    return {
+      ...camera,
+      position,
+      target: pathMid,
+      fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
+    };
+  }
+
   const centroid: Vec3 = stagedPositions.reduce((sum, position, _index, list) => [
     sum[0] + position[0] / list.length,
     sum[1] + position[1] / list.length,
@@ -206,97 +229,16 @@ export function resolveReadableMotionCamera(
     camera.position[2] - centroid[2],
   ];
   const lateralDistance = offset[0] * lateral[0] + offset[2] * lateral[2];
-  const desired = isLocomotionAction(shot)
-    ? READABLE_LOCOMOTION_CAMERA_LATERAL_METERS
-    : 1.2;
-  let position: Vec3 = camera.position;
-  if (Math.abs(lateralDistance) < desired) {
-    const sign = lateralDistance < 0 ? -1 : 1;
-    const correction = desired * sign - lateralDistance;
-    position = [
+  if (Math.abs(lateralDistance) >= 1.2) return camera;
+  const sign = lateralDistance < 0 ? -1 : 1;
+  const correction = 1.2 * sign - lateralDistance;
+  return {
+    ...camera,
+    position: [
       camera.position[0] + lateral[0] * correction,
       camera.position[1],
       camera.position[2] + lateral[2] * correction,
-    ];
-  }
-  let fovDegrees = camera.fovDegrees;
-  if (isLocomotionAction(shot)) {
-    const firstCamera = shot.motion?.keyframes[0]?.camera;
-    const first = firstCamera?.position;
-    if (first) {
-      const firstAlong = first[0] * forward[0] + first[2] * forward[2];
-      const currentAlong = position[0] * forward[0] + position[2] * forward[2];
-      const laggedAlong = firstAlong
-        + READABLE_LOCOMOTION_CAMERA_TRACKING * (currentAlong - firstAlong);
-      const travelDelta = laggedAlong - currentAlong;
-      position = [
-        position[0] + forward[0] * travelDelta,
-        position[1],
-        position[2] + forward[2] * travelDelta,
-      ];
-      const target = camera.target;
-      if (target && firstCamera.target) {
-        const firstStaged = (shot.motion?.keyframes[0]?.staging ?? [])
-          .filter((entry) => shot.camera.subjects.includes(entry.subject))
-          .flatMap((entry) => entry.transform?.position ? [entry.transform.position] : []);
-        const firstCentroid: Vec3 = firstStaged.length > 0
-          ? firstStaged.reduce((sum, sample, _index, list) => [
-            sum[0] + sample[0] / list.length,
-            sum[1] + sample[1] / list.length,
-            sum[2] + sample[2] / list.length,
-          ], [0, 0, 0])
-          : centroid;
-        const firstOffset: Vec3 = [
-          first[0] - firstCentroid[0],
-          0,
-          first[2] - firstCentroid[2],
-        ];
-        let firstReadable: Vec3 = first;
-        const firstLateral = firstOffset[0] * lateral[0] + firstOffset[2] * lateral[2];
-        if (Math.abs(firstLateral) < desired) {
-          const firstSign = firstLateral < 0 ? -1 : 1;
-          const firstCorrection = desired * firstSign - firstLateral;
-          firstReadable = [
-            first[0] + lateral[0] * firstCorrection,
-            first[1],
-            first[2] + lateral[2] * firstCorrection,
-          ];
-        }
-        const desiredLook = Math.hypot(
-          firstCamera.target[0] - firstReadable[0],
-          firstCamera.target[1] - firstReadable[1],
-          firstCamera.target[2] - firstReadable[2],
-        );
-        const toTarget: Vec3 = [
-          target[0] - position[0],
-          target[1] - position[1],
-          target[2] - position[2],
-        ];
-        const dist = Math.hypot(toTarget[0], toTarget[1], toTarget[2]);
-        if (dist > 1e-6 && desiredLook > dist) {
-          const extra = (desiredLook - dist) / dist;
-          position = [
-            position[0] - toTarget[0] * extra,
-            position[1] - toTarget[1] * extra,
-            position[2] - toTarget[2] * extra,
-          ];
-        }
-      }
-    }
-    fovDegrees = Math.max(camera.fovDegrees ?? 0, READABLE_LOCOMOTION_CAMERA_FOV_DEGREES);
-  }
-  if (
-    position[0] === camera.position[0]
-    && position[1] === camera.position[1]
-    && position[2] === camera.position[2]
-    && fovDegrees === camera.fovDegrees
-  ) {
-    return camera;
-  }
-  return {
-    ...camera,
-    position,
-    ...(fovDegrees !== undefined ? { fovDegrees } : {}),
+    ],
   };
 }
 

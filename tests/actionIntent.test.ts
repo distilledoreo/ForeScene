@@ -7,7 +7,9 @@ import {
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
-  READABLE_LOCOMOTION_CAMERA_LATERAL_METERS,
+  READABLE_LOCOMOTION_COVER_FOV_DEGREES,
+  READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
+  READABLE_LOCOMOTION_COVER_LATERAL_METERS,
   RIGID_LOCOMOTION_LEAN_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
@@ -107,27 +109,28 @@ describe('action intent', () => {
 
   it('adds a bounded lateral offset to a collinear multi-subject tracking camera', () => {
     const shot = chase();
+    shot.name = 'Two-shot conversation';
+    shot.description = 'The pair hold position.';
     const repaired = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
-    expect(repaired.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_CAMERA_LATERAL_METERS, 5);
+    expect(repaired.position?.[0]).toBeCloseTo(1.2, 5);
     expect(repaired.position?.[1]).toBe(1.6);
     expect(repaired.position?.[2]).toBe(-2);
     expect(repaired.target).toEqual([0, 0.9, -5.8]);
   });
 
-  it('lags locomotion dolly so end stills are not a fully tracked copy of the start', () => {
+  it('locks a covering chase camera so subjects travel through the frame', () => {
     const shot = chase();
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
-    const lookDistance = (camera: NonNullable<typeof start>) => Math.hypot(
-      (camera.target?.[0] ?? 0) - (camera.position?.[0] ?? 0),
-      (camera.target?.[1] ?? 0) - (camera.position?.[1] ?? 0),
-      (camera.target?.[2] ?? 0) - (camera.position?.[2] ?? 0),
-    );
-    expect(start.position?.[2]).toBe(-2);
-    expect(lookDistance(end)).toBeCloseTo(lookDistance(start), 5);
-    expect(end.position?.[2]).not.toBeCloseTo(start.position?.[2] ?? 0, 1);
-    expect(end.position?.[2]).toBeLessThan(8.6);
-    expect(end.fovDegrees).toBeGreaterThanOrEqual(50);
+    expect(start.position).toEqual(end.position);
+    expect(start.target).toEqual(end.target);
+    expect(start.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_COVER_LATERAL_METERS, 5);
+    expect(start.position?.[1]).toBe(READABLE_LOCOMOTION_COVER_HEIGHT_METERS);
+    expect(start.position?.[2]).toBeCloseTo(0, 5);
+    expect(start.target).toEqual([0, 0.9, 0]);
+    expect(start.fovDegrees).toBe(READABLE_LOCOMOTION_COVER_FOV_DEGREES);
+    expect(shot.motion!.keyframes[0]!.staging![0]!.transform!.position![2]).toBe(-5.3);
+    expect(shot.motion!.keyframes[1]!.staging![0]!.transform!.position![2]).toBe(5.3);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {
