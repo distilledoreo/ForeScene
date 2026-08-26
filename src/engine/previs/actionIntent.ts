@@ -118,8 +118,10 @@ export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: nu
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
 /** Locked side-on covering distance so the pack stays fully framed. */
 export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
-/** Partial follow so the pack travels through frame without becoming a rear close-up. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.70;
+/** Extra lag at path start so start/mid stills show travel through the corridor. */
+export const READABLE_LOCOMOTION_COVER_FOLLOW_START = 0.52;
+/** Tighter lock at path end so the last frame stays side-on, not a rear palm. */
+export const READABLE_LOCOMOTION_COVER_FOLLOW_END = 0.78;
 /** Height of the locked covering camera, in meters. */
 export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.85;
 /** Vertical FOV for the locked covering camera, in degrees. */
@@ -246,7 +248,25 @@ export function resolveReadableMotionCamera(
       sum[1] + sample[1] / list.length,
       sum[2] + sample[2] / list.length,
     ], [0, 0, 0]);
-    const alongDelta = READABLE_LOCOMOTION_COVER_FOLLOW * (
+    const pathStart: Vec3 = [primarySamples[0]![0], 0, primarySamples[0]![2]];
+    const pathEnd: Vec3 = [
+      primarySamples[primarySamples.length - 1]![0],
+      0,
+      primarySamples[primarySamples.length - 1]![2],
+    ];
+    const primaryNow = (keyframe.staging ?? []).find((entry) => (
+      entry.subject === primary && entry.transform?.position
+    ))?.transform?.position ?? centroid;
+    const pathLength = (pathEnd[0] - pathStart[0]) * forward[0]
+      + (pathEnd[2] - pathStart[2]) * forward[2];
+    const alongFromStart = (primaryNow[0] - pathStart[0]) * forward[0]
+      + (primaryNow[2] - pathStart[2]) * forward[2];
+    const pathProgress = pathLength > 1e-6
+      ? Math.max(0, Math.min(1, alongFromStart / pathLength))
+      : 0.5;
+    const follow = READABLE_LOCOMOTION_COVER_FOLLOW_START
+      + pathProgress * (READABLE_LOCOMOTION_COVER_FOLLOW_END - READABLE_LOCOMOTION_COVER_FOLLOW_START);
+    const alongDelta = follow * (
       (centroid[0] - pathMid[0]) * forward[0]
       + (centroid[2] - pathMid[2]) * forward[2]
     );

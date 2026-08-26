@@ -9,7 +9,8 @@ import {
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
   rigidLocomotionGroundedPosition,
-  READABLE_LOCOMOTION_COVER_FOLLOW,
+  READABLE_LOCOMOTION_COVER_FOLLOW_END,
+  READABLE_LOCOMOTION_COVER_FOLLOW_START,
   RIGID_LOCOMOTION_LEAN_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
@@ -158,8 +159,10 @@ describe('action intent', () => {
     expect(start.target?.[2]).toBeCloseTo(startCentroidZ, 5);
     expect(end.target?.[2]).toBeCloseTo(endCentroidZ, 5);
     expect(start.target?.[2]).not.toBeCloseTo(0, 1);
-    expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * startCentroidZ, 5);
-    expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * endCentroidZ, 5);
+    expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW_START * startCentroidZ, 5);
+    expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW_END * endCentroidZ, 5);
+    expect(Math.abs(start.position![2] - startCentroidZ))
+      .toBeGreaterThan(Math.abs(end.position![2] - endCentroidZ));
     expect(start.position?.[2]).not.toBeCloseTo(start.target?.[2] ?? 0, 1);
     expect(end.position?.[2]).not.toBeCloseTo(end.target?.[2] ?? 0, 1);
     expect(start.fovDegrees).toBe(60);
