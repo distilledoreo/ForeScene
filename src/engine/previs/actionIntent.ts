@@ -1,4 +1,5 @@
 import type { Vec3 } from '../../domain/types';
+import { centerTransformForFootPlant } from '../groundPivot';
 import type {
   PrevisCharacterDefinition,
   PrevisProductionManifestV1,
@@ -83,17 +84,19 @@ export function inferRigidLocomotionRotation(
 export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 
 /**
- * Pitching a center-staged root lifts the feet. Lower the origin by the
- * exact rise of a foot at ±height/2 so the lean stays planted.
+ * Pitching a center-staged root lifts the feet. This helper documents the
+ * Y drop for a pure local lean; runtime planting uses the authored Euler in
+ * `applySceneObjectTransform` so interpolated frames stay grounded too.
  */
 export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: number): Vec3 {
-  if (heightMeters < 0.4) return position;
-  const radians = (RIGID_LOCOMOTION_LEAN_DEGREES * Math.PI) / 180;
-  const drop = (heightMeters / 2) * (1 - Math.cos(radians));
-  return [position[0], position[1] - drop, position[2]];
+  return centerTransformForFootPlant(
+    position,
+    [RIGID_LOCOMOTION_LEAN_DEGREES, 0, 0],
+    heightMeters,
+  );
 }
 /** Half-separation applied to stacked chase subjects, in meters. */
-export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
+export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
 /** Locked side-on covering distance so the pack travels through frame. */
 export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 2.9;
 /** How far the locked camera follows pack travel from path midpoint, 0–1. */

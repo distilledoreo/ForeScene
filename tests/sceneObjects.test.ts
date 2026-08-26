@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
 import {
   CHECKERBOARD_TILE_METERS,
+  FORESCENE_CONTACT_SHADOW_NAME,
   buildScene,
   computeBuildFogRange,
   createObject3D,
@@ -165,5 +166,24 @@ describe('object surface styles', () => {
 
     const mesh = createObject3D(checker);
     expect(mesh).toBeTruthy();
+  });
+});
+
+describe('ground contact', () => {
+  it('plants leaned character roots so declared feet stay on the floor', () => {
+    const person = createSceneObject('human_dummy', 1);
+    person.transform.position = [0, 0.875, 0];
+    person.transform.rotation = [34, 0, 0];
+    const node = createObject3D(person);
+    const half = person.dimensions[1] / 2;
+    const foot = new THREE.Vector3(0, -half, 0).applyEuler(node.rotation);
+    expect(node.position.y + foot.y).toBeCloseTo(0, 5);
+    expect(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeTruthy();
+  });
+
+  it('does not attach contact shadows to set architecture', () => {
+    const wall = createSceneObject('wall', 1);
+    const node = createObject3D(wall);
+    expect(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
   });
 });

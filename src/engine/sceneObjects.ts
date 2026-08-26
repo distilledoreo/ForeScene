@@ -22,6 +22,7 @@ import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh'
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
+import { centerTransformForFootPlant } from './groundPivot';
 
 export type SceneVisualTheme = 'light' | 'dark';
 
@@ -91,6 +92,19 @@ const treeCrownMaterialByTheme: Record<SceneVisualTheme, THREE.MeshStandardMater
   dark: new THREE.MeshStandardMaterial({ color: 0x7f8d84, roughness: 0.85 }),
 };
 const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+const contactShadowMaterial = new THREE.MeshBasicMaterial({
+  color: 0x111111,
+  transparent: true,
+  opacity: 0.45,
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
+export const FORESCENE_CONTACT_SHADOW_NAME = 'forescene-contact-shadow';
+const contactFlattenQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const contactWorldPoint = new THREE.Vector3();
 const SHARED_MATERIALS = new Set<THREE.Material>([
   ...Object.values(materialByTheme.light),
   ...Object.values(materialByTheme.dark),
@@ -102,8 +116,9 @@ const SHARED_MATERIALS = new Set<THREE.Material>([
   ...Object.values(treeTrunkMaterialByTheme),
   ...Object.values(treeCrownMaterialByTheme),
   panoOriginRingMaterial,
+  contactShadowMaterial,
 ]);
-const SHARED_GEOMETRIES = new Set<THREE.BufferGeometry>();
+const SHARED_GEOMETRIES = new Set<THREE.BufferGeometry>([contactShadowGeometry]);
 const primitiveGeometryCache = new Map<string, THREE.BufferGeometry>();
 const solidMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const checkerMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -571,6 +586,10 @@ export function createObject3D(
   }
 
   node.name = object.name;
+  if (objectUsesGroundContact(object)) {
+    node.userData.groundPivotHeight = object.dimensions[1];
+    attachContactShadow(node, object);
+  }
   applySceneObjectTransform(node, object.transform, {
     applyScale: !sceneObjectUsesProceduralScale(object.type),
   });
@@ -587,7 +606,13 @@ export function applySceneObjectTransform(
   transform: Transform,
   options: { applyScale?: boolean; visible?: boolean } = {},
 ) {
-  node.position.fromArray(transform.position);
+  const pivotHeight = typeof node.userData.groundPivotHeight === 'number'
+    ? node.userData.groundPivotHeight * (options.applyScale === false ? 1 : transform.scale[1])
+    : 0;
+  const position = pivotHeight > 0
+    ? centerTransformForFootPlant(transform.position, transform.rotation, pivotHeight)
+    : transform.position;
+  node.position.fromArray(position);
   node.rotation.set(
     degreesToRadians(transform.rotation[0]),
     degreesToRadians(transform.rotation[1]),
@@ -599,6 +624,43 @@ export function applySceneObjectTransform(
   if (options.visible !== undefined) {
     node.visible = options.visible;
   }
+  placeContactShadow(node, transform, pivotHeight);
+}
+
+function objectUsesGroundContact(object: SceneObject): boolean {
+  if (object.stagingRole === 'set') return false;
+  return object.type === 'human_dummy'
+    || object.type === 'imported_model'
+    || Boolean(object.poseableCharacter);
+}
+
+function attachContactShadow(node: THREE.Object3D, object: SceneObject): void {
+  if (node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)) return;
+  const radius = Math.min(
+    1.15,
+    Math.max(0.26, Math.max(object.dimensions[0], object.dimensions[2]) * 0.42),
+  );
+  const disc = new THREE.Mesh(contactShadowGeometry, contactShadowMaterial);
+  disc.name = FORESCENE_CONTACT_SHADOW_NAME;
+  disc.userData.contactShadow = true;
+  disc.scale.set(radius, radius, 1);
+  disc.renderOrder = 2;
+  node.add(disc);
+}
+
+function placeContactShadow(node: THREE.Object3D, transform: Transform, pivotHeight: number): void {
+  const disc = node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME);
+  if (!disc) return;
+  const half = pivotHeight > 0 ? pivotHeight / 2 : 0;
+  contactWorldPoint.set(
+    transform.position[0],
+    transform.position[1] - half + 0.012,
+    transform.position[2],
+  );
+  node.updateMatrixWorld(true);
+  node.worldToLocal(contactWorldPoint);
+  disc.position.copy(contactWorldPoint);
+  disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);
 }
 
 const PROCEDURAL_SCALE_TYPES = new Set<SceneObjectType>([

@@ -86,7 +86,7 @@ describe('action intent', () => {
     expect(pursuer[0]).toBeGreaterThan(0);
     expect(runner[2]).toBe(-5.3);
     expect(pursuer[2]).toBe(-6.5);
-    expect(pursuer[0] - runner[0]).toBeCloseTo(0.96, 5);
+    expect(pursuer[0] - runner[0]).toBeCloseTo(1.12, 5);
   });
 
   it('keeps an already separated chase pair on its authored laterals', () => {
