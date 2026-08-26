@@ -130,6 +130,9 @@ export function createImportedMeshNode(
       safeDimensionRatio(object.dimensions[1], sourceSize.y) * object.transform.scale[1],
       safeDimensionRatio(object.dimensions[2], sourceSize.z) * object.transform.scale[2],
     );
+    if (object.stagingRole !== 'set') {
+      centerMeshOnGeometryBounds(mesh);
+    }
     root.add(mesh);
     root.userData.importedModelAssetId = asset.id;
     // Keep the historical geometry/material surface available to importer
@@ -329,6 +332,16 @@ function createMissingAssetLabel(name: string): THREE.Sprite | undefined {
   sprite.scale.set(2.4, 0.45, 1);
   sprite.userData.missingAssetLabel = true;
   return sprite;
+}
+
+function centerMeshOnGeometryBounds(mesh: THREE.Mesh): void {
+  const box = mesh.geometry.boundingBox;
+  if (!box) return;
+  mesh.position.set(
+    -0.5 * (box.min.x + box.max.x) * mesh.scale.x,
+    -0.5 * (box.min.y + box.max.y) * mesh.scale.y,
+    -0.5 * (box.min.z + box.max.z) * mesh.scale.z,
+  );
 }
 
 function safeDimensionRatio(current: number, source: number) {

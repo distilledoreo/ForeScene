@@ -96,7 +96,7 @@ export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: nu
   );
 }
 /** Half-separation applied to stacked chase subjects, in meters. */
-export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
+export const READABLE_LOCOMOTION_SPREAD_METERS = 0.7;
 /** Locked side-on covering distance so the pack travels through frame. */
 export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 2.9;
 /** How far the locked camera follows pack travel from path midpoint, 0–1. */
