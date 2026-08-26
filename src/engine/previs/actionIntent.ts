@@ -83,11 +83,13 @@ export function inferRigidLocomotionRotation(
 }
 
 /** Local forward lean after facing travel, in degrees. */
-export const RIGID_LOCOMOTION_LEAN_DEGREES = 20;
+export const RIGID_LOCOMOTION_LEAN_DEGREES = 28;
 /** Bounded yaw toward an off-axis tracking camera, in degrees. */
-export const RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES = 28;
+export const RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES = 48;
 /** Half-separation applied to stacked chase subjects, in meters. */
-export const READABLE_LOCOMOTION_SPREAD_METERS = 0.42;
+export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
+/** Lateral tracking offset for locomotion, in meters. */
+export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 2;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -218,10 +220,12 @@ export function resolveReadableMotionCamera(
     camera.position[2] - centroid[2],
   ];
   const lateralDistance = offset[0] * lateral[0] + offset[2] * lateral[2];
-  // Preserve an authored side/three-quarter baseline once it is already clear
-  // of the motion axis. Larger generic offsets can push a camera through the
-  // walls of a narrow prepared location and erase the environment entirely.
-  const desired = 1.2;
+  // Non-locomotion tracking stays conservative so a camera cannot leave a
+  // narrow prepared room. Chase coverage already hides the near wall, so a
+  // wider side-on baseline is what makes a rigid lean readable.
+  const desired = isLocomotionAction(shot)
+    ? READABLE_LOCOMOTION_CAMERA_LATERAL_METERS
+    : 1.2;
   if (Math.abs(lateralDistance) >= desired) return camera;
   const sign = lateralDistance < 0 ? -1 : 1;
   const correction = desired * sign - lateralDistance;

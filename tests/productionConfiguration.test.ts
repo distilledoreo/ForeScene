@@ -306,7 +306,7 @@ describe('production configuration validation', () => {
     }
     const leadX = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[0] ?? 0;
     const pursuerX = actions.find((action) => action.entityId === 'asset.pursuer')?.samples[0]?.position?.[0] ?? 0;
-    expect(pursuerX - leadX).toBeCloseTo(0.84, 5);
+    expect(pursuerX - leadX).toBeCloseTo(0.96, 5);
   });
 
   it('derives dynamic classification from prepared object semantics', () => {

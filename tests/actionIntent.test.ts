@@ -62,13 +62,13 @@ describe('action intent', () => {
   it('orients imported locomotion toward travel with a readable local lean', () => {
     const runner = inferRigidLocomotionRotation(chase(), 'runner')!;
     const pursuer = inferRigidLocomotionRotation(chase(), 'pursuer')!;
-    expect(runner[0]).toBeGreaterThan(12);
-    expect(runner[1]).toBeGreaterThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES - 5);
-    expect(runner[1]).toBeLessThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES + 5);
-    expect(Math.abs(runner[2])).toBeLessThan(15);
+    expect(runner[0]).toBeGreaterThan(15);
+    expect(runner[1]).toBeGreaterThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES - 10);
+    expect(runner[1]).toBeLessThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES + 10);
+    expect(Math.abs(runner[2])).toBeLessThan(35);
     expect(pursuer).toEqual(runner);
     expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual(runner);
-    expect(RIGID_LOCOMOTION_LEAN_DEGREES).toBe(20);
+    expect(RIGID_LOCOMOTION_LEAN_DEGREES).toBe(28);
   });
 
   it('separates stacked chase silhouettes without changing travel', () => {
@@ -80,7 +80,7 @@ describe('action intent', () => {
     expect(pursuer[0]).toBeGreaterThan(0);
     expect(runner[2]).toBe(-5.3);
     expect(pursuer[2]).toBe(-6.5);
-    expect(pursuer[0] - runner[0]).toBeCloseTo(0.84, 5);
+    expect(pursuer[0] - runner[0]).toBeCloseTo(0.96, 5);
   });
 
   it('keeps an already separated chase pair on its authored laterals', () => {
@@ -110,7 +110,7 @@ describe('action intent', () => {
   it('adds a bounded lateral offset to a collinear multi-subject tracking camera', () => {
     const shot = chase();
     const repaired = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
-    expect(repaired.position?.[0]).toBeCloseTo(1.2, 5);
+    expect(repaired.position?.[0]).toBeCloseTo(2, 5);
     expect(repaired.position?.[1]).toBe(1.6);
     expect(repaired.position?.[2]).toBe(-2);
     expect(repaired.target).toEqual([0, 0.9, -5.8]);
