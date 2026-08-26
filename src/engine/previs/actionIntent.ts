@@ -231,15 +231,20 @@ export function resolveReadableMotionCamera(
       (centroid[0] - pathMid[0]) * forward[0]
       + (centroid[2] - pathMid[2]) * forward[2]
     );
+    const coverCenter: Vec3 = [
+      pathMid[0] + forward[0] * alongDelta,
+      camera.target[1],
+      pathMid[2] + forward[2] * alongDelta,
+    ];
     const position: Vec3 = [
-      pathMid[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign + forward[0] * alongDelta,
+      coverCenter[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
       READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
-      pathMid[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign + forward[2] * alongDelta,
+      coverCenter[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
     ];
     return {
       ...camera,
       position,
-      target: [centroid[0], camera.target[1], centroid[2]],
+      target: coverCenter,
       fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
     };
   }

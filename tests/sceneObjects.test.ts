@@ -4,6 +4,7 @@ import { createDefaultProject, createSceneObject } from '../src/domain/defaults'
 import {
   CHECKERBOARD_TILE_METERS,
   FORESCENE_CONTACT_SHADOW_NAME,
+  FORESCENE_GROUP_CONTACT_SHADOW_PREFIX,
   buildScene,
   computeBuildFogRange,
   createObject3D,
@@ -185,5 +186,29 @@ describe('ground contact', () => {
     const wall = createSceneObject('wall', 1);
     const node = createObject3D(wall);
     expect(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
+  });
+
+  it('uses one floor-level contact shadow for a multipart imported assembly', () => {
+    const project = createDefaultProject();
+    const left = createSceneObject('imported_model', 1);
+    const right = createSceneObject('imported_model', 2);
+    left.stagingRole = 'prop';
+    right.stagingRole = 'prop';
+    left.transform.position = [-0.4, 1, 0];
+    right.transform.position = [0.4, 1.2, 0];
+    project.scene.objects = [left, right];
+    project.scene.objectGroups = {
+      assembly: { id: 'assembly', name: 'Assembly', objectIds: [left.id, right.id] },
+    };
+
+    const scene = buildScene(project);
+    const leftNode = scene.children.find((node) => node.userData.sceneObjectId === left.id)!;
+    const rightNode = scene.children.find((node) => node.userData.sceneObjectId === right.id)!;
+    expect(leftNode.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
+    expect(rightNode.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
+    const shadow = scene.getObjectByName(`${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}assembly`)!;
+    expect(shadow).toBeTruthy();
+    expect(shadow.position.y).toBeLessThan(0.05);
+    expect(shadow.position.y).toBeGreaterThan(-0.15);
   });
 });
