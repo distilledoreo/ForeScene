@@ -7,6 +7,7 @@ import {
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
+  READABLE_LOCOMOTION_COVER_FOLLOW,
   READABLE_LOCOMOTION_COVER_FOV_DEGREES,
   READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
   READABLE_LOCOMOTION_COVER_LATERAL_METERS,
@@ -122,10 +123,11 @@ describe('action intent', () => {
     const shot = chase();
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
-    expect(start.position).toEqual(end.position);
     expect(start.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_COVER_LATERAL_METERS, 5);
     expect(start.position?.[1]).toBe(READABLE_LOCOMOTION_COVER_HEIGHT_METERS);
-    expect(start.position?.[2]).toBeCloseTo(0, 5);
+    expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((-5.3 + -6.5) / 2), 5);
+    expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((5.3 + 4.1) / 2), 5);
+    expect(start.position?.[2]).not.toBeCloseTo(end.position?.[2] ?? 0, 1);
     expect(start.target?.[2]).toBeCloseTo((-5.3 + -6.5) / 2, 5);
     expect(end.target?.[2]).toBeCloseTo((5.3 + 4.1) / 2, 5);
     expect(start.fovDegrees).toBe(READABLE_LOCOMOTION_COVER_FOV_DEGREES);

@@ -84,7 +84,9 @@ export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Locked side-on covering distance so the pack travels through frame. */
-export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
+export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 2.7;
+/** How far the locked camera follows pack travel from path midpoint, 0–1. */
+export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.5;
 /** Height of the locked covering camera, in meters. */
 export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.6;
 /** Vertical FOV for the locked covering camera, in degrees. */
@@ -211,10 +213,14 @@ export function resolveReadableMotionCamera(
       sum[1] + sample[1] / list.length,
       sum[2] + sample[2] / list.length,
     ], [0, 0, 0]);
+    const alongDelta = READABLE_LOCOMOTION_COVER_FOLLOW * (
+      (centroid[0] - pathMid[0]) * forward[0]
+      + (centroid[2] - pathMid[2]) * forward[2]
+    );
     const position: Vec3 = [
-      pathMid[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+      pathMid[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign + forward[0] * alongDelta,
       READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
-      pathMid[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+      pathMid[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign + forward[2] * alongDelta,
     ];
     return {
       ...camera,
