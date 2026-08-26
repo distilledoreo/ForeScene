@@ -160,6 +160,8 @@ describe('action intent', () => {
     expect(start.target?.[2]).not.toBeCloseTo(0, 1);
     expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * startCentroidZ, 5);
     expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * endCentroidZ, 5);
+    expect(start.position?.[2]).not.toBeCloseTo(start.target?.[2] ?? 0, 1);
+    expect(end.position?.[2]).not.toBeCloseTo(end.target?.[2] ?? 0, 1);
     expect(start.fovDegrees).toBe(60);
   });
 
