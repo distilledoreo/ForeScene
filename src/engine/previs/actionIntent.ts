@@ -120,8 +120,8 @@ export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
 export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
 /** Extra lag at path start so start/mid stills show travel through the corridor. */
 export const READABLE_LOCOMOTION_COVER_FOLLOW_START = 0.52;
-/** Tighter lock at path end so the last frame stays side-on, not a rear palm. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW_END = 0.78;
+/** Full lock at path end so the last frame stays fully abeam, not a rear palm. */
+export const READABLE_LOCOMOTION_COVER_FOLLOW_END = 1;
 /** Height of the locked covering camera, in meters. */
 export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.85;
 /** Vertical FOV for the locked covering camera, in degrees. */

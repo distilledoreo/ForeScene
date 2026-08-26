@@ -164,7 +164,7 @@ describe('action intent', () => {
     expect(Math.abs(start.position![2] - startCentroidZ))
       .toBeGreaterThan(Math.abs(end.position![2] - endCentroidZ));
     expect(start.position?.[2]).not.toBeCloseTo(start.target?.[2] ?? 0, 1);
-    expect(end.position?.[2]).not.toBeCloseTo(end.target?.[2] ?? 0, 1);
+    expect(end.position?.[2]).toBeCloseTo(end.target?.[2] ?? 0, 5);
     expect(start.fovDegrees).toBe(60);
   });
 
