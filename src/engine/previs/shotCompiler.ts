@@ -664,10 +664,7 @@ function compileSingleShot(
                 staging.subject,
                 staging.posePreset ?? inferredPose,
               );
-              const rigidLocomotionRotation = (
-                stagedCharacter?.type === 'imported_character'
-                || (!stagedCharacter && Boolean(assetMapping))
-              )
+              const rigidLocomotionRotation = stagedCharacter?.type === 'imported_character'
                 && !staging.transform?.rotation
                 ? inferRigidLocomotionRotation(shot, staging.subject)
                 : undefined;
