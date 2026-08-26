@@ -661,7 +661,9 @@ function applyProjectedStyleToObject(
   projected: ProjectedSceneOptions,
 ) {
   const clay = resolveObjectMaterial(object, theme);
-  const fallbackColor = clay.color?.clone?.() ?? new THREE.Color(0xc8cdc8);
+  const fallbackColor = objectProvidesProjectedGroundPlane(object)
+    ? new THREE.Color(0x2a2c2b)
+    : (clay.color?.clone?.() ?? new THREE.Color(0xc8cdc8));
   const projectedMaterial = createProjectedStyleMaterial({
     texture: projected.texture,
     origin: projected.origin,
@@ -669,7 +671,9 @@ function applyProjectedStyleToObject(
     panoramaWidth: projected.panoramaWidth,
     panoramaHeight: projected.panoramaHeight,
     settings: projected.settings,
-    fallbackColor: projected.settings.fallbackMode === 'neutral' ? 0xb0b6b2 : fallbackColor,
+    fallbackColor: objectProvidesProjectedGroundPlane(object)
+      ? 0x2a2c2b
+      : projected.settings.fallbackMode === 'neutral' ? 0xb0b6b2 : fallbackColor,
     disposable: projected.disposableMaterials ?? true,
     hideUnprojectedGeometry: projected.hideUnprojectedGeometry ?? true,
     occlusionTexture: projected.occlusionTexture,
