@@ -225,8 +225,13 @@ describe('ground contact', () => {
     expect(rightNode.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
     const shadow = scene.getObjectByName(`${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}assembly`)!;
     expect(shadow).toBeTruthy();
+    expect(leftNode.position.y).toBeLessThan(left.transform.position[1]);
+    expect(rightNode.position.y - leftNode.position.y).toBeCloseTo(
+      right.transform.position[1] - left.transform.position[1],
+      5,
+    );
     expect(shadow.position.y).toBeLessThan(0.05);
-    expect(shadow.position.y).toBeGreaterThan(0);
+    expect(shadow.position.y).toBeGreaterThan(-0.08);
     leftNode.visible = false;
     rightNode.visible = false;
     placeImportedAssemblyContactShadows(scene, project);

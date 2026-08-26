@@ -116,8 +116,14 @@ export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: nu
 }
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
-/** How far the locked camera follows pack travel from path midpoint, 0–1. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.7;
+/** Locked side-on covering distance so the pack stays fully framed. */
+export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
+/** Stay abeam of the pack so the end of a chase does not become a rear close-up. */
+export const READABLE_LOCOMOTION_COVER_FOLLOW = 1;
+/** Height of the locked covering camera, in meters. */
+export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.85;
+/** Vertical FOV for the locked covering camera, in degrees. */
+export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 60;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -235,11 +241,6 @@ export function resolveReadableMotionCamera(
     const authoredSide = (camera.position[0] - pathMid[0]) * lateral[0]
       + (camera.position[2] - pathMid[2]) * lateral[2];
     const sign = authoredSide < 0 ? -1 : 1;
-    const coverDistance = Math.max(1.2, Math.hypot(
-      camera.position[0] - camera.target[0],
-      camera.position[2] - camera.target[2],
-    ));
-    const authoredHeightOffset = camera.position[1] - camera.target[1];
     const centroid: Vec3 = stagedPositions.reduce((sum, sample, _index, list) => [
       sum[0] + sample[0] / list.length,
       sum[1] + sample[1] / list.length,
@@ -255,14 +256,15 @@ export function resolveReadableMotionCamera(
       pathMid[2] + forward[2] * alongDelta,
     ];
     const position: Vec3 = [
-      coverCenter[0] + lateral[0] * coverDistance * sign,
-      coverCenter[1] + authoredHeightOffset,
-      coverCenter[2] + lateral[2] * coverDistance * sign,
+      coverCenter[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+      READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
+      coverCenter[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
     ];
     return {
       ...camera,
       position,
-      target: coverCenter,
+      target: [centroid[0], camera.target[1], centroid[2]],
+      fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
     };
   }
 

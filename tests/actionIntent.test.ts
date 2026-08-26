@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PrevisShotDefinition } from '../src/engine/previs/manifest';
 import {
   canInferNativeActionPose,
+  canInferRigidLocomotion,
   inferNativeActionPose,
   inferRigidLocomotionRotation,
   resolveEmbeddedPropIntents,
@@ -58,6 +59,30 @@ describe('action intent', () => {
       name: 'Dummy',
       type: 'human_dummy',
     })).toBe(true);
+  });
+
+  it('allows rigid locomotion for imported subjects without inventing joint poses', () => {
+    const manifest: PrevisProductionManifestV1 = {
+      version: 1,
+      project: { name: 'test', aspectRatio: '16:9' },
+      locations: [{ id: 'corridor', name: 'Corridor', template: 'corridor' }],
+      cast: [{
+        id: 'runner',
+        name: 'Runner',
+        type: 'imported_character',
+        source: 'runner.glb',
+      }],
+      assets: [{
+        id: 'pursuer',
+        type: 'imported_model',
+        source: 'pursuer.glb',
+        semanticRole: 'subject',
+      }],
+      shots: [chase()],
+    };
+    expect(canInferRigidLocomotion(manifest, 'runner')).toBe(true);
+    expect(canInferRigidLocomotion(manifest, 'pursuer')).toBe(true);
+    expect(canInferNativeActionPose(manifest.cast[0])).toBe(false);
   });
 
   it('orients imported locomotion toward travel with a readable local lean', () => {
@@ -121,18 +146,21 @@ describe('action intent', () => {
     expect(repaired.target).toEqual([0, 0.9, -5.8]);
   });
 
-  it('locks a covering chase camera so subjects travel through the frame', () => {
+  it('locks a covering chase camera abeam the pack instead of the path midpoint', () => {
     const shot = chase();
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
-    expect(start.position?.[0]).toBeCloseTo(Math.hypot(0.4, 3.8), 5);
-    expect(start.position?.[1]).toBe(1.6);
-    expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((-5.3 + -6.5) / 2), 5);
-    expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((5.3 + 4.1) / 2), 5);
-    expect(start.position?.[2]).not.toBeCloseTo(end.position?.[2] ?? 0, 1);
-    expect(start.target?.[2]).toBeCloseTo(start.position?.[2] ?? 0, 5);
-    expect(end.target?.[2]).toBeCloseTo(end.position?.[2] ?? 0, 5);
-    expect(start.fovDegrees).toBe(50);
+    const startCentroidZ = (-5.3 + -6.5) / 2;
+    const endCentroidZ = (5.3 + 4.1) / 2;
+    expect(start.position?.[0]).toBeCloseTo(3.2, 5);
+    expect(start.position?.[1]).toBe(1.85);
+    expect(start.target?.[0]).toBeCloseTo(0, 5);
+    expect(start.target?.[2]).toBeCloseTo(startCentroidZ, 5);
+    expect(end.target?.[2]).toBeCloseTo(endCentroidZ, 5);
+    expect(start.target?.[2]).not.toBeCloseTo(0, 1);
+    expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * startCentroidZ, 5);
+    expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * endCentroidZ, 5);
+    expect(start.fovDegrees).toBe(60);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {

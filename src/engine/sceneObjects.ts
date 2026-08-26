@@ -514,6 +514,12 @@ export function placeImportedAssemblyContactShadows(
     ));
     assemblySupportScratch.copy(supportParts[0] ?? assemblyBoundsScratch);
     for (const part of supportParts.slice(1)) assemblySupportScratch.union(part);
+    const dy = -0.068 - assemblyBoundsScratch.min.y;
+    if (Number.isFinite(dy) && Math.abs(dy) <= 2.5 && Math.abs(dy) >= 0.004) {
+      for (const node of memberNodes) node.position.y += dy;
+      assemblySupportScratch.min.y += dy;
+      assemblySupportScratch.max.y += dy;
+    }
     placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
   }
 }
