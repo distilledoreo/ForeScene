@@ -416,13 +416,8 @@ export function buildScene(
       },
     );
     mesh.userData.sceneObjectId = object.id;
-    if (receivesProjectedStyle && options.projected) {
-      applyProjectedStyleToObject(mesh, object, theme, {
-        ...options.projected,
-        hideUnprojectedGeometry: objectProvidesProjectedGroundPlane(object)
-          ? false
-          : options.projected.hideUnprojectedGeometry,
-      });
+    if (receivesProjectedStyle && options.projected && !objectProvidesProjectedGroundPlane(object)) {
+      applyProjectedStyleToObject(mesh, object, theme, options.projected);
     }
     scene.add(mesh);
   }
