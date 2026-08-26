@@ -103,9 +103,9 @@ const contactShadowMaterial = new THREE.MeshBasicMaterial({
   polygonOffsetUnits: -2,
 });
 /** Live mesh AABBs sit this far into the authored floor so contact reads on clay. */
-const GROUND_CONTACT_SINK_METERS = 0.045;
+const GROUND_CONTACT_SINK_METERS = 0.10;
 /** Extra drop for projected beauty: the painted pano floor sits above graybox y=0. */
-const GROUND_CONTACT_PROJECTED_SINK_METERS = 0.12;
+const GROUND_CONTACT_PROJECTED_SINK_METERS = 0.22;
 const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
 export const FORESCENE_CONTACT_SHADOW_NAME = 'forescene-contact-shadow';
 export const FORESCENE_GROUP_CONTACT_SHADOW_PREFIX = `${FORESCENE_CONTACT_SHADOW_NAME}:group:`;

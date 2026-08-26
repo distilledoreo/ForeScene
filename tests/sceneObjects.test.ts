@@ -231,7 +231,7 @@ describe('ground contact', () => {
       5,
     );
     expect(shadow.position.y).toBeLessThan(0.05);
-    expect(shadow.position.y).toBeGreaterThan(-0.08);
+    expect(shadow.position.y).toBeGreaterThan(-0.16);
     leftNode.visible = false;
     rightNode.visible = false;
     placeImportedAssemblyContactShadows(scene, project);
@@ -295,7 +295,7 @@ describe('ground contact', () => {
     const node = scene.children.find((child) => child.userData.sceneObjectId === dummy.id)!;
     const bounds = new THREE.Box3().setFromObject(node);
     expect(bounds.min.y).toBeLessThan(0.02);
-    expect(bounds.min.y).toBeGreaterThan(-0.12);
+    expect(bounds.min.y).toBeGreaterThan(-0.18);
     disposeScene(scene);
   });
 
