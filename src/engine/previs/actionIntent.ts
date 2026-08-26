@@ -100,7 +100,7 @@ export function inferRigidLocomotionRotation(
 }
 
 /** Local forward lean after facing travel, in degrees. */
-export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
+export const RIGID_LOCOMOTION_LEAN_DEGREES = 20;
 
 /**
  * Pitching a center-staged root lifts the feet. This helper documents the
