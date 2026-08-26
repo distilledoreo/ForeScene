@@ -87,6 +87,8 @@ export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 1.2;
 /** Fraction of authored along-path dolly kept so stills show travel. */
 export const READABLE_LOCOMOTION_CAMERA_TRACKING = 0.85;
+/** Minimum vertical FOV so a lagged chase still keeps the lean in frame. */
+export const READABLE_LOCOMOTION_CAMERA_FOV_DEGREES = 56;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -217,8 +219,10 @@ export function resolveReadableMotionCamera(
       camera.position[2] + lateral[2] * correction,
     ];
   }
+  let fovDegrees = camera.fovDegrees;
   if (isLocomotionAction(shot)) {
-    const first = shot.motion?.keyframes[0]?.camera?.position;
+    const firstCamera = shot.motion?.keyframes[0]?.camera;
+    const first = firstCamera?.position;
     if (first) {
       const firstAlong = first[0] * forward[0] + first[2] * forward[2];
       const currentAlong = position[0] * forward[0] + position[2] * forward[2];
@@ -230,12 +234,69 @@ export function resolveReadableMotionCamera(
         position[1],
         position[2] + forward[2] * travelDelta,
       ];
+      const target = camera.target;
+      if (target && firstCamera.target) {
+        const firstStaged = (shot.motion?.keyframes[0]?.staging ?? [])
+          .filter((entry) => shot.camera.subjects.includes(entry.subject))
+          .flatMap((entry) => entry.transform?.position ? [entry.transform.position] : []);
+        const firstCentroid: Vec3 = firstStaged.length > 0
+          ? firstStaged.reduce((sum, sample, _index, list) => [
+            sum[0] + sample[0] / list.length,
+            sum[1] + sample[1] / list.length,
+            sum[2] + sample[2] / list.length,
+          ], [0, 0, 0])
+          : centroid;
+        const firstOffset: Vec3 = [
+          first[0] - firstCentroid[0],
+          0,
+          first[2] - firstCentroid[2],
+        ];
+        let firstReadable: Vec3 = first;
+        const firstLateral = firstOffset[0] * lateral[0] + firstOffset[2] * lateral[2];
+        if (Math.abs(firstLateral) < desired) {
+          const firstSign = firstLateral < 0 ? -1 : 1;
+          const firstCorrection = desired * firstSign - firstLateral;
+          firstReadable = [
+            first[0] + lateral[0] * firstCorrection,
+            first[1],
+            first[2] + lateral[2] * firstCorrection,
+          ];
+        }
+        const desiredLook = Math.hypot(
+          firstCamera.target[0] - firstReadable[0],
+          firstCamera.target[1] - firstReadable[1],
+          firstCamera.target[2] - firstReadable[2],
+        );
+        const toTarget: Vec3 = [
+          target[0] - position[0],
+          target[1] - position[1],
+          target[2] - position[2],
+        ];
+        const dist = Math.hypot(toTarget[0], toTarget[1], toTarget[2]);
+        if (dist > 1e-6 && desiredLook > dist) {
+          const extra = (desiredLook - dist) / dist;
+          position = [
+            position[0] - toTarget[0] * extra,
+            position[1] - toTarget[1] * extra,
+            position[2] - toTarget[2] * extra,
+          ];
+        }
+      }
     }
+    fovDegrees = Math.max(camera.fovDegrees ?? 0, READABLE_LOCOMOTION_CAMERA_FOV_DEGREES);
   }
-  if (position[0] === camera.position[0] && position[2] === camera.position[2]) return camera;
+  if (
+    position[0] === camera.position[0]
+    && position[1] === camera.position[1]
+    && position[2] === camera.position[2]
+    && fovDegrees === camera.fovDegrees
+  ) {
+    return camera;
+  }
   return {
     ...camera,
     position,
+    ...(fovDegrees !== undefined ? { fovDegrees } : {}),
   };
 }
 

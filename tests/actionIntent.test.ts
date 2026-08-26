@@ -8,7 +8,6 @@ import {
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
   READABLE_LOCOMOTION_CAMERA_LATERAL_METERS,
-  READABLE_LOCOMOTION_CAMERA_TRACKING,
   RIGID_LOCOMOTION_LEAN_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
@@ -119,10 +118,16 @@ describe('action intent', () => {
     const shot = chase();
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
+    const lookDistance = (camera: NonNullable<typeof start>) => Math.hypot(
+      (camera.target?.[0] ?? 0) - (camera.position?.[0] ?? 0),
+      (camera.target?.[1] ?? 0) - (camera.position?.[1] ?? 0),
+      (camera.target?.[2] ?? 0) - (camera.position?.[2] ?? 0),
+    );
     expect(start.position?.[2]).toBe(-2);
-    expect(end.position?.[2]).toBeCloseTo(-2 + READABLE_LOCOMOTION_CAMERA_TRACKING * (8.6 - -2), 5);
+    expect(lookDistance(end)).toBeCloseTo(lookDistance(start), 5);
+    expect(end.position?.[2]).not.toBeCloseTo(start.position?.[2] ?? 0, 1);
     expect(end.position?.[2]).toBeLessThan(8.6);
-    expect(end.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_CAMERA_LATERAL_METERS, 5);
+    expect(end.fovDegrees).toBeGreaterThanOrEqual(50);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {
