@@ -300,7 +300,7 @@ describe('ground contact', () => {
     const node = scene.children.find((child) => child.userData.sceneObjectId === dummy.id)!;
     const bounds = new THREE.Box3().setFromObject(node);
     expect(bounds.min.y).toBeLessThan(0.02);
-    expect(bounds.min.y).toBeGreaterThan(-0.18);
+    expect(bounds.min.y).toBeGreaterThan(-0.24);
     disposeScene(scene);
   });
 

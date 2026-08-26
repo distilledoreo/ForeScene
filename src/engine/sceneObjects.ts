@@ -95,7 +95,7 @@ const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
 const contactShadowMaterial = new THREE.MeshBasicMaterial({
   color: 0x111111,
   transparent: true,
-  opacity: 0.72,
+  opacity: 0.88,
   alphaMap: createContactShadowAlphaMap(),
   depthWrite: false,
   polygonOffset: true,
@@ -103,7 +103,7 @@ const contactShadowMaterial = new THREE.MeshBasicMaterial({
   polygonOffsetUnits: -2,
 });
 /** Live mesh AABBs sit this far into the authored floor so contact reads on clay. */
-const GROUND_CONTACT_SINK_METERS = 0.12;
+const GROUND_CONTACT_SINK_METERS = 0.18;
 /** Extra drop for projected beauty: the painted pano floor sits above graybox y=0. */
 const GROUND_CONTACT_PROJECTED_SINK_METERS = 0.28;
 const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
