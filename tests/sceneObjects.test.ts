@@ -25,11 +25,15 @@ describe('scene object disposal', () => {
     set.id = 'set-proxy';
     set.name = 'Set proxy';
     set.stagingRole = 'set';
+    const floor = createSceneObject('floor', 1);
+    floor.id = 'set-floor';
+    floor.name = 'Set floor';
+    floor.stagingRole = 'set';
     const subject = createSceneObject('box', 1);
     subject.id = 'subject-prop';
     subject.name = 'Subject prop';
     subject.stagingRole = 'prop';
-    project.scene.objects = [set, subject];
+    project.scene.objects = [set, floor, subject];
     const scene = buildScene(project, {
       appearance: 'projected',
       projected: {
@@ -41,6 +45,7 @@ describe('scene object disposal', () => {
       showHelpers: false,
     });
     expect(scene.getObjectByName('Set proxy')).toBeUndefined();
+    expect(scene.getObjectByName('Set floor')).toBeTruthy();
     expect(scene.getObjectByName('Subject prop')).toBeTruthy();
     expect(project.scene.objects.some((object) => object.id === 'set-proxy')).toBe(true);
     disposeScene(scene);

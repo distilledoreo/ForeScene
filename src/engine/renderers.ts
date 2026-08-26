@@ -1138,6 +1138,7 @@ export function renderCameraMoveFrame(
           ?? (normalized.objectAnimation.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene'),
         includeCharacterAttachments: normalized.objectAnimation.includeCharacterAttachments,
         objectGroups: normalized.objectAnimation.objectGroups,
+        projected: normalized.pass === 'projected',
       },
     );
   }
@@ -1208,6 +1209,7 @@ function applyAnimatedObjectOverridesToScene(
     contentMode?: SceneContentMode;
     includeCharacterAttachments?: boolean;
     objectGroups?: LocationProject['scene']['objectGroups'];
+    projected?: boolean;
   },
 ) {
   const baseById = new Map(baseObjects.map((object) => [object.id, object]));
@@ -1233,7 +1235,7 @@ function applyAnimatedObjectOverridesToScene(
   }
   plantGroundedSubjects(scene, {
     scene: { objects: baseObjects, objectGroups: contentOptions.objectGroups },
-  });
+  }, { projected: contentOptions.projected });
 }
 
 export async function renderViewportClay(

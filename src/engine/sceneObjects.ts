@@ -396,14 +396,14 @@ export function buildScene(
     if (hiddenTypes.has(object.type)) continue;
     if (options.showMissingPlaceholders === false && isMissingSceneObject(object, project)) continue;
     const receivesProjectedStyle = useProjected && shouldReceiveProjectedStyle(object);
-    // The calibrated panorama and primitive set proxies describe the same
-    // environment. Keep the proxies in project truth for collision, depth,
-    // camera solving, and validation, but do not composite a second copy into
-    // the projected beauty frame where parallax exposes cutout seams.
+    // Walls and other set proxies duplicate the panorama and show parallax
+    // seams. Floors stay: they are the only 3D plane subjects can stand on
+    // once the pano is the background.
     if (
       receivesProjectedStyle
       && object.stagingRole === 'set'
       && options.projected?.hideSetGeometry !== false
+      && !objectProvidesProjectedGroundPlane(object)
     ) continue;
     const mesh = createObject3D(
       object,
@@ -417,7 +417,12 @@ export function buildScene(
     );
     mesh.userData.sceneObjectId = object.id;
     if (receivesProjectedStyle && options.projected) {
-      applyProjectedStyleToObject(mesh, object, theme, options.projected);
+      applyProjectedStyleToObject(mesh, object, theme, {
+        ...options.projected,
+        hideUnprojectedGeometry: objectProvidesProjectedGroundPlane(object)
+          ? false
+          : options.projected.hideUnprojectedGeometry,
+      });
     }
     scene.add(mesh);
   }
@@ -829,6 +834,10 @@ export function applySceneObjectTransform(
     node.visible = options.visible;
   }
   placeContactShadow(node, pivotHeight);
+}
+
+function objectProvidesProjectedGroundPlane(object: SceneObject): boolean {
+  return object.type === 'floor' || object.type === 'terrain_mass';
 }
 
 function objectUsesGroundContact(object: SceneObject): boolean {
