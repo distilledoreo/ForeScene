@@ -95,7 +95,7 @@ const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
 const contactShadowMaterial = new THREE.MeshBasicMaterial({
   color: 0x111111,
   transparent: true,
-  opacity: 0.52,
+  opacity: 0.72,
   alphaMap: createContactShadowAlphaMap(),
   depthWrite: false,
   polygonOffset: true,

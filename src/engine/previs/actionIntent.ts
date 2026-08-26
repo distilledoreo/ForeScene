@@ -119,7 +119,7 @@ export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
 /** Locked side-on covering distance so the pack stays fully framed. */
 export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
 /** Partial follow so the pack travels through frame without becoming a rear close-up. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.78;
+export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.70;
 /** Height of the locked covering camera, in meters. */
 export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.85;
 /** Vertical FOV for the locked covering camera, in degrees. */
