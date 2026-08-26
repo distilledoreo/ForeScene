@@ -15,6 +15,33 @@ import {
 } from '../src/engine/sceneObjects';
 
 describe('scene object disposal', () => {
+  it('keeps semantic set proxies out of projected beauty frames', () => {
+    const project = createDefaultProject();
+    const set = createSceneObject('box', 1);
+    set.id = 'set-proxy';
+    set.name = 'Set proxy';
+    set.stagingRole = 'set';
+    const subject = createSceneObject('box', 1);
+    subject.id = 'subject-prop';
+    subject.name = 'Subject prop';
+    subject.stagingRole = 'prop';
+    project.scene.objects = [set, subject];
+    const scene = buildScene(project, {
+      appearance: 'projected',
+      projected: {
+        texture: new THREE.Texture(),
+        origin: [0, 1.6, 0],
+        rotation: [0, 0, 0],
+        settings: project.settings.projectedStyle!,
+      },
+      showHelpers: false,
+    });
+    expect(scene.getObjectByName('Set proxy')).toBeUndefined();
+    expect(scene.getObjectByName('Subject prop')).toBeTruthy();
+    expect(project.scene.objects.some((object) => object.id === 'set-proxy')).toBe(true);
+    disposeScene(scene);
+  });
+
   it('maps Build visibility distance to the fog/shroud range', () => {
     expect(computeBuildFogRange(40)).toEqual({ near: 18, far: 40 });
     expect(computeBuildFogRange(200)).toEqual({ near: 90, far: 200 });

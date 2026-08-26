@@ -110,11 +110,10 @@ export function resolveReadableMotionCamera(
     camera.position[2] - centroid[2],
   ];
   const lateralDistance = offset[0] * lateral[0] + offset[2] * lateral[2];
-  // A five-metre lateral baseline keeps a modest depth chase legible in a full
-  // shot, while also increasing camera distance enough to protect feet and
-  // multipart silhouettes from edge cropping. It remains bounded and changes
-  // neither authored timing nor the along-path tracking relationship.
-  const desired = 5;
+  // Preserve an authored side/three-quarter baseline once it is already clear
+  // of the motion axis. Larger generic offsets can push a camera through the
+  // walls of a narrow prepared location and erase the environment entirely.
+  const desired = 1.2;
   if (Math.abs(lateralDistance) >= desired) return camera;
   const sign = lateralDistance < 0 ? -1 : 1;
   const correction = desired * sign - lateralDistance;

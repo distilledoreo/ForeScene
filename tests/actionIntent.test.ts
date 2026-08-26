@@ -72,7 +72,7 @@ describe('action intent', () => {
   it('adds a bounded lateral offset to a collinear multi-subject tracking camera', () => {
     const shot = chase();
     const repaired = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
-    expect(repaired.position?.[0]).toBeCloseTo(5, 5);
+    expect(repaired.position?.[0]).toBeCloseTo(1.2, 5);
     expect(repaired.position?.[1]).toBe(1.6);
     expect(repaired.position?.[2]).toBe(-2);
     expect(repaired.target).toEqual([0, 0.9, -5.8]);

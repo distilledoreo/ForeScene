@@ -253,6 +253,8 @@ export interface ProjectedSceneOptions {
   disposableMaterials?: boolean;
   /** Reveal the calibrated panorama background where no projector owns a surface. */
   hideUnprojectedGeometry?: boolean;
+  /** Do not draw proxy set geometry already represented by the full panorama. */
+  hideSetGeometry?: boolean;
 
   occlusionTexture?: THREE.CubeTexture;
   occlusionNearMeters?: number;
@@ -365,6 +367,16 @@ export function buildScene(
     if (!object.visible) continue;
     if (hiddenTypes.has(object.type)) continue;
     if (options.showMissingPlaceholders === false && isMissingSceneObject(object, project)) continue;
+    const receivesProjectedStyle = useProjected && shouldReceiveProjectedStyle(object);
+    // The calibrated panorama and primitive set proxies describe the same
+    // environment. Keep the proxies in project truth for collision, depth,
+    // camera solving, and validation, but do not composite a second copy into
+    // the projected beauty frame where parallax exposes cutout seams.
+    if (
+      receivesProjectedStyle
+      && object.stagingRole === 'set'
+      && options.projected?.hideSetGeometry !== false
+    ) continue;
     const mesh = createObject3D(
       object,
       Boolean(options.selectedObjectIds?.includes(object.id)),
@@ -372,7 +384,7 @@ export function buildScene(
       project.assets,
     );
     mesh.userData.sceneObjectId = object.id;
-    if (useProjected && options.projected && shouldReceiveProjectedStyle(object)) {
+    if (receivesProjectedStyle && options.projected) {
       applyProjectedStyleToObject(mesh, object, theme, options.projected);
     }
     scene.add(mesh);
