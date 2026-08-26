@@ -8,7 +8,6 @@ import {
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
   RIGID_LOCOMOTION_LEAN_DEGREES,
-  RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 
@@ -62,13 +61,11 @@ describe('action intent', () => {
   it('orients imported locomotion toward travel with a readable local lean', () => {
     const runner = inferRigidLocomotionRotation(chase(), 'runner')!;
     const pursuer = inferRigidLocomotionRotation(chase(), 'pursuer')!;
-    expect(runner[0]).toBeGreaterThan(15);
-    expect(runner[1]).toBeGreaterThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES - 10);
-    expect(runner[1]).toBeLessThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES + 10);
-    expect(Math.abs(runner[2])).toBeLessThan(35);
+    expect(runner[0]).toBeCloseTo(RIGID_LOCOMOTION_LEAN_DEGREES, 5);
+    expect(runner[1]).toBeCloseTo(0, 5);
+    expect(runner[2]).toBeCloseTo(0, 5);
     expect(pursuer).toEqual(runner);
     expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual(runner);
-    expect(RIGID_LOCOMOTION_LEAN_DEGREES).toBe(28);
   });
 
   it('separates stacked chase silhouettes without changing travel', () => {

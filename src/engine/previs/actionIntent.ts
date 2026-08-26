@@ -63,13 +63,10 @@ export function inferNativeActionPose(
 /**
  * Imported rigs that cannot safely accept inferred joint deformation can still
  * communicate locomotion with a conservative whole-object orientation. The
- * rotation is derived from authored travel (and a bounded camera-relative
- * three-quarter when a tracking camera exists) and stays constant across
- * samples, so interpolation cannot distort or oscillate the asset.
- *
- * World-axis pitch alone is nearly invisible from a frontal tracking camera:
- * yaw into travel, then a local forward lean, so the silhouette tilts against
- * the environment instead of into the lens.
+ * rotation faces authored travel and applies a local forward lean that stays
+ * constant across samples. A side-on tracking camera is what makes that lean
+ * readable; yawing toward the lens turns a runner into a guard facing the
+ * pursuer.
  */
 export function inferRigidLocomotionRotation(
   shot: PrevisShotDefinition,
@@ -79,13 +76,11 @@ export function inferRigidLocomotionRotation(
   const travel = subjectTravel(shot, subjectId);
   if (!travel) return undefined;
   const faceYaw = (Math.atan2(travel[0], travel[2]) * 180) / Math.PI;
-  return yawThenLocalPitch(faceYaw + cameraThreeQuarterYaw(shot, travel), RIGID_LOCOMOTION_LEAN_DEGREES);
+  return yawThenLocalPitch(faceYaw, RIGID_LOCOMOTION_LEAN_DEGREES);
 }
 
 /** Local forward lean after facing travel, in degrees. */
 export const RIGID_LOCOMOTION_LEAN_DEGREES = 28;
-/** Bounded yaw toward an off-axis tracking camera, in degrees. */
-export const RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES = 48;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Lateral tracking offset for locomotion, in meters. */
@@ -109,20 +104,6 @@ function subjectTravel(shot: PrevisShotDefinition, subjectId: string): Vec3 | un
     0,
     samples[samples.length - 1]![2] - samples[0]![2],
   ]);
-}
-
-function cameraThreeQuarterYaw(shot: PrevisShotDefinition, travel: Vec3): number {
-  const keyframe = shot.motion?.keyframes.find((sample) => sample.camera?.position);
-  if (!keyframe) return 0;
-  const camera = resolveReadableMotionCamera(shot, keyframe);
-  if (!camera?.position) return 0;
-  const origin = keyframe.staging?.find((entry) => entry.transform?.position)?.transform?.position;
-  if (!origin) return 0;
-  const lateral: Vec3 = [travel[2], 0, -travel[0]];
-  const cameraLateral = (camera.position[0] - origin[0]) * lateral[0]
-    + (camera.position[2] - origin[2]) * lateral[2];
-  if (Math.abs(cameraLateral) < 1e-6) return 0;
-  return (cameraLateral < 0 ? -1 : 1) * RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES;
 }
 
 function yawThenLocalPitch(yawDegrees: number, pitchDegrees: number): Vec3 {
