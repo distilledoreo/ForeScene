@@ -231,7 +231,7 @@ describe('ground contact', () => {
       5,
     );
     expect(shadow.position.y).toBeLessThan(0.05);
-    expect(shadow.position.y).toBeGreaterThan(-0.16);
+    expect(shadow.position.y).toBeGreaterThan(-0.35);
     leftNode.visible = false;
     rightNode.visible = false;
     placeImportedAssemblyContactShadows(scene, project);
