@@ -7,6 +7,8 @@ import {
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
+  READABLE_LOCOMOTION_CAMERA_LATERAL_METERS,
+  READABLE_LOCOMOTION_CAMERA_TRACKING,
   RIGID_LOCOMOTION_LEAN_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
@@ -24,14 +26,14 @@ function chase(): PrevisShotDefinition {
       durationSeconds: 3,
       keyframes: [{
         timeSeconds: 0,
-        camera: { position: [1.2, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },
+        camera: { position: [0.4, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },
         staging: [
           { subject: 'runner', transform: { position: [0, 0.875, -5.3] } },
           { subject: 'pursuer', transform: { position: [0, 0, -6.5] } },
         ],
       }, {
         timeSeconds: 3,
-        camera: { position: [1.2, 1.6, 8.6], target: [0, 0.9, 4.8], fovDegrees: 50 },
+        camera: { position: [0.4, 1.6, 8.6], target: [0, 0.9, 4.8], fovDegrees: 50 },
         staging: [
           { subject: 'runner', transform: { position: [0, 0.875, 5.3] } },
           { subject: 'pursuer', transform: { position: [0, 0, 4.1] } },
@@ -107,10 +109,20 @@ describe('action intent', () => {
   it('adds a bounded lateral offset to a collinear multi-subject tracking camera', () => {
     const shot = chase();
     const repaired = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
-    expect(repaired.position?.[0]).toBeCloseTo(2.5, 5);
+    expect(repaired.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_CAMERA_LATERAL_METERS, 5);
     expect(repaired.position?.[1]).toBe(1.6);
     expect(repaired.position?.[2]).toBe(-2);
     expect(repaired.target).toEqual([0, 0.9, -5.8]);
+  });
+
+  it('lags locomotion dolly so end stills are not a fully tracked copy of the start', () => {
+    const shot = chase();
+    const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
+    const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
+    expect(start.position?.[2]).toBe(-2);
+    expect(end.position?.[2]).toBeCloseTo(-2 + READABLE_LOCOMOTION_CAMERA_TRACKING * (8.6 - -2), 5);
+    expect(end.position?.[2]).toBeLessThan(8.6);
+    expect(end.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_CAMERA_LATERAL_METERS, 5);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {

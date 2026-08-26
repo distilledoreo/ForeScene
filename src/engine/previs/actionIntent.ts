@@ -23,7 +23,7 @@ function actionText(shot: PrevisShotDefinition): string {
   ].join(' ').toLowerCase();
 }
 
-function isLocomotionAction(shot: PrevisShotDefinition): boolean {
+export function isLocomotionAction(shot: PrevisShotDefinition): boolean {
   return /\b(sprint|running|run|chase|flee|pursu(?:e|it|ing))\b/.test(actionText(shot));
 }
 
@@ -83,8 +83,10 @@ export function inferRigidLocomotionRotation(
 export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
-/** Lateral tracking offset for locomotion, in meters. */
-export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 2.5;
+/** Lateral offset for locomotion, in meters. Stays inside a 4 m corridor. */
+export const READABLE_LOCOMOTION_CAMERA_LATERAL_METERS = 1.2;
+/** Fraction of authored along-path dolly kept so stills show travel. */
+export const READABLE_LOCOMOTION_CAMERA_TRACKING = 0.85;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -155,8 +157,9 @@ function quaternionToEulerXyzDegrees(q: { x: number; y: number; z: number; w: nu
 
 /**
  * Keep multiple moving subjects readable when an authored tracking camera is
- * nearly collinear with their path. The correction is lateral only and bounded;
- * timing, height, target, lens, and forward/back tracking remain authored.
+ * nearly collinear with their path. Lateral offset stays bounded. Locomotion
+ * cameras also lag the authored along-path dolly so start/mid/end stills are
+ * not the same tracked silhouette against a hidden wall.
  */
 export function resolveReadableMotionCamera(
   shot: PrevisShotDefinition,
@@ -201,22 +204,38 @@ export function resolveReadableMotionCamera(
     camera.position[2] - centroid[2],
   ];
   const lateralDistance = offset[0] * lateral[0] + offset[2] * lateral[2];
-  // Non-locomotion tracking stays conservative so a camera cannot leave a
-  // narrow prepared room. Chase coverage already hides the near wall, so a
-  // wider side-on baseline is what makes a rigid lean readable.
   const desired = isLocomotionAction(shot)
     ? READABLE_LOCOMOTION_CAMERA_LATERAL_METERS
     : 1.2;
-  if (Math.abs(lateralDistance) >= desired) return camera;
-  const sign = lateralDistance < 0 ? -1 : 1;
-  const correction = desired * sign - lateralDistance;
-  return {
-    ...camera,
-    position: [
+  let position: Vec3 = camera.position;
+  if (Math.abs(lateralDistance) < desired) {
+    const sign = lateralDistance < 0 ? -1 : 1;
+    const correction = desired * sign - lateralDistance;
+    position = [
       camera.position[0] + lateral[0] * correction,
       camera.position[1],
       camera.position[2] + lateral[2] * correction,
-    ],
+    ];
+  }
+  if (isLocomotionAction(shot)) {
+    const first = shot.motion?.keyframes[0]?.camera?.position;
+    if (first) {
+      const firstAlong = first[0] * forward[0] + first[2] * forward[2];
+      const currentAlong = position[0] * forward[0] + position[2] * forward[2];
+      const laggedAlong = firstAlong
+        + READABLE_LOCOMOTION_CAMERA_TRACKING * (currentAlong - firstAlong);
+      const travelDelta = laggedAlong - currentAlong;
+      position = [
+        position[0] + forward[0] * travelDelta,
+        position[1],
+        position[2] + forward[2] * travelDelta,
+      ];
+    }
+  }
+  if (position[0] === camera.position[0] && position[2] === camera.position[2]) return camera;
+  return {
+    ...camera,
+    position,
   };
 }
 

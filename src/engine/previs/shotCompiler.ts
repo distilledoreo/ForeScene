@@ -33,6 +33,7 @@ import {
   canInferNativeActionPose,
   inferNativeActionPose,
   inferRigidLocomotionRotation,
+  isLocomotionAction,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
 } from './actionIntent';
@@ -597,7 +598,9 @@ function compileSingleShot(
   }
 
   // Apply wall-hide overrides from the camera solver so scored compositions match renders.
-  const hideBlockerIds = new Set(cameraSolve.hideBlockerIds ?? []);
+  const hideBlockerIds = new Set(
+    isLocomotionAction(shot) ? [] : (cameraSolve.hideBlockerIds ?? []),
+  );
   for (const blockerId of hideBlockerIds) {
     if (!blockerId) continue;
     commands.push({
