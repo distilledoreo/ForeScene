@@ -7,6 +7,7 @@ import {
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
+  rigidLocomotionGroundedPosition,
   READABLE_LOCOMOTION_COVER_FOLLOW,
   READABLE_LOCOMOTION_COVER_FOV_DEGREES,
   READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
@@ -70,6 +71,10 @@ describe('action intent', () => {
     expect(runner[2]).toBeCloseTo(0, 5);
     expect(pursuer).toEqual(runner);
     expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual(runner);
+    const planted = rigidLocomotionGroundedPosition([0, 0.875, -5.3], 1.75);
+    expect(planted[1]).toBeLessThan(0.875);
+    expect(planted[1]).toBeGreaterThan(0.7);
+    expect(rigidLocomotionGroundedPosition([0, 0, -6.5], 0)).toEqual([0, 0, -6.5]);
   });
 
   it('separates stacked chase silhouettes without changing travel', () => {

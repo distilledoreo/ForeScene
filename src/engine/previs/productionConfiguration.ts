@@ -15,6 +15,7 @@ import {
   inferNativeActionPose,
   inferRigidLocomotionRotation,
   resolveReadableMotionSubjectPosition,
+  rigidLocomotionGroundedPosition,
 } from './actionIntent';
 
 export type ProductionConfigurationDiagnosticCode =
@@ -150,17 +151,19 @@ export function deriveShotActionContracts(
       const resolution = requestedPose
         ? resolvePose(staging.subject, requestedPose)
         : undefined;
+      const resolvedPosition = staging.transform?.position
+        ? (
+          resolveReadableMotionSubjectPosition(definition, keyframe, staging.subject)
+          ?? staging.transform.position
+        )
+        : undefined;
+      const plantedPosition = resolvedPosition && inferredRotation
+        ? rigidLocomotionGroundedPosition(resolvedPosition, resolvedPosition[1] * 2)
+        : resolvedPosition;
       samples.push({
         timeSeconds: keyframe.timeSeconds,
         ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
-        ...(staging.transform?.position
-          ? {
-              position: [...(
-                resolveReadableMotionSubjectPosition(definition, keyframe, staging.subject)
-                ?? staging.transform.position
-              )],
-            }
-          : {}),
+        ...(plantedPosition ? { position: plantedPosition } : {}),
         ...(staging.transform?.rotation
           ? { rotation: [...staging.transform.rotation] }
           : inferredRotation

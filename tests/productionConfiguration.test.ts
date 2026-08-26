@@ -304,6 +304,9 @@ describe('production configuration validation', () => {
         action.entityId === 'cast.lead' ? -5.3 : -6.5,
       );
     }
+    const leadY = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[1] ?? 0;
+    expect(leadY).toBeLessThan(0.875);
+    expect(leadY).toBeGreaterThan(0.7);
     const leadX = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[0] ?? 0;
     const pursuerX = actions.find((action) => action.entityId === 'asset.pursuer')?.samples[0]?.position?.[0] ?? 0;
     expect(pursuerX - leadX).toBeCloseTo(0.96, 5);

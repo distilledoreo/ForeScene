@@ -81,6 +81,17 @@ export function inferRigidLocomotionRotation(
 
 /** Local forward lean after facing travel, in degrees. */
 export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
+
+/**
+ * Pitching a center-staged root lifts the feet. Lower the origin by the
+ * exact rise of a foot at ±height/2 so the lean stays planted.
+ */
+export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: number): Vec3 {
+  if (heightMeters < 0.4) return position;
+  const radians = (RIGID_LOCOMOTION_LEAN_DEGREES * Math.PI) / 180;
+  const drop = (heightMeters / 2) * (1 - Math.cos(radians));
+  return [position[0], position[1] - drop, position[2]];
+}
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Locked side-on covering distance so the pack travels through frame. */

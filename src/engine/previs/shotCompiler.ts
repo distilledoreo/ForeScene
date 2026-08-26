@@ -35,6 +35,7 @@ import {
   inferRigidLocomotionRotation,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
+  rigidLocomotionGroundedPosition,
 } from './actionIntent';
 import { defaultPropDimensions } from './propDimensions';
 import {
@@ -673,12 +674,18 @@ function compileSingleShot(
                 keyframe,
                 staging.subject,
               );
-              const effectiveStaging = rigidLocomotionRotation || readablePosition
+              const plantedPosition = readablePosition && rigidLocomotionRotation
+                ? rigidLocomotionGroundedPosition(
+                  readablePosition,
+                  stagedCharacter?.height ?? readablePosition[1] * 2,
+                )
+                : readablePosition;
+              const effectiveStaging = rigidLocomotionRotation || plantedPosition
                 ? {
                     ...staging,
                     transform: {
                       ...staging.transform,
-                      ...(readablePosition ? { position: readablePosition } : {}),
+                      ...(plantedPosition ? { position: plantedPosition } : {}),
                       ...(rigidLocomotionRotation ? { rotation: rigidLocomotionRotation } : {}),
                     },
                   }
