@@ -133,10 +133,8 @@ describe('action intent', () => {
     expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((-5.3 + -6.5) / 2), 5);
     expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((5.3 + 4.1) / 2), 5);
     expect(start.position?.[2]).not.toBeCloseTo(end.position?.[2] ?? 0, 1);
-    expect(start.target?.[2]).toBeCloseTo(start.position?.[2] ?? 0, 5);
-    expect(end.target?.[2]).toBeCloseTo(end.position?.[2] ?? 0, 5);
-    expect(start.target?.[0]).toBeCloseTo(0, 5);
-    expect(end.target?.[0]).toBeCloseTo(0, 5);
+    expect(start.target?.[2]).toBeCloseTo((-5.3 + -6.5) / 2, 5);
+    expect(end.target?.[2]).toBeCloseTo((5.3 + 4.1) / 2, 5);
     expect(start.fovDegrees).toBe(READABLE_LOCOMOTION_COVER_FOV_DEGREES);
   });
 

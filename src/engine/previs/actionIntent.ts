@@ -244,7 +244,7 @@ export function resolveReadableMotionCamera(
     return {
       ...camera,
       position,
-      target: coverCenter,
+      target: [centroid[0], camera.target[1], centroid[2]],
       fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
     };
   }
