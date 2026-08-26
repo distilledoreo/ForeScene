@@ -3,6 +3,7 @@ import type { PrevisShotDefinition } from '../src/engine/previs/manifest';
 import {
   canInferNativeActionPose,
   inferNativeActionPose,
+  inferRigidLocomotionRotation,
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
 } from '../src/engine/previs/actionIntent';
@@ -53,6 +54,11 @@ describe('action intent', () => {
       name: 'Dummy',
       type: 'human_dummy',
     })).toBe(true);
+  });
+
+  it('derives a stable deformation-free lean from authored travel', () => {
+    expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual([9, 0, -0]);
+    expect(inferRigidLocomotionRotation(chase(), 'pursuer')).toEqual([9, 0, -0]);
   });
 
   it('derives a stable exact locomotion silhouette across timeline interpolation', () => {

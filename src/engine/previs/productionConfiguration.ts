@@ -11,7 +11,7 @@ import type { PrevisProductionManifestV1, PrevisShotDefinition } from './manifes
 import type { ProductionBindingMode } from './productionBindingMode';
 import { resolvePrevisPosePresetId } from './posePresets';
 import { getHumanPosePreset } from '../humanPosePresets';
-import { inferNativeActionPose } from './actionIntent';
+import { inferNativeActionPose, inferRigidLocomotionRotation } from './actionIntent';
 
 export type ProductionConfigurationDiagnosticCode =
   | 'missing_binding'
@@ -82,6 +82,7 @@ export function deriveShotActionContracts(
   definition: PrevisShotDefinition,
   options: {
     poseableEntityIds?: ReadonlySet<string>;
+    rigidLocomotionEntityIds?: ReadonlySet<string>;
     resolvePose?: (entityId: string, requestedPose: string) => {
       resolvedPose?: string;
       relationship: import('../../domain/types').PoseResolutionRelationship;
@@ -99,6 +100,7 @@ export function deriveShotActionContracts(
   });
   const actions: ShotActionContract[] = [];
   const poseableEntityIds = options.poseableEntityIds ?? new Set<string>();
+  const rigidLocomotionEntityIds = options.rigidLocomotionEntityIds ?? new Set<string>();
   for (const blocking of definition.blocking ?? []) {
     const requestedPose = blocking.pose
       ?? (!definition.motion && poseableEntityIds.has(blocking.subject)
@@ -137,6 +139,10 @@ export function deriveShotActionContracts(
       ) continue;
       const samples = samplesByEntity.get(staging.subject) ?? [];
       const requestedPose = staging.posePreset ?? inferredPose;
+      const inferredRotation = rigidLocomotionEntityIds.has(staging.subject)
+        && !staging.transform?.rotation
+        ? inferRigidLocomotionRotation(definition, staging.subject)
+        : undefined;
       const resolution = requestedPose
         ? resolvePose(staging.subject, requestedPose)
         : undefined;
@@ -144,7 +150,11 @@ export function deriveShotActionContracts(
         timeSeconds: keyframe.timeSeconds,
         ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
         ...(staging.transform?.position ? { position: [...staging.transform.position] } : {}),
-        ...(staging.transform?.rotation ? { rotation: [...staging.transform.rotation] } : {}),
+        ...(staging.transform?.rotation
+          ? { rotation: [...staging.transform.rotation] }
+          : inferredRotation
+            ? { rotation: inferredRotation }
+            : {}),
         ...(requestedPose
           ? {
               requestedPose,

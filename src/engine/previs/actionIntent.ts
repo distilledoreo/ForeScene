@@ -56,6 +56,33 @@ export function inferNativeActionPose(
   return undefined;
 }
 
+/**
+ * Imported rigs that cannot safely accept inferred joint deformation can still
+ * communicate locomotion with a conservative whole-object lean. The rotation
+ * is derived from the authored world-space travel vector and remains constant
+ * across samples, so interpolation cannot distort or oscillate the asset.
+ */
+export function inferRigidLocomotionRotation(
+  shot: PrevisShotDefinition,
+  subjectId: string,
+): Vec3 | undefined {
+  if (!/\b(sprint|running|run|chase|flee|pursu(?:e|it|ing))\b/.test(actionText(shot))) return undefined;
+  const samples = shot.motion?.keyframes.flatMap((keyframe) => (
+    keyframe.staging?.flatMap((entry) => (
+      entry.subject === subjectId && entry.transform?.position ? [entry.transform.position] : []
+    )) ?? []
+  )) ?? [];
+  if (samples.length < 2) return undefined;
+  const travel = normalizeHorizontal([
+    samples[samples.length - 1]![0] - samples[0]![0],
+    0,
+    samples[samples.length - 1]![2] - samples[0]![2],
+  ]);
+  if (!travel) return undefined;
+  const leanDegrees = 9;
+  return [leanDegrees * travel[2], 0, -leanDegrees * travel[0]];
+}
+
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
   if (length < 1e-6) return undefined;

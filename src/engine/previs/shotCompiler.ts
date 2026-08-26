@@ -32,6 +32,7 @@ import { resolvePrevisPosePresetId } from './posePresets';
 import {
   canInferNativeActionPose,
   inferNativeActionPose,
+  inferRigidLocomotionRotation,
   resolveReadableMotionCamera,
 } from './actionIntent';
 import { defaultPropDimensions } from './propDimensions';
@@ -662,6 +663,19 @@ function compileSingleShot(
                 staging.subject,
                 staging.posePreset ?? inferredPose,
               );
+              const rigidLocomotionRotation = stagedCharacter?.type === 'imported_character'
+                && !staging.transform?.rotation
+                ? inferRigidLocomotionRotation(shot, staging.subject)
+                : undefined;
+              const effectiveStaging = rigidLocomotionRotation
+                ? {
+                    ...staging,
+                    transform: {
+                      ...staging.transform,
+                      rotation: rigidLocomotionRotation,
+                    },
+                  }
+                : staging;
               const stagedAssetDimensions = assetMapping
                 ? manifestAssetDimensions(manifest, context, options.presenceProject, staging.subject)
                 : undefined;
@@ -670,7 +684,7 @@ function compileSingleShot(
                 project: options.presenceProject,
                 fallbackRef: previsRef(prefix, staging.subject),
                 effectiveStaticTransform: effectiveStaticTransforms[staging.subject],
-                staging,
+                staging: effectiveStaging,
                 resolvedPose,
                 groundOffsetY: stagedAssetDimensions
                   ? stagedAssetDimensions[1] / 2
