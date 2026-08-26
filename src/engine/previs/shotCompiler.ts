@@ -30,12 +30,14 @@ import {
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
 import {
+  canInferRigidLocomotion,
   canInferNativeActionPose,
   inferNativeActionPose,
   inferRigidLocomotionRotation,
   resolveReadableMotionCamera,
   resolveReadableMotionSubjectPosition,
 } from './actionIntent';
+import { centerTransformForBoundsPlant, centerTransformForFootPlant } from '../groundPivot';
 import { defaultPropDimensions } from './propDimensions';
 import {
   deriveDynamicObjectUniverse,
@@ -664,7 +666,7 @@ function compileSingleShot(
                 staging.subject,
                 staging.posePreset ?? inferredPose,
               );
-              const rigidLocomotionRotation = stagedCharacter?.type === 'imported_character'
+              const rigidLocomotionRotation = canInferRigidLocomotion(manifest, staging.subject)
                 && !staging.transform?.rotation
                 ? inferRigidLocomotionRotation(shot, staging.subject)
                 : undefined;
@@ -695,6 +697,12 @@ function compileSingleShot(
                 resolvedPose,
                 groundOffsetY: stagedAssetDimensions
                   ? stagedAssetDimensions[1] / 2
+                  : undefined,
+                groundedRotationHeight: rigidLocomotionRotation
+                  ? (stagedAssetDimensions?.[1] ?? stagedCharacter?.height ?? 1.75)
+                  : undefined,
+                groundedRotationDimensions: rigidLocomotionRotation
+                  ? stagedAssetDimensions
                   : undefined,
               });
             }) ?? []),
@@ -889,6 +897,9 @@ function buildKeyframeStagingObjects(input: {
   resolvedPose?: string;
   /** Imported-model manifest positions are floor contacts, matching static blocking placement. */
   groundOffsetY?: number;
+  groundedRotationHeight?: number;
+  /** Exact live assembly bounds when available; stronger than a centerline foot pivot. */
+  groundedRotationDimensions?: Vec3;
 }): Array<{
   object: { id: string } | { ref: string };
   visible?: boolean;
@@ -902,11 +913,17 @@ function buildKeyframeStagingObjects(input: {
   };
   if (input.staging.transform) {
     const requestedPosition = input.staging.transform.position;
-    const targetTransform: Transform = {
-      position: requestedPosition
+    const rotation = input.staging.transform.rotation ?? baseTransform.rotation;
+    const centerPosition: Vec3 = requestedPosition
         ? [requestedPosition[0], requestedPosition[1] + (input.groundOffsetY ?? 0), requestedPosition[2]]
-        : baseTransform.position,
-      rotation: input.staging.transform.rotation ?? baseTransform.rotation,
+        : baseTransform.position;
+    const targetTransform: Transform = {
+      position: input.groundedRotationDimensions
+        ? centerTransformForBoundsPlant(centerPosition, rotation, input.groundedRotationDimensions)
+        : input.groundedRotationHeight
+          ? centerTransformForFootPlant(centerPosition, rotation, input.groundedRotationHeight)
+          : centerPosition,
+      rotation,
       scale: input.staging.transform.scale ?? baseTransform.scale,
     };
     if (input.mapping?.groupId && input.mapping.objectIds?.length) {

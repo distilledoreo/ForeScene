@@ -262,8 +262,8 @@ describe('production compile group bindings', () => {
       shots: [{
         id: 'shot.monster',
         shotNumber: '01',
-        name: 'Monster',
-        description: 'Imported multipart monster',
+        name: 'Monster sprint',
+        description: 'The imported multipart monster runs through the room.',
         locationId: 'location.interior',
         subjects: ['hand-monster'],
         blocking: [{ subject: 'hand-monster', placement: { type: 'location_slot', slot: 'center' } }],
@@ -304,6 +304,10 @@ describe('production compile group bindings', () => {
     expect(motionTransforms).toHaveLength(2);
     expect(motionTransforms[0]!.position).not.toEqual(motionTransforms[1]!.position);
     expect(Math.min(...motionTransforms.map((transform) => transform.position[1]))).toBeGreaterThanOrEqual(0);
+    expect(motionTransforms.every((transform) => Math.abs(transform.rotation[0]) > 12)).toBe(true);
+    expect(motionTransforms[0]!.rotation).toEqual(motionTransforms[1]!.rotation);
+    expect(Math.min(...motionTransforms.map((transform) => transform.position[1])))
+      .toBeGreaterThan(Math.min(palm.dimensions[1], finger.dimensions[1]) / 2);
   });
 
   it('compiles group-only prepared locations without template geometry', () => {

@@ -609,6 +609,23 @@ async function ensureImportedModelAssemblyGroup(
   if (objectIds.length <= 1) return { ok: true };
   return page.evaluate(async (input) => {
     const project = window.foreScene!.getProjectDocument();
+    const importedObjects = input.objectIds.map((objectId) => (
+      project.scene.objects.find((object) => object.id === objectId)
+    ));
+    const sourceImportIds = [...new Set(importedObjects.flatMap((object) => (
+      object?.importedModel?.sourceImportId ? [object.importedModel.sourceImportId] : []
+    )))];
+    if (importedObjects.some((object) => !object) || sourceImportIds.length !== 1) {
+      return {
+        ok: false,
+        diagnostics: [{
+          code: 'imported_assembly_identity_unresolved',
+          severity: 'error',
+          message: `Imported asset "${input.assetId}" does not resolve to one complete source import.`,
+        }],
+      };
+    }
+    const sourceImportId = sourceImportIds[0]!;
     const groups = project.scene.objectGroups ?? {};
     let existing = input.preferredGroupId ? groups[input.preferredGroupId] : undefined;
     if (!existing) {
@@ -627,10 +644,11 @@ async function ensureImportedModelAssemblyGroup(
         }
       }
     }
-    if (existing) return { ok: true, groupId: existing.id };
+    if (existing?.sourceImportId === sourceImportId) return { ok: true, groupId: existing.id };
     const created = await window.foreScene!.createObjectGroup({
       name: `${input.assetId} assembly`,
       objectIds: input.objectIds,
+      sourceImportId,
     });
     return {
       ok: created.ok,

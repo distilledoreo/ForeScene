@@ -4,6 +4,7 @@ import {
   Euler,
   Landmark,
   LocationProject,
+  ObjectGroup,
   ObjectSurfaceStyle,
   ProjectedStyleSettings,
   SceneObject,
@@ -22,7 +23,6 @@ import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh'
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
-import { centerTransformForFootPlant } from './groundPivot';
 
 export type SceneVisualTheme = 'light' | 'dark';
 
@@ -95,7 +95,8 @@ const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
 const contactShadowMaterial = new THREE.MeshBasicMaterial({
   color: 0x111111,
   transparent: true,
-  opacity: 0.45,
+  opacity: 0.34,
+  alphaMap: createContactShadowAlphaMap(),
   depthWrite: false,
   polygonOffset: true,
   polygonOffsetFactor: -2,
@@ -379,9 +380,10 @@ export function buildScene(
     );
   }
 
+  const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
   const groupedImportedIds = new Set(
     Object.values(project.scene.objectGroups ?? {})
-      .filter((group) => group.objectIds.length > 1)
+      .filter((group) => isRigidImportedAssembly(group, objectsById))
       .flatMap((group) => group.objectIds),
   );
 
@@ -416,7 +418,7 @@ export function buildScene(
     scene.add(mesh);
   }
 
-  plantImportedAssemblies(scene, project);
+  placeImportedAssemblyContactShadows(scene, project);
 
   if (options.previewObject) {
     scene.add(createPreviewMesh(options.previewObject));
@@ -459,8 +461,8 @@ const assemblyBoundsScratch = new THREE.Box3();
 const assemblyPartScratch = new THREE.Box3();
 const assemblySupportScratch = new THREE.Box3();
 
-/** Keep multipart imported subjects intact, but drop the assembly onto the floor as one piece. */
-export function plantImportedAssemblies(
+/** Place one visual contact cue without altering persisted member transforms. */
+export function placeImportedAssemblyContactShadows(
   scene: THREE.Scene,
   project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
 ): void {
@@ -470,22 +472,24 @@ export function plantImportedAssemblies(
     if (typeof objectId === 'string') nodes.set(objectId, child);
   }
   const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
+  const seenSourceImportIds = new Set<string>();
   for (const group of Object.values(project.scene.objectGroups ?? {})) {
     const shadowName = `${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}${group.id}`;
     const existingShadow = scene.getObjectByName(shadowName);
     if (existingShadow) existingShadow.visible = false;
-    if (group.objectIds.length < 2) continue;
+    if (!isRigidImportedAssembly(group, objectsById)) continue;
+    if (seenSourceImportIds.has(group.sourceImportId!)) continue;
+    seenSourceImportIds.add(group.sourceImportId!);
     const members = group.objectIds.flatMap((objectId) => {
       const object = objectsById.get(objectId);
       return object ? [object] : [];
     });
-    if (members.length < 2) continue;
-    if (!members.every((object) => object.type === 'imported_model' && object.stagingRole !== 'set')) continue;
     const memberNodes = members.flatMap((member) => {
       const node = nodes.get(member.id);
       return node ? [node] : [];
     });
     if (memberNodes.length !== members.length) continue;
+    if (!memberNodes.every((node) => node.visible)) continue;
     const partBounds: THREE.Box3[] = [];
     for (const node of memberNodes) {
       node.traverse((child) => {
@@ -504,19 +508,58 @@ export function plantImportedAssemblies(
     if (partBounds.length === 0) continue;
     assemblyBoundsScratch.copy(partBounds[0]!);
     for (const part of partBounds.slice(1)) assemblyBoundsScratch.union(part);
-    const dy = -0.068 - assemblyBoundsScratch.min.y;
-    if (!Number.isFinite(dy) || Math.abs(dy) > 2.5) continue;
-    if (Math.abs(dy) >= 0.004) {
-      for (const node of memberNodes) node.position.y += dy;
-    }
     const supportTolerance = Math.max(0.035, assemblyBoundsScratch.getSize(contactWorldPoint).y * 0.06);
     const supportParts = partBounds.filter((part) => (
       part.min.y <= assemblyBoundsScratch.min.y + supportTolerance
     ));
     assemblySupportScratch.copy(supportParts[0] ?? assemblyBoundsScratch);
     for (const part of supportParts.slice(1)) assemblySupportScratch.union(part);
-    placeGroupContactShadow(scene, shadowName, assemblySupportScratch, dy);
+    placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
   }
+}
+
+function isRigidImportedAssembly(
+  group: ObjectGroup,
+  objectsById: ReadonlyMap<string, SceneObject>,
+): boolean {
+  if (!group.sourceImportId || group.objectIds.length < 2) return false;
+  const membersMatch = group.objectIds.every((objectId) => {
+    const object = objectsById.get(objectId);
+    return object?.type === 'imported_model'
+      && object.stagingRole !== 'set'
+      && object.importedModel?.sourceImportId === group.sourceImportId;
+  });
+  if (!membersMatch) return false;
+  const completeSourceIds = [...objectsById.values()]
+    .filter((object) => (
+      object.type === 'imported_model'
+      && object.stagingRole !== 'set'
+      && object.importedModel?.sourceImportId === group.sourceImportId
+    ))
+    .map((object) => object.id);
+  return completeSourceIds.length === group.objectIds.length
+    && completeSourceIds.every((objectId) => group.objectIds.includes(objectId));
+}
+
+function createContactShadowAlphaMap(): THREE.DataTexture {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = (x + 0.5) / size * 2 - 1;
+      const dy = (y + 0.5) / size * 2 - 1;
+      const radial = Math.max(0, 1 - Math.hypot(dx, dy));
+      const alpha = Math.round(255 * radial * radial * (3 - 2 * radial));
+      const offset = (y * size + x) * 4;
+      data[offset] = 255;
+      data[offset + 1] = alpha;
+      data[offset + 2] = 255;
+      data[offset + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  return texture;
 }
 
 export function resolveObjectMaterial(
@@ -684,7 +727,6 @@ function placeGroupContactShadow(
   scene: THREE.Scene,
   name: string,
   supportBounds: THREE.Box3,
-  verticalOffset: number,
 ): void {
   let disc = scene.getObjectByName(name) as THREE.Mesh | undefined;
   if (!disc) {
@@ -697,7 +739,7 @@ function placeGroupContactShadow(
   }
   const center = supportBounds.getCenter(contactWorldPoint);
   const size = supportBounds.getSize(new THREE.Vector3());
-  disc.position.set(center.x, supportBounds.min.y + verticalOffset + 0.006, center.z);
+  disc.position.set(center.x, supportBounds.min.y + 0.006, center.z);
   disc.scale.set(
     Math.min(1.35, Math.max(0.22, size.x * 0.58)),
     Math.min(1.35, Math.max(0.22, size.z * 0.58)),
@@ -714,12 +756,9 @@ export function applySceneObjectTransform(
   options: { applyScale?: boolean; visible?: boolean } = {},
 ) {
   const pivotHeight = typeof node.userData.groundPivotHeight === 'number'
-    ? node.userData.groundPivotHeight * (options.applyScale === false ? 1 : transform.scale[1])
+    ? node.userData.groundPivotHeight
     : 0;
-  const position = pivotHeight > 0
-    ? centerTransformForFootPlant(transform.position, transform.rotation, pivotHeight)
-    : transform.position;
-  node.position.fromArray(position);
+  node.position.fromArray(transform.position);
   node.rotation.set(
     degreesToRadians(transform.rotation[0]),
     degreesToRadians(transform.rotation[1]),
@@ -731,7 +770,7 @@ export function applySceneObjectTransform(
   if (options.visible !== undefined) {
     node.visible = options.visible;
   }
-  placeContactShadow(node, transform, pivotHeight);
+  placeContactShadow(node, pivotHeight);
 }
 
 function objectUsesGroundContact(object: SceneObject): boolean {
@@ -755,16 +794,14 @@ function attachContactShadow(node: THREE.Object3D, object: SceneObject): void {
   node.add(disc);
 }
 
-function placeContactShadow(node: THREE.Object3D, transform: Transform, pivotHeight: number): void {
+function placeContactShadow(node: THREE.Object3D, pivotHeight: number): void {
   const disc = node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME);
   if (!disc) return;
   const half = pivotHeight > 0 ? pivotHeight / 2 : 0;
-  contactWorldPoint.set(
-    transform.position[0],
-    transform.position[1] - half + 0.012,
-    transform.position[2],
-  );
   node.updateMatrixWorld(true);
+  contactWorldPoint.set(0, -half, 0);
+  node.localToWorld(contactWorldPoint);
+  contactWorldPoint.y += 0.012;
   node.worldToLocal(contactWorldPoint);
   disc.position.copy(contactWorldPoint);
   disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);

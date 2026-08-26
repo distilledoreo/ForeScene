@@ -12,9 +12,11 @@ import {
   defaultSecondaryColor,
   defaultSolidColorForObject,
   disposeScene,
+  placeImportedAssemblyContactShadows,
   resolveObjectMaterial,
   resolveSurfaceStyle,
 } from '../src/engine/sceneObjects';
+import { centerTransformForFootPlant } from '../src/engine/groundPivot';
 
 describe('scene object disposal', () => {
   it('keeps semantic set proxies out of projected beauty frames', () => {
@@ -173,8 +175,12 @@ describe('object surface styles', () => {
 describe('ground contact', () => {
   it('plants leaned character roots so declared feet stay on the floor', () => {
     const person = createSceneObject('human_dummy', 1);
-    person.transform.position = [0, 0.875, 0];
     person.transform.rotation = [34, 0, 0];
+    person.transform.position = centerTransformForFootPlant(
+      [0, person.dimensions[1] / 2, 0],
+      person.transform.rotation,
+      person.dimensions[1],
+    );
     const node = createObject3D(person);
     const half = person.dimensions[1] / 2;
     const foot = new THREE.Vector3(0, -half, 0).applyEuler(node.rotation);
@@ -192,13 +198,24 @@ describe('ground contact', () => {
     const project = createDefaultProject();
     const left = createSceneObject('imported_model', 1);
     const right = createSceneObject('imported_model', 2);
+    const importedModel = {
+      sourceName: 'assembly.glb', sourceFormat: 'glb', sourceKind: 'model' as const,
+      vertexCount: 8, triangleCount: 12, meshCount: 1, importMode: 'separate' as const,
+      sourceImportId: 'import-assembly', geometrySimplified: false as const,
+      hierarchyFlattened: true as const,
+    };
+    left.importedModel = importedModel;
+    right.importedModel = importedModel;
     left.stagingRole = 'prop';
     right.stagingRole = 'prop';
-    left.transform.position = [-0.4, 1, 0];
-    right.transform.position = [0.4, 1.2, 0];
+    left.transform.position = [-0.4, left.dimensions[1] / 2, 0];
+    right.transform.position = [0.4, right.dimensions[1] / 2, 0];
     project.scene.objects = [left, right];
     project.scene.objectGroups = {
-      assembly: { id: 'assembly', name: 'Assembly', objectIds: [left.id, right.id] },
+      assembly: {
+        id: 'assembly', name: 'Assembly', objectIds: [left.id, right.id],
+        sourceImportId: 'import-assembly',
+      },
     };
 
     const scene = buildScene(project);
@@ -209,6 +226,26 @@ describe('ground contact', () => {
     const shadow = scene.getObjectByName(`${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}assembly`)!;
     expect(shadow).toBeTruthy();
     expect(shadow.position.y).toBeLessThan(0.05);
-    expect(shadow.position.y).toBeGreaterThan(-0.15);
+    expect(shadow.position.y).toBeGreaterThan(0);
+    leftNode.visible = false;
+    rightNode.visible = false;
+    placeImportedAssemblyContactShadows(scene, project);
+    expect(shadow.visible).toBe(false);
+  });
+
+  it('does not reinterpret an ordinary multi-object group as an import assembly', () => {
+    const project = createDefaultProject();
+    const left = createSceneObject('imported_model', 1);
+    const right = createSceneObject('imported_model', 2);
+    left.stagingRole = 'prop';
+    right.stagingRole = 'prop';
+    project.scene.objects = [left, right];
+    project.scene.objectGroups = {
+      pair: { id: 'pair', name: 'Independent pair', objectIds: [left.id, right.id] },
+    };
+    const scene = buildScene(project);
+    expect(scene.getObjectByName(`${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}pair`)).toBeUndefined();
+    const nodes = scene.children.filter((node) => node.userData.sceneObjectId);
+    expect(nodes.every((node) => Boolean(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)))).toBe(true);
   });
 });

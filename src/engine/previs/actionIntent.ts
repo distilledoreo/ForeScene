@@ -16,6 +16,25 @@ export function canInferNativeActionPose(character: PrevisCharacterDefinition | 
   return character?.type === 'human_dummy';
 }
 
+/** Semantic entities that can communicate locomotion through a rigid root transform. */
+export function canInferRigidLocomotion(
+  manifest: PrevisProductionManifestV1,
+  entityId: string,
+): boolean {
+  const character = manifest.cast.find((entry) => entry.id === entityId);
+  if (character) return character.type === 'imported_character';
+  const asset = manifest.assets?.find((entry) => entry.id === entityId);
+  return Boolean(
+    asset
+    && (asset.semanticRole === 'subject' || asset.semanticRole === 'character')
+    && (
+      asset.type === 'imported_model'
+      || asset.type === 'imported_character'
+      || asset.type === 'saved_rig'
+    )
+  );
+}
+
 function actionText(shot: PrevisShotDefinition): string {
   return [
     shot.name,
@@ -97,14 +116,8 @@ export function rigidLocomotionGroundedPosition(position: Vec3, heightMeters: nu
 }
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.56;
-/** Locked side-on covering distance so the pack travels through frame. */
-export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
 /** How far the locked camera follows pack travel from path midpoint, 0–1. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.55;
-/** Height of the locked covering camera, in meters. */
-export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.85;
-/** Vertical FOV for the locked covering camera, in degrees. */
-export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 60;
+export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.7;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -222,6 +235,11 @@ export function resolveReadableMotionCamera(
     const authoredSide = (camera.position[0] - pathMid[0]) * lateral[0]
       + (camera.position[2] - pathMid[2]) * lateral[2];
     const sign = authoredSide < 0 ? -1 : 1;
+    const coverDistance = Math.max(1.2, Math.hypot(
+      camera.position[0] - camera.target[0],
+      camera.position[2] - camera.target[2],
+    ));
+    const authoredHeightOffset = camera.position[1] - camera.target[1];
     const centroid: Vec3 = stagedPositions.reduce((sum, sample, _index, list) => [
       sum[0] + sample[0] / list.length,
       sum[1] + sample[1] / list.length,
@@ -237,15 +255,14 @@ export function resolveReadableMotionCamera(
       pathMid[2] + forward[2] * alongDelta,
     ];
     const position: Vec3 = [
-      coverCenter[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
-      READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
-      coverCenter[2] + lateral[2] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
+      coverCenter[0] + lateral[0] * coverDistance * sign,
+      coverCenter[1] + authoredHeightOffset,
+      coverCenter[2] + lateral[2] * coverDistance * sign,
     ];
     return {
       ...camera,
       position,
-      target: [centroid[0], camera.target[1], centroid[2]],
-      fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
+      target: coverCenter,
     };
   }
 

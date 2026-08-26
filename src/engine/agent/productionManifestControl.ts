@@ -14,7 +14,7 @@ import { parsePrevisProductionManifest } from '../previs/manifestValidation';
 import { buildProductionCompileEntityBindings, buildProductionCompileLocationBindings } from '../previs/productionCompileBindings';
 import { inferExistingProjectLocationBindings } from '../previs/productionCompileBindings';
 import { deriveShotActionContracts } from '../previs/productionConfiguration';
-import { canInferNativeActionPose } from '../previs/actionIntent';
+import { canInferNativeActionPose, canInferRigidLocomotion } from '../previs/actionIntent';
 import { resolveProductionPose } from '../previs/entityCapability';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
@@ -414,9 +414,8 @@ function buildManifestProductionConfiguration(input: {
       poseableEntityIds: new Set(input.manifest.cast
         .filter(canInferNativeActionPose)
         .map((entry) => entry.id)),
-      rigidLocomotionEntityIds: new Set(input.manifest.cast
-        .filter((entry) => entry.type === 'imported_character')
-        .map((entry) => entry.id)),
+      rigidLocomotionEntityIds: new Set(entityIds
+        .filter((entityId) => canInferRigidLocomotion(input.manifest, entityId))),
       resolvePose: (entityId, requestedPose) => resolveProductionPose({
         project: input.project,
         entityId,

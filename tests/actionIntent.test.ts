@@ -9,9 +9,6 @@ import {
   resolveReadableMotionSubjectPosition,
   rigidLocomotionGroundedPosition,
   READABLE_LOCOMOTION_COVER_FOLLOW,
-  READABLE_LOCOMOTION_COVER_FOV_DEGREES,
-  READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
-  READABLE_LOCOMOTION_COVER_LATERAL_METERS,
   RIGID_LOCOMOTION_LEAN_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
@@ -128,14 +125,14 @@ describe('action intent', () => {
     const shot = chase();
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
-    expect(start.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_COVER_LATERAL_METERS, 5);
-    expect(start.position?.[1]).toBe(READABLE_LOCOMOTION_COVER_HEIGHT_METERS);
+    expect(start.position?.[0]).toBeCloseTo(Math.hypot(0.4, 3.8), 5);
+    expect(start.position?.[1]).toBe(1.6);
     expect(start.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((-5.3 + -6.5) / 2), 5);
     expect(end.position?.[2]).toBeCloseTo(READABLE_LOCOMOTION_COVER_FOLLOW * ((5.3 + 4.1) / 2), 5);
     expect(start.position?.[2]).not.toBeCloseTo(end.position?.[2] ?? 0, 1);
-    expect(start.target?.[2]).toBeCloseTo((-5.3 + -6.5) / 2, 5);
-    expect(end.target?.[2]).toBeCloseTo((5.3 + 4.1) / 2, 5);
-    expect(start.fovDegrees).toBe(READABLE_LOCOMOTION_COVER_FOV_DEGREES);
+    expect(start.target?.[2]).toBeCloseTo(start.position?.[2] ?? 0, 5);
+    expect(end.target?.[2]).toBeCloseTo(end.position?.[2] ?? 0, 5);
+    expect(start.fovDegrees).toBe(50);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {

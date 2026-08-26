@@ -28,7 +28,7 @@ import {
   applySceneObjectTransform,
   buildScene,
   disposeScene,
-  plantImportedAssemblies,
+  placeImportedAssemblyContactShadows,
   sceneObjectUsesProceduralScale,
   type ProjectedSceneOptions,
   type SceneVisualTheme,
@@ -1232,7 +1232,7 @@ function applyAnimatedObjectOverridesToScene(
       }, assets);
   }
   if (contentOptions.objectGroups) {
-    plantImportedAssemblies(scene, {
+    placeImportedAssemblyContactShadows(scene, {
       scene: { objects: baseObjects, objectGroups: contentOptions.objectGroups },
     });
   }
