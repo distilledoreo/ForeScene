@@ -253,4 +253,18 @@ describe('ground contact', () => {
     const nodes = scene.children.filter((node) => node.userData.sceneObjectId);
     expect(nodes.every((node) => Boolean(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)))).toBe(true);
   });
+
+  it('plants a standalone contact subject so live mesh sits on the floor', () => {
+    const project = createDefaultProject();
+    const dummy = createSceneObject('human_dummy', 1);
+    dummy.transform.position = [0, 0.875, 0];
+    dummy.transform.rotation = [34, 0, 0];
+    project.scene.objects = [dummy];
+    const scene = buildScene(project, { showHelpers: false });
+    const node = scene.children.find((child) => child.userData.sceneObjectId === dummy.id)!;
+    const bounds = new THREE.Box3().setFromObject(node);
+    expect(bounds.min.y).toBeLessThan(0.02);
+    expect(bounds.min.y).toBeGreaterThan(-0.12);
+    disposeScene(scene);
+  });
 });

@@ -95,13 +95,15 @@ const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
 const contactShadowMaterial = new THREE.MeshBasicMaterial({
   color: 0x111111,
   transparent: true,
-  opacity: 0.34,
+  opacity: 0.52,
   alphaMap: createContactShadowAlphaMap(),
   depthWrite: false,
   polygonOffset: true,
   polygonOffsetFactor: -2,
   polygonOffsetUnits: -2,
 });
+/** Live mesh AABBs sit this far into the authored floor so contact reads on clay and pano. */
+const GROUND_CONTACT_SINK_METERS = 0.045;
 const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
 export const FORESCENE_CONTACT_SHADOW_NAME = 'forescene-contact-shadow';
 export const FORESCENE_GROUP_CONTACT_SHADOW_PREFIX = `${FORESCENE_CONTACT_SHADOW_NAME}:group:`;
@@ -418,7 +420,7 @@ export function buildScene(
     scene.add(mesh);
   }
 
-  placeImportedAssemblyContactShadows(scene, project);
+  plantGroundedSubjects(scene, project);
 
   if (options.previewObject) {
     scene.add(createPreviewMesh(options.previewObject));
@@ -461,8 +463,39 @@ const assemblyBoundsScratch = new THREE.Box3();
 const assemblyPartScratch = new THREE.Box3();
 const assemblySupportScratch = new THREE.Box3();
 
-/** Place one visual contact cue without altering persisted member transforms. */
-export function placeImportedAssemblyContactShadows(
+function collectMeshWorldBounds(node: THREE.Object3D): THREE.Box3[] {
+  const partBounds: THREE.Box3[] = [];
+  node.traverse((child) => {
+    if (child.userData.contactShadow) return;
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    const part = mesh.geometry.boundingBox;
+    if (!part) return;
+    assemblyPartScratch.copy(part);
+    mesh.updateWorldMatrix(true, false);
+    assemblyPartScratch.applyMatrix4(mesh.matrixWorld);
+    partBounds.push(assemblyPartScratch.clone());
+  });
+  return partBounds;
+}
+
+function unionBounds(partBounds: THREE.Box3[]): THREE.Box3 | undefined {
+  if (partBounds.length === 0) return undefined;
+  assemblyBoundsScratch.copy(partBounds[0]!);
+  for (const part of partBounds.slice(1)) assemblyBoundsScratch.union(part);
+  return assemblyBoundsScratch;
+}
+
+function applyFloorPlant(nodes: THREE.Object3D[], minY: number): number {
+  const dy = -GROUND_CONTACT_SINK_METERS - minY;
+  if (!Number.isFinite(dy) || Math.abs(dy) > 2.5 || Math.abs(dy) < 0.003) return 0;
+  for (const node of nodes) node.position.y += dy;
+  return dy;
+}
+
+/** Plant live contact meshes on the floor and keep one visual cue per assembly. */
+export function plantGroundedSubjects(
   scene: THREE.Scene,
   project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
 ): void {
@@ -472,6 +505,7 @@ export function placeImportedAssemblyContactShadows(
     if (typeof objectId === 'string') nodes.set(objectId, child);
   }
   const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
+  const groupedImportedIds = new Set<string>();
   const seenSourceImportIds = new Set<string>();
   for (const group of Object.values(project.scene.objectGroups ?? {})) {
     const shadowName = `${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}${group.id}`;
@@ -490,38 +524,39 @@ export function placeImportedAssemblyContactShadows(
     });
     if (memberNodes.length !== members.length) continue;
     if (!memberNodes.every((node) => node.visible)) continue;
-    const partBounds: THREE.Box3[] = [];
-    for (const node of memberNodes) {
-      node.traverse((child) => {
-        if (child.userData.contactShadow) return;
-        const mesh = child as THREE.Mesh;
-        if (!mesh.isMesh || !mesh.geometry) return;
-        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-        const part = mesh.geometry.boundingBox;
-        if (!part) return;
-        assemblyPartScratch.copy(part);
-        mesh.updateWorldMatrix(true, false);
-        assemblyPartScratch.applyMatrix4(mesh.matrixWorld);
-        partBounds.push(assemblyPartScratch.clone());
-      });
-    }
-    if (partBounds.length === 0) continue;
-    assemblyBoundsScratch.copy(partBounds[0]!);
-    for (const part of partBounds.slice(1)) assemblyBoundsScratch.union(part);
-    const supportTolerance = Math.max(0.035, assemblyBoundsScratch.getSize(contactWorldPoint).y * 0.06);
+    const partBounds = memberNodes.flatMap((node) => collectMeshWorldBounds(node));
+    const assembled = unionBounds(partBounds);
+    if (!assembled) continue;
+    const supportTolerance = Math.max(0.035, assembled.getSize(contactWorldPoint).y * 0.06);
     const supportParts = partBounds.filter((part) => (
-      part.min.y <= assemblyBoundsScratch.min.y + supportTolerance
+      part.min.y <= assembled.min.y + supportTolerance
     ));
-    assemblySupportScratch.copy(supportParts[0] ?? assemblyBoundsScratch);
+    assemblySupportScratch.copy(supportParts[0] ?? assembled);
     for (const part of supportParts.slice(1)) assemblySupportScratch.union(part);
-    const dy = -0.068 - assemblyBoundsScratch.min.y;
-    if (Number.isFinite(dy) && Math.abs(dy) <= 2.5 && Math.abs(dy) >= 0.004) {
-      for (const node of memberNodes) node.position.y += dy;
-      assemblySupportScratch.min.y += dy;
-      assemblySupportScratch.max.y += dy;
-    }
+    const dy = applyFloorPlant(memberNodes, assembled.min.y);
+    assemblySupportScratch.min.y += dy;
+    assemblySupportScratch.max.y += dy;
     placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
+    for (const member of members) groupedImportedIds.add(member.id);
   }
+
+  for (const [objectId, node] of nodes) {
+    if (groupedImportedIds.has(objectId) || !node.visible) continue;
+    const object = objectsById.get(objectId);
+    if (!object || !objectUsesGroundContact(object)) continue;
+    const assembled = unionBounds(collectMeshWorldBounds(node));
+    if (!assembled) continue;
+    applyFloorPlant([node], assembled.min.y);
+    placeContactShadowOnWorldFloor(node);
+  }
+}
+
+/** @deprecated Use plantGroundedSubjects; kept for existing render-path call sites. */
+export function placeImportedAssemblyContactShadows(
+  scene: THREE.Scene,
+  project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
+): void {
+  plantGroundedSubjects(scene, project);
 }
 
 function isRigidImportedAssembly(
@@ -808,6 +843,22 @@ function placeContactShadow(node: THREE.Object3D, pivotHeight: number): void {
   contactWorldPoint.set(0, -half, 0);
   node.localToWorld(contactWorldPoint);
   contactWorldPoint.y += 0.012;
+  node.worldToLocal(contactWorldPoint);
+  disc.position.copy(contactWorldPoint);
+  disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);
+}
+
+function placeContactShadowOnWorldFloor(node: THREE.Object3D): void {
+  const disc = node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME);
+  if (!disc) return;
+  const assembled = unionBounds(collectMeshWorldBounds(node));
+  if (!assembled) {
+    placeContactShadow(node, typeof node.userData.groundPivotHeight === 'number' ? node.userData.groundPivotHeight : 0);
+    return;
+  }
+  const center = assembled.getCenter(contactWorldPoint);
+  contactWorldPoint.set(center.x, assembled.min.y + 0.012, center.z);
+  node.updateMatrixWorld(true);
   node.worldToLocal(contactWorldPoint);
   disc.position.copy(contactWorldPoint);
   disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);

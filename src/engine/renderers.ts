@@ -28,7 +28,7 @@ import {
   applySceneObjectTransform,
   buildScene,
   disposeScene,
-  placeImportedAssemblyContactShadows,
+  plantGroundedSubjects,
   sceneObjectUsesProceduralScale,
   type ProjectedSceneOptions,
   type SceneVisualTheme,
@@ -1224,18 +1224,16 @@ function applyAnimatedObjectOverridesToScene(
       // reverse clean-plate / characters-only rules after the scene is resolved.
       visible: isObjectVisibleForContentMode(base, requestedVisible, contentOptions),
     });
-      applyHumanPoseToObject3D(node, {
+  applyHumanPoseToObject3D(node, {
         id: objectId,
         type: base.type,
         poseableCharacter: base.poseableCharacter,
         humanPose: override.humanPose ?? base.humanPose,
       }, assets);
   }
-  if (contentOptions.objectGroups) {
-    placeImportedAssemblyContactShadows(scene, {
-      scene: { objects: baseObjects, objectGroups: contentOptions.objectGroups },
-    });
-  }
+  plantGroundedSubjects(scene, {
+    scene: { objects: baseObjects, objectGroups: contentOptions.objectGroups },
+  });
 }
 
 export async function renderViewportClay(
