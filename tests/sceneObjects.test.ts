@@ -254,6 +254,37 @@ describe('ground contact', () => {
     expect(nodes.every((node) => Boolean(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)))).toBe(true);
   });
 
+  it('does not plant each mesh of a multipart group onto the floor by itself', () => {
+    const project = createDefaultProject();
+    const body = createSceneObject('imported_model', 1);
+    const eye = createSceneObject('imported_model', 2);
+    const importedModel = {
+      sourceName: 'assembly.glb', sourceFormat: 'glb', sourceKind: 'model' as const,
+      vertexCount: 8, triangleCount: 12, meshCount: 1, importMode: 'separate' as const,
+      sourceImportId: 'import-assembly', geometrySimplified: false as const,
+      hierarchyFlattened: true as const,
+    };
+    body.importedModel = importedModel;
+    eye.importedModel = importedModel;
+    body.stagingRole = 'prop';
+    eye.stagingRole = 'prop';
+    body.transform.position = [0, 0.5, 0];
+    eye.transform.position = [0, 1.4, 0.35];
+    project.scene.objects = [body, eye];
+    project.scene.objectGroups = {
+      assembly: {
+        id: 'assembly', name: 'Assembly', objectIds: [body.id, eye.id],
+        sourceImportId: 'import-assembly',
+      },
+    };
+    const scene = buildScene(project, { showHelpers: false });
+    const bodyNode = scene.children.find((node) => node.userData.sceneObjectId === body.id)!;
+    const eyeNode = scene.children.find((node) => node.userData.sceneObjectId === eye.id)!;
+    const restGap = eye.transform.position[1] - body.transform.position[1];
+    expect(eyeNode.position.y - bodyNode.position.y).toBeCloseTo(restGap, 5);
+    disposeScene(scene);
+  });
+
   it('plants a standalone contact subject so live mesh sits on the floor', () => {
     const project = createDefaultProject();
     const dummy = createSceneObject('human_dummy', 1);

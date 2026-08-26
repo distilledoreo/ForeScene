@@ -505,7 +505,11 @@ export function plantGroundedSubjects(
     if (typeof objectId === 'string') nodes.set(objectId, child);
   }
   const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
-  const groupedImportedIds = new Set<string>();
+  const groupedImportedIds = new Set(
+    Object.values(project.scene.objectGroups ?? {})
+      .filter((group) => group.objectIds.length > 1)
+      .flatMap((group) => group.objectIds),
+  );
   const seenSourceImportIds = new Set<string>();
   for (const group of Object.values(project.scene.objectGroups ?? {})) {
     const shadowName = `${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}${group.id}`;
@@ -537,7 +541,6 @@ export function plantGroundedSubjects(
     assemblySupportScratch.min.y += dy;
     assemblySupportScratch.max.y += dy;
     placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
-    for (const member of members) groupedImportedIds.add(member.id);
   }
 
   for (const [objectId, node] of nodes) {
