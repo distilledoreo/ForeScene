@@ -84,11 +84,11 @@ export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Locked side-on covering distance so the pack travels through frame. */
-export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 7;
+export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 3.2;
 /** Height of the locked covering camera, in meters. */
-export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.8;
+export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.6;
 /** Vertical FOV for the locked covering camera, in degrees. */
-export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 80;
+export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 52;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
@@ -160,8 +160,9 @@ function quaternionToEulerXyzDegrees(q: { x: number; y: number; z: number; w: nu
 /**
  * Keep multiple moving subjects readable when an authored tracking camera is
  * nearly collinear with their path. Non-locomotion shots only get a bounded
- * lateral nudge. Locomotion shots use one locked covering camera so travel
- * reads as the pack moving through the frame instead of a tracked freeze.
+ * lateral nudge. Locomotion shots lock camera position at path midpoint and
+ * pan the look-at with the pack so framing stays full while the corridor
+ * reads as travel.
  */
 export function resolveReadableMotionCamera(
   shot: PrevisShotDefinition,
@@ -205,6 +206,11 @@ export function resolveReadableMotionCamera(
     const authoredSide = (camera.position[0] - pathMid[0]) * lateral[0]
       + (camera.position[2] - pathMid[2]) * lateral[2];
     const sign = authoredSide < 0 ? -1 : 1;
+    const centroid: Vec3 = stagedPositions.reduce((sum, sample, _index, list) => [
+      sum[0] + sample[0] / list.length,
+      sum[1] + sample[1] / list.length,
+      sum[2] + sample[2] / list.length,
+    ], [0, 0, 0]);
     const position: Vec3 = [
       pathMid[0] + lateral[0] * READABLE_LOCOMOTION_COVER_LATERAL_METERS * sign,
       READABLE_LOCOMOTION_COVER_HEIGHT_METERS,
@@ -213,7 +219,7 @@ export function resolveReadableMotionCamera(
     return {
       ...camera,
       position,
-      target: pathMid,
+      target: [centroid[0], camera.target[1], centroid[2]],
       fovDegrees: READABLE_LOCOMOTION_COVER_FOV_DEGREES,
     };
   }

@@ -123,14 +123,12 @@ describe('action intent', () => {
     const start = resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!)!;
     const end = resolveReadableMotionCamera(shot, shot.motion!.keyframes[1]!)!;
     expect(start.position).toEqual(end.position);
-    expect(start.target).toEqual(end.target);
     expect(start.position?.[0]).toBeCloseTo(READABLE_LOCOMOTION_COVER_LATERAL_METERS, 5);
     expect(start.position?.[1]).toBe(READABLE_LOCOMOTION_COVER_HEIGHT_METERS);
     expect(start.position?.[2]).toBeCloseTo(0, 5);
-    expect(start.target).toEqual([0, 0.9, 0]);
+    expect(start.target?.[2]).toBeCloseTo((-5.3 + -6.5) / 2, 5);
+    expect(end.target?.[2]).toBeCloseTo((5.3 + 4.1) / 2, 5);
     expect(start.fovDegrees).toBe(READABLE_LOCOMOTION_COVER_FOV_DEGREES);
-    expect(shot.motion!.keyframes[0]!.staging![0]!.transform!.position![2]).toBe(-5.3);
-    expect(shot.motion!.keyframes[1]!.staging![0]!.transform!.position![2]).toBe(5.3);
   });
 
   it('aliases explicitly preferred built-in props to the sole saved-rig host', () => {
