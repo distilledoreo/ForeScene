@@ -112,6 +112,7 @@ export function createImportedMeshNode(
   object: SceneObject,
   assets: AssetRegistry | undefined,
   material: THREE.Material,
+  options?: { centerNonSetMesh?: boolean },
 ): THREE.Object3D {
   const root = new THREE.Group();
   const asset = object.modelAssetId ? assets?.assets[object.modelAssetId] : undefined;
@@ -130,7 +131,7 @@ export function createImportedMeshNode(
       safeDimensionRatio(object.dimensions[1], sourceSize.y) * object.transform.scale[1],
       safeDimensionRatio(object.dimensions[2], sourceSize.z) * object.transform.scale[2],
     );
-    if (object.stagingRole !== 'set') {
+    if (object.stagingRole !== 'set' && options?.centerNonSetMesh !== false) {
       centerMeshOnGeometryBounds(mesh);
     }
     root.add(mesh);

@@ -378,6 +378,12 @@ export function buildScene(
     );
   }
 
+  const groupedImportedIds = new Set(
+    Object.values(project.scene.objectGroups ?? {})
+      .filter((group) => group.objectIds.length > 1)
+      .flatMap((group) => group.objectIds),
+  );
+
   for (const object of project.scene.objects) {
     if (!object.visible) continue;
     if (hiddenTypes.has(object.type)) continue;
@@ -397,6 +403,7 @@ export function buildScene(
       Boolean(options.selectedObjectIds?.includes(object.id)),
       theme,
       project.assets,
+      { skipImportedMeshCentering: groupedImportedIds.has(object.id) },
     );
     mesh.userData.sceneObjectId = object.id;
     if (receivesProjectedStyle && options.projected) {
@@ -404,6 +411,8 @@ export function buildScene(
     }
     scene.add(mesh);
   }
+
+  plantImportedAssemblies(scene, project);
 
   if (options.previewObject) {
     scene.add(createPreviewMesh(options.previewObject));
@@ -440,6 +449,68 @@ export function buildScene(
   }
 
   return scene;
+}
+
+const assemblyBoundsScratch = new THREE.Box3();
+const assemblyPartScratch = new THREE.Box3();
+
+/** Keep multipart imported subjects intact, but drop the assembly onto the floor as one piece. */
+export function plantImportedAssemblies(
+  scene: THREE.Scene,
+  project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
+): void {
+  const nodes = new Map<string, THREE.Object3D>();
+  for (const child of scene.children) {
+    const objectId = child.userData.sceneObjectId;
+    if (typeof objectId === 'string') nodes.set(objectId, child);
+  }
+  const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
+  for (const group of Object.values(project.scene.objectGroups ?? {})) {
+    if (group.objectIds.length < 2) continue;
+    const members = group.objectIds.flatMap((objectId) => {
+      const object = objectsById.get(objectId);
+      return object ? [object] : [];
+    });
+    if (members.length < 2) continue;
+    if (!members.every((object) => object.type === 'imported_model' && object.stagingRole !== 'set')) continue;
+    const memberNodes = members.flatMap((member) => {
+      const node = nodes.get(member.id);
+      return node ? [node] : [];
+    });
+    if (memberNodes.length !== members.length) continue;
+    let found = false;
+    for (const node of memberNodes) {
+      node.traverse((child) => {
+        if (child.userData.contactShadow) return;
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        const part = mesh.geometry.boundingBox;
+        if (!part) return;
+        assemblyPartScratch.copy(part);
+        mesh.updateWorldMatrix(true, false);
+        assemblyPartScratch.applyMatrix4(mesh.matrixWorld);
+        if (!found) {
+          assemblyBoundsScratch.copy(assemblyPartScratch);
+          found = true;
+        } else {
+          assemblyBoundsScratch.union(assemblyPartScratch);
+        }
+      });
+    }
+    if (!found) continue;
+    const dy = 0.012 - assemblyBoundsScratch.min.y;
+    if (!Number.isFinite(dy) || Math.abs(dy) < 0.008 || Math.abs(dy) > 2.5) continue;
+    for (const node of memberNodes) {
+      node.position.y += dy;
+      const object = objectsById.get(String(node.userData.sceneObjectId));
+      if (!object) continue;
+      const pivotHeight = typeof node.userData.groundPivotHeight === 'number'
+        ? node.userData.groundPivotHeight
+        : 0;
+      placeContactShadow(node, object.transform, pivotHeight);
+    }
+  }
 }
 
 export function resolveObjectMaterial(
@@ -520,6 +591,7 @@ export function createObject3D(
   _selected = false,
   theme: SceneVisualTheme = 'light',
   assets?: AssetRegistry,
+  options?: { skipImportedMeshCentering?: boolean },
 ): THREE.Object3D {
   let node: THREE.Object3D;
   let character: ReturnType<typeof resolvePoseableCharacterForObject>;
@@ -576,7 +648,9 @@ export function createObject3D(
       node = createSunMarker(object, theme, style === 'default' ? undefined : material);
       break;
     case 'imported_model':
-      node = createImportedMeshNode(object, assets, material);
+      node = createImportedMeshNode(object, assets, material, {
+        centerNonSetMesh: options?.skipImportedMeshCentering !== true,
+      });
       break;
     default:
       node = new THREE.Mesh(

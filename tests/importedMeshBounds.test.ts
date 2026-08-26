@@ -44,5 +44,14 @@ describe('imported mesh bounds', () => {
     expect((box.min.y + box.max.y) / 2).toBeCloseTo(0, 5);
     expect(box.min.y).toBeCloseTo(-1, 5);
     expect(box.max.y).toBeCloseTo(1, 5);
+
+    const uncentered = createImportedMeshNode(
+      object,
+      assets,
+      new THREE.MeshStandardMaterial(),
+      { centerNonSetMesh: false },
+    );
+    const raw = uncentered.children[0] as THREE.Mesh;
+    expect(raw.position.y).toBe(0);
   });
 });

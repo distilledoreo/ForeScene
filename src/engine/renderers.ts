@@ -28,6 +28,7 @@ import {
   applySceneObjectTransform,
   buildScene,
   disposeScene,
+  plantImportedAssemblies,
   sceneObjectUsesProceduralScale,
   type ProjectedSceneOptions,
   type SceneVisualTheme,
@@ -746,6 +747,7 @@ async function renderShotCameraMoveMp4Deterministic(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
+                objectGroups: (sourceProject ?? project).scene.objectGroups,
                 assets: (sourceProject ?? project).assets,
                 contentMode,
                 includeCharacterAttachments,
@@ -987,6 +989,7 @@ async function renderShotCameraMoveMp4QuickPreview(
               ? {
                 shot,
                 baseObjects: (sourceProject ?? project).scene.objects,
+                objectGroups: (sourceProject ?? project).scene.objectGroups,
                 assets: (sourceProject ?? project).assets,
                 contentMode,
                 includeCharacterAttachments,
@@ -1091,6 +1094,7 @@ export function renderCameraMoveFrame(
     objectAnimation?: {
       shot: Pick<Shot, 'objectOverrides'>;
       baseObjects: LocationProject['scene']['objects'];
+      objectGroups?: LocationProject['scene']['objectGroups'];
       assets?: LocationProject['assets'];
       contentMode?: SceneContentMode;
       includeCharacterAttachments?: boolean;
@@ -1133,6 +1137,7 @@ export function renderCameraMoveFrame(
         contentMode: normalized.objectAnimation.contentMode
           ?? (normalized.objectAnimation.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene'),
         includeCharacterAttachments: normalized.objectAnimation.includeCharacterAttachments,
+        objectGroups: normalized.objectAnimation.objectGroups,
       },
     );
   }
@@ -1160,6 +1165,7 @@ export function renderCameraMoveFrame(
 type CameraMoveObjectAnimationOptions = {
   shot: Pick<Shot, 'objectOverrides'>;
   baseObjects: LocationProject['scene']['objects'];
+  objectGroups?: LocationProject['scene']['objectGroups'];
   assets?: LocationProject['assets'];
   contentMode?: SceneContentMode;
   includeCharacterAttachments?: boolean;
@@ -1201,6 +1207,7 @@ function applyAnimatedObjectOverridesToScene(
   contentOptions: {
     contentMode?: SceneContentMode;
     includeCharacterAttachments?: boolean;
+    objectGroups?: LocationProject['scene']['objectGroups'];
   },
 ) {
   const baseById = new Map(baseObjects.map((object) => [object.id, object]));
@@ -1223,6 +1230,11 @@ function applyAnimatedObjectOverridesToScene(
         poseableCharacter: base.poseableCharacter,
         humanPose: override.humanPose ?? base.humanPose,
       }, assets);
+  }
+  if (contentOptions.objectGroups) {
+    plantImportedAssemblies(scene, {
+      scene: { objects: baseObjects, objectGroups: contentOptions.objectGroups },
+    });
   }
 }
 
@@ -1978,6 +1990,7 @@ export async function renderCameraMoveFrames(options: {
             ? {
               shot: options.shot,
               baseObjects: options.project.scene.objects,
+              objectGroups: options.project.scene.objectGroups,
               assets: options.project.assets,
               contentMode,
               includeCharacterAttachments,
