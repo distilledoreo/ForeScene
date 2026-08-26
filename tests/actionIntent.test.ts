@@ -6,6 +6,9 @@ import {
   inferRigidLocomotionRotation,
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
+  resolveReadableMotionSubjectPosition,
+  RIGID_LOCOMOTION_LEAN_DEGREES,
+  RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES,
 } from '../src/engine/previs/actionIntent';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 
@@ -56,9 +59,38 @@ describe('action intent', () => {
     })).toBe(true);
   });
 
-  it('derives a stable deformation-free lean from authored travel', () => {
-    expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual([9, 0, -0]);
-    expect(inferRigidLocomotionRotation(chase(), 'pursuer')).toEqual([9, 0, -0]);
+  it('orients imported locomotion toward travel with a readable local lean', () => {
+    const runner = inferRigidLocomotionRotation(chase(), 'runner')!;
+    const pursuer = inferRigidLocomotionRotation(chase(), 'pursuer')!;
+    expect(runner[0]).toBeGreaterThan(12);
+    expect(runner[1]).toBeGreaterThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES - 5);
+    expect(runner[1]).toBeLessThan(RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES + 5);
+    expect(Math.abs(runner[2])).toBeLessThan(15);
+    expect(pursuer).toEqual(runner);
+    expect(inferRigidLocomotionRotation(chase(), 'runner')).toEqual(runner);
+    expect(RIGID_LOCOMOTION_LEAN_DEGREES).toBe(20);
+  });
+
+  it('separates stacked chase silhouettes without changing travel', () => {
+    const shot = chase();
+    const start = shot.motion!.keyframes[0]!;
+    const runner = resolveReadableMotionSubjectPosition(shot, start, 'runner')!;
+    const pursuer = resolveReadableMotionSubjectPosition(shot, start, 'pursuer')!;
+    expect(runner[0]).toBeLessThan(0);
+    expect(pursuer[0]).toBeGreaterThan(0);
+    expect(runner[2]).toBe(-5.3);
+    expect(pursuer[2]).toBe(-6.5);
+    expect(pursuer[0] - runner[0]).toBeCloseTo(0.84, 5);
+  });
+
+  it('keeps an already separated chase pair on its authored laterals', () => {
+    const shot = chase();
+    shot.motion!.keyframes[0]!.staging = [
+      { subject: 'runner', transform: { position: [-0.8, 0.875, -5.3] } },
+      { subject: 'pursuer', transform: { position: [0.8, 0, -6.5] } },
+    ];
+    expect(resolveReadableMotionSubjectPosition(shot, shot.motion!.keyframes[0]!, 'runner')).toEqual([-0.8, 0.875, -5.3]);
+    expect(resolveReadableMotionSubjectPosition(shot, shot.motion!.keyframes[0]!, 'pursuer')).toEqual([0.8, 0, -6.5]);
   });
 
   it('derives a stable exact locomotion silhouette across timeline interpolation', () => {

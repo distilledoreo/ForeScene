@@ -34,6 +34,7 @@ import {
   inferNativeActionPose,
   inferRigidLocomotionRotation,
   resolveReadableMotionCamera,
+  resolveReadableMotionSubjectPosition,
 } from './actionIntent';
 import { defaultPropDimensions } from './propDimensions';
 import {
@@ -663,16 +664,25 @@ function compileSingleShot(
                 staging.subject,
                 staging.posePreset ?? inferredPose,
               );
-              const rigidLocomotionRotation = stagedCharacter?.type === 'imported_character'
+              const rigidLocomotionRotation = (
+                stagedCharacter?.type === 'imported_character'
+                || (!stagedCharacter && Boolean(assetMapping))
+              )
                 && !staging.transform?.rotation
                 ? inferRigidLocomotionRotation(shot, staging.subject)
                 : undefined;
-              const effectiveStaging = rigidLocomotionRotation
+              const readablePosition = resolveReadableMotionSubjectPosition(
+                shot,
+                keyframe,
+                staging.subject,
+              );
+              const effectiveStaging = rigidLocomotionRotation || readablePosition
                 ? {
                     ...staging,
                     transform: {
                       ...staging.transform,
-                      rotation: rigidLocomotionRotation,
+                      ...(readablePosition ? { position: readablePosition } : {}),
+                      ...(rigidLocomotionRotation ? { rotation: rigidLocomotionRotation } : {}),
                     },
                   }
                 : staging;

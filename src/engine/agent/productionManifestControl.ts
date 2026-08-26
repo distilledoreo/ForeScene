@@ -414,9 +414,12 @@ function buildManifestProductionConfiguration(input: {
       poseableEntityIds: new Set(input.manifest.cast
         .filter(canInferNativeActionPose)
         .map((entry) => entry.id)),
-      rigidLocomotionEntityIds: new Set(input.manifest.cast
-        .filter((entry) => entry.type === 'imported_character')
-        .map((entry) => entry.id)),
+      rigidLocomotionEntityIds: new Set([
+        ...input.manifest.cast
+          .filter((entry) => entry.type === 'imported_character')
+          .map((entry) => entry.id),
+        ...(input.manifest.assets ?? []).map((entry) => entry.id),
+      ]),
       resolvePose: (entityId, requestedPose) => resolveProductionPose({
         project: input.project,
         entityId,

@@ -11,7 +11,11 @@ import type { PrevisProductionManifestV1, PrevisShotDefinition } from './manifes
 import type { ProductionBindingMode } from './productionBindingMode';
 import { resolvePrevisPosePresetId } from './posePresets';
 import { getHumanPosePreset } from '../humanPosePresets';
-import { inferNativeActionPose, inferRigidLocomotionRotation } from './actionIntent';
+import {
+  inferNativeActionPose,
+  inferRigidLocomotionRotation,
+  resolveReadableMotionSubjectPosition,
+} from './actionIntent';
 
 export type ProductionConfigurationDiagnosticCode =
   | 'missing_binding'
@@ -149,7 +153,14 @@ export function deriveShotActionContracts(
       samples.push({
         timeSeconds: keyframe.timeSeconds,
         ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
-        ...(staging.transform?.position ? { position: [...staging.transform.position] } : {}),
+        ...(staging.transform?.position
+          ? {
+              position: [...(
+                resolveReadableMotionSubjectPosition(definition, keyframe, staging.subject)
+                ?? staging.transform.position
+              )],
+            }
+          : {}),
         ...(staging.transform?.rotation
           ? { rotation: [...staging.transform.rotation] }
           : inferredRotation

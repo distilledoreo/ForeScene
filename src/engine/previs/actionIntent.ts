@@ -23,6 +23,10 @@ function actionText(shot: PrevisShotDefinition): string {
   ].join(' ').toLowerCase();
 }
 
+function isLocomotionAction(shot: PrevisShotDefinition): boolean {
+  return /\b(sprint|running|run|chase|flee|pursu(?:e|it|ing))\b/.test(actionText(shot));
+}
+
 /**
  * Resolve explicit natural-language action intent to an exact native pose.
  * This is deliberately small and generic: it only handles unambiguous action
@@ -58,35 +62,112 @@ export function inferNativeActionPose(
 
 /**
  * Imported rigs that cannot safely accept inferred joint deformation can still
- * communicate locomotion with a conservative whole-object lean. The rotation
- * is derived from the authored world-space travel vector and remains constant
- * across samples, so interpolation cannot distort or oscillate the asset.
+ * communicate locomotion with a conservative whole-object orientation. The
+ * rotation is derived from authored travel (and a bounded camera-relative
+ * three-quarter when a tracking camera exists) and stays constant across
+ * samples, so interpolation cannot distort or oscillate the asset.
+ *
+ * World-axis pitch alone is nearly invisible from a frontal tracking camera:
+ * yaw into travel, then a local forward lean, so the silhouette tilts against
+ * the environment instead of into the lens.
  */
 export function inferRigidLocomotionRotation(
   shot: PrevisShotDefinition,
   subjectId: string,
 ): Vec3 | undefined {
-  if (!/\b(sprint|running|run|chase|flee|pursu(?:e|it|ing))\b/.test(actionText(shot))) return undefined;
+  if (!isLocomotionAction(shot)) return undefined;
+  const travel = subjectTravel(shot, subjectId);
+  if (!travel) return undefined;
+  const faceYaw = (Math.atan2(travel[0], travel[2]) * 180) / Math.PI;
+  return yawThenLocalPitch(faceYaw + cameraThreeQuarterYaw(shot, travel), RIGID_LOCOMOTION_LEAN_DEGREES);
+}
+
+/** Local forward lean after facing travel, in degrees. */
+export const RIGID_LOCOMOTION_LEAN_DEGREES = 20;
+/** Bounded yaw toward an off-axis tracking camera, in degrees. */
+export const RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES = 28;
+/** Half-separation applied to stacked chase subjects, in meters. */
+export const READABLE_LOCOMOTION_SPREAD_METERS = 0.42;
+
+function normalizeHorizontal(value: Vec3): Vec3 | undefined {
+  const length = Math.hypot(value[0], value[2]);
+  if (length < 1e-6) return undefined;
+  return [value[0] / length, 0, value[2] / length];
+}
+
+function subjectTravel(shot: PrevisShotDefinition, subjectId: string): Vec3 | undefined {
   const samples = shot.motion?.keyframes.flatMap((keyframe) => (
     keyframe.staging?.flatMap((entry) => (
       entry.subject === subjectId && entry.transform?.position ? [entry.transform.position] : []
     )) ?? []
   )) ?? [];
   if (samples.length < 2) return undefined;
-  const travel = normalizeHorizontal([
+  return normalizeHorizontal([
     samples[samples.length - 1]![0] - samples[0]![0],
     0,
     samples[samples.length - 1]![2] - samples[0]![2],
   ]);
-  if (!travel) return undefined;
-  const leanDegrees = 9;
-  return [leanDegrees * travel[2], 0, -leanDegrees * travel[0]];
 }
 
-function normalizeHorizontal(value: Vec3): Vec3 | undefined {
-  const length = Math.hypot(value[0], value[2]);
-  if (length < 1e-6) return undefined;
-  return [value[0] / length, 0, value[2] / length];
+function cameraThreeQuarterYaw(shot: PrevisShotDefinition, travel: Vec3): number {
+  const keyframe = shot.motion?.keyframes.find((sample) => sample.camera?.position);
+  if (!keyframe) return 0;
+  const camera = resolveReadableMotionCamera(shot, keyframe);
+  if (!camera?.position) return 0;
+  const origin = keyframe.staging?.find((entry) => entry.transform?.position)?.transform?.position;
+  if (!origin) return 0;
+  const lateral: Vec3 = [travel[2], 0, -travel[0]];
+  const cameraLateral = (camera.position[0] - origin[0]) * lateral[0]
+    + (camera.position[2] - origin[2]) * lateral[2];
+  if (Math.abs(cameraLateral) < 1e-6) return 0;
+  return (cameraLateral < 0 ? -1 : 1) * RIGID_LOCOMOTION_THREE_QUARTER_YAW_DEGREES;
+}
+
+function yawThenLocalPitch(yawDegrees: number, pitchDegrees: number): Vec3 {
+  const halfYaw = (yawDegrees * Math.PI) / 360;
+  const halfPitch = (pitchDegrees * Math.PI) / 360;
+  const qPitch = { x: Math.sin(halfPitch), y: 0, z: 0, w: Math.cos(halfPitch) };
+  const qYaw = { x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) };
+  return quaternionToEulerXyzDegrees(multiplyQuaternions(qYaw, qPitch));
+}
+
+function multiplyQuaternions(
+  a: { x: number; y: number; z: number; w: number },
+  b: { x: number; y: number; z: number; w: number },
+): { x: number; y: number; z: number; w: number } {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
+function quaternionToEulerXyzDegrees(q: { x: number; y: number; z: number; w: number }): Vec3 {
+  const xx = q.x * q.x;
+  const yy = q.y * q.y;
+  const zz = q.z * q.z;
+  const m13 = 2 * (q.x * q.z + q.w * q.y);
+  const m23 = 2 * (q.y * q.z - q.w * q.x);
+  const m33 = 1 - 2 * (xx + yy);
+  const m12 = 2 * (q.x * q.y - q.w * q.z);
+  const m11 = 1 - 2 * (yy + zz);
+  const clamped = Math.max(-1, Math.min(1, m13));
+  const eulerY = Math.asin(clamped);
+  if (Math.abs(clamped) < 0.9999999) {
+    return [
+      (Math.atan2(-m23, m33) * 180) / Math.PI,
+      (eulerY * 180) / Math.PI,
+      (Math.atan2(-m12, m11) * 180) / Math.PI,
+    ];
+  }
+  const m32 = 2 * (q.y * q.z + q.w * q.x);
+  const m22 = 1 - 2 * (xx + zz);
+  return [
+    (Math.atan2(m32, m22) * 180) / Math.PI,
+    (eulerY * 180) / Math.PI,
+    0,
+  ];
 }
 
 /**
@@ -152,6 +233,62 @@ export function resolveReadableMotionCamera(
       camera.position[2] + lateral[2] * correction,
     ],
   };
+}
+
+/**
+ * Keep a runner and pursuer from sharing one screen silhouette during
+ * locomotion. Offsets are lateral only, bounded, and derived from travel plus
+ * the readable tracking camera; authored along-path spacing is preserved.
+ */
+export function resolveReadableMotionSubjectPosition(
+  shot: PrevisShotDefinition,
+  keyframe: PrevisShotMotionKeyframe,
+  subjectId: string,
+): Vec3 | undefined {
+  const authored = keyframe.staging?.find((entry) => entry.subject === subjectId)?.transform?.position;
+  if (!authored) return undefined;
+  if (!isLocomotionAction(shot) || shot.camera.subjects.length < 2) return authored;
+
+  const placed = shot.camera.subjects.flatMap((id) => {
+    const position = keyframe.staging?.find((entry) => entry.subject === id)?.transform?.position;
+    return position ? [{ id, position }] : [];
+  });
+  if (placed.length < 2) return authored;
+
+  const travel = subjectTravel(shot, shot.camera.subjects[0]!)
+    ?? subjectTravel(shot, placed[0]!.id);
+  if (!travel) return authored;
+  const lateral: Vec3 = [travel[2], 0, -travel[0]];
+  const lateralValues = placed.map((entry) => (
+    entry.position[0] * lateral[0] + entry.position[2] * lateral[2]
+  ));
+  const alreadySeparated = Math.max(...lateralValues) - Math.min(...lateralValues)
+    >= READABLE_LOCOMOTION_SPREAD_METERS * (17 / 10);
+  if (alreadySeparated) return authored;
+
+  const camera = resolveReadableMotionCamera(shot, keyframe);
+  if (!camera?.position) return authored;
+  const centroid: Vec3 = placed.reduce((sum, entry, _index, list) => [
+    sum[0] + entry.position[0] / list.length,
+    0,
+    sum[2] + entry.position[2] / list.length,
+  ], [0, 0, 0]);
+  const cameraLateral = (camera.position[0] - centroid[0]) * lateral[0]
+    + (camera.position[2] - centroid[2]) * lateral[2];
+  const cameraSide = cameraLateral < 0 ? -1 : 1;
+  const ranked = [...placed].sort((left, right) => (
+    (left.position[0] * travel[0] + left.position[2] * travel[2])
+    - (right.position[0] * travel[0] + right.position[2] * travel[2])
+  ));
+  const rank = ranked.findIndex((entry) => entry.id === subjectId);
+  if (rank < 0) return authored;
+  const t = rank / (ranked.length - 1);
+  const offset = cameraSide * READABLE_LOCOMOTION_SPREAD_METERS * (1 - 2 * t);
+  return [
+    authored[0] + lateral[0] * offset,
+    authored[1],
+    authored[2] + lateral[2] * offset,
+  ];
 }
 
 export interface DerivedEmbeddedPropIntent {

@@ -266,6 +266,49 @@ describe('production configuration validation', () => {
     ]));
   });
 
+  it('persists a stable deformation-free locomotion orientation', () => {
+    const definition = manifest().shots[0]!;
+    definition.name = 'Sprint chase';
+    definition.subjects = ['cast.lead', 'asset.pursuer'];
+    definition.camera = { template: 'full', subjects: ['cast.lead', 'asset.pursuer'], angle: 'three_quarter' };
+    definition.motion = {
+      durationSeconds: 3,
+      keyframes: [{
+        timeSeconds: 0,
+        camera: { position: [1.2, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },
+        staging: [
+          { subject: 'cast.lead', transform: { position: [0, 0.875, -5.3] } },
+          { subject: 'asset.pursuer', transform: { position: [0, 0, -6.5] } },
+        ],
+      }, {
+        timeSeconds: 3,
+        camera: { position: [1.2, 1.6, 8.6], target: [0, 0.9, 4.8], fovDegrees: 50 },
+        staging: [
+          { subject: 'cast.lead', transform: { position: [0, 0.875, 5.3] } },
+          { subject: 'asset.pursuer', transform: { position: [0, 0, 4.1] } },
+        ],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition, {
+      rigidLocomotionEntityIds: new Set(['cast.lead', 'asset.pursuer']),
+    });
+
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action.mode).toBe('timeline');
+      expect(action.samples[0]?.rotation?.[0]).toBeGreaterThan(12);
+      expect(action.samples[0]?.rotation).toEqual(action.samples[1]?.rotation);
+      expect(action.samples[0]?.position?.[0]).not.toBe(0);
+      expect(action.samples[0]?.position?.[2]).toBe(
+        action.entityId === 'cast.lead' ? -5.3 : -6.5,
+      );
+    }
+    const leadX = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[0] ?? 0;
+    const pursuerX = actions.find((action) => action.entityId === 'asset.pursuer')?.samples[0]?.position?.[0] ?? 0;
+    expect(pursuerX - leadX).toBeCloseTo(0.84, 5);
+  });
+
   it('derives dynamic classification from prepared object semantics', () => {
     const project = createDefaultProject();
     const hero = project.scene.objects.find((object) => object.type === 'human_dummy')!;
