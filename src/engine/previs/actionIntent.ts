@@ -84,13 +84,13 @@ export const RIGID_LOCOMOTION_LEAN_DEGREES = 34;
 /** Half-separation applied to stacked chase subjects, in meters. */
 export const READABLE_LOCOMOTION_SPREAD_METERS = 0.48;
 /** Locked side-on covering distance so the pack travels through frame. */
-export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 2.7;
+export const READABLE_LOCOMOTION_COVER_LATERAL_METERS = 2.9;
 /** How far the locked camera follows pack travel from path midpoint, 0–1. */
-export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.5;
+export const READABLE_LOCOMOTION_COVER_FOLLOW = 0.55;
 /** Height of the locked covering camera, in meters. */
-export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.6;
+export const READABLE_LOCOMOTION_COVER_HEIGHT_METERS = 1.75;
 /** Vertical FOV for the locked covering camera, in degrees. */
-export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 52;
+export const READABLE_LOCOMOTION_COVER_FOV_DEGREES = 58;
 
 function normalizeHorizontal(value: Vec3): Vec3 | undefined {
   const length = Math.hypot(value[0], value[2]);
