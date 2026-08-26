@@ -919,7 +919,7 @@ function collectSourceMeshUnits(root: THREE.Object3D): SourceMeshUnit[] {
 
 function textureFreeSourceColor(material: THREE.Material | undefined): string | undefined {
   if (!material) return undefined;
-  const named = material.name.trim().toLowerCase();
+  const named = material.name.trim().toLowerCase().replace(/[_-]+/g, ' ');
   const color = (material as THREE.Material & { color?: THREE.Color }).color;
   const hasAuthoredColor = Boolean(color
     && !(color.r > 0.97 && color.g > 0.97 && color.b > 0.97));

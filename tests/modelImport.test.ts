@@ -230,9 +230,8 @@ describe('texture-free model conversion', () => {
       images: [{ uri: 'data:image/png;base64,not-decoded' }],
       textures: [{ source: 0 }],
       materials: [{
-        name: 'Skin Procedural',
+        name: 'Skin_and_Stalk_Procedural',
         pbrMetallicRoughness: {
-          baseColorFactor: [0.4, 0.2, 0.1, 1],
           baseColorTexture: { index: 0 },
         },
       }],
@@ -252,9 +251,9 @@ describe('texture-free model conversion', () => {
     expect(result.items[0].asset.uri).not.toContain('not-decoded');
     expect(result.items[0].object).toMatchObject({
       surfaceStyle: 'solid',
-      color: '#aa7c59',
+      color: '#8f665f',
     });
-    expect(result.items[0].asset.metadata?.sourceMaterialName).toBe('Skin Procedural');
+    expect(result.items[0].asset.metadata?.sourceMaterialName).toBe('Skin_and_Stalk_Procedural');
   });
 
   it('keeps canonical mesh assets through undo and prunes only on saved deletion', () => {
