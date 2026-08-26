@@ -298,4 +298,27 @@ describe('ground contact', () => {
     expect(bounds.min.y).toBeGreaterThan(-0.12);
     disposeScene(scene);
   });
+
+  it('sinks projected contact subjects deeper so they meet a painted pano floor', () => {
+    const project = createDefaultProject();
+    const dummy = createSceneObject('human_dummy', 1);
+    dummy.transform.position = [0, 0.875, 0];
+    project.scene.objects = [dummy];
+    const clay = buildScene(project, { showHelpers: false });
+    const clayY = clay.children.find((child) => child.userData.sceneObjectId === dummy.id)!.position.y;
+    disposeScene(clay);
+    const projected = buildScene(project, {
+      showHelpers: false,
+      appearance: 'projected',
+      projected: {
+        texture: new THREE.Texture(),
+        origin: [0, 1.6, 0],
+        rotation: [0, 0, 0],
+        settings: project.settings.projectedStyle!,
+      },
+    });
+    const projectedY = projected.children.find((child) => child.userData.sceneObjectId === dummy.id)!.position.y;
+    expect(projectedY).toBeLessThan(clayY - 0.05);
+    disposeScene(projected);
+  });
 });

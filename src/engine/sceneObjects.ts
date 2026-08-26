@@ -102,8 +102,10 @@ const contactShadowMaterial = new THREE.MeshBasicMaterial({
   polygonOffsetFactor: -2,
   polygonOffsetUnits: -2,
 });
-/** Live mesh AABBs sit this far into the authored floor so contact reads on clay and pano. */
+/** Live mesh AABBs sit this far into the authored floor so contact reads on clay. */
 const GROUND_CONTACT_SINK_METERS = 0.045;
+/** Extra drop for projected beauty: the painted pano floor sits above graybox y=0. */
+const GROUND_CONTACT_PROJECTED_SINK_METERS = 0.12;
 const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
 export const FORESCENE_CONTACT_SHADOW_NAME = 'forescene-contact-shadow';
 export const FORESCENE_GROUP_CONTACT_SHADOW_PREFIX = `${FORESCENE_CONTACT_SHADOW_NAME}:group:`;
@@ -420,7 +422,7 @@ export function buildScene(
     scene.add(mesh);
   }
 
-  plantGroundedSubjects(scene, project);
+  plantGroundedSubjects(scene, project, { projected: useProjected });
 
   if (options.previewObject) {
     scene.add(createPreviewMesh(options.previewObject));
@@ -487,17 +489,23 @@ function unionBounds(partBounds: THREE.Box3[]): THREE.Box3 | undefined {
   return assemblyBoundsScratch;
 }
 
-function applyFloorPlant(nodes: THREE.Object3D[], minY: number): number {
-  const dy = -GROUND_CONTACT_SINK_METERS - minY;
+function applyFloorPlant(nodes: THREE.Object3D[], minY: number, sinkMeters: number): number {
+  const dy = -sinkMeters - minY;
   if (!Number.isFinite(dy) || Math.abs(dy) > 2.5 || Math.abs(dy) < 0.003) return 0;
   for (const node of nodes) node.position.y += dy;
   return dy;
+}
+
+export interface GroundContactPlantOptions {
+  /** Projected stills need a deeper sink so feet meet the painted pano floor. */
+  projected?: boolean;
 }
 
 /** Plant live contact meshes on the floor and keep one visual cue per assembly. */
 export function plantGroundedSubjects(
   scene: THREE.Scene,
   project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
+  options: GroundContactPlantOptions = {},
 ): void {
   const nodes = new Map<string, THREE.Object3D>();
   for (const child of scene.children) {
@@ -537,19 +545,25 @@ export function plantGroundedSubjects(
     ));
     assemblySupportScratch.copy(supportParts[0] ?? assembled);
     for (const part of supportParts.slice(1)) assemblySupportScratch.union(part);
-    const dy = applyFloorPlant(memberNodes, assembled.min.y);
+    const sinkMeters = options.projected
+      ? GROUND_CONTACT_PROJECTED_SINK_METERS
+      : GROUND_CONTACT_SINK_METERS;
+    const dy = applyFloorPlant(memberNodes, assembled.min.y, sinkMeters);
     assemblySupportScratch.min.y += dy;
     assemblySupportScratch.max.y += dy;
     placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
   }
 
+  const sinkMeters = options.projected
+    ? GROUND_CONTACT_PROJECTED_SINK_METERS
+    : GROUND_CONTACT_SINK_METERS;
   for (const [objectId, node] of nodes) {
     if (groupedImportedIds.has(objectId) || !node.visible) continue;
     const object = objectsById.get(objectId);
     if (!object || !objectUsesGroundContact(object)) continue;
     const assembled = unionBounds(collectMeshWorldBounds(node));
     if (!assembled) continue;
-    applyFloorPlant([node], assembled.min.y);
+    applyFloorPlant([node], assembled.min.y, sinkMeters);
     placeContactShadowOnWorldFloor(node);
   }
 }
