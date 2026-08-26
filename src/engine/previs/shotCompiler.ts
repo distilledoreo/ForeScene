@@ -29,7 +29,11 @@ import {
 } from './cameraSolver';
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
-import { inferNativeActionPose, resolveReadableMotionCamera } from './actionIntent';
+import {
+  canInferNativeActionPose,
+  inferNativeActionPose,
+  resolveReadableMotionCamera,
+} from './actionIntent';
 import { defaultPropDimensions } from './propDimensions';
 import {
   deriveDynamicObjectUniverse,
@@ -460,7 +464,7 @@ function compileSingleShot(
     const blocking = blockingResults[character.id];
     const requestedPose = requestedPoseBySubject[character.id]
       ?? character.defaultPose
-      ?? inferNativeActionPose(shot, character.id);
+      ?? (canInferNativeActionPose(character) ? inferNativeActionPose(shot, character.id) : undefined);
     const pose = resolveCompilerPose(character.id, requestedPose)
       ?? (!options.presenceProject?.workflow.production ? blocking?.posePreset : undefined);
 
@@ -650,7 +654,8 @@ function compileSingleShot(
                 : (manifest.props ?? []).some((item) => item.id === staging.subject)
                   ? 'prop'
                   : 'asset';
-              const inferredPose = manifest.cast.some((item) => item.id === staging.subject)
+              const stagedCharacter = manifest.cast.find((item) => item.id === staging.subject);
+              const inferredPose = canInferNativeActionPose(stagedCharacter)
                 ? inferNativeActionPose(shot, staging.subject, shot.motion!.keyframes.indexOf(keyframe))
                 : undefined;
               const resolvedPose = resolveCompilerPose(

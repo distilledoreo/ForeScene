@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PrevisShotDefinition } from '../src/engine/previs/manifest';
 import {
+  canInferNativeActionPose,
   inferNativeActionPose,
   resolveEmbeddedPropIntents,
   resolveReadableMotionCamera,
@@ -38,6 +39,22 @@ function chase(): PrevisShotDefinition {
 }
 
 describe('action intent', () => {
+  it('does not invent deformation for imported rigs from prose alone', () => {
+    expect(canInferNativeActionPose({
+      id: 'rigged',
+      name: 'Rigged character',
+      type: 'imported_character',
+      source: 'character.glb',
+      rigMode: 'saved-rig',
+      rigPackage: 'character.fsrig',
+    })).toBe(false);
+    expect(canInferNativeActionPose({
+      id: 'dummy',
+      name: 'Dummy',
+      type: 'human_dummy',
+    })).toBe(true);
+  });
+
   it('derives a stable exact locomotion silhouette across timeline interpolation', () => {
     const shot = chase();
     expect(inferNativeActionPose(shot, 'runner', 0)).toBe('walk-contact-left');

@@ -251,6 +251,8 @@ export interface ProjectedSceneOptions {
   settings: ProjectedStyleSettings;
   /** Dispose projected materials with the scene (export / one-shot). */
   disposableMaterials?: boolean;
+  /** Reveal the calibrated panorama background where no projector owns a surface. */
+  hideUnprojectedGeometry?: boolean;
 
   occlusionTexture?: THREE.CubeTexture;
   occlusionNearMeters?: number;
@@ -459,6 +461,7 @@ function applyProjectedStyleToObject(
     settings: projected.settings,
     fallbackColor: projected.settings.fallbackMode === 'neutral' ? 0xb0b6b2 : fallbackColor,
     disposable: projected.disposableMaterials ?? true,
+    hideUnprojectedGeometry: projected.hideUnprojectedGeometry ?? true,
     occlusionTexture: projected.occlusionTexture,
     occlusionNearMeters: projected.occlusionNearMeters,
     occlusionFarMeters: projected.occlusionFarMeters,

@@ -14,6 +14,7 @@ import { parsePrevisProductionManifest } from '../previs/manifestValidation';
 import { buildProductionCompileEntityBindings, buildProductionCompileLocationBindings } from '../previs/productionCompileBindings';
 import { inferExistingProjectLocationBindings } from '../previs/productionCompileBindings';
 import { deriveShotActionContracts } from '../previs/productionConfiguration';
+import { canInferNativeActionPose } from '../previs/actionIntent';
 import { resolveProductionPose } from '../previs/entityCapability';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
@@ -410,7 +411,9 @@ function buildManifestProductionConfiguration(input: {
       }];
     });
     const actions = deriveShotActionContracts(definition, {
-      poseableEntityIds: new Set(input.manifest.cast.map((entry) => entry.id)),
+      poseableEntityIds: new Set(input.manifest.cast
+        .filter(canInferNativeActionPose)
+        .map((entry) => entry.id)),
       resolvePose: (entityId, requestedPose) => resolveProductionPose({
         project: input.project,
         entityId,

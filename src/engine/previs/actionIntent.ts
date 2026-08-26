@@ -1,9 +1,19 @@
 import type { Vec3 } from '../../domain/types';
 import type {
+  PrevisCharacterDefinition,
   PrevisProductionManifestV1,
   PrevisShotDefinition,
   PrevisShotMotionKeyframe,
 } from './manifest';
+
+/**
+ * Prose may safely select native poses only for ForeScene's own mannequin.
+ * Imported rigs remain pose-capable for explicit contracts, but topology or a
+ * saved rig package alone does not prove that an invented deformation is safe.
+ */
+export function canInferNativeActionPose(character: PrevisCharacterDefinition | undefined): boolean {
+  return character?.type === 'human_dummy';
+}
 
 function actionText(shot: PrevisShotDefinition): string {
   return [
