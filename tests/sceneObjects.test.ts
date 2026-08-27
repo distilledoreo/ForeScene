@@ -199,6 +199,19 @@ describe('ground contact', () => {
     expect(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
   });
 
+  it('keeps untagged imported architecture at its source AABB instead of floor-planting it', () => {
+    const project = createDefaultProject();
+    const wall = createSceneObject('imported_model', 1);
+    delete wall.stagingRole;
+    wall.dimensions = [2, 2, 0.001];
+    wall.transform.position = [11, 3, -1];
+    project.scene.objects = [wall];
+    const scene = buildScene(project, { showHelpers: false });
+    const node = scene.children.find((child) => child.userData.sceneObjectId === wall.id)!;
+    expect(node.position.toArray()).toEqual([11, 3, -1]);
+    expect(node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)).toBeUndefined();
+  });
+
   it('uses one floor-level contact shadow for a multipart imported assembly', () => {
     const project = createDefaultProject();
     const left = createSceneObject('imported_model', 1);

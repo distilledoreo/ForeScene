@@ -33,6 +33,7 @@ describe('benchmark artifact evidence', () => {
       shotIds: ['shot_fixture'],
       castCount: 1,
       assetCount: 0,
+      importedModelCount: 0,
     });
   });
 });

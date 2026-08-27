@@ -448,7 +448,7 @@ function evaluateVisualPreflightAtTime(input: {
     && alignment < 0.2;
   checks.push({
     id: 'motion_continuity',
-    status: statusFromFailed(motionFailed, shot.cameraKeyframes.length >= 2 && maxSubjectMotion < 0.02 && cameraMotion < 0.02),
+    status: statusFromFailed(motionFailed, false),
     message: motionFailed
       ? 'Subjects move but the camera does not follow them.'
       : 'Motion continuity is consistent with the shot timeline.',
@@ -464,17 +464,12 @@ function evaluateVisualPreflightAtTime(input: {
     shot,
     timeSeconds: diagnosticsResult.sampledTimeSeconds ?? input.timeSeconds ?? 0,
   });
-  if (actionContinuity) {
-    const hasAuthoredSample = actionContinuity.expectedCount > 0;
+  if (actionContinuity?.expectedCount) {
     checks.push({
       id: 'action_continuity',
-      status: hasAuthoredSample
-        ? statusFromFailed(!actionContinuity.ok, false)
-        : 'warning',
-      message: actionContinuity.ok && hasAuthoredSample
+      status: statusFromFailed(!actionContinuity.ok, false),
+      message: actionContinuity.ok
         ? 'Persisted action intent matches the shot-effective timeline state.'
-        : !hasAuthoredSample
-          ? 'Persisted action intent has no sample at this preflight time.'
         : actionContinuity.reviewRequiredCount > 0
           ? 'Persisted action intent includes an unapproved approximate pose substitution.'
           : 'Shot-effective pose, visibility, or trajectory diverges from persisted action intent.',

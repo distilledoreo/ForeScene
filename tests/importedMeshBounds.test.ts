@@ -54,4 +54,41 @@ describe('imported mesh bounds', () => {
     const raw = uncentered.children[0] as THREE.Mesh;
     expect(raw.position.y).toBe(0);
   });
+
+  it('keeps untagged imported architecture at its source AABB', () => {
+    const packed = encodeBinaryGrayboxMesh(
+      new Float32Array([
+        0, 0, 0,
+        2, 0, 0,
+        0, 4, 0,
+        0, 0, 2,
+      ]),
+      new Uint32Array([0, 1, 2, 0, 2, 3]),
+    );
+    registerModelAssetBytes('imported-bounds-architecture', packed.buffer);
+    const object = createSceneObject('imported_model', 1);
+    delete object.stagingRole;
+    object.modelAssetId = 'mesh';
+    object.dimensions = [2, 4, 2];
+    object.transform.scale = [1, 1, 1];
+    const assets = {
+      assets: {
+        mesh: {
+          id: 'mesh',
+          type: 'model' as const,
+          name: 'architecture.glb',
+          uri: `${MODEL_ASSET_URI_PREFIX}imported-bounds-architecture`,
+          storageKey: 'imported-bounds-architecture',
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    };
+    const root = createImportedMeshNode(object, assets, new THREE.MeshStandardMaterial());
+    const mesh = root.children[0] as THREE.Mesh;
+    expect(mesh.position.y).toBe(0);
+    mesh.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(mesh);
+    expect(box.min.y).toBeCloseTo(0, 5);
+    expect(box.max.y).toBeCloseTo(4, 5);
+  });
 });

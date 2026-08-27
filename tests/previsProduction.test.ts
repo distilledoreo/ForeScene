@@ -353,6 +353,52 @@ describe('previs compilers', () => {
     expect(stage).toBeTruthy();
   });
 
+  it('frames an interior-room medium of one imported character at human distance, not room scale', () => {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Imported cast e2e', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast: [{
+        id: 'joseph',
+        type: 'imported_character',
+        source: './joseph.glb',
+        rigMode: 'preserve-existing',
+      }],
+      shots: [{
+        id: 'joseph-medium',
+        shotNumber: '010',
+        name: 'Joseph medium',
+        description: 'Joseph holds a guarded stance.',
+        locationId: 'room',
+        subjects: ['joseph'],
+        camera: { template: 'medium', subjects: ['joseph'] },
+      }],
+    });
+    const compiled = compileProduction(parsed.manifest!);
+    const resolved = compileShotList(parsed.manifest!, {
+      ...compiled.context,
+      entities: {
+        ...compiled.context.entities,
+        'cast.joseph': { objectId: 'obj_imported_joseph', refs: { obj_imported_joseph: 'obj_imported_joseph' } },
+      },
+    });
+    const created = resolved.flatMap((batch) => batch.plan.commands).find((command) => (
+      command.op === 'shot.create'
+    ));
+    expect(created?.op).toBe('shot.create');
+    if (created?.op !== 'shot.create') return;
+    const camera = created.shot.camera;
+    expect(camera?.position).toBeDefined();
+    expect(camera?.target).toBeDefined();
+    if (!camera?.position || !camera.target) return;
+    const distance = Math.hypot(
+      camera.position[0] - camera.target[0],
+      camera.position[1] - camera.target[1],
+      camera.position[2] - camera.target[2],
+    );
+    expect(distance).toBeLessThan(3.5);
+  });
+
   function compileCastRebuild(cast: Array<Record<string, unknown>>) {
     const parsed = parsePrevisProductionManifest({
       version: 1,

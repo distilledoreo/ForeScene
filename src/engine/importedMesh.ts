@@ -131,7 +131,12 @@ export function createImportedMeshNode(
       safeDimensionRatio(object.dimensions[1], sourceSize.y) * object.transform.scale[1],
       safeDimensionRatio(object.dimensions[2], sourceSize.z) * object.transform.scale[2],
     );
-    if (object.stagingRole !== 'set' && options?.centerNonSetMesh !== false) {
+    // Person/prop subjects are center-staged so contact plant can run.
+    // Untagged imports and set architecture keep their source AABB.
+    if (
+      (object.stagingRole === 'person' || object.stagingRole === 'prop')
+      && options?.centerNonSetMesh !== false
+    ) {
       centerMeshOnGeometryBounds(mesh);
     }
     root.add(mesh);

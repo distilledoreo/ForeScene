@@ -1,3 +1,9 @@
+import {
+  HUMANOID_FIXTURE_POSITION_MAX,
+  HUMANOID_FIXTURE_POSITION_MIN,
+  HUMANOID_FIXTURE_POSITIONS,
+} from './humanoidMeshPositions';
+
 /** Small self-contained GLB with a skinned mesh and Mixamo-style skeleton. */
 export function preservedRigGlb(): ArrayBuffer {
   const nodes: Array<Record<string, unknown>> = [];
@@ -36,10 +42,7 @@ export function preservedRigGlb(): ArrayBuffer {
   nodes[rightLeg]!.children = [rightFoot];
 
   const jointNodes = [hips, spine, head, leftArm, leftForeArm, leftHand, rightArm, rightForeArm, rightHand, leftUpLeg, leftLeg, leftFoot, rightUpLeg, rightLeg, rightFoot];
-  const positions = Buffer.from(new Float32Array([
-    -0.2, 0, 0, 0.2, 0, 0, 0, 1.5, 0,
-    -0.5, 1, 0, -0.2, 1, 0, -0.2, 1.5, 0,
-  ]).buffer);
+  const positions = Buffer.from(HUMANOID_FIXTURE_POSITIONS.buffer);
   const joints = Buffer.from(new Uint8Array([
     9, 0, 0, 0, 12, 0, 0, 0, 1, 0, 0, 0,
     3, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0,
@@ -66,7 +69,7 @@ export function preservedRigGlb(): ArrayBuffer {
       { buffer: 0, byteOffset: positions.length + joints.length + weights.length, byteLength: inverseBind.length },
     ],
     accessors: [
-      { bufferView: 0, componentType: 5126, count: 6, type: 'VEC3', min: [-0.5, 0, 0], max: [0.2, 1.5, 0] },
+      { bufferView: 0, componentType: 5126, count: 6, type: 'VEC3', min: HUMANOID_FIXTURE_POSITION_MIN, max: HUMANOID_FIXTURE_POSITION_MAX },
       { bufferView: 1, componentType: 5121, count: 6, type: 'VEC4' },
       { bufferView: 2, componentType: 5126, count: 6, type: 'VEC4' },
       { bufferView: 3, componentType: 5126, count: jointNodes.length, type: 'MAT4' },

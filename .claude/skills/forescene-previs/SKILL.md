@@ -25,6 +25,15 @@ The Agent CLI is the public automation surface. **Before authoring**, query capa
 npm run agent:capabilities
 ```
 
+If command syntax is uncertain, query it through the stateless public discovery
+surface instead of guessing flags or inspecting implementation source:
+
+```bash
+npm run agent:describe -- --command previs
+npm run agent:previs -- --help
+npm run agent:schema
+```
+
 Stdout is one JSON envelope. Read `result.capabilities`: if a capability is `true`, use the documented `npm run agent:*` command for that operation. See `docs/agent-capability-matrix.md`.
 
 Every command writes one envelope to stdout (`ok`, `operation`, `operationId`, `durationMs`, `warnings`, `error`, `result`). Parse that object. Human progress and `[agent-op]` heartbeats are on stderr and are not the machine contract. Exit `0` success, `1` failure, `2` usage error.

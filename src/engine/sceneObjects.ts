@@ -584,14 +584,14 @@ function isRigidImportedAssembly(
   const membersMatch = group.objectIds.every((objectId) => {
     const object = objectsById.get(objectId);
     return object?.type === 'imported_model'
-      && object.stagingRole !== 'set'
+      && (object.stagingRole === 'person' || object.stagingRole === 'prop')
       && object.importedModel?.sourceImportId === group.sourceImportId;
   });
   if (!membersMatch) return false;
   const completeSourceIds = [...objectsById.values()]
     .filter((object) => (
       object.type === 'imported_model'
-      && object.stagingRole !== 'set'
+      && (object.stagingRole === 'person' || object.stagingRole === 'prop')
       && object.importedModel?.sourceImportId === group.sourceImportId
     ))
     .map((object) => object.id);
@@ -841,9 +841,13 @@ function objectProvidesProjectedGroundPlane(object: SceneObject): boolean {
 
 function objectUsesGroundContact(object: SceneObject): boolean {
   if (object.stagingRole === 'set') return false;
-  return object.type === 'human_dummy'
-    || object.type === 'imported_model'
-    || Boolean(object.poseableCharacter);
+  if (object.type === 'human_dummy' || Boolean(object.poseableCharacter)) return true;
+  // Untagged imports keep their source AABB (walls, floors, set dressing).
+  // Only person/prop subjects get contact plant so architecture stays put.
+  if (object.type === 'imported_model') {
+    return object.stagingRole === 'person' || object.stagingRole === 'prop';
+  }
+  return false;
 }
 
 function attachContactShadow(node: THREE.Object3D, object: SceneObject): void {

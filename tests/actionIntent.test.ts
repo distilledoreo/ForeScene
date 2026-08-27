@@ -72,6 +72,7 @@ describe('action intent', () => {
         name: 'Runner',
         type: 'imported_character',
         source: 'runner.glb',
+        rigMode: 'preserve-existing',
       }],
       assets: [{
         id: 'pursuer',

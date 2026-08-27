@@ -969,7 +969,11 @@ function buildCandidates(params: {
   const horizontalOffsets = [0, 0.2, -0.2];
   // Deep assemblies can place their camera-facing surface much closer than
   // their centroid. Search far enough back to fit the complete projected AABB.
-  const distScales = [0.8, 1.0, 1.2, 1.4, 1.8, 2.2, 2.8];
+  // Single human subjects keep the tighter band so interior mediums do not
+  // jump to room-scale cameras.
+  const distScales = params.primary.some((subject) => subject.requireCompleteAssembly)
+    ? [0.8, 1.0, 1.2, 1.4, 1.8, 2.2, 2.8]
+    : [0.8, 1.0, 1.2, 1.4];
 
   for (const yawDeg of yawOffsets) {
     for (const distScale of distScales) {

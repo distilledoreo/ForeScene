@@ -124,6 +124,23 @@ describe('agent character import busy protection', () => {
     });
   });
 
+  it('stores a humanoid presentation volume for a preserved planar rig', async () => {
+    const analysis = await analyzeCharacterImport({
+      file: new File([preservedRigGlb()], 'joseph.glb', { type: 'model/gltf-binary' }),
+      mode: 'preserveExistingRig',
+    });
+    const result = await importCharacter({
+      analysisId: analysis.analysisId,
+      mode: 'preserveExistingRig',
+      name: 'joseph',
+    });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const imported = useProjectStore.getState().project.scene.objects.find((object) => object.id === result.objectId);
+    expect(imported?.dimensions[0]).toBeGreaterThanOrEqual(0.4);
+    expect(imported?.dimensions[1]).toBeGreaterThan(1);
+    expect(imported?.dimensions[2]).toBeGreaterThanOrEqual(0.4);
+  });
+
   it('does not write project state for mismatched or corrupt saved-rig packages', async () => {
     const sourceFile = new File([unriggedHumanoidGlb()], 'joseph.glb', { type: 'model/gltf-binary' });
     const beforeMismatch = structuredClone(useProjectStore.getState().project);

@@ -39,7 +39,7 @@ describe('human mannequin model', () => {
     await ensureHumanMannequinModel(modelBuffer);
     const person = createSceneObject('human_dummy', 1);
     person.transform.position = [0, person.dimensions[1] / 2, 0];
-    const mesh = createObject3D(person, false, 'light');
+    const mesh = createObject3D(person, false, 'light', undefined, { skipContactShadow: true });
     mesh.updateMatrixWorld(true);
     const bounds = new THREE.Box3();
     mesh.traverse((node) => {
@@ -58,7 +58,7 @@ describe('human mannequin model', () => {
     const person = createSceneObject('human_dummy', 1);
     person.dimensions = [0.55, 2.1, 0.55];
     person.transform.position = [0, 1.05, 0];
-    const mesh = createObject3D(person, false, 'light');
+    const mesh = createObject3D(person, false, 'light', undefined, { skipContactShadow: true });
     mesh.updateMatrixWorld(true);
     const bounds = new THREE.Box3();
     mesh.traverse((node) => {

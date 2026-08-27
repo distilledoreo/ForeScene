@@ -515,6 +515,93 @@ describe('benchmark remediation', () => {
     expect(merged.visualPreflight).toBe(unapproved);
   });
 
+  it('passes pose-only timelines at interpolated camera samples', () => {
+    const floor = createSceneObject('floor', 1);
+    floor.dimensions = [20, 0.1, 20];
+    const actor = createSceneObject('human_dummy', 1, [0, 0.875, 0]);
+    const shot = createShot({
+      index: 1,
+      camera: {
+        position: [0, 1.5, 6],
+        target: [0, 0.9, 0],
+        fovDegrees: 50,
+        aspectRatio: 16 / 9,
+        near: 0.1,
+        far: 100,
+      },
+    });
+    shot.cameraKeyframes = [
+      {
+        id: 'kf-start',
+        label: 'Start',
+        timeSeconds: 0,
+        camera: structuredClone(shot.camera),
+        easing: 'linear',
+        objectOverrides: {
+          [actor.id]: { humanPose: { version: 1, joints: {}, presetId: 'a-pose' } },
+        },
+      },
+      {
+        id: 'kf-end',
+        label: 'End',
+        timeSeconds: 1,
+        camera: structuredClone(shot.camera),
+        easing: 'linear',
+        objectOverrides: {
+          [actor.id]: { humanPose: { version: 1, joints: {}, presetId: 'standing-relaxed' } },
+        },
+      },
+    ];
+    const project: LocationProject = touchProject({
+      ...createDefaultProject(),
+      scene: { ...createDefaultProject().scene, objects: [floor, actor] },
+      shots: [shot],
+      workflow: {
+        ...createDefaultProject().workflow,
+        production: {
+          schemaVersion: 1,
+          bindings: {
+            actor: { kind: 'object', objectId: actor.id },
+          },
+          locations: {},
+          shotContracts: {
+            [shot.id]: {
+              presence: {
+                expectedVisibleObjectIds: [actor.id],
+                expectedVisibleGroupIds: [],
+                allowUnspecifiedDynamicObjects: false,
+              },
+              actions: [{
+                actionId: 'shot-1:actor:timeline-pose',
+                entityId: 'actor',
+                mode: 'timeline',
+                durationSeconds: 1,
+                samples: [
+                  {
+                    timeSeconds: 0,
+                    requestedPose: 'a-pose',
+                    resolvedPose: 'a-pose',
+                  },
+                  {
+                    timeSeconds: 1,
+                    requestedPose: 'standing-relaxed',
+                    resolvedPose: 'standing-relaxed',
+                  },
+                ],
+              }],
+            },
+          },
+        },
+      },
+    });
+
+    const result = inspectShotVisualPreflight({ project, shotId: shot.id });
+    expect(result.sampleTimesSeconds).toEqual([0, 0.5, 1]);
+    expect(result.checks.find((check) => check.id === 'action_continuity')?.status).toBe('passed');
+    expect(result.checks.find((check) => check.id === 'motion_continuity')?.status).toBe('passed');
+    expect(result.gateStatus).toBe('passed');
+  });
+
   it('fails an ordinary shot that has candidate subjects but infers none', () => {
     const floor = createSceneObject('floor', 1);
     floor.dimensions = [20, 0.1, 20];
