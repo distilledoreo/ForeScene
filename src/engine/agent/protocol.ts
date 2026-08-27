@@ -727,8 +727,10 @@ export interface AgentPackageExportRequest {
    * When false, build only — no download and no shot status / workflow updates.
    */
   download?: boolean;
-  /** Refuse to export if the flushed revision is not this id. */
+  /** Refuse to export if this was not the active revision when export began. */
   expectedRevisionId?: string;
+  /** Refuse to export if the verified project content changed after refresh. */
+  expectedFingerprint?: string;
 }
 
 export interface AgentPackageExportProgressSnapshot {
@@ -2029,6 +2031,7 @@ export interface AgentModelImportResult {
   importBudget?: ImportBudgetEstimate;
   requiresConsent?: boolean;
   verifiedRevisionId?: string;
+  reused?: boolean;
   warnings: string[];
   diagnostics?: AgentDiagnostic[];
 }

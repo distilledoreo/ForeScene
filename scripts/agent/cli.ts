@@ -39,7 +39,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
 import { createCliAbortScope, installCliAbortBridge, type CliAbortScope } from './cliAbort';
@@ -54,7 +54,6 @@ import {
 import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
 import { runRefinementCli } from './refinement';
 import {
-  refreshAgentSessionRevision,
   saveAgentArtifactToFile,
   toCliArtifactTransfer,
   type AgentArtifactTransferTelemetry,
@@ -71,7 +70,8 @@ import {
   resolveAgentRenderAppearance,
   type AgentRenderAppearance,
 } from './cliCapabilities';
-import { buildAgentCliHelpDocument } from './cliCommands';
+import { buildAgentCliHelpDocument, describeAgentCliCommand } from './cliCommands';
+import { getAgentSchema } from '../../src/engine/agent/discovery';
 import {
   AGENT_CLI_EXIT,
   AgentCliUsageError,
@@ -88,6 +88,7 @@ import {
   requestCliOperationCancel,
 } from './cliOperation';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
+import { writeCliEvidence } from './cliEvidence';
 import {
   resolveCliCommandShotUsage,
   toOptionalRequestedShotIds,
@@ -102,7 +103,9 @@ const cliStdout: CliStdoutContext = {
 };
 
 function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(wrapAgentCliStdout(cliStdout, value), null, 2)}\n`);
+  const envelope = wrapAgentCliStdout(cliStdout, value);
+  writeCliEvidence(envelope, envelope.ok ? AGENT_CLI_EXIT.success : AGENT_CLI_EXIT.failure);
+  process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
 }
 
 function printErr(message: string): void {
@@ -351,6 +354,17 @@ async function runShotPanorama(options: {
   });
 }
 
+async function resolveOptionalArtifactOutput(output: string | undefined): Promise<string | undefined> {
+  if (!output) return undefined;
+  const resolved = path.resolve(output);
+  try {
+    if ((await stat(resolved)).isDirectory()) return undefined;
+  } catch {
+    // Treat missing paths as explicit file targets.
+  }
+  return resolved;
+}
+
 async function runModelImport(options: {
   url?: string;
   headless: boolean;
@@ -364,6 +378,7 @@ async function runModelImport(options: {
 }) {
   requireExplicitWrite('agent:import-model', options.writeAccess);
   const target = path.resolve(options.file);
+  const output = await resolveOptionalArtifactOutput(options.output);
   await withSession(options, async (session) => {
     await session.page.locator('[data-agent-model-import-input]').setInputFiles(target);
     const result = await session.page.evaluate(async (input) => {
@@ -380,12 +395,11 @@ async function runModelImport(options: {
       consentToken: options.consentToken ?? (options.allowHeavyModelImports ? 'allow-heavy-model-imports' : undefined),
       extremeConfirmation: options.consentToken === 'IMPORT' ? 'IMPORT' : undefined,
     });
-    if (options.output) {
-      const output = path.resolve(options.output);
+    if (output) {
       await mkdir(path.dirname(output), { recursive: true });
       await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
     }
-    printJson({ ...result, ...(options.output ? { output: path.resolve(options.output) } : {}) });
+    printJson({ ...result, ...(output ? { output } : {}) });
     if (!result.ok) process.exitCode = 1;
   });
 }
@@ -1168,18 +1182,20 @@ async function runPackage(options: {
     persistWrite: options.persistWrite,
     profile: options.profile,
   }, async (session) => {
-    await waitForAgentIdle(session.page);
-    const revision = await refreshAgentSessionRevision(session.page).catch(() => ({ revisionId: undefined }));
     printErr('[agent] starting package export…');
 
     const result = await session.page.evaluate(async (input) => {
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
-      return window.foreScene!.exportPackage({
+      const api = window.foreScene!;
+      await api.waitForIdle({ timeoutMs: 60_000 });
+      // Export the current in-browser project; do not thread a Node-side revision
+      // snapshot captured before waitForIdle — save/frame/flush can advance it.
+      return api.exportPackage({
         shotIds: input.shotIds,
         download: false,
-        expectedRevisionId: input.expectedRevisionId,
       });
-    }, { shotIds: options.shotIds, expectedRevisionId: revision.revisionId });
+    }, {
+      shotIds: options.shotIds,
+    });
 
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
@@ -1385,7 +1401,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
   cliStdout.operation = commandToOperationName(args.command);
-  if (agentCliCommandRequiresProfile(args.command)) {
+  if (!args.helpRequested && agentCliCommandRequiresProfile(args.command)) {
     args.profile = requireExplicitAgentProfile(args.profile);
     cliStdout.profile = args.profile;
   }
@@ -1394,6 +1410,26 @@ async function main() {
     + (args.rigMode ? ` rigMode=${args.rigMode}` : '')
     + ((args.mode || args.appearance) ? ` appearance=${args.mode ?? args.appearance}` : ''),
   );
+
+  if (args.helpRequested) {
+    const description = describeAgentCliCommand(args.command);
+    if (!description) throw new AgentCliUsageError(`Unknown Agent CLI command: ${args.command}`);
+    printJson(description);
+    return;
+  }
+
+  if (args.command === 'describe') {
+    if (!args.describeCommand) throw new AgentCliUsageError('describe requires --command <cli-command>.');
+    const description = describeAgentCliCommand(args.describeCommand);
+    if (!description) throw new AgentCliUsageError(`Unknown Agent CLI command: ${args.describeCommand}`);
+    printJson(description);
+    return;
+  }
+
+  if (args.command === 'schema') {
+    printJson(getAgentSchema());
+    return;
+  }
 
   if (args.command === 'capabilities') {
     printJson(buildAgentCliCapabilitiesDocument());
@@ -1935,6 +1971,7 @@ async function main() {
 main().catch((error: unknown) => {
   const { envelope, exitCode } = envelopeFromError(cliStdout, error);
   printErr(`[agent] ${envelope.error?.message ?? 'Command failed.'}`);
+  writeCliEvidence(envelope, exitCode);
   process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
   process.exitCode = exitCode;
 });

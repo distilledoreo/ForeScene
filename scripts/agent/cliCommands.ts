@@ -4,6 +4,8 @@
 
 export const AGENT_CLI_COMMANDS = [
   'capabilities',
+  'describe',
+  'schema',
   'inspect',
   'open',
   'save',
@@ -45,6 +47,93 @@ export function isAgentCliCommand(value: string): value is AgentCliCommand {
   return (AGENT_CLI_COMMANDS as readonly string[]).includes(value);
 }
 
+export interface AgentCliCommandDescription {
+  command: AgentCliCommand;
+  operation: string;
+  usage: string;
+  write?: boolean;
+  required: string[];
+  optional: string[];
+  result: string;
+  notes?: string[];
+}
+
+const COMMON_SESSION_FLAGS = ['--url <url>', '--headless'] as const;
+
+const COMMAND_DESCRIPTIONS: Partial<Record<AgentCliCommand, AgentCliCommandDescription>> = {
+  capabilities: {
+    command: 'capabilities', operation: 'agent.capabilities', usage: 'npm run agent:capabilities', write: false,
+    required: [], optional: [], result: 'Capability map, operation metadata, command inventory, and JSON envelope contract.',
+  },
+  describe: {
+    command: 'describe', operation: 'agent.describe', usage: 'npm run agent:describe -- --command <cli-command>', write: false,
+    required: ['--command <cli-command>'], optional: [], result: 'Machine-readable argv grammar and behavior for one public CLI command.',
+  },
+  schema: {
+    command: 'schema', operation: 'agent.schema', usage: 'npm run agent:schema', write: false,
+    required: [], optional: [], result: 'Agent plan limits, executable operations, and result-shape schema document.',
+    notes: ['This describes Agent plans/results. Use `describe --command previs` for the production-manifest entry point.'],
+  },
+  inspect: {
+    command: 'inspect', operation: 'project.inspect', usage: 'npm run agent:inspect -- --profile <dir> [--document]', write: false,
+    required: ['--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, '--document'], result: 'Live status, capabilities, project summary, and optional complete document.',
+  },
+  previs: {
+    command: 'previs', operation: 'previs.orchestrate', usage: 'npm run agent:previs -- --manifest <manifest.json> --profile <dir> --output <dir> --write [--reset-project]', write: true,
+    required: ['--manifest <manifest.json>', '--profile <isolated-dir>', '--output <dir>', '--write'],
+    optional: [...COMMON_SESSION_FLAGS, '--reset-project', '--update-manifest', '--initialize-only', '--skip-package', '--no-auto-repair', '--max-repair-passes <n>'],
+    result: 'Compiled project, rendered review artifacts, validation, run state, optional control videos, final project, and package status.',
+    notes: [
+      '`--reset-project` is separately authorized and is prohibited for valuable existing projects.',
+      'Manifest reference: docs/previs-production-manifest.md; complete examples: skills/forescene-previs/examples/*.json.',
+      'In benchmark mode, omitted manifest/output values are read from FORESCENE_BENCHMARK_BRIEF.',
+    ],
+  },
+  production: {
+    command: 'production', operation: 'production.orchestrate', usage: 'npm run agent:production -- --manifest <manifest.json> --profile <dir> --output <dir> --write --mode <rapid-review|delivery>', write: true,
+    required: ['--manifest <manifest.json>', '--profile <isolated-dir>', '--output <dir>', '--write'], optional: [...COMMON_SESSION_FLAGS, '--mode <rapid-review|delivery>', '--final-project <project.fsp>', '--reset-project', '--max-repair-passes <n>'],
+    result: 'Production orchestration status, review artifacts, validation, and final project path.',
+  },
+  frame: {
+    command: 'frame', operation: 'render.frame', usage: 'npm run agent:frame -- --shot <id-or-number> --mode <clay|projected|depth> --output <frame.png> --profile <dir>', write: false,
+    required: ['--shot <id-or-number>', '--output <frame.png>', '--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, '--mode <clay|projected|depth>', '--time <seconds>', '--people-variant <value>', '--content <value>'], result: 'Canonical PNG, pixel statistics, pose telemetry, artifact handle, and provenance.',
+  },
+  video: {
+    command: 'video', operation: 'render.video', usage: 'npm run agent:video -- --shot <id-or-number> --mode <clay|projected|depth> --output <video.mp4> --profile <dir> --write', write: true,
+    required: ['--shot <id-or-number>', '--output <video.mp4>', '--profile <isolated-dir>', '--write'], optional: [...COMMON_SESSION_FLAGS, '--mode <clay|projected|depth>', '--resolution <preset>'], result: 'MP4 artifact, duration, dimensions, transfer, timing, diagnostics, and provenance.',
+    notes: ['The selected shot must contain at least two timeline keyframes.'],
+  },
+  'contact-sheet': {
+    command: 'contact-sheet', operation: 'render.contactSheet', usage: 'npm run agent:contact-sheet -- --input <frames-dir> --output <contact-sheet.png>', write: false,
+    required: ['--input <frames-dir>', '--output <contact-sheet.png>'], optional: [], result: 'Contact-sheet path.',
+  },
+  save: {
+    command: 'save', operation: 'project.save', usage: 'npm run agent:save -- --output <project.fsp> --profile <dir> --write', write: true,
+    required: ['--output <project.fsp>', '--profile <isolated-dir>', '--write'], optional: [...COMMON_SESSION_FLAGS], result: 'Verified FSP backup and transfer telemetry.',
+  },
+  package: {
+    command: 'package', operation: 'export.package', usage: 'npm run agent:package -- --output <package.zip> --profile <dir> --write [--shots <ids>]', write: true,
+    required: ['--output <package.zip>', '--profile <isolated-dir>', '--write'], optional: [...COMMON_SESSION_FLAGS, '--shot <id-or-number>', '--shots <comma-separated-ids>'], result: 'ZIP package, manifest paths, shot ids, recovery diagnostics, timing, and provenance.',
+  },
+  'verify-package': {
+    command: 'verify-package', operation: 'export.verifyPackage', usage: 'npm run agent:verify-package -- --plan <deliverables-plan.json> --package <package.zip>', write: false,
+    required: ['--plan <deliverables-plan.json>', '--package <package.zip>'], optional: [], result: 'Package verification against the supplied deliverables plan.',
+  },
+};
+
+export function describeAgentCliCommand(command: string): AgentCliCommandDescription | undefined {
+  if (!isAgentCliCommand(command)) return undefined;
+  return COMMAND_DESCRIPTIONS[command] ?? {
+    command,
+    operation: `cli.${command}`,
+    usage: `npm run agent:${command}`,
+    required: [],
+    optional: ['Run this command with --help for its public descriptor.'],
+    result: 'One stable Agent CLI JSON envelope.',
+    notes: ['Consult `agent:capabilities` for write and profile requirements when this compact descriptor omits them.'],
+  };
+}
+
 export function buildAgentCliHelpDocument() {
   return {
     commands: [...AGENT_CLI_COMMANDS],
@@ -59,9 +148,8 @@ export function buildAgentCliHelpDocument() {
     },
     discovery: {
       cliCapabilities: '`npm run agent:capabilities` — canonical public surface; no browser required',
-      describeCapabilities: 'window.foreScene.describeCapabilities() — browser API only; prefer CLI capabilities',
-      describeOperation: 'window.foreScene.describeOperation(name)',
-      getAgentSchema: 'window.foreScene.getAgentSchema()',
+      describeCommand: '`npm run agent:describe -- --command <name>` or `npm run agent:<name> -- --help`',
+      agentSchema: '`npm run agent:schema` — plan limits, executable operations, and result shapes; no browser required',
     },
     renderModes: {
       frame: 'Clay, projected, and depth are `--mode` (alias `--appearance`) on `frame`. Default clay.',

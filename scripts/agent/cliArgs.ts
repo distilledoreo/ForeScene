@@ -33,6 +33,8 @@ function benchmarkBrief(): Partial<{
 
 export interface AgentCliArgs {
   command: string;
+  describeCommand?: string;
+  helpRequested: boolean;
   plan?: string;
   manifest?: string;
   url?: string;
@@ -89,6 +91,7 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
   const brief = benchmarkBrief();
   const args: AgentCliArgs = {
     command: argv[0] ?? 'inspect',
+    helpRequested: false,
     url: process.env.FORESCENE_URL,
     manifest: process.env.FORESCENE_BENCHMARK_MANIFEST ?? brief.productionManifest,
     output: process.env.FORESCENE_OUTPUT ?? brief.outputDir,
@@ -119,6 +122,10 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
     const token = argv[index]!;
     if (token === '--plan') {
       args.plan = argv[++index];
+    } else if (token === '--command') {
+      args.describeCommand = argv[++index];
+    } else if (token === '--help') {
+      args.helpRequested = true;
     } else if (token === '--manifest') {
       args.manifest = argv[++index];
     } else if (token === '--url') {

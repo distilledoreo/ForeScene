@@ -7,6 +7,7 @@ import {
   resetAgentPackageExportControl,
 } from '../src/engine/agent/packageExportControl';
 import { buildAgentCapabilities } from '../src/engine/agent/capabilities';
+import { projectFingerprint } from '../src/engine/agent/planDiff';
 import { useAgentControlStore } from '../src/state/useAgentControlStore';
 import { useProjectSafetyStore } from '../src/state/useProjectSafetyStore';
 import { useProjectStore } from '../src/state/useProjectStore';
@@ -47,6 +48,7 @@ describe('agent package export control', () => {
     });
     useProjectSafetyStore.setState({
       criticalWrite: false,
+      activeRevisionId: 'rev-active',
       flushProject: async () => ({
         project,
         revision: { id: 'rev-1' },
@@ -87,6 +89,30 @@ describe('agent package export control', () => {
     expect(downloadBlob).not.toHaveBeenCalled();
     expect(result.progress?.message).toBe('Package built');
     expect(useProjectStore.getState().project.shots.map((shot) => shot.status)).toEqual(shotStatuses);
+  });
+
+  it('accepts a new durability revision when refreshed project content is unchanged', async () => {
+    useAgentControlStore.setState({ controlMode: 'read-write' });
+    const project = useProjectStore.getState().project;
+    const result = await exportAgentPackage({
+      download: false,
+      expectedRevisionId: 'rev-active',
+      expectedFingerprint: projectFingerprint(project),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.revisionId).toBe('rev-1');
+  });
+
+  it('rejects export when project content changed after revision refresh', async () => {
+    useAgentControlStore.setState({ controlMode: 'read-write' });
+    const result = await exportAgentPackage({
+      download: false,
+      expectedRevisionId: 'rev-active',
+      expectedFingerprint: 'stale-fingerprint',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('stale_revision');
+    expect(result.diagnostics[0]?.code).toBe('stale_revision');
   });
 
   it('cancel without an active export returns a diagnostic', () => {

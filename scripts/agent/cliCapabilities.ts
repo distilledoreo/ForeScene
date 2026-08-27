@@ -518,6 +518,8 @@ export function buildAgentCliCapabilitiesDocument() {
 
 export function commandToOperationName(command: string): string {
   if (command === 'help') return 'agent.help';
+  if (command === 'describe') return 'agent.describe';
+  if (command === 'schema') return 'agent.schema';
   if (command === 'frame') return 'render.frame';
   if (command === 'video') return 'render.video';
   if (command === 'cancel') return 'operation.cancel';

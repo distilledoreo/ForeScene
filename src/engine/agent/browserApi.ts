@@ -1174,6 +1174,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           summary: batch.summary,
           importBudget: batch.analysis,
           verifiedRevisionId: batch.verifiedRevisionId,
+          reused: batch.reused,
           warnings: batch.warnings,
         };
       } catch (error) {

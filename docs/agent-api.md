@@ -67,7 +67,10 @@ CLI launches always clear a stale localStorage write seed unless `--persist-writ
 `importModel({ file, mode })` uses the shared model conversion and local-recovery
 commit path behind **Import 3D scene**. It creates texture-free graybox geometry,
 registers its binary payloads, and adds the resulting objects in the same protected
-project mutation. It requires `read-write` access. Heavy geometry returns a
+project mutation. Importing the same file bytes again (matching stored `contentHash`)
+reuses the existing model asset and imported object instead of creating duplicates;
+the result includes `reused: true` when binding is reused. It requires `read-write`
+access. Heavy geometry returns a
 structured `requiresConsent` result until its caller sends the explicit
 `allow-heavy-model-imports` token; extreme imports also require the literal
 `IMPORT` confirmation.
