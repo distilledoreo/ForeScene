@@ -28,6 +28,7 @@ import {
   updateShotKeyframe,
 } from '../shotTimeline';
 import type {
+  AgentEntityReference,
   AgentFrameSubjectsInput,
   AgentFrameSubjectsResult,
   AgentOrientObjectTowardInput,
@@ -38,13 +39,18 @@ import type {
   AgentSnapObjectToFloorResult,
   AgentTrackSubjectsInput,
   AgentTrackSubjectsResult,
+  ForeSceneAgentCommand,
 } from './protocol';
 import {
   resolveExistingLandmarkTarget,
   resolveExistingObjectTarget,
   resolveExistingShotTarget,
 } from './inspection';
-import { coerceShotTarget } from './targetResolver';
+import {
+  coerceShotTarget,
+  resolveObjectTarget,
+  resolveShotTarget,
+} from './targetResolver';
 import {
   applyShotCamera,
   applyShotStagingTransform,
@@ -399,6 +405,64 @@ export async function orientAgentObjectToward(
     rotation: nextRotation,
     revisionId: commit.revisionId,
     diagnostics: commit.diagnostics,
+  };
+}
+
+export type FrameSubjectsPlanCommand = Extract<ForeSceneAgentCommand, { op: 'shot.frameSubjects' }>;
+export type UpdateCameraPlanCommand = Extract<ForeSceneAgentCommand, { op: 'shot.updateCamera' }>;
+
+/**
+ * Expand a `shot.frameSubjects` plan command into the equivalent
+ * `shot.updateCamera` command using the same solver as the frameSubjects
+ * Agent API primitive. Runs at plan-prepare time so preview, diff, apply, and
+ * undo all treat cinematic framing intent as an ordinary camera plan command.
+ */
+export function expandFrameSubjectsPlanCommand(
+  project: LocationProject,
+  command: FrameSubjectsPlanCommand,
+  refs: Record<string, AgentEntityReference>,
+): {
+  ok: true;
+  command: UpdateCameraPlanCommand;
+  measuredCoverage?: number;
+  warnings: AgentDiagnostic[];
+} | {
+  ok: false;
+  diagnostics: AgentDiagnostic[];
+} {
+  const shotResolved = resolveShotTarget(project, command.shot, refs);
+  if (!shotResolved.ok) return { ok: false, diagnostics: shotResolved.diagnostics };
+  const subjectIds: string[] = [];
+  for (const target of command.subjects) {
+    const resolved = resolveObjectTarget(project, target, refs);
+    if (!resolved.ok) return { ok: false, diagnostics: resolved.diagnostics };
+    subjectIds.push(resolved.id);
+  }
+  if (subjectIds.length === 0) {
+    return {
+      ok: false,
+      diagnostics: [
+        agentError(
+          AGENT_DIAGNOSTIC_CODES.invalidArgument,
+          'shot.frameSubjects requires at least one subject.',
+          { path: 'subjects' },
+        ),
+      ],
+    };
+  }
+  const solved = solveSubjectsCameraForShot(project, shotResolved.id, subjectIds, command.composition);
+  if (!solved.camera) {
+    return { ok: false, diagnostics: solved.diagnostics };
+  }
+  return {
+    ok: true,
+    command: {
+      op: 'shot.updateCamera',
+      shot: { id: shotResolved.id },
+      camera: solved.camera,
+    },
+    ...(solved.measuredCoverage !== undefined ? { measuredCoverage: solved.measuredCoverage } : {}),
+    warnings: solved.diagnostics.filter((diagnostic) => diagnostic.severity !== 'error'),
   };
 }
 

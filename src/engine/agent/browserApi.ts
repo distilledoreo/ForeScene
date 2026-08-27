@@ -1038,8 +1038,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return result;
     },
 
-    async applyPlan(plan: unknown): Promise<AgentPlanApplyResult> {
-      return applyAgentPlan(plan);
+    async applyPlan(
+      plan: unknown,
+      options?: { expectedRevisionId?: string },
+    ): Promise<AgentPlanApplyResult> {
+      return applyAgentPlan(plan, options);
     },
 
     async applyVerifiedProxyReplacement(

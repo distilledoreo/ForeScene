@@ -91,9 +91,12 @@ import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cli
 import { writeCliEvidence } from './cliEvidence';
 import {
   resolveCliCommandShotUsage,
+  resolveCliShotReferences,
   toOptionalRequestedShotIds,
-  toVisualCollectionInput,
+  type CliShotReference,
+  type ResolveCliShotReferencesResult,
 } from './cliShotSelection';
+import { buildFrameCliResult } from './frameResult';
 
 let activeCliCommand: string | undefined;
 let activeCliOperation: ReturnType<typeof beginCliOperation> | undefined;
@@ -335,19 +338,17 @@ async function runShotPanorama(options: {
 }) {
   requireExplicitWrite('agent:shot-panorama', options.writeAccess);
   const panoId = options.pano === 'null' || options.pano === '' ? null : options.pano;
-  const looksLikeShotNumber = /^\d+$/.test(options.shotId.trim());
   await withSession({ ...options, command: 'shot-panorama' }, async (session) => {
+    const shot = await resolveRequiredShot(session, 'shot-panorama', options.shotId);
+    if (!shot) return;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.setShotPanorama({
-        shot: input.looksLikeShotNumber
-          ? { shotNumber: input.shotId }
-          : { id: input.shotId },
+        shot: { id: input.shotId },
         panoId: input.panoId,
       })
     ), {
-      shotId: options.shotId,
+      shotId: shot.id,
       panoId,
-      looksLikeShotNumber,
     });
     printJson(result);
     if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
@@ -571,6 +572,10 @@ async function runFrame(options: {
   output: string;
 }) {
   await withSession(options, async (session) => {
+    // Resolve the selector once at the CLI boundary so --shot accepts canonical
+    // ids and shot numbers (padding-normalized) with identical semantics.
+    const shot = await resolveRequiredShot(session, 'frame', options.shotId);
+    if (!shot) return;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.renderShotFrame({
         shotId: input.shotId,
@@ -580,23 +585,30 @@ async function runFrame(options: {
         content: input.content,
       })
     ), {
-      shotId: options.shotId,
+      shotId: shot.id,
       timeSeconds: options.timeSeconds,
       appearance: options.appearance,
       peopleVariant: options.peopleVariant,
       content: options.content,
     });
     if (!result.ok || !result.pngDataUrl) {
-      printJson(result);
+      printJson({ ...result, shotNumber: shot.shotNumber });
       process.exitCode = AGENT_CLI_EXIT.failure;
       return;
     }
     const comma = result.pngDataUrl.indexOf(',');
     if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
+    const bytes = Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64');
     const target = path.resolve(options.output);
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64'));
-    printJson({ ...result, pngDataUrl: undefined, output: target, appearance: options.appearance });
+    await writeFile(target, bytes);
+    printJson(buildFrameCliResult({
+      result,
+      output: target,
+      appearance: options.appearance,
+      bytes,
+      shotNumber: shot.shotNumber,
+    }));
   });
 }
 
@@ -689,20 +701,91 @@ const REVIEW_PASSES = [
   },
 ] as const;
 
+async function listCliShotReferences(session: AgentBrowserSession): Promise<CliShotReference[]> {
+  return session.page.evaluate(() => window.foreScene!.listShots());
+}
+
+function printShotResolutionFailure(command: string, selector: string, failure: Extract<ResolveCliShotReferencesResult, { ok: false }>): void {
+  const ambiguous = failure.ambiguous.length > 0;
+  printJson({
+    ok: false,
+    status: 'failed',
+    command,
+    shotId: selector,
+    revisionId: '',
+    width: 0,
+    height: 0,
+    diagnostics: [{
+      severity: 'error' as const,
+      code: ambiguous ? 'ambiguous_target' : 'target_not_found',
+      message: failure.error,
+      ...(ambiguous
+        ? { candidates: failure.ambiguous.flatMap((entry) => entry.candidates.map((candidate) => candidate.id)) }
+        : {}),
+    }],
+  });
+  process.exitCode = AGENT_CLI_EXIT.failure;
+}
+
+/**
+ * Resolve one CLI shot selector (canonical id or shot number, padding-normalized)
+ * against the live project before calling an API that takes exact ids.
+ * Prints a target_not_found / ambiguous_target result envelope and sets the
+ * failure exit code when resolution fails; callers must return without the API call.
+ */
+async function resolveRequiredShot(
+  session: AgentBrowserSession,
+  command: string,
+  selector: string,
+): Promise<CliShotReference | undefined> {
+  const resolved = resolveCliShotReferences(await listCliShotReferences(session), [selector]);
+  if (!resolved.ok) {
+    printShotResolutionFailure(command, selector, resolved);
+    return undefined;
+  }
+  return resolved.shots[0];
+}
+
+/**
+ * Resolve engine passthrough selections (verify / visual-preflight).
+ *
+ * Selectors that resolve are replaced with canonical ids; unknown selectors are
+ * passed through untouched so the documented engine contract — explicit unknown
+ * or empty selections fail collectVisualPreflightValidation and unmatched ids
+ * appear in the JSON result and provenance — stays intact. Ambiguous selectors
+ * hard-fail because passing one through would silently change meaning.
+ */
+async function resolvePassthroughShotIds(
+  session: AgentBrowserSession,
+  requested: readonly string[] | undefined,
+): Promise<{ ok: true; shotIds?: string[] } | { ok: false }> {
+  if (requested === undefined) return { ok: true };
+  const available = await listCliShotReferences(session);
+  const shotIds: string[] = [];
+  for (const selector of requested) {
+    const resolved = resolveCliShotReferences(available, [selector]);
+    if (resolved.ok) {
+      shotIds.push(resolved.shots[0]!.id);
+      continue;
+    }
+    if (resolved.ambiguous.length > 0) {
+      printShotResolutionFailure('verify', selector, resolved);
+      return { ok: false };
+    }
+    shotIds.push(selector);
+  }
+  return { ok: true, shotIds };
+}
+
 async function resolveShotIds(
   session: AgentBrowserSession,
   requestedIds: string[],
 ): Promise<Array<{ id: string; shotNumber: string }>> {
-  const available = await session.page.evaluate(() => window.foreScene!.listShots());
+  const available = await listCliShotReferences(session);
   const requested = requestedIds.length > 0 ? requestedIds : available.map((shot) => shot.id);
-  const resolved = requested.map((requestedId) => (
-    available.find((shot) => shot.id === requestedId || shot.shotNumber === requestedId)
-  ));
-  const missing = requested.filter((id, index) => !resolved[index]);
-  if (missing.length > 0) {
-    throw new Error(`Unknown shot id or number: ${missing.join(', ')}.`);
-  }
-  return resolved as Array<{ id: string; shotNumber: string }>;
+  const resolved = resolveCliShotReferences(available, requested);
+  if (!resolved.ok) throw new Error(resolved.error);
+  return resolved.shots;
 }
 
 function dataUrlBytes(dataUrl: string): Buffer {
@@ -838,6 +921,8 @@ async function runVideo(options: {
   download: boolean;
 }) {
   await withSession(options, async (session) => {
+    const shot = await resolveRequiredShot(session, 'video', options.shotId);
+    if (!shot) return;
     const contentMode = options.content === 'full' ? 'full_scene' : options.content;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.renderShotVideo({
@@ -848,7 +933,13 @@ async function runVideo(options: {
         attachToShot: input.attachToShot,
         download: false,
       })
-    ), { ...options, content: contentMode });
+    ), {
+      shotId: shot.id,
+      resolution: options.resolution,
+      appearance: options.appearance,
+      content: contentMode,
+      attachToShot: options.attachToShot,
+    });
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
     if (options.download && options.output && result.ok && result.artifact?.artifactId) {
@@ -858,6 +949,7 @@ async function runVideo(options: {
     }
     printJson({
       ...result,
+      shotNumber: shot.shotNumber,
       savedPath,
       transfer,
       provenance: (await session.page.evaluate(() => window.foreScene!.getStatus())).provenance,
@@ -977,6 +1069,7 @@ async function previewOrApply(
     writeAccess: boolean;
     persistWrite: boolean;
     profile?: string;
+    expectedRevision?: string;
   },
 ) {
   const raw = await readFile(path.resolve(planPath), 'utf8');
@@ -991,13 +1084,17 @@ async function previewOrApply(
     if (command === 'apply') {
       await waitForAgentIdle(session.page);
     }
-    const result = await session.page.evaluate(async ({ commandName, planJson }) => {
+    const result = await session.page.evaluate(async ({ commandName, planJson, expectedRevisionId }) => {
       const api = window.foreScene;
       if (!api) throw new Error('window.foreScene is not available');
       if (commandName === 'preview') return api.previewPlan(planJson);
       await api.waitForIdle({ timeoutMs: 60_000 });
-      return api.applyPlan(planJson);
-    }, { commandName: command, planJson: plan });
+      return api.applyPlan(planJson, expectedRevisionId ? { expectedRevisionId } : undefined);
+    }, {
+      commandName: command,
+      planJson: plan,
+      expectedRevisionId: options.expectedRevision,
+    });
     printJson(result);
     if (!result || typeof result !== 'object' || !('ok' in result) || !(result as { ok: boolean }).ok) {
       process.exitCode = 1;
@@ -1039,11 +1136,12 @@ async function runVerify(options: {
   output?: string;
   shotIds?: string[];
 }) {
-  const visualInput = toVisualCollectionInput({
-    explicit: options.shotIds !== undefined,
-    shotIds: options.shotIds ?? [],
-  });
   await withSession(options, async (session) => {
+    // Resolve selectors that match to canonical ids; unknown selectors pass
+    // through untouched so the engine-side unmatched-report contract holds.
+    const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
+    if (!passthrough.ok) return;
+    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
       await waitForAgentIdle(session.page);
@@ -1226,11 +1324,12 @@ async function runVisualPreflight(options: {
   profile?: string;
   shotIds?: string[];
 }) {
-  const visualInput = toVisualCollectionInput({
-    explicit: options.shotIds !== undefined,
-    shotIds: options.shotIds ?? [],
-  });
   await withSession(options, async (session) => {
+    // Resolve selectors that match to canonical ids; unknown selectors pass
+    // through untouched so the engine-side unmatched-report contract holds.
+    const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
+    if (!passthrough.ok) return;
+    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
     const result = await session.page.evaluate((input) => {
       const api = window.foreScene!;
       const collected = api.collectVisualPreflightValidation(input);
@@ -1265,6 +1364,12 @@ async function runAssetContract(options: {
   shotId?: string;
 }) {
   await withSession(options, async (session) => {
+    let shotId: string | undefined;
+    if (options.shotId !== undefined) {
+      const shot = await resolveRequiredShot(session, 'asset-contract', options.shotId);
+      if (!shot) return;
+      shotId = shot.id;
+    }
     const result = await session.page.evaluate((shotId) => {
       const api = window.foreScene!;
       const assetPoseContract = api.inspectAssetPoseContract(shotId ? { shotId } : {});
@@ -1278,7 +1383,7 @@ async function runAssetContract(options: {
         assetPoseContract,
         provenance: api.getStatus().provenance,
       };
-    }, options.shotId);
+    }, shotId);
     printJson(result);
   });
 }
@@ -1294,40 +1399,38 @@ async function runGenerativeWorldBoundary(options: {
   output?: string;
 }) {
   await withSession(options, async (session) => {
-    const result = await session.page.evaluate(({ command, requestedShots }) => {
-      const api = window.foreScene!;
-      const summaries = api.listShots();
-      let shotIds: string[] | undefined;
-      if (requestedShots !== undefined) {
-        const resolved: string[] = [];
-        const unmatched: string[] = [];
-        for (const requested of requestedShots) {
-          const shot = summaries.find((candidate) => (
-            candidate.id === requested || candidate.shotNumber === requested
-          ));
-          if (!shot) unmatched.push(requested);
-          else if (!resolved.includes(shot.id)) resolved.push(shot.id);
-        }
-        if (requestedShots.length === 0 || unmatched.length > 0) {
-          return {
-            ok: false,
-            diagnostics: [{
-              severity: 'error' as const,
-              code: 'target_not_found',
-              message: requestedShots.length === 0
-                ? 'An explicit shot selection cannot be empty.'
-                : `Unknown shot id(s) or number(s): ${unmatched.join(', ')}.`,
-            }],
-          };
-        }
-        shotIds = resolved;
+    let resolvedShotIds: string[] | undefined;
+    if (options.requestedShots !== undefined) {
+      if (options.requestedShots.length === 0) {
+        printJson({
+          ok: false,
+          diagnostics: [{
+            severity: 'error' as const,
+            code: 'target_not_found',
+            message: 'An explicit shot selection cannot be empty.',
+          }],
+        });
+        process.exitCode = AGENT_CLI_EXIT.failure;
+        return;
       }
+      const resolved = resolveCliShotReferences(
+        await listCliShotReferences(session),
+        options.requestedShots,
+      );
+      if (!resolved.ok) {
+        printShotResolutionFailure(options.command, options.requestedShots.join(', '), resolved);
+        return;
+      }
+      resolvedShotIds = resolved.shots.map((shot) => shot.id);
+    }
+    const result = await session.page.evaluate(({ command, shotIds }) => {
+      const api = window.foreScene!;
       return command === 'world-preview'
         ? api.previewGenerativeWorldRequest({ shotIds })
         : api.runMockGenerativeWorldBackend({ shotIds });
     }, {
       command: options.command,
-      requestedShots: options.requestedShots,
+      shotIds: resolvedShotIds,
     });
     if (options.output) {
       const output = path.resolve(options.output);
@@ -1354,34 +1457,18 @@ async function runGenerativeWorldDepth(options: {
 }) {
   const dimensions = resolveImageDimensions(options.resolution);
   await withSession(options, async (session) => {
+    const shot = await resolveRequiredShot(session, 'world-depth', options.requestedShot);
+    if (!shot) return;
     const result = await session.page.evaluate(async (input) => {
       const api = window.foreScene!;
-      const shot = api.listShots().find((candidate) => (
-        candidate.id === input.requestedShot || candidate.shotNumber === input.requestedShot
-      ));
-      if (!shot) {
-        return {
-          ok: false,
-          status: 'failed' as const,
-          shotId: input.requestedShot,
-          revisionId: api.getStatus().revisionId,
-          width: input.width ?? 0,
-          height: input.height ?? 0,
-          diagnostics: [{
-            severity: 'error' as const,
-            code: 'target_not_found',
-            message: `Unknown shot id or number: ${input.requestedShot}.`,
-          }],
-        };
-      }
       return api.renderGenerativeWorldDepthPrior({
-        shotId: shot.id,
+        shotId: input.shotId,
         timeSeconds: input.timeSeconds,
         width: input.width,
         height: input.height,
       });
     }, {
-      requestedShot: options.requestedShot,
+      shotId: shot.id,
       timeSeconds: options.timeSeconds,
       ...dimensions,
     });
@@ -1392,7 +1479,7 @@ async function runGenerativeWorldDepth(options: {
       savedPath = saved.savedPath;
       transfer = toCliArtifactTransfer(saved);
     }
-    printJson({ ...result, savedPath, transfer });
+    printJson({ ...result, shotNumber: shot.shotNumber, savedPath, transfer });
     if (!result.ok || !savedPath) process.exitCode = AGENT_CLI_EXIT.failure;
   });
 }
@@ -1681,6 +1768,7 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       profile: args.profile,
+      ...(args.command === 'apply' && args.expectedRevision ? { expectedRevision: args.expectedRevision } : {}),
     });
     return;
   }
@@ -1893,6 +1981,7 @@ async function main() {
         autoRepair: args.autoRepair,
         maxRepairPasses: args.maxRepairPasses,
         timeBudgetSeconds: args.timeBudgetSeconds,
+        pruneNonManifestShots: args.pruneNonManifestShots,
         finalProjectPath: args.finalProject,
       });
       if (cancellationObserved || productionOperation.record.cancelRequested) {
@@ -1932,6 +2021,10 @@ async function main() {
       skipPackage: args.skipPackage,
       profileDir: args.profile,
       allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      autoRepair: args.autoRepair,
+      maxRepairPasses: args.maxRepairPasses,
+      timeBudgetSeconds: args.timeBudgetSeconds,
+      pruneNonManifestShots: args.pruneNonManifestShots,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;
@@ -1959,6 +2052,7 @@ async function main() {
     const result = await runContactSheetCli({
       inputDir: args.input,
       outputPath: args.output,
+      allowPartial: args.allowPartial,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;

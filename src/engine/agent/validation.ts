@@ -238,6 +238,8 @@ function parseCommand(
       return parseShotUpdateDescription(record, path, errors, warnings);
     case 'shot.updateCamera':
       return parseShotUpdateCamera(record, path, errors, warnings);
+    case 'shot.frameSubjects':
+      return parseShotFrameSubjects(record, path, errors, warnings);
     case 'shot.setPanorama':
       return parseShotSetPanorama(record, path, errors);
     case 'shot.select':
@@ -612,6 +614,68 @@ function parseShotUpdateCamera(
     return undefined;
   }
   return { op: 'shot.updateCamera', shot: target, camera };
+}
+
+const FRAME_SUBJECTS_COMPOSITIONS = new Set<string>([
+  'establishing',
+  'wide',
+  'full_body',
+  'full',
+  'medium',
+  'medium_close_up',
+  'close_up',
+  'three_quarter_tracking',
+  'over_the_shoulder',
+  'two_shot',
+]);
+
+function parseShotFrameSubjects(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  const shot = parseEntityTarget(record.shot, `${path}.shot`, errors);
+  if (!shot) return undefined;
+  if (!Array.isArray(record.subjects) || record.subjects.length === 0) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'shot.frameSubjects requires at least one subject target.',
+      { path: `${path}.subjects` },
+    ));
+    return undefined;
+  }
+  const subjects: AgentEntityTarget[] = [];
+  record.subjects.forEach((raw, index) => {
+    const target = parseEntityTarget(raw, `${path}.subjects[${index}]`, errors);
+    if (target) subjects.push(target);
+  });
+  if (subjects.length === 0) return undefined;
+  let composition: string | undefined;
+  if (record.composition !== undefined) {
+    if (typeof record.composition !== 'string') {
+      errors.push(agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'composition must be a string.',
+        { path: `${path}.composition` },
+      ));
+    } else {
+      if (!FRAME_SUBJECTS_COMPOSITIONS.has(record.composition)) {
+        warnings.push(agentWarning(
+          'frame_subjects_composition',
+          `Unknown composition "${record.composition}"; the solver will fall back to medium.`,
+          { path: `${path}.composition` },
+        ));
+      }
+      composition = record.composition;
+    }
+  }
+  return {
+    op: 'shot.frameSubjects',
+    shot,
+    subjects,
+    ...(composition !== undefined ? { composition } : {}),
+  };
 }
 
 function parseShotStageObject(

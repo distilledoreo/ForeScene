@@ -40,6 +40,13 @@ Every command writes one envelope to stdout (`ok`, `operation`, `operationId`, `
 
 If a long-running command hangs, cancel with `npm run agent:cancel -- --operation <id>` (or omit `--operation` for the latest active record). Do not kill Chromium.
 
+### Selector and batch-honesty guarantees
+
+- Every `--shot`/`--shots` selector accepts the canonical shot id or the shot number; leading zeros are normalized (`010`, `10`, and `0010` address the same shot). Selectors resolve once before the command runs; ambiguity fails closed with candidate ids, and render results echo both `shotId` and `shotNumber`.
+- Batch `ok` is a conjunction. `agent:render-stills` reports `ok:false` with `failedShotNumbers`/`pendingShotNumbers` when any tracked shot failed or is unrendered. Standalone `agent:contact-sheet` fails closed on missing/empty/unrendered frames (per-shot `frames` report with sha256); pass `--allow-partial` only when a partial sheet is explicitly wanted — `ok` stays `false`.
+- `agent:previs -- --no-auto-repair` is authoritative: the summary reports `repairsDisabled: true` and `repairsAttempted: 0`. After compilation the runner prunes only intact scaffold shots (the blank Origin); non-manifest user shots are retained and reported unless `--prune-non-manifest-shots` is passed.
+- `agent:frame` stdout never contains inline image payloads: it returns the output path plus `sha256`, `byteLength`, `revisionId`, pixel stats, and pose telemetry. Command success is still not visual approval.
+
 ## Benchmark mode
 
 When `FORESCENE_BENCHMARK=1` or `FORESCENE_BENCHMARK_BRIEF` is set, the repository harness owns the experiment. The candidate owns previs only.

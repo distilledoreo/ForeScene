@@ -85,6 +85,9 @@ export interface AgentCliArgs {
   noAutoRepair: boolean;
   maxRepairPasses?: number;
   timeBudgetSeconds?: number;
+  allowPartial: boolean;
+  pruneNonManifestShots: boolean;
+  expectedRevision?: string;
 }
 
 export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
@@ -116,6 +119,8 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
     document: false,
     autoRepair: true,
     noAutoRepair: false,
+    allowPartial: false,
+    pruneNonManifestShots: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -238,6 +243,16 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
         throw new Error('--time-budget must be a positive number');
       }
       args.timeBudgetSeconds = value;
+    } else if (token === '--allow-partial') {
+      args.allowPartial = true;
+    } else if (token === '--prune-non-manifest-shots') {
+      args.pruneNonManifestShots = true;
+    } else if (token === '--expected-revision') {
+      const value = argv[++index];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--expected-revision requires a revision id');
+      }
+      args.expectedRevision = value;
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }

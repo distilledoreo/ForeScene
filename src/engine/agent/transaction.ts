@@ -90,7 +90,19 @@ export function restoreAgentSelectionToStore(params: {
   });
 }
 
-export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResult> {
+export interface AgentPlanApplyOptions {
+  /**
+   * Compare-and-swap: refuse the apply with stale_revision when the live
+   * verified revision is missing or different. Mirrors the expectedRevisionId
+   * contract on package export.
+   */
+  expectedRevisionId?: string;
+}
+
+export async function applyAgentPlan(
+  input: unknown,
+  options?: AgentPlanApplyOptions,
+): Promise<AgentPlanApplyResult> {
   const writeBlocked = requireWriteAccess('applyPlan');
   if (writeBlocked) {
     return { ok: false, diagnostics: writeBlocked };
@@ -99,6 +111,23 @@ export async function applyAgentPlan(input: unknown): Promise<AgentPlanApplyResu
   const stillBusy = await awaitAgentNotBusy();
   if (stillBusy) {
     return { ok: false, diagnostics: stillBusy };
+  }
+
+  if (options?.expectedRevisionId) {
+    const activeRevisionId = useProjectSafetyStore.getState().activeRevisionId ?? '';
+    if (!activeRevisionId || activeRevisionId !== options.expectedRevisionId) {
+      return {
+        ok: false,
+        diagnostics: [
+          agentError(
+            AGENT_DIAGNOSTIC_CODES.staleRevision,
+            activeRevisionId
+              ? `expectedRevisionId "${options.expectedRevisionId}" does not match the active revision "${activeRevisionId}".`
+              : `expectedRevisionId "${options.expectedRevisionId}" was provided but no verified revision is active yet.`,
+          ),
+        ],
+      };
+    }
   }
 
   const source = readLiveSource();

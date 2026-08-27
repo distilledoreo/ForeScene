@@ -81,12 +81,19 @@ import {
   type ProductionRunTiming,
 } from '../../src/engine/previs/index';
 import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession';
+import { isIntactSystemScaffoldShot } from '../../src/domain/scaffold';
 import { attachAgentRunSession, detachAgentRunSession, startAgentRunSession } from './agentSession';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
 import { createCliAbortScope, installCliAbortBridge } from './cliAbort';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
+import {
+  deriveRenderStillsOutcome,
+  evaluateContactSheetFrames,
+  type ContactSheetFrameReport,
+} from './batchHonesty';
+import { selectPrunableShots } from './shotPrune';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -116,6 +123,12 @@ export interface PrevisCliOptions {
   skipControlVideos?: boolean;
   /** Export a verified .fsp backup before the production session closes. */
   finalProjectPath?: string;
+  /**
+   * Delete non-manifest user shots after compilation. Default false: only
+   * intact scaffold shots (blank Origin) are pruned; other non-manifest shots
+   * are retained and reported.
+   */
+  pruneNonManifestShots?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -151,6 +164,17 @@ export interface PrevisCliResult {
   provenance?: unknown;
   partial?: boolean;
   budgetExceeded?: boolean;
+  /** Total repair passes attempted across the run (previs summary honesty). */
+  repairsAttempted?: number;
+  /** True iff --no-auto-repair disabled the repair loop for this run. */
+  repairsDisabled?: boolean;
+  /** Standalone render-stills conjunction report. */
+  shotsConsidered?: number;
+  renderedComplete?: number;
+  failedShotNumbers?: string[];
+  pendingShotNumbers?: string[];
+  /** Standalone contact-sheet per-frame preflight report. */
+  frames?: ContactSheetFrameReport['frames'];
   error?: string;
 }
 
@@ -812,6 +836,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   let sourceRevisionId: string | undefined;
   let resultRevisionId: string | undefined;
   let repairMs = 0;
+  let repairsAttemptedTotal = 0;
+  const pruneNonManifest = options.pruneNonManifestShots ?? false;
 
   await mkdir(outputDir, { recursive: true });
   await mkdir(path.join(outputDir, 'logs'), { recursive: true });
@@ -1725,19 +1751,47 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         });
       }
     }
-    // Final prune — drop blank Origin and any leftover non-manifest shots.
-    const extras = liveShots.filter((shot) => !keepShotNumbers.has(shot.shotNumber));
-    if (extras.length > 0) {
+    // Final prune — drop intact scaffold shots (blank Origin). Non-manifest
+    // user shots survive unless the operator passed --prune-non-manifest-shots.
+    const liveProjectForPrune = await session.page.evaluate(
+      () => window.foreScene!.getProjectDocument(),
+    ) as LocationProject;
+    const pruneDecision = selectPrunableShots(
+      liveProjectForPrune.shots.map((shot) => ({
+        id: shot.id,
+        shotNumber: shot.shotNumber,
+        isIntactScaffold: isIntactSystemScaffoldShot(shot),
+      })),
+      keepShotNumbers,
+      { pruneNonManifest },
+    );
+    // Never delete down to zero shots.
+    const prunable = liveShots.length - pruneDecision.prune.length >= 1
+      ? pruneDecision.prune
+      : [];
+    if (prunable.length > 0) {
       const prune = await applyPlanOnPage(session.page, {
         version: 1,
         planId: 'previs-shot-prune',
-        commands: extras.map((shot) => ({
+        commands: prunable.map((shot) => ({
           op: 'shot.delete' as const,
           shot: { id: shot.id },
         })),
       });
-      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), { extras, prune });
+      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), {
+        pruned: prunable,
+        retainedNonManifest: pruneDecision.retainedNonManifest,
+        pruneNonManifestAuthorized: pruneNonManifest,
+        prune,
+      });
       liveShots = await session.page.evaluate(() => window.foreScene!.listShots());
+    } else if (pruneDecision.retainedNonManifest.length > 0) {
+      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), {
+        pruned: [],
+        retainedNonManifest: pruneDecision.retainedNonManifest,
+        pruneNonManifestAuthorized: pruneNonManifest,
+        note: 'Non-manifest shots were retained. Pass --prune-non-manifest-shots to remove them explicitly.',
+      });
     }
     state = setPhase(state, 'shots', 'complete');
     await writeJson(runStatePath, state);
@@ -2059,6 +2113,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
 
         repairAttempts += 1;
+        repairsAttemptedTotal += 1;
         const repairStartedAt = Date.now();
         const rankBefore = rankFrameValidation(finalResult);
         const metricsBefore = extractFramingMetrics(
@@ -2604,6 +2659,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       warnings,
       failed,
       reviewRequiredShotIds,
+      repairsAttempted: repairsAttemptedTotal,
+      repairsDisabled: !autoRepair,
       contactSheet: contactSheetPath,
       reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
@@ -2652,6 +2709,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         cacheHitRate: cacheHits + cacheMisses > 0 ? cacheHits / (cacheHits + cacheMisses) : 0,
         controlVideosRendered,
         controlVideosFailed,
+        repairsAttempted: repairsAttemptedTotal,
+        repairsDisabled: !autoRepair,
         timing,
         sourceRevisionId,
         error: error.message,
@@ -2727,7 +2786,21 @@ export async function runRenderStillsCli(options: {
       framesRendered += 1;
       await writeJson(runStatePath, next);
     }
-    return { ok: true, framesRendered, runStatePath, projectId: state.projectId };
+    // Batch honesty: ok is a conjunction. A failed or unrendered compiled shot
+    // makes the batch not-ok even though other frames rendered fine.
+    const outcome = deriveRenderStillsOutcome(next.shots);
+    return {
+      ok: outcome.ok,
+      framesRendered,
+      shotsConsidered: outcome.shotsConsidered,
+      renderedComplete: outcome.rendered,
+      ...(outcome.failedShotNumbers.length > 0 ? { failedShotNumbers: outcome.failedShotNumbers } : {}),
+      ...(outcome.pendingShotNumbers.length > 0 ? { pendingShotNumbers: outcome.pendingShotNumbers } : {}),
+      ...(outcome.ok ? {} : { error: 'Render-stills batch is incomplete: '
+        + `${outcome.failedShotNumbers.length} failed, ${outcome.pendingShotNumbers.length} not rendered.` }),
+      runStatePath,
+      projectId: state.projectId,
+    };
   } finally {
     await session.close();
   }
@@ -2738,6 +2811,8 @@ export async function runContactSheetCli(options: {
   inputDir: string;
   outputPath: string;
   title?: string;
+  /** Build the sheet over existing frames even when preflight fails; ok stays false. */
+  allowPartial?: boolean;
 }): Promise<PrevisCliResult> {
   const inputDir = path.resolve(options.inputDir);
   const runStatePath = path.join(path.dirname(inputDir), 'run-state.json');
@@ -2753,15 +2828,52 @@ export async function runContactSheetCli(options: {
   const numbers = Array.isArray(shotNumbers) ? shotNumbers : await shotNumbers;
   const entries = numbers.map((shotNumber) => ({
     shotNumber,
-    name: shotNumber,
     framePath: path.join(inputDir, `${shotNumber}.png`),
-    status: state?.shots[shotNumber]?.validation ?? 'unknown',
-    warningCount: state?.shots[shotNumber]?.issues?.length ?? 0,
+    ...(state !== undefined ? { renderStatus: state.shots[shotNumber]?.render } : {}),
+  }));
+
+  // Fail-closed input contract: every frame must exist, be non-empty, and — when
+  // run-state backs the invocation — have finished rendering. A sheet over stale
+  // or missing frames must never claim ok:true.
+  const preflight = await evaluateContactSheetFrames({
+    entries,
+    pathExists,
+    readFile: (filePath) => readFile(filePath),
+  });
+
+  if (!preflight.ok && !options.allowPartial) {
+    return {
+      ok: false,
+      error: 'Contact-sheet inputs failed preflight; no sheet was built. '
+        + 'Pass --allow-partial to build a sheet over the frames that exist.',
+      diagnostics: preflight.issues.map((issue) => ({
+        severity: 'error' as const,
+        code: `contact_sheet_${issue.kind}`,
+        message: issue.message,
+        shotNumber: issue.shotNumber,
+      })),
+      frames: preflight.frames,
+    };
+  }
+
+  const includedEntries = preflight.ok
+    ? entries
+    : entries.filter((entry) => {
+      const frame = preflight.frames.find((candidate) => candidate.shotNumber === entry.shotNumber);
+      return Boolean(frame?.exists) && (frame?.byteLength ?? 0) > 0;
+    });
+
+  const sheetEntries = includedEntries.map((entry) => ({
+    shotNumber: entry.shotNumber,
+    name: entry.shotNumber,
+    framePath: entry.framePath,
+    status: state?.shots[entry.shotNumber]?.validation ?? 'unknown',
+    warningCount: state?.shots[entry.shotNumber]?.issues?.length ?? 0,
   }));
 
   const spec = buildContactSheetSpec({
     title: options.title ?? 'ForeScene Contact Sheet',
-    shots: entries,
+    shots: sheetEntries,
   });
   const htmlPath = `${options.outputPath}.html`;
   await writeFile(htmlPath, contactSheetHtml({
@@ -2781,5 +2893,19 @@ export async function runContactSheetCli(options: {
     await browser.close();
   }
 
-  return { ok: true, contactSheet: path.resolve(options.outputPath) };
+  return {
+    ok: preflight.ok,
+    ...(preflight.ok ? {} : {
+      partial: true,
+      error: 'Contact sheet was built over a partial frame set; ok stays false.',
+      diagnostics: preflight.issues.map((issue) => ({
+        severity: 'error' as const,
+        code: `contact_sheet_${issue.kind}`,
+        message: issue.message,
+        shotNumber: issue.shotNumber,
+      })),
+    }),
+    contactSheet: path.resolve(options.outputPath),
+    frames: preflight.frames,
+  };
 }

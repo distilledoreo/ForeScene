@@ -73,6 +73,7 @@ import type {
   AgentTimelineObjectInput,
 } from './protocol';
 import { resolveLandmarkTarget, resolveObjectTarget, resolveShotTarget } from './targetResolver';
+import { expandFrameSubjectsPlanCommand } from './spatialPrimitives';
 import { parseForeSceneAgentPlan } from './validation';
 import {
   clearKeyframeStaging,
@@ -185,7 +186,22 @@ export function prepareAgentPlan(
 
   for (let index = 0; index < parsed.plan.commands.length; index += 1) {
     const command = parsed.plan.commands[index]!;
-    const result = applyCommand(ctx, command, refs, diff, `commands[${index}]`);
+    // Solver-backed framing intent (`shot.frameSubjects`) expands into an
+    // equivalent `shot.updateCamera` against the mid-plan project state, so
+    // cinematic verbs compose with staging commands and stay previewable,
+    // diffable, atomic, and undoable plan commands.
+    let effectiveCommand: ForeSceneAgentCommand = command;
+    if (command.op === 'shot.frameSubjects') {
+      const expanded = expandFrameSubjectsPlanCommand(ctx.project, command, refs);
+      if (!expanded.ok) {
+        diagnostics.push(...expanded.diagnostics);
+        // Fail the entire plan — no partial preparation.
+        return { ok: false, diagnostics, warnings };
+      }
+      warnings.push(...expanded.warnings);
+      effectiveCommand = expanded.command;
+    }
+    const result = applyCommand(ctx, effectiveCommand, refs, diff, `commands[${index}]`);
     if (!result.ok) {
       diagnostics.push(...result.diagnostics);
       // Fail the entire plan — no partial preparation.

@@ -514,6 +514,20 @@ export type ForeSceneAgentCommand =
       camera: Partial<CameraData>;
     }
   | {
+      /**
+       * Solver-backed framing intent: the plan compiler solves the camera for
+       * the listed subjects (same solver as the frameSubjects Agent API
+       * primitive) and expands this into an equivalent shot.updateCamera
+       * command, so preview/diff/apply/undo treat framing as an ordinary
+       * camera plan command.
+       */
+      op: 'shot.frameSubjects';
+      shot: AgentEntityTarget;
+      subjects: AgentEntityTarget[];
+      /** establishing | wide | full_body/full | medium | medium_close_up | close_up | over_the_shoulder | two_shot (default medium). */
+      composition?: string;
+    }
+  | {
       op: 'shot.setPanorama';
       shot: AgentEntityTarget;
       pano: AgentEntityTarget | null;
@@ -2229,7 +2243,7 @@ export interface ForeSceneBrowserApi {
   upsertObjectKeyframe(input: AgentUpsertObjectKeyframeInput): Promise<AgentUpsertObjectKeyframeResult>;
 
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
-  applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
+  applyPlan(plan: unknown, options?: { expectedRevisionId?: string }): Promise<AgentPlanApplyResult>;
   applyVerifiedProxyReplacement(input: AgentVerifiedProxyReplacementInput): Promise<AgentVerifiedProxyReplacementResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
