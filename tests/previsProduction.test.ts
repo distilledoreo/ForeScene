@@ -208,6 +208,7 @@ describe('previs production manifest', () => {
     input.shots[0]!.motion = {
       durationSeconds: 2,
       renderControlVideo: true,
+      autoCompose: true,
       keyframes: [
         { timeSeconds: 0, camera: { position: [0, 1, 2], target: [0, 1, 0] } },
         { timeSeconds: 2, staging: [{ subject: 'alex', visible: true, transform: { position: [1, 0, 0] } }] },
@@ -216,6 +217,10 @@ describe('previs production manifest', () => {
     const result = parsePrevisProductionManifest(input);
     expect(result.errors).toEqual([]);
     expect(result.manifest?.shots[0]?.motion?.keyframes).toHaveLength(2);
+    expect(result.manifest?.shots[0]?.motion?.autoCompose).toBe(true);
+
+    (input.shots[0]!.motion as Record<string, unknown>).autoCompose = 'true';
+    expect(parsePrevisProductionManifest(input).errors.some((item) => item.path?.endsWith('.autoCompose'))).toBe(true);
 
     input.shots[0]!.motion = { durationSeconds: 3, keyframes: [{ timeSeconds: 0 }, { timeSeconds: 2 }] };
     expect(parsePrevisProductionManifest(input).errors.some((item) => item.code === 'invalid_range')).toBe(true);

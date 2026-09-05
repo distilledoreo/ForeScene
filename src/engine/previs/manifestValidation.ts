@@ -862,6 +862,9 @@ function parseShotMotion(
   if (record.renderControlVideo !== undefined && typeof record.renderControlVideo !== 'boolean') {
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.renderControlVideo must be a boolean.`, { path: `${path}.renderControlVideo` }));
   }
+  if (record.autoCompose !== undefined && typeof record.autoCompose !== 'boolean') {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.autoCompose must be a boolean.`, { path: `${path}.autoCompose` }));
+  }
   if (!Array.isArray(record.keyframes) || record.keyframes.length < 2) {
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, `${path}.keyframes must contain at least two entries.`, { path: `${path}.keyframes` }));
     return undefined;
@@ -900,7 +903,12 @@ function parseShotMotion(
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion durationSeconds must equal the final keyframe time.', { path }));
     return undefined;
   }
-  return { durationSeconds, ...(renderControlVideo !== undefined ? { renderControlVideo } : {}), keyframes };
+  return {
+    durationSeconds,
+    ...(renderControlVideo !== undefined ? { renderControlVideo } : {}),
+    ...(typeof record.autoCompose === 'boolean' ? { autoCompose: record.autoCompose } : {}),
+    keyframes,
+  };
 }
 
 function parseMotionStaging(

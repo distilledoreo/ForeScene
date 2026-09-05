@@ -257,6 +257,8 @@ export interface PrevisShotDefinition {
 export interface PrevisShotMotion {
   durationSeconds: number;
   renderControlVideo?: boolean;
+  /** Opt in to composition adjustments of authored cameras and subject positions. */
+  autoCompose?: boolean;
   keyframes: PrevisShotMotionKeyframe[];
 }
 

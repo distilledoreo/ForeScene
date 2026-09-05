@@ -273,6 +273,7 @@ describe('production configuration validation', () => {
     definition.camera = { template: 'full', subjects: ['cast.lead', 'asset.pursuer'], angle: 'three_quarter' };
     definition.motion = {
       durationSeconds: 3,
+      autoCompose: true,
       keyframes: [{
         timeSeconds: 0,
         camera: { position: [1.2, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },

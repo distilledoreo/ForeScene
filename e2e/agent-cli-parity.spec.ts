@@ -39,7 +39,7 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
     );
   });
 
-  test('open → inspect → projected frame → video → save → reopen → verify', async ({ baseURL }) => {
+  test('open → inspect → selected package → projected frame → video → save → reopen → verify', async ({ baseURL }) => {
     test.setTimeout(8 * 60_000);
     const url = process.env.FORESCENE_URL ?? baseURL;
     expect(url, 'Playwright webServer or FORESCENE_URL is required').toBeTruthy();
@@ -74,6 +74,38 @@ test.describe('Agent CLI documented parity @heavy @agent-cli', () => {
     }));
     const shot = firstShotSelector(inspectFresh);
     const projectId = inspectFresh.projectId;
+
+    const shotNumber = (inspectFresh.result as {
+      shots: Array<{ id: string; shotNumber: string }>;
+    }).shots.find((candidate) => candidate.id === shot)!.shotNumber;
+    const normalizedShotNumber = /^\d+$/.test(shotNumber)
+      ? String(Number(shotNumber))
+      : shotNumber;
+    const selectedPackagePath = path.join(workDir, 'selected-package.zip');
+    const packaged = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
+      command: 'package',
+      args: ['--shot', normalizedShotNumber, '--output', selectedPackagePath, '--write'],
+      url,
+      profile: profileDir,
+      cwd: workDir,
+      repoRoot,
+      timeoutMs: 180_000,
+    }));
+    expect((packaged.result as { shotIds: string[] }).shotIds).toEqual([shot]);
+    expect((await stat(selectedPackagePath)).size).toBeGreaterThan(32);
+
+    const emptyPackage = await runDocumentedAgentCommand({
+      command: 'package',
+      args: ['--shots', ',', '--output', path.join(workDir, 'empty-package.zip'), '--write'],
+      url,
+      profile: profileDir,
+      cwd: workDir,
+      repoRoot,
+      timeoutMs: 120_000,
+    });
+    expect(emptyPackage.code, emptyPackage.stderr).toBe(1);
+    expect(emptyPackage.envelope?.ok).toBe(false);
+    expect(JSON.stringify(emptyPackage.envelope)).toContain('explicit shotIds selection cannot be empty');
 
     const saved = assertSuccessfulEnvelope(await runDocumentedAgentCommand({
       command: 'save',

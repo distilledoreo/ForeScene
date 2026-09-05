@@ -26,6 +26,7 @@ function chase(): PrevisShotDefinition {
     camera: { template: 'full', subjects: ['runner', 'pursuer'], angle: 'three_quarter' },
     motion: {
       durationSeconds: 3,
+      autoCompose: true,
       keyframes: [{
         timeSeconds: 0,
         camera: { position: [0.4, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },
@@ -46,6 +47,20 @@ function chase(): PrevisShotDefinition {
 }
 
 describe('action intent', () => {
+  it('preserves authored cameras and chase positions unless composition is explicitly enabled', () => {
+    const shot = chase();
+    delete shot.motion!.autoCompose;
+    for (const keyframe of shot.motion!.keyframes) {
+      expect(resolveReadableMotionCamera(shot, keyframe)).toEqual(keyframe.camera);
+      for (const staging of keyframe.staging!) {
+        expect(resolveReadableMotionSubjectPosition(shot, keyframe, staging.subject))
+          .toEqual(staging.transform!.position);
+      }
+    }
+    shot.motion!.autoCompose = false;
+    expect(resolveReadableMotionCamera(shot, shot.motion!.keyframes[0]!))
+      .toEqual(shot.motion!.keyframes[0]!.camera);
+  });
   it('does not invent deformation for imported rigs from prose alone', () => {
     expect(canInferNativeActionPose({
       id: 'rigged',

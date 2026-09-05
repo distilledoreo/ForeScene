@@ -52,11 +52,11 @@ describe('reliability soak gates A–F', () => {
   });
 
   it('offline soak CLI reports skipped live gates and does not claim stabilization', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
     const outputDir = path.join(os.tmpdir(), `forescene-soak-cli-${Date.now()}`);
     const output = path.join(outputDir, 'report.json');
     execFileSync(process.execPath, [
-      tsxCli,
+      '--import', tsxLoader,
       'scripts/reliability/soak.ts',
       '--output',
       output,

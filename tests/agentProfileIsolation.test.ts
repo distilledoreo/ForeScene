@@ -70,12 +70,12 @@ describe('Agent CLI profile isolation', () => {
   });
 
   it('live CLI inspect with the default profile path is refused', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
     let stdout = '';
     let code = 0;
     try {
       stdout = execFileSync(process.execPath, [
-        tsxCli,
+        '--import', tsxLoader,
         'scripts/agent/cli.ts',
         'inspect',
         '--profile',
@@ -101,11 +101,11 @@ describe('Agent CLI profile isolation', () => {
   }, 30_000);
 
   it('live CLI inspect without --profile is a usage error and does not open the default profile', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
     let stdout = '';
     let code = 0;
     try {
-      stdout = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'inspect'], {
+      stdout = execFileSync(process.execPath, ['--import', tsxLoader, 'scripts/agent/cli.ts', 'inspect'], {
         cwd: repoRoot,
         encoding: 'utf8',
         timeout: 30_000,

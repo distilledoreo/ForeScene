@@ -206,6 +206,8 @@ export function resolveReadableMotionCamera(
   keyframe: PrevisShotMotionKeyframe,
 ): PrevisShotMotionKeyframe['camera'] {
   const camera = keyframe.camera;
+  // Explicit numeric authoring is authoritative unless the manifest opts in.
+  if (shot.motion?.autoCompose !== true) return camera;
   if (!camera?.position || !camera.target || shot.camera.subjects.length < 2) return camera;
   const stagedPositions = (keyframe.staging ?? [])
     .filter((entry) => shot.camera.subjects.includes(entry.subject))
@@ -324,6 +326,7 @@ export function resolveReadableMotionSubjectPosition(
 ): Vec3 | undefined {
   const authored = keyframe.staging?.find((entry) => entry.subject === subjectId)?.transform?.position;
   if (!authored) return undefined;
+  if (shot.motion?.autoCompose !== true) return authored;
   if (!isLocomotionAction(shot) || shot.camera.subjects.length < 2) return authored;
 
   const placed = shot.camera.subjects.flatMap((id) => {

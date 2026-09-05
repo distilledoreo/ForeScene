@@ -1280,6 +1280,16 @@ async function runPackage(options: {
     persistWrite: options.persistWrite,
     profile: options.profile,
   }, async (session) => {
+    let shotIds = options.shotIds;
+    if (shotIds !== undefined) {
+      const resolved = resolveCliShotReferences(await listCliShotReferences(session), shotIds);
+      if (!resolved.ok) {
+        printShotResolutionFailure('package', shotIds.join(', '), resolved);
+        return;
+      }
+      // Preserve [] so the export API rejects an explicit empty selection.
+      shotIds = resolved.shots.map((shot) => shot.id);
+    }
     printErr('[agent] starting package export…');
 
     const result = await session.page.evaluate(async (input) => {
@@ -1292,7 +1302,7 @@ async function runPackage(options: {
         download: false,
       });
     }, {
-      shotIds: options.shotIds,
+      shotIds,
     });
 
     let savedPath: string | undefined;

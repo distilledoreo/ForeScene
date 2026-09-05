@@ -114,8 +114,8 @@ describe('agent CLI discovery', () => {
   });
 
   it('prints machine-readable help from the live CLI', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    const output = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'help', '--json'], {
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+    const output = execFileSync(process.execPath, ['--import', tsxLoader, 'scripts/agent/cli.ts', 'help', '--json'], {
       cwd: repoRoot,
       encoding: 'utf8',
       timeout: 30_000,
@@ -309,8 +309,8 @@ describe('agent CLI public surface', () => {
   });
 
   it('prints a browser-free capability catalog with the Phase 1 gaps closed', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    const output = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'capabilities'], {
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+    const output = execFileSync(process.execPath, ['--import', tsxLoader, 'scripts/agent/cli.ts', 'capabilities'], {
       cwd: repoRoot,
       encoding: 'utf8',
       timeout: 30_000,
