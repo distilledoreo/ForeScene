@@ -2,6 +2,17 @@
 
 The Agent CLI uses Playwright (not raw CDP) to connect to a running ForeScene instance and call `window.foreScene`.
 
+For hosted instances, Chromium receives the configured `HTTPS_PROXY` or
+`HTTP_PROXY` for the target URL scheme, falling back to `ALL_PROXY`. Lowercase
+variants take precedence. `NO_PROXY` becomes Chromium's bypass list; `*`
+disables the proxy. Proxy URLs containing credentials are rejected: Chromium
+can reuse proxy credentials for an origin's HTTP authentication challenge.
+Use an unauthenticated local forwarding proxy when upstream authentication is
+required. Configuration errors never include the supplied proxy URL.
+TLS certificate verification remains enabled; managed proxy certificates must
+be trusted by the host's Chromium trust store. Failed navigation or readiness
+closes the browser context and releases its persistent profile.
+
 ## Scripts
 
 ```bash
