@@ -1700,8 +1700,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     let shotsCreated = Object.values(state.shots).filter((shot) => shot.compile === 'complete').length;
 
     for (const batch of shotBatches) {
-      if (batch.plan.commands.length === 0) continue;
-      const applied = await applyPlanOnPage(session.page, batch.plan);
+      const applied: Awaited<ReturnType<typeof applyPlanOnPage>> = batch.plan.commands.length > 0
+        ? await applyPlanOnPage(session.page, batch.plan)
+        : { ok: false, diagnostics: [] };
       await writeJson(
         path.join(
           outputDir,
@@ -1735,7 +1736,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         } else if (!applied.ok) {
           state = upsertShotState(state, shotNumber, {
             compile: 'failed',
-            lastError: 'batch apply failed',
+            lastError: applied.diagnostics?.map((item) => item.message).join('; ') || 'batch apply failed',
           });
         }
       }
@@ -2015,7 +2016,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         const result: FrameValidationResult = {
           shotNumber: definition.shotNumber,
           status: 'failed',
-          issues: [{ code: 'shot_missing', message: 'Shot missing after compile.' }],
+          issues: [{ code: 'shot_missing', message: shotState?.lastError ?? 'Shot missing after compile.' }],
         };
         validationResults.push(result);
         state = upsertShotState(state, definition.shotNumber, {
