@@ -5,7 +5,7 @@ You author **creative decisions only**. Write them to `candidate-plan.json` in t
 Read:
 
 - `intent.json` — the three shot assignments
-- `plan-schema.json` — the only fields you may write
+- `plan-schema.json` — the JSON Schema for the only fields you may write; `$defs` describes camera, placement, motion keyframes, and staging
 
 ## Hard rules
 

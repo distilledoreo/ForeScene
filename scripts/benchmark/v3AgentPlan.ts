@@ -53,24 +53,114 @@ const STAGING_KEYS = new Set(['subject', 'visible', 'transform', 'posePreset']);
 const TRANSFORM_KEYS = new Set(['position', 'rotation', 'scale']);
 
 export const V3_AGENT_PLAN_SCHEMA = {
-  version: 1,
-  description: 'Creative decisions only. Do not change assets, locations, continuity, or deliverables.',
-  knownSubjects: ['hand-monster', 'joseph-amputated', 'joseph-final', 'shield', 'wrist-blade'],
-  requiredShots: ['01', '02', '03'],
-  camera: {
-    template: PREVIS_CAMERA_TEMPLATES,
-    angle: PREVIS_CAMERA_ANGLES,
-    lensClass: PREVIS_LENS_CLASSES,
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  title: 'ForeScene V3-Agent candidate plan',
+  description: 'Creative decisions only. Do not change assets, locations, continuity, or deliverables. Include each shot exactly once.',
+  type: 'object',
+  additionalProperties: false,
+  required: ['version', 'shots'],
+  properties: {
+    version: { const: 1 },
+    shots: { type: 'array', minItems: 3, maxItems: 3, items: { $ref: '#/$defs/shot' } },
   },
-  blocking: {
-    placementTypes: ['location_slot', 'relative'],
-    slots: PREVIS_LOCATION_SLOTS,
-    relations: PREVIS_RELATIVE_RELATIONS,
-  },
-  motion: {
-    requiredOn: '02',
-    startSeconds: 0,
-    endSeconds: 3,
+  $defs: {
+    subject: { type: 'string', enum: ['hand-monster', 'joseph-amputated', 'joseph-final', 'shield', 'wrist-blade'] },
+    vec3: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'number' } },
+    shot: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['shotNumber', 'camera'],
+      properties: {
+        shotNumber: { enum: SHOT_NUMBERS },
+        camera: { $ref: '#/$defs/camera' },
+        blocking: { type: 'array', items: { $ref: '#/$defs/blocking' } },
+        motion: { $ref: '#/$defs/motion' },
+      },
+      if: { properties: { shotNumber: { const: '02' } } },
+      then: { required: ['motion'] },
+      else: { not: { required: ['motion'] } },
+    },
+    camera: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['template', 'subjects'],
+      properties: {
+        template: { enum: PREVIS_CAMERA_TEMPLATES },
+        subjects: { type: 'array', minItems: 1, items: { $ref: '#/$defs/subject' } },
+        foregroundSubject: { $ref: '#/$defs/subject' },
+        angle: { enum: PREVIS_CAMERA_ANGLES },
+        lensClass: { enum: PREVIS_LENS_CLASSES },
+      },
+    },
+    blocking: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['subject', 'placement'],
+      properties: {
+        subject: { $ref: '#/$defs/subject' },
+        placement: {
+          oneOf: [
+            {
+              type: 'object', additionalProperties: false, required: ['type', 'slot'],
+              properties: { type: { const: 'location_slot' }, slot: { enum: PREVIS_LOCATION_SLOTS } },
+            },
+            {
+              type: 'object', additionalProperties: false, required: ['type', 'anchor', 'relation'],
+              properties: {
+                type: { const: 'relative' },
+                anchor: { $ref: '#/$defs/subject' },
+                relation: { enum: PREVIS_RELATIVE_RELATIONS },
+                secondaryAnchor: { $ref: '#/$defs/subject' },
+              },
+            },
+          ],
+        },
+        face: { type: 'string', description: 'The subject id or named location anchor to face.' },
+        pose: { type: 'string', description: 'A supported ForeScene pose preset.' },
+      },
+    },
+    motion: {
+      type: 'object', additionalProperties: false, required: ['durationSeconds', 'keyframes'],
+      properties: {
+        durationSeconds: { const: 3 },
+        renderControlVideo: { type: 'boolean' },
+        keyframes: {
+          type: 'array', minItems: 2, items: { $ref: '#/$defs/keyframe' },
+          description: 'Times must increase strictly, starting at 0 and ending at 3 seconds. Camera and staging positions are absolute world coordinates, not location-relative offsets.',
+        },
+      },
+    },
+    keyframe: {
+      type: 'object', additionalProperties: false, required: ['timeSeconds'],
+      properties: {
+        timeSeconds: { type: 'number', minimum: 0, maximum: 3 },
+        camera: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            position: { $ref: '#/$defs/vec3' },
+            target: { $ref: '#/$defs/vec3' },
+            fovDegrees: { type: 'number', exclusiveMinimum: 0 },
+          },
+        },
+        staging: { type: 'array', items: { $ref: '#/$defs/staging' } },
+      },
+    },
+    staging: {
+      type: 'object', additionalProperties: false, required: ['subject'],
+      properties: {
+        subject: { $ref: '#/$defs/subject' },
+        visible: { type: 'boolean' },
+        posePreset: { type: 'string' },
+        transform: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            position: { $ref: '#/$defs/vec3' },
+            rotation: { $ref: '#/$defs/vec3', description: 'Euler rotation in radians.' },
+            scale: { $ref: '#/$defs/vec3' },
+          },
+        },
+      },
+    },
   },
 };
 

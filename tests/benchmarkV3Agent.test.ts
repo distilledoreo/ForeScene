@@ -2,7 +2,7 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createBenchmarkRunLayout } from '../scripts/benchmark/layout';
 import { collectIntentSolutionLeaks, loadV3AgentContract } from '../scripts/benchmark/v3AgentContract';
 import { buildV3AgentProductionManifest, validateV3AgentCandidatePlan } from '../scripts/benchmark/v3AgentPlan';
@@ -211,9 +211,54 @@ describe('ForeScene Benchmark V3-Agent', () => {
     expect(env.FORESCENE_URL).toBeUndefined();
     const candidateFiles = (await (await import('node:fs/promises')).readdir(prepared.candidateDir)).sort();
     expect(candidateFiles).toEqual(['intent.json', 'plan-schema.json', 'task.md']);
+    const schema = JSON.parse(await readFile(prepared.schemaPath, 'utf8'));
+    expect(schema.required).toEqual(['version', 'shots']);
+    expect(schema.$defs.shot.required).toContain('camera');
+    expect(schema.$defs.camera.properties.subjects.items.$ref).toBe('#/$defs/subject');
+    expect(schema.$defs.blocking.properties.placement.oneOf).toHaveLength(2);
+    expect(schema.$defs.motion.properties.keyframes.items.$ref).toBe('#/$defs/keyframe');
+    expect(schema.$defs.keyframe.properties.staging.items.$ref).toBe('#/$defs/staging');
+    expect(schema.$defs.staging.properties.transform.properties.position.$ref).toBe('#/$defs/vec3');
     const intent = await readFile(prepared.intentPath, 'utf8');
     expect(intent).not.toMatch(/production-manifest/);
     expect(await readFile(liteContractPath, 'utf8')).toMatch(/manifestSha256/);
+
+    try {
+      vi.stubEnv('OPENAI_API_KEY', 'fixture-model-credential');
+      vi.stubEnv('ANTHROPIC_API_KEY', 'fixture-other-model-credential');
+      vi.stubEnv('FORESCENE_BENCHMARK_MANIFEST', '/hidden/answer-key.json');
+      vi.stubEnv('UNRELATED_SERVICE_SECRET', 'must-not-be-inherited');
+      const authenticatedEnv = isolatedModelEnvironment(prepared);
+      expect(authenticatedEnv.OPENAI_API_KEY).toBe('fixture-model-credential');
+      expect(authenticatedEnv.ANTHROPIC_API_KEY).toBe('fixture-other-model-credential');
+      expect(authenticatedEnv.FORESCENE_BENCHMARK_MANIFEST).toBeUndefined();
+      expect(authenticatedEnv.UNRELATED_SERVICE_SECRET).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['candidate', 'production'] as const)('fails a timed-out %s even when it returns exit code zero', async (timedOutStage) => {
+    const inputRoot = await fixtureInputRoot();
+    const runRoot = path.join(await (await import('node:fs/promises')).mkdtemp(path.join(os.tmpdir(), 'forescene-v3-agent-timeout-')), 'run');
+    let productionCalls = 0;
+    const result = await runV3Agent({
+      contractPath, inputRoot, runRoot, candidate: 'fixture',
+      doctorRunner: passingDoctor(),
+      modelRunner: async ({ env }) => {
+        await copyFile(path.join(repoRoot, 'scripts/benchmark/fixtures/v3AgentFakeA.plan.json'), env.FORESCENE_AGENT_PLAN!);
+        return { code: 0, stdout: '{}', stderr: '', runtimeMs: 5, timedOut: timedOutStage === 'candidate' };
+      },
+      productionRunner: async ({ env }) => {
+        productionCalls += 1;
+        await writeProductionArtifacts(env, colorPng(220, 30, 30));
+        return { code: 0, stdout: '{}', stderr: '', runtimeMs: 5, timedOut: timedOutStage === 'production' };
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure?.operation).toBe(timedOutStage);
+    expect(result.failure?.class).toBe(timedOutStage === 'candidate' ? 'MODEL_FAILURE' : 'INFRASTRUCTURE_FAILURE');
+    expect(productionCalls).toBe(timedOutStage === 'candidate' ? 0 : 1);
   });
 
   it('runs Fake A and Fake B through the real V3-Agent path with one model invocation and no auto-repair', async () => {

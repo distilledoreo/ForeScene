@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { extractAgentEnvelope, failureFromInvocation } from './agentCli';
 import { defaultRunRoot, repoRoot, type BenchmarkRunLayout, createBenchmarkRunLayout } from './layout';
 import { gitIdentity, unauthorizedRepoModifications, type GitIdentityRecord } from './git';
-import { isStopTheRun, harnessFailure, modelFailure } from './failures';
+import { isStopTheRun, harnessFailure, infrastructureFailure, modelFailure } from './failures';
 import { addReportArtifactChecks, validateV3LiteTechnical, type V3LiteTechnicalValidation } from './v3LiteValidator';
 import { gradeV3LiteQuality, type V3LiteQualityGrade } from './v3LiteQuality';
 import type { BenchmarkFailure } from './types';
@@ -67,6 +67,11 @@ interface Invocation {
 }
 
 const OS_ENV = /^(PATH|PATHEXT|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|USERNAME|USERDOMAIN|NUMBER_OF_PROCESSORS|PROCESSOR_|OS|TMPDIR|LANG|LC_|TERM|NODE_|npm_|NVM_)/i;
+const MODEL_ENV = new Set([
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL',
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY',
+]);
 
 function npmScriptInvocation(script: string, args: string[]): Invocation {
   const npmExec = process.env.npm_execpath;
@@ -187,7 +192,7 @@ export function isolatedModelEnvironment(prepared: V3AgentPreparedRun): NodeJS.P
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (key.startsWith('FORESCENE_')) continue;
-    if (OS_ENV.test(key)) env[key] = value;
+    if (OS_ENV.test(key) || MODEL_ENV.has(key)) env[key] = value;
   }
   env.FORESCENE_AGENT_TASK = prepared.taskPath;
   env.FORESCENE_AGENT_INTENT = prepared.intentPath;
@@ -417,13 +422,15 @@ export async function runV3Agent(input: {
   const candidate = { ...modelResult, invocationCount: 1 as const };
   await writeFile(path.join(prepared.layout.logsDir, 'candidate.stdout.log'), candidate.stdout, 'utf8');
   await writeFile(path.join(prepared.layout.logsDir, 'candidate.stderr.log'), candidate.stderr, 'utf8');
-  if (candidate.code !== 0) {
-    const failure = failureFromInvocation({
-      code: candidate.code,
-      stdout: candidate.stdout,
-      stderr: candidate.stderr,
-      envelope: extractAgentEnvelope(candidate.stdout),
-    }, 'candidate');
+  if (candidate.timedOut || candidate.code !== 0) {
+    const failure = candidate.timedOut
+      ? modelFailure('Candidate exceeded its time limit.', 'candidate')
+      : failureFromInvocation({
+          code: candidate.code,
+          stdout: candidate.stdout,
+          stderr: candidate.stderr,
+          envelope: extractAgentEnvelope(candidate.stdout),
+        }, 'candidate');
     const technical = { ok: false, checks: [{ id: 'model.exit', ok: false, message: failure.message }] };
     const quality = await gradeV3LiteQuality(lite, layout, technical);
     return writeReports({ prepared, doctor: doctorResult.report, candidate, technical, quality, failure });
@@ -475,13 +482,15 @@ export async function runV3Agent(input: {
   const after = await gitIdentity();
   const drift = unauthorizedRepoModifications(prepared.git, after);
   let failure: BenchmarkFailure | undefined = drift;
-  if (!failure && production.code !== 0) {
-    failure = failureFromInvocation({
-      code: production.code,
-      stdout: production.stdout,
-      stderr: production.stderr,
-      envelope: extractAgentEnvelope(production.stdout),
-    }, 'production');
+  if (!failure && (production.timedOut || production.code !== 0)) {
+    failure = production.timedOut
+      ? infrastructureFailure('production', 'Production exceeded its time limit.')
+      : failureFromInvocation({
+          code: production.code,
+          stdout: production.stdout,
+          stderr: production.stderr,
+          envelope: extractAgentEnvelope(production.stdout),
+        }, 'production');
   }
   if (!failure && !technical.ok) failure = modelFailure('V3-Agent technical artifact validation failed.', 'technical-validation');
   const quality = await gradeV3LiteQuality(lite, layout, technical);
