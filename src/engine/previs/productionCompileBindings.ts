@@ -5,6 +5,7 @@
 import type { LocationProject, Vec3 } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from './manifest';
 import { resolveProductionBindingObjectIds } from './productionConfiguration';
+import { deriveDynamicObjectUniverse } from './shotPresence';
 
 export type ProductionCompileEntityBinding =
   | { kind: 'object'; objectId: string }
@@ -26,6 +27,10 @@ export function inferExistingProjectLocationBindings(
   project: LocationProject,
   manifest: PrevisProductionManifestV1,
 ): Record<string, ProductionCompileLocationBinding> {
+  // Imported cast and multipart props may be parked inside a prepared set on
+  // resume. They remain shot-controlled entities, not location geometry or
+  // camera blockers: an inactive location must never hide an active subject.
+  const dynamicObjectIds = new Set(deriveDynamicObjectUniverse(project).map((entry) => entry.objectId));
   const landmarks = project.landmarks.map((landmark) => ({
     landmark,
     key: normalizedBindingKey(landmark.name),
@@ -39,6 +44,7 @@ export function inferExistingProjectLocationBindings(
   for (const entry of centers) {
     const objectIds = project.scene.objects
       .filter((object) => !object.locked && object.type !== 'sun_marker' && object.category !== 'helper')
+      .filter((object) => !dynamicObjectIds.has(object.id))
       .filter((object) => {
         const position = object.transform.position;
         const ownDistance = Math.hypot(position[0] - entry.center[0], position[2] - entry.center[2]);
