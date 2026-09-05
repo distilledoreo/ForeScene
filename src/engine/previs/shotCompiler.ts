@@ -47,6 +47,7 @@ import {
 import { resolveProductionPose } from './entityCapability';
 import { resolveShotEnvironment } from './shotEnvironment';
 import { selectionBounds } from '../buildSelection';
+import { AGENT_PLAN_LIMITS } from '../agent/constants';
 
 export { defaultPropDimensions } from './propDimensions';
 
@@ -79,16 +80,24 @@ export function compileShotList(
   } = {},
 ): CompiledShotBatch[] {
   const batchSize = options.batchSize ?? PREVIS_SHOT_BATCH_SIZE;
+  if (!Number.isInteger(batchSize) || batchSize < 1) throw new Error('Shot batch size must be a positive integer.');
   const skip = options.skipShotNumbers ?? new Set<string>();
   const pending = manifest.shots.filter((shot) => !skip.has(shot.shotNumber));
   const batches: CompiledShotBatch[] = [];
 
-  for (let index = 0; index < pending.length; index += batchSize) {
-    const slice = pending.slice(index, index + batchSize);
-    batches.push(compileShotBatch(manifest, context, slice, batches.length, {
-      existingShotIds: options.existingShotIds,
-      presenceProject: options.presenceProject,
-    }));
+  for (let index = 0; index < pending.length;) {
+    let count = Math.min(batchSize, pending.length - index);
+    let batch: CompiledShotBatch;
+    do {
+      batch = compileShotBatch(manifest, context, pending.slice(index, index + count), batches.length, {
+        existingShotIds: options.existingShotIds,
+        presenceProject: options.presenceProject,
+      });
+      if (batch.plan.commands.length <= AGENT_PLAN_LIMITS.maxCommands || count === 1) break;
+      count -= 1;
+    } while (count > 0);
+    batches.push(batch!);
+    index += count;
   }
 
   return batches;
@@ -126,6 +135,12 @@ export function compileShotBatch(
         existingShotId: options.existingShotIds?.[shot.shotNumber],
         presenceProject: options.presenceProject,
       });
+      if (compiled.commands.length > AGENT_PLAN_LIMITS.maxCommands) {
+        const message = `Shot ${shot.shotNumber} requires ${compiled.commands.length} commands; the atomic plan limit is ${AGENT_PLAN_LIMITS.maxCommands}.`;
+        diagnostics.push(previsError('shot_commands_limit', message, { path, entityId: shot.id }));
+        shotResults[shot.shotNumber] = { ok: false, warnings: [message] };
+        continue;
+      }
       diagnostics.push(...compiled.diagnostics);
       commands.push(...compiled.commands);
       shotResults[shot.shotNumber] = {
