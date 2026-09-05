@@ -250,7 +250,7 @@ export async function parsePoseableRigPackageFile(
       skinAsset = {
         id: skinAssetId,
         name: `${manifestJson.characterName ?? 'Character'} skin`,
-        type: 'other',
+        type: 'model',
         uri: persistAssets ? `${MODEL_ASSET_URI_PREFIX}${key}` : 'panoref-model:preflight-skin',
         createdAt: new Date().toISOString(),
         metadata: { poseableSkin: true },
@@ -277,7 +277,7 @@ export async function parsePoseableRigPackageFile(
       regionAsset = {
         id: regionAssetId,
         name: `${manifestJson.characterName ?? 'Character'} regions`,
-        type: 'other',
+        type: 'model',
         uri: persistAssets ? `${MODEL_ASSET_URI_PREFIX}${key}` : 'panoref-model:preflight-region',
         createdAt: new Date().toISOString(),
         metadata: { poseableRegionMap: true },

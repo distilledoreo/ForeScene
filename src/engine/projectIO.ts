@@ -62,7 +62,9 @@ function createPortableProject(project: LocationProject): LocationProject {
   const portable = structuredClone(pruneUnreferencedProjectAssets(withoutEphemeral));
   portable.schemaVersion = CURRENT_SCHEMA_VERSION;
   portable.productVersion = portable.productVersion ?? '0.1.0';
-  for (const asset of Object.values(portable.assets.assets)) {
+  for (const [id, candidate] of Object.entries(portable.assets.assets)) {
+    const asset = normalizeSavedRigBinaryAsset(candidate);
+    portable.assets.assets[id] = asset;
     // Keep inline data URLs until package staging extracts them. Pure migrations
     // may assign a planned storageKey without having written binary storage yet.
     if (asset.storageKey && !asset.uri.startsWith('data:') && asset.resolutionStatus !== 'missing' && asset.resolutionStatus !== 'corrupt' && asset.resolutionStatus !== 'unsupported') {
@@ -241,6 +243,14 @@ function normalizeSceneObject(object: SceneObject & { projectionStamp?: unknown 
   };
 }
 
+/** Saved-rig packages historically mislabeled model-store skin/region bytes as other. */
+function normalizeSavedRigBinaryAsset(asset: ProjectAsset): ProjectAsset {
+  return asset.type === 'other'
+    && (asset.metadata?.poseableSkin === true || asset.metadata?.poseableRegionMap === true)
+    ? { ...asset, type: 'model' }
+    : asset;
+}
+
 function normalizeProjectAssets(
   assets: Record<string, ProjectAsset>,
 ): Record<string, ProjectAsset> {
@@ -257,7 +267,7 @@ function normalizeProjectAssets(
       };
       continue;
     }
-    next[id] = asset;
+    next[id] = normalizeSavedRigBinaryAsset(asset);
   }
   return next;
 }

@@ -94,6 +94,8 @@ describe('poseable rig package IO', () => {
     expect(imported.rig.id).not.toBe('rig_source');
     expect(imported.skinAsset?.id).toBeTruthy();
     expect(imported.regionAsset?.id).toBeTruthy();
+    expect(imported.skinAsset?.type).toBe('model');
+    expect(imported.regionAsset?.type).toBe('model');
     expect(imported.rig.skin?.skinAssetId).toBe(imported.skinAsset?.id);
     expect(imported.rig.regionMap?.topologyHash).toBe('topo-abc');
 
