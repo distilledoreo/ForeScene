@@ -123,6 +123,12 @@ the shot is compiled, attaches it to the shot, and saves the MP4 under the
 run output's `shots/` directory. The render is skipped when that artifact is
 already present in resumable run-state.
 
+Authored keyframe cameras and subject positions are preserved by default.
+Set `motion.autoCompose: true` to explicitly allow automatic composition
+adjustments, including lateral subject separation and a covering chase camera.
+This can change authored positions, camera height, and field of view; leave it
+omitted or `false` when exact staging and camera control matter.
+
 See `src/engine/previs/manifest.ts` for the full TypeScript contract.
 
 ## Location templates

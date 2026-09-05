@@ -62,6 +62,11 @@ import type {
   ProductionGateState,
 } from '../previs/productionGates';
 import type { ApprovedLayoutRevision } from '../previs/stillLayoutApproval';
+import type {
+  GenerativeWorldRequestV1,
+  GenerativeWorldResultV1,
+  HyWorld2CameraPriorFile,
+} from '../generativeWorldBoundary';
 
 export const FORESCENE_AGENT_API_VERSION = 1 as const;
 
@@ -509,6 +514,20 @@ export type ForeSceneAgentCommand =
       camera: Partial<CameraData>;
     }
   | {
+      /**
+       * Solver-backed framing intent: the plan compiler solves the camera for
+       * the listed subjects (same solver as the frameSubjects Agent API
+       * primitive) and expands this into an equivalent shot.updateCamera
+       * command, so preview/diff/apply/undo treat framing as an ordinary
+       * camera plan command.
+       */
+      op: 'shot.frameSubjects';
+      shot: AgentEntityTarget;
+      subjects: AgentEntityTarget[];
+      /** establishing | wide | full_body/full | medium | medium_close_up | close_up | over_the_shoulder | two_shot (default medium). */
+      composition?: string;
+    }
+  | {
       op: 'shot.setPanorama';
       shot: AgentEntityTarget;
       pano: AgentEntityTarget | null;
@@ -722,8 +741,10 @@ export interface AgentPackageExportRequest {
    * When false, build only — no download and no shot status / workflow updates.
    */
   download?: boolean;
-  /** Refuse to export if the flushed revision is not this id. */
+  /** Refuse to export if this was not the active revision when export began. */
   expectedRevisionId?: string;
+  /** Refuse to export if the verified project content changed after refresh. */
+  expectedFingerprint?: string;
 }
 
 export interface AgentPackageExportProgressSnapshot {
@@ -952,7 +973,8 @@ export type AgentVisualPreflightCheckId =
   | 'ground_contact'
   | 'camera_direction'
   | 'cropping'
-  | 'motion_continuity';
+  | 'motion_continuity'
+  | 'action_continuity';
 
 export interface AgentVisualPreflightCheck {
   id: AgentVisualPreflightCheckId;
@@ -2023,8 +2045,40 @@ export interface AgentModelImportResult {
   importBudget?: ImportBudgetEstimate;
   requiresConsent?: boolean;
   verifiedRevisionId?: string;
+  reused?: boolean;
   warnings: string[];
   diagnostics?: AgentDiagnostic[];
+}
+
+export interface AgentGenerativeWorldPreviewResult {
+  ok: boolean;
+  request?: GenerativeWorldRequestV1;
+  hyWorld2CameraPrior?: HyWorld2CameraPriorFile;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentGenerativeWorldMockResult {
+  ok: boolean;
+  request?: GenerativeWorldRequestV1;
+  result?: GenerativeWorldResultV1;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface AgentGenerativeWorldDepthResult {
+  ok: boolean;
+  status: AgentOperationStatus;
+  shotId: string;
+  requestedTimeSeconds?: number;
+  sampledTimeSeconds?: number;
+  revisionId: string;
+  width: number;
+  height: number;
+  encoding?: 'npy-float32-linear-camera-z';
+  invalidDepthValue?: 0;
+  nearMeters?: number;
+  farMeters?: number;
+  artifact?: AgentArtifactHandle;
+  diagnostics: AgentDiagnostic[];
 }
 
 export interface ForeSceneBrowserApi {
@@ -2047,6 +2101,21 @@ export interface ForeSceneBrowserApi {
   };
   describeOperation(operation: string): AgentOperationDescription | undefined;
   getAgentSchema(): AgentSchemaDocument;
+
+  previewGenerativeWorldRequest(input?: {
+    shotIds?: string[];
+    desiredRepresentations?: Array<'mesh' | '3dgs'>;
+  }): AgentGenerativeWorldPreviewResult;
+  runMockGenerativeWorldBackend(input?: {
+    shotIds?: string[];
+    desiredRepresentations?: Array<'mesh' | '3dgs'>;
+  }): AgentGenerativeWorldMockResult;
+  renderGenerativeWorldDepthPrior(input: {
+    shotId: string;
+    timeSeconds?: number;
+    width?: number;
+    height?: number;
+  }): Promise<AgentGenerativeWorldDepthResult>;
 
   inspectProject(): AgentProjectInspection;
   listMissingAssets(): AgentMissingAssetSummary[];
@@ -2174,7 +2243,7 @@ export interface ForeSceneBrowserApi {
   upsertObjectKeyframe(input: AgentUpsertObjectKeyframeInput): Promise<AgentUpsertObjectKeyframeResult>;
 
   previewPlan(plan: unknown): Promise<AgentPlanPreviewResult>;
-  applyPlan(plan: unknown): Promise<AgentPlanApplyResult>;
+  applyPlan(plan: unknown, options?: { expectedRevisionId?: string }): Promise<AgentPlanApplyResult>;
   applyVerifiedProxyReplacement(input: AgentVerifiedProxyReplacementInput): Promise<AgentVerifiedProxyReplacementResult>;
   undoLastPlan(): Promise<AgentPlanApplyResult>;
   listPlanHistory(): AgentPlanHistoryEntry[];
@@ -2301,7 +2370,11 @@ export interface ForeSceneBrowserApi {
 
   // Production manifest compiler
   validateProductionManifest(input: { manifest: unknown }): AgentProductionManifestValidateResult;
-  bindManifestAssets(input: { manifest: unknown; bindings: Record<string, string> }): Promise<AgentProductionManifestValidateResult>;
+  bindManifestAssets(input: {
+    manifest: unknown;
+    bindings: Record<string, string>;
+    groupBindings?: Record<string, string>;
+  }): Promise<AgentProductionManifestValidateResult>;
   inspectProductionConfiguration(): AgentProductionConfigurationInspection;
   validateProductionConfiguration(input: { manifest: unknown }): AgentProductionConfigurationValidationResult;
   bindProductionEntity(input: { entityId: string; binding: ProductionEntityBinding }): Promise<AgentProductionConfigurationMutationResult>;

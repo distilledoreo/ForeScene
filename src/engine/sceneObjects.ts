@@ -4,6 +4,7 @@ import {
   Euler,
   Landmark,
   LocationProject,
+  ObjectGroup,
   ObjectSurfaceStyle,
   ProjectedStyleSettings,
   SceneObject,
@@ -21,7 +22,7 @@ import {
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
-import { degreesToRadians } from './sync';
+import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
 
 export type SceneVisualTheme = 'light' | 'dark';
 
@@ -91,6 +92,25 @@ const treeCrownMaterialByTheme: Record<SceneVisualTheme, THREE.MeshStandardMater
   dark: new THREE.MeshStandardMaterial({ color: 0x7f8d84, roughness: 0.85 }),
 };
 const panoOriginRingMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+const contactShadowMaterial = new THREE.MeshBasicMaterial({
+  color: 0x111111,
+  transparent: true,
+  opacity: 0.88,
+  alphaMap: createContactShadowAlphaMap(),
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+/** Live mesh AABBs sit this far into the authored floor so contact reads on clay. */
+const GROUND_CONTACT_SINK_METERS = 0.18;
+/** Extra drop for projected beauty: the painted pano floor sits above graybox y=0. */
+const GROUND_CONTACT_PROJECTED_SINK_METERS = 0.28;
+const contactShadowGeometry = new THREE.CircleGeometry(1, 28);
+export const FORESCENE_CONTACT_SHADOW_NAME = 'forescene-contact-shadow';
+export const FORESCENE_GROUP_CONTACT_SHADOW_PREFIX = `${FORESCENE_CONTACT_SHADOW_NAME}:group:`;
+const contactFlattenQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const contactWorldPoint = new THREE.Vector3();
 const SHARED_MATERIALS = new Set<THREE.Material>([
   ...Object.values(materialByTheme.light),
   ...Object.values(materialByTheme.dark),
@@ -102,8 +122,9 @@ const SHARED_MATERIALS = new Set<THREE.Material>([
   ...Object.values(treeTrunkMaterialByTheme),
   ...Object.values(treeCrownMaterialByTheme),
   panoOriginRingMaterial,
+  contactShadowMaterial,
 ]);
-const SHARED_GEOMETRIES = new Set<THREE.BufferGeometry>();
+const SHARED_GEOMETRIES = new Set<THREE.BufferGeometry>([contactShadowGeometry]);
 const primitiveGeometryCache = new Map<string, THREE.BufferGeometry>();
 const solidMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const checkerMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -251,6 +272,10 @@ export interface ProjectedSceneOptions {
   settings: ProjectedStyleSettings;
   /** Dispose projected materials with the scene (export / one-shot). */
   disposableMaterials?: boolean;
+  /** Reveal the calibrated panorama background where no projector owns a surface. */
+  hideUnprojectedGeometry?: boolean;
+  /** Do not draw proxy set geometry already represented by the full panorama. */
+  hideSetGeometry?: boolean;
 
   occlusionTexture?: THREE.CubeTexture;
   occlusionNearMeters?: number;
@@ -344,23 +369,60 @@ export function buildScene(
   }
 
   const useProjected = options.appearance === 'projected' && Boolean(options.projected?.texture);
+  if (useProjected && options.projected) {
+    // Projection styles the authored geometry, but it cannot fill rays where
+    // the graybox has no surface. Use the same equirect panorama as the scene
+    // background so calibrated environment imagery remains visible instead of
+    // exposing the renderer's white clear color through every opening.
+    options.projected.texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = options.projected.texture;
+    scene.backgroundIntensity = options.projected.settings.exposure;
+    scene.backgroundRotation.set(
+      degreesToRadians(options.projected.rotation[0] ?? 0),
+      degreesToRadians(panoYawToThreeJsYawDegrees(options.projected.rotation[1] ?? 0)),
+      degreesToRadians(options.projected.rotation[2] ?? 0),
+    );
+  }
+
+  const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
+  const groupedImportedIds = new Set(
+    Object.values(project.scene.objectGroups ?? {})
+      .filter((group) => isRigidImportedAssembly(group, objectsById))
+      .flatMap((group) => group.objectIds),
+  );
 
   for (const object of project.scene.objects) {
     if (!object.visible) continue;
     if (hiddenTypes.has(object.type)) continue;
     if (options.showMissingPlaceholders === false && isMissingSceneObject(object, project)) continue;
+    const receivesProjectedStyle = useProjected && shouldReceiveProjectedStyle(object);
+    // Walls and other set proxies duplicate the panorama and show parallax
+    // seams. Floors stay: they are the only 3D plane subjects can stand on
+    // once the pano is the background.
+    if (
+      receivesProjectedStyle
+      && object.stagingRole === 'set'
+      && options.projected?.hideSetGeometry !== false
+      && !objectProvidesProjectedGroundPlane(object)
+    ) continue;
     const mesh = createObject3D(
       object,
       Boolean(options.selectedObjectIds?.includes(object.id)),
       theme,
       project.assets,
+      {
+        skipImportedMeshCentering: groupedImportedIds.has(object.id),
+        skipContactShadow: groupedImportedIds.has(object.id),
+      },
     );
     mesh.userData.sceneObjectId = object.id;
-    if (useProjected && options.projected && shouldReceiveProjectedStyle(object)) {
+    if (receivesProjectedStyle && options.projected && !objectProvidesProjectedGroundPlane(object)) {
       applyProjectedStyleToObject(mesh, object, theme, options.projected);
     }
     scene.add(mesh);
   }
+
+  plantGroundedSubjects(scene, project, { projected: useProjected });
 
   if (options.previewObject) {
     scene.add(createPreviewMesh(options.previewObject));
@@ -399,6 +461,165 @@ export function buildScene(
   return scene;
 }
 
+const assemblyBoundsScratch = new THREE.Box3();
+const assemblyPartScratch = new THREE.Box3();
+const assemblySupportScratch = new THREE.Box3();
+
+function collectMeshWorldBounds(node: THREE.Object3D): THREE.Box3[] {
+  const partBounds: THREE.Box3[] = [];
+  node.traverse((child) => {
+    if (child.userData.contactShadow) return;
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    const part = mesh.geometry.boundingBox;
+    if (!part) return;
+    assemblyPartScratch.copy(part);
+    mesh.updateWorldMatrix(true, false);
+    assemblyPartScratch.applyMatrix4(mesh.matrixWorld);
+    partBounds.push(assemblyPartScratch.clone());
+  });
+  return partBounds;
+}
+
+function unionBounds(partBounds: THREE.Box3[]): THREE.Box3 | undefined {
+  if (partBounds.length === 0) return undefined;
+  assemblyBoundsScratch.copy(partBounds[0]!);
+  for (const part of partBounds.slice(1)) assemblyBoundsScratch.union(part);
+  return assemblyBoundsScratch;
+}
+
+function applyFloorPlant(nodes: THREE.Object3D[], minY: number, sinkMeters: number): number {
+  const dy = -sinkMeters - minY;
+  if (!Number.isFinite(dy) || Math.abs(dy) > 2.5 || Math.abs(dy) < 0.003) return 0;
+  for (const node of nodes) node.position.y += dy;
+  return dy;
+}
+
+export interface GroundContactPlantOptions {
+  /** Projected stills need a deeper sink so feet meet the painted pano floor. */
+  projected?: boolean;
+}
+
+/** Plant live contact meshes on the floor and keep one visual cue per assembly. */
+export function plantGroundedSubjects(
+  scene: THREE.Scene,
+  project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
+  options: GroundContactPlantOptions = {},
+): void {
+  const nodes = new Map<string, THREE.Object3D>();
+  for (const child of scene.children) {
+    const objectId = child.userData.sceneObjectId;
+    if (typeof objectId === 'string') nodes.set(objectId, child);
+  }
+  const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
+  const groupedImportedIds = new Set(
+    Object.values(project.scene.objectGroups ?? {})
+      .filter((group) => group.objectIds.length > 1)
+      .flatMap((group) => group.objectIds),
+  );
+  const seenSourceImportIds = new Set<string>();
+  for (const group of Object.values(project.scene.objectGroups ?? {})) {
+    const shadowName = `${FORESCENE_GROUP_CONTACT_SHADOW_PREFIX}${group.id}`;
+    const existingShadow = scene.getObjectByName(shadowName);
+    if (existingShadow) existingShadow.visible = false;
+    if (!isRigidImportedAssembly(group, objectsById)) continue;
+    if (seenSourceImportIds.has(group.sourceImportId!)) continue;
+    seenSourceImportIds.add(group.sourceImportId!);
+    const members = group.objectIds.flatMap((objectId) => {
+      const object = objectsById.get(objectId);
+      return object ? [object] : [];
+    });
+    const memberNodes = members.flatMap((member) => {
+      const node = nodes.get(member.id);
+      return node ? [node] : [];
+    });
+    if (memberNodes.length !== members.length) continue;
+    if (!memberNodes.every((node) => node.visible)) continue;
+    const partBounds = memberNodes.flatMap((node) => collectMeshWorldBounds(node));
+    const assembled = unionBounds(partBounds);
+    if (!assembled) continue;
+    const supportTolerance = Math.max(0.035, assembled.getSize(contactWorldPoint).y * 0.06);
+    const supportParts = partBounds.filter((part) => (
+      part.min.y <= assembled.min.y + supportTolerance
+    ));
+    assemblySupportScratch.copy(supportParts[0] ?? assembled);
+    for (const part of supportParts.slice(1)) assemblySupportScratch.union(part);
+    const sinkMeters = options.projected
+      ? GROUND_CONTACT_PROJECTED_SINK_METERS
+      : GROUND_CONTACT_SINK_METERS;
+    const dy = applyFloorPlant(memberNodes, assembled.min.y, sinkMeters);
+    assemblySupportScratch.min.y += dy;
+    assemblySupportScratch.max.y += dy;
+    placeGroupContactShadow(scene, shadowName, assemblySupportScratch);
+  }
+
+  const sinkMeters = options.projected
+    ? GROUND_CONTACT_PROJECTED_SINK_METERS
+    : GROUND_CONTACT_SINK_METERS;
+  for (const [objectId, node] of nodes) {
+    if (groupedImportedIds.has(objectId) || !node.visible) continue;
+    const object = objectsById.get(objectId);
+    if (!object || !objectUsesGroundContact(object)) continue;
+    const assembled = unionBounds(collectMeshWorldBounds(node));
+    if (!assembled) continue;
+    applyFloorPlant([node], assembled.min.y, sinkMeters);
+    placeContactShadowOnWorldFloor(node);
+  }
+}
+
+/** @deprecated Use plantGroundedSubjects; kept for existing render-path call sites. */
+export function placeImportedAssemblyContactShadows(
+  scene: THREE.Scene,
+  project: { scene: { objects: SceneObject[]; objectGroups?: LocationProject['scene']['objectGroups'] } },
+): void {
+  plantGroundedSubjects(scene, project);
+}
+
+function isRigidImportedAssembly(
+  group: ObjectGroup,
+  objectsById: ReadonlyMap<string, SceneObject>,
+): boolean {
+  if (!group.sourceImportId || group.objectIds.length < 2) return false;
+  const membersMatch = group.objectIds.every((objectId) => {
+    const object = objectsById.get(objectId);
+    return object?.type === 'imported_model'
+      && (object.stagingRole === 'person' || object.stagingRole === 'prop')
+      && object.importedModel?.sourceImportId === group.sourceImportId;
+  });
+  if (!membersMatch) return false;
+  const completeSourceIds = [...objectsById.values()]
+    .filter((object) => (
+      object.type === 'imported_model'
+      && (object.stagingRole === 'person' || object.stagingRole === 'prop')
+      && object.importedModel?.sourceImportId === group.sourceImportId
+    ))
+    .map((object) => object.id);
+  return completeSourceIds.length === group.objectIds.length
+    && completeSourceIds.every((objectId) => group.objectIds.includes(objectId));
+}
+
+function createContactShadowAlphaMap(): THREE.DataTexture {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = (x + 0.5) / size * 2 - 1;
+      const dy = (y + 0.5) / size * 2 - 1;
+      const radial = Math.max(0, 1 - Math.hypot(dx, dy));
+      const alpha = Math.round(255 * radial * radial * (3 - 2 * radial));
+      const offset = (y * size + x) * 4;
+      data[offset] = 255;
+      data[offset + 1] = alpha;
+      data[offset + 2] = 255;
+      data[offset + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export function resolveObjectMaterial(
   object: SceneObject,
   theme: SceneVisualTheme = 'light',
@@ -420,6 +641,11 @@ export function resolveObjectMaterial(
 export function shouldReceiveProjectedStyle(object: SceneObject): boolean {
   if (object.category === 'helper' || object.category === 'landmark') return false;
   if (object.type === 'sun_marker' || object.type === 'human_dummy') return false;
+  // Imported models carry authored materials and textures. Projecting the
+  // environment panorama over them destroys production-asset identity (and
+  // previously turned multipart creatures into white silhouettes).
+  if (object.type === 'imported_model') return false;
+  if (object.stagingRole === 'person' || object.stagingRole === 'prop') return false;
   return true;
 }
 
@@ -430,7 +656,9 @@ function applyProjectedStyleToObject(
   projected: ProjectedSceneOptions,
 ) {
   const clay = resolveObjectMaterial(object, theme);
-  const fallbackColor = clay.color?.clone?.() ?? new THREE.Color(0xc8cdc8);
+  const fallbackColor = objectProvidesProjectedGroundPlane(object)
+    ? new THREE.Color(0x2a2c2b)
+    : (clay.color?.clone?.() ?? new THREE.Color(0xc8cdc8));
   const projectedMaterial = createProjectedStyleMaterial({
     texture: projected.texture,
     origin: projected.origin,
@@ -438,8 +666,11 @@ function applyProjectedStyleToObject(
     panoramaWidth: projected.panoramaWidth,
     panoramaHeight: projected.panoramaHeight,
     settings: projected.settings,
-    fallbackColor: projected.settings.fallbackMode === 'neutral' ? 0xb0b6b2 : fallbackColor,
+    fallbackColor: objectProvidesProjectedGroundPlane(object)
+      ? 0x2a2c2b
+      : projected.settings.fallbackMode === 'neutral' ? 0xb0b6b2 : fallbackColor,
     disposable: projected.disposableMaterials ?? true,
+    hideUnprojectedGeometry: projected.hideUnprojectedGeometry ?? true,
     occlusionTexture: projected.occlusionTexture,
     occlusionNearMeters: projected.occlusionNearMeters,
     occlusionFarMeters: projected.occlusionFarMeters,
@@ -471,6 +702,7 @@ export function createObject3D(
   _selected = false,
   theme: SceneVisualTheme = 'light',
   assets?: AssetRegistry,
+  options?: { skipImportedMeshCentering?: boolean; skipContactShadow?: boolean },
 ): THREE.Object3D {
   let node: THREE.Object3D;
   let character: ReturnType<typeof resolvePoseableCharacterForObject>;
@@ -527,7 +759,9 @@ export function createObject3D(
       node = createSunMarker(object, theme, style === 'default' ? undefined : material);
       break;
     case 'imported_model':
-      node = createImportedMeshNode(object, assets, material);
+      node = createImportedMeshNode(object, assets, material, {
+        centerNonSetMesh: options?.skipImportedMeshCentering !== true,
+      });
       break;
     default:
       node = new THREE.Mesh(
@@ -537,6 +771,10 @@ export function createObject3D(
   }
 
   node.name = object.name;
+  if (objectUsesGroundContact(object) && options?.skipContactShadow !== true) {
+    node.userData.groundPivotHeight = object.dimensions[1];
+    attachContactShadow(node, object);
+  }
   applySceneObjectTransform(node, object.transform, {
     applyScale: !sceneObjectUsesProceduralScale(object.type),
   });
@@ -547,12 +785,41 @@ export function createObject3D(
   return node;
 }
 
+function placeGroupContactShadow(
+  scene: THREE.Scene,
+  name: string,
+  supportBounds: THREE.Box3,
+): void {
+  let disc = scene.getObjectByName(name) as THREE.Mesh | undefined;
+  if (!disc) {
+    disc = new THREE.Mesh(contactShadowGeometry, contactShadowMaterial);
+    disc.name = name;
+    disc.userData.contactShadow = true;
+    disc.renderOrder = 2;
+    disc.quaternion.copy(contactFlattenQuaternion);
+    scene.add(disc);
+  }
+  const center = supportBounds.getCenter(contactWorldPoint);
+  const size = supportBounds.getSize(new THREE.Vector3());
+  disc.position.set(center.x, supportBounds.min.y + 0.006, center.z);
+  disc.scale.set(
+    Math.min(1.35, Math.max(0.22, size.x * 0.58)),
+    Math.min(1.35, Math.max(0.22, size.z * 0.58)),
+    1,
+  );
+  disc.visible = true;
+  disc.updateMatrixWorld(true);
+}
+
 /** Apply a staged/interpolated object transform onto a built scene object node. */
 export function applySceneObjectTransform(
   node: THREE.Object3D,
   transform: Transform,
   options: { applyScale?: boolean; visible?: boolean } = {},
 ) {
+  const pivotHeight = typeof node.userData.groundPivotHeight === 'number'
+    ? node.userData.groundPivotHeight
+    : 0;
   node.position.fromArray(transform.position);
   node.rotation.set(
     degreesToRadians(transform.rotation[0]),
@@ -565,6 +832,65 @@ export function applySceneObjectTransform(
   if (options.visible !== undefined) {
     node.visible = options.visible;
   }
+  placeContactShadow(node, pivotHeight);
+}
+
+function objectProvidesProjectedGroundPlane(object: SceneObject): boolean {
+  return object.type === 'floor' || object.type === 'terrain_mass';
+}
+
+function objectUsesGroundContact(object: SceneObject): boolean {
+  if (object.stagingRole === 'set') return false;
+  if (object.type === 'human_dummy' || Boolean(object.poseableCharacter)) return true;
+  // Untagged imports keep their source AABB (walls, floors, set dressing).
+  // Only person/prop subjects get contact plant so architecture stays put.
+  if (object.type === 'imported_model') {
+    return object.stagingRole === 'person' || object.stagingRole === 'prop';
+  }
+  return false;
+}
+
+function attachContactShadow(node: THREE.Object3D, object: SceneObject): void {
+  if (node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME)) return;
+  const radius = Math.min(
+    1.15,
+    Math.max(0.26, Math.max(object.dimensions[0], object.dimensions[2]) * 0.42),
+  );
+  const disc = new THREE.Mesh(contactShadowGeometry, contactShadowMaterial);
+  disc.name = FORESCENE_CONTACT_SHADOW_NAME;
+  disc.userData.contactShadow = true;
+  disc.scale.set(radius, radius, 1);
+  disc.renderOrder = 2;
+  node.add(disc);
+}
+
+function placeContactShadow(node: THREE.Object3D, pivotHeight: number): void {
+  const disc = node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME);
+  if (!disc) return;
+  const half = pivotHeight > 0 ? pivotHeight / 2 : 0;
+  node.updateMatrixWorld(true);
+  contactWorldPoint.set(0, -half, 0);
+  node.localToWorld(contactWorldPoint);
+  contactWorldPoint.y += 0.012;
+  node.worldToLocal(contactWorldPoint);
+  disc.position.copy(contactWorldPoint);
+  disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);
+}
+
+function placeContactShadowOnWorldFloor(node: THREE.Object3D): void {
+  const disc = node.getObjectByName(FORESCENE_CONTACT_SHADOW_NAME);
+  if (!disc) return;
+  const assembled = unionBounds(collectMeshWorldBounds(node));
+  if (!assembled) {
+    placeContactShadow(node, typeof node.userData.groundPivotHeight === 'number' ? node.userData.groundPivotHeight : 0);
+    return;
+  }
+  const center = assembled.getCenter(contactWorldPoint);
+  contactWorldPoint.set(center.x, assembled.min.y + 0.012, center.z);
+  node.updateMatrixWorld(true);
+  node.worldToLocal(contactWorldPoint);
+  disc.position.copy(contactWorldPoint);
+  disc.quaternion.copy(node.quaternion).invert().multiply(contactFlattenQuaternion);
 }
 
 const PROCEDURAL_SCALE_TYPES = new Set<SceneObjectType>([

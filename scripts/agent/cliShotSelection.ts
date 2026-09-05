@@ -6,6 +6,83 @@
  * extra ids before the browser opens.
  */
 
+import { matchShotsByShotNumber } from '../../src/engine/agent/shotNumberMatch';
+
+export interface CliShotReference {
+  id: string;
+  shotNumber: string;
+}
+
+export interface CliShotAmbiguity {
+  selector: string;
+  candidates: CliShotReference[];
+}
+
+export type ResolveCliShotReferencesResult =
+  | { ok: true; shots: CliShotReference[] }
+  | {
+    ok: false;
+    error: string;
+    unknownSelectors: string[];
+    ambiguous: CliShotAmbiguity[];
+  };
+
+/**
+ * One resolver for every CLI shot selector.
+ *
+ * Order: exact id → exact shotNumber → padding-normalized shotNumber.
+ * Multiple matches are ambiguous and fail closed with candidate ids; resolved
+ * references carry the canonical id and shotNumber so every result can echo
+ * both. Duplicate selections resolve to one shot.
+ */
+export function resolveCliShotReferences(
+  available: readonly CliShotReference[],
+  requested: readonly string[],
+): ResolveCliShotReferencesResult {
+  const shots: CliShotReference[] = [];
+  const unknownSelectors: string[] = [];
+  const ambiguous: CliShotAmbiguity[] = [];
+  for (const selector of requested) {
+    const trimmed = selector.trim();
+    if (!trimmed) {
+      unknownSelectors.push(selector);
+      continue;
+    }
+    const byId = available.find((shot) => shot.id === trimmed);
+    const matches = byId ? [byId] : matchShotsByShotNumber(available, trimmed);
+    if (matches.length === 0) {
+      unknownSelectors.push(selector);
+      continue;
+    }
+    if (matches.length > 1) {
+      ambiguous.push({
+        selector,
+        candidates: matches.map(({ id, shotNumber }) => ({ id, shotNumber })),
+      });
+      continue;
+    }
+    const shot = matches[0]!;
+    if (!shots.some((existing) => existing.id === shot.id)) shots.push(shot);
+  }
+  if (unknownSelectors.length > 0 || ambiguous.length > 0) {
+    const parts: string[] = [];
+    if (unknownSelectors.length > 0) {
+      parts.push(`Unknown shot id(s) or number(s): ${unknownSelectors.join(', ')}.`);
+    }
+    if (ambiguous.length > 0) {
+      for (const entry of ambiguous) {
+        parts.push(
+          `Shot selector "${entry.selector}" matched ${entry.candidates.length} shots (`
+          + entry.candidates.map((candidate) => `${candidate.shotNumber} (${candidate.id})`).join(', ')
+          + '); use the canonical shot id.',
+        );
+      }
+    }
+    return { ok: false, error: parts.join(' '), unknownSelectors, ambiguous };
+  }
+  return { ok: true, shots };
+}
+
 export interface CliShotSelection {
   /** True when --shot or --shots appeared on the command line. */
   explicit: boolean;
@@ -90,7 +167,7 @@ export interface CliCommandShotUsage {
  * Call this before opening the browser so multi-id values cannot be truncated.
  */
 export function resolveCliCommandShotUsage(command: string, selection: CliShotSelection): CliCommandShotUsage {
-  if (command === 'frame' || command === 'video' || command === 'shot-panorama') {
+  if (command === 'frame' || command === 'video' || command === 'shot-panorama' || command === 'world-depth') {
     const shotId = requireSingleShotId(command, selection);
     return {
       shotId,

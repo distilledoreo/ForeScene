@@ -33,6 +33,8 @@ function benchmarkBrief(): Partial<{
 
 export interface AgentCliArgs {
   command: string;
+  describeCommand?: string;
+  helpRequested: boolean;
   plan?: string;
   manifest?: string;
   url?: string;
@@ -83,12 +85,16 @@ export interface AgentCliArgs {
   noAutoRepair: boolean;
   maxRepairPasses?: number;
   timeBudgetSeconds?: number;
+  allowPartial: boolean;
+  pruneNonManifestShots: boolean;
+  expectedRevision?: string;
 }
 
 export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
   const brief = benchmarkBrief();
   const args: AgentCliArgs = {
     command: argv[0] ?? 'inspect',
+    helpRequested: false,
     url: process.env.FORESCENE_URL,
     manifest: process.env.FORESCENE_BENCHMARK_MANIFEST ?? brief.productionManifest,
     output: process.env.FORESCENE_OUTPUT ?? brief.outputDir,
@@ -113,12 +119,18 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
     document: false,
     autoRepair: true,
     noAutoRepair: false,
+    allowPartial: false,
+    pruneNonManifestShots: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === '--plan') {
       args.plan = argv[++index];
+    } else if (token === '--command') {
+      args.describeCommand = argv[++index];
+    } else if (token === '--help') {
+      args.helpRequested = true;
     } else if (token === '--manifest') {
       args.manifest = argv[++index];
     } else if (token === '--url') {
@@ -231,6 +243,16 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
         throw new Error('--time-budget must be a positive number');
       }
       args.timeBudgetSeconds = value;
+    } else if (token === '--allow-partial') {
+      args.allowPartial = true;
+    } else if (token === '--prune-non-manifest-shots') {
+      args.pruneNonManifestShots = true;
+    } else if (token === '--expected-revision') {
+      const value = argv[++index];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--expected-revision requires a revision id');
+      }
+      args.expectedRevision = value;
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }

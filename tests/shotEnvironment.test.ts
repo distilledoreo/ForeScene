@@ -11,6 +11,8 @@ import {
 } from '../src/engine/previs/shotEnvironment';
 import { compileShotList } from '../src/engine/previs/shotCompiler';
 import { createEmptyCompiledContext } from '../src/engine/previs/locationCompiler';
+import { createExportPlan, listPlannedFiles } from '../src/engine/exportPlan';
+import { generateImagePrompt, generateVideoPrompt } from '../src/engine/prompts';
 
 function preparedProject() {
   const project = createDefaultProject();
@@ -29,6 +31,14 @@ function preparedProject() {
     createdAt: new Date().toISOString(),
   };
   project.panoRefs.push(pano);
+  project.assets.assets.asset_pano = {
+    id: 'asset_pano',
+    type: 'image',
+    name: 'Prepared panorama',
+    uri: 'data:image/png;base64,iVBORw0KGgo=',
+    mimeType: 'image/png',
+    createdAt: new Date(0).toISOString(),
+  };
   project.workflow.production = {
     schemaVersion: 1,
     bindings: {},
@@ -87,6 +97,69 @@ describe('shot environment contracts', () => {
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'expected_panorama_missing' }),
     ]));
+  });
+
+  it('persists and verifies an explicit no-panorama environment contract', () => {
+    const { project, shot } = preparedProject();
+    project.workflow.production!.locations.interior.defaultPanoId = undefined;
+    project.workflow.production!.locations.interior.panoIds = [];
+    project.workflow.production!.shotContracts[shot.id]!.environment = {
+      locationId: 'interior',
+      expectNoPanorama: true,
+      requireProjection: false,
+    };
+    shot.linkedPanoId = null;
+
+    expect(inspectShotEnvironment(project, shot)).toMatchObject({
+      ok: true,
+      contractPresent: true,
+      locationId: 'interior',
+      actualPanoId: undefined,
+      requireProjection: false,
+    });
+
+    shot.linkedPanoId = 'pano_unexpected';
+    expect(inspectShotEnvironment(project, shot).diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'wrong_panorama_linked' }),
+    ]));
+  });
+
+  it('omits panorama-derived package inputs and prompt instructions for an explicit no-panorama shot', () => {
+    const { project, shot } = preparedProject();
+    project.workflow.production!.shotContracts[shot.id]!.environment = {
+      locationId: 'interior',
+      expectNoPanorama: true,
+      requireProjection: false,
+    };
+    shot.linkedPanoId = null;
+    shot.exportSettings = {
+      ...shot.exportSettings,
+      includeFullPano: true,
+      includeGrayboxPano: true,
+      includeCubemap: true,
+      includePanoCrop: true,
+    };
+
+    const plan = createExportPlan(project, [shot], { packageType: 'current-shot' });
+    const panoramaArtifacts = plan.shots[0]!.artifacts.filter((artifact) => (
+      artifact.kind === 'global-reference'
+      || artifact.kind === 'global-graybox'
+      || artifact.kind === 'cubemap'
+      || artifact.kind === 'pano-crop'
+    ));
+    expect(panoramaArtifacts).toHaveLength(4);
+    expect(panoramaArtifacts.every((artifact) => (
+      artifact.disposition === 'omit'
+      && artifact.omissionCode === 'production-contract-no-panorama'
+    ))).toBe(true);
+    expect(listPlannedFiles(plan).some((file) => (
+      file.path.includes('global_reference')
+      || file.path.includes('global_graybox')
+      || file.path.includes('/cubemap/')
+      || file.path.includes('pano_crop')
+    ))).toBe(false);
+    expect(generateImagePrompt(project, shot)).not.toContain('global_reference.png');
+    expect(generateVideoPrompt(shot, project)).not.toContain('inputs/cubemap/');
   });
 
   it('emits an executable panorama-routing command during shot compilation', () => {

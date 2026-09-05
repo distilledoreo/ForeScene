@@ -87,6 +87,7 @@ import {
 } from './depthRender';
 import { prepareVideoArtifact } from './prepareVideoArtifact';
 import { renderWorkCoordinator } from './renderWorkCoordinator';
+import { shotExpectsNoPanorama } from './previs/shotEnvironment';
 import {
   createEmptyPackageVideoPerformanceStats,
   resolveProjectVideoPerformance,
@@ -515,6 +516,7 @@ async function appendShotPackageToZip(
   const manifestPreview = createShotPackageManifest(shotProject, shot, rootFolder);
   const resolvedRootFolder = manifestPreview.rootFolder;
   const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);
+  const omitPanoramaReferences = shotExpectsNoPanorama(project, shot);
   const canonicalPano = project.panoRefs.find((pano) => pano.isCanonical);
   const grayboxPano = project.panoRefs.find((pano) => pano.type === 'graybox_render');
   const canonicalAsset = canonicalPano ? project.assets.assets[canonicalPano.imageAssetId] : undefined;
@@ -884,9 +886,9 @@ async function appendShotPackageToZip(
   }
 
   // Cubemap is independently gated (includeCubemap); canonical preferred, else linked.
-  const cubemapSourcePano = (shot.exportSettings.includeCubemap && canonicalPano && canonicalAsset)
+  const cubemapSourcePano = (!omitPanoramaReferences && shot.exportSettings.includeCubemap && canonicalPano && canonicalAsset)
     ? { pano: canonicalPano, asset: canonicalAsset }
-    : (shot.exportSettings.includeCubemap && linkedPano && linkedPanoAsset)
+    : (!omitPanoramaReferences && shot.exportSettings.includeCubemap && linkedPano && linkedPanoAsset)
       ? { pano: linkedPano, asset: linkedPanoAsset }
       : undefined;
   if (cubemapSourcePano) {
@@ -941,7 +943,7 @@ async function appendShotPackageToZip(
     }
   }
 
-  if (shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop) {
+  if (!omitPanoramaReferences && shot.exportSettings.includePanoCrop && linkedPano && shot.panoCrop) {
     if (linkedPanoAsset) {
       throwIfAborted(signal);
       emit('rendering', 'Rendering pano crop…', { indeterminate: true });
@@ -951,7 +953,7 @@ async function appendShotPackageToZip(
     }
   }
 
-  if (shot.exportSettings.includeFullPano && canonicalAsset && canonicalPano) {
+  if (!omitPanoramaReferences && shot.exportSettings.includeFullPano && canonicalAsset && canonicalPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing styled reference panorama…', { indeterminate: true });
     const prepared = await prepareSharedPano(canonicalAsset, canonicalPano);
@@ -966,7 +968,7 @@ async function appendShotPackageToZip(
     }
   }
 
-  if (shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) {
+  if (!omitPanoramaReferences && shot.exportSettings.includeGrayboxPano && grayboxAsset && grayboxPano) {
     throwIfAborted(signal);
     emit('packaging', 'Preparing graybox panorama…', { indeterminate: true });
     const prepared = await prepareSharedPano(grayboxAsset, grayboxPano);
@@ -1219,7 +1221,7 @@ async function appendShotPackageToZip(
     throwIfAborted(signal);
     emit('packaging', 'Writing prompts…');
     zip.file(`${resolvedRootFolder}/prompts/image_gen_prompt.txt`, generateImagePrompt(shotProject, shot));
-    zip.file(`${resolvedRootFolder}/prompts/video_gen_prompt.txt`, generateVideoPrompt(shot));
+    zip.file(`${resolvedRootFolder}/prompts/video_gen_prompt.txt`, generateVideoPrompt(shot, project));
     zip.file(`${resolvedRootFolder}/prompts/negative_prompt.txt`, shot.promptOverrides.negativePrompt || '');
     finishUnit('packaging', 'Prompts written');
   }

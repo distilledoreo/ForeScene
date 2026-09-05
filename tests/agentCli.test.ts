@@ -7,6 +7,7 @@ import { parseAgentCliArgs } from '../scripts/agent/cliArgs';
 import {
   AGENT_CLI_COMMANDS,
   buildAgentCliHelpDocument,
+  describeAgentCliCommand,
   isAgentCliCommand,
 } from '../scripts/agent/cliCommands';
 import {
@@ -21,6 +22,7 @@ import {
   resolveAgentRenderAppearance,
 } from '../scripts/agent/cliCapabilities';
 import { AgentCliUsageError, envelopeFromError, wrapAgentCliStdout } from '../scripts/agent/cliResult';
+import { agentCliCommandRequiresProfile } from '../scripts/agent/agentProfile';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -50,11 +52,17 @@ describe('agent CLI discovery', () => {
       'cancel',
       'operations',
       'capabilities',
+      'describe',
+      'schema',
       'import-panorama',
       'shot-panorama',
+      'world-preview',
+      'world-mock',
+      'world-depth',
     ]));
     expect(help.checks.visualPreflight).toMatch(/visual-preflight/);
     expect(help.checks.assetPoseContract).toMatch(/asset-contract/);
+    expect(help.checks.generativeWorldBoundary).toMatch(/HY-World 2/);
     expect(help.checks.repairCandidates).toMatch(/previs/);
     expect(help.checks.provenance).toMatch(/provenance/);
     expect(help.checks.recoveryResources).toMatch(/package/);
@@ -73,6 +81,8 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:verify']).toContain('verify');
     expect(packageJson.scripts?.['agent:help']).toContain('help');
     expect(packageJson.scripts?.['agent:capabilities']).toContain('capabilities');
+    expect(packageJson.scripts?.['agent:describe']).toContain('describe');
+    expect(packageJson.scripts?.['agent:schema']).toContain('schema');
     expect(packageJson.scripts?.['agent:open']).toContain('open');
     expect(packageJson.scripts?.['agent:save']).toContain('save');
     expect(packageJson.scripts?.['agent:cancel']).toContain('cancel');
@@ -81,11 +91,31 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
     expect(packageJson.scripts?.['agent:shot-panorama']).toContain('shot-panorama');
     expect(packageJson.scripts?.['agent:video']).toContain('video');
+    expect(packageJson.scripts?.['agent:world-preview']).toContain('world-preview');
+    expect(packageJson.scripts?.['agent:world-mock']).toContain('world-mock');
+    expect(packageJson.scripts?.['agent:world-depth']).toContain('world-depth');
+  });
+
+  it('publishes machine-readable command grammars and supports command-local help', () => {
+    expect(describeAgentCliCommand('previs')).toMatchObject({
+      command: 'previs',
+      operation: 'previs.orchestrate',
+      write: true,
+    });
+    expect(describeAgentCliCommand('previs')?.required).toContain('--manifest <manifest.json>');
+    expect(describeAgentCliCommand('contact-sheet')?.required).toContain('--input <frames-dir>');
+    expect(parseAgentCliArgs(['previs', '--help'])).toMatchObject({ command: 'previs', helpRequested: true });
+    expect(parseAgentCliArgs(['describe', '--command', 'video'])).toMatchObject({
+      command: 'describe',
+      describeCommand: 'video',
+    });
+    expect(agentCliCommandRequiresProfile('describe')).toBe(false);
+    expect(agentCliCommandRequiresProfile('schema')).toBe(false);
   });
 
   it('prints machine-readable help from the live CLI', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    const output = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'help', '--json'], {
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+    const output = execFileSync(process.execPath, ['--import', tsxLoader, 'scripts/agent/cli.ts', 'help', '--json'], {
       cwd: repoRoot,
       encoding: 'utf8',
       timeout: 30_000,
@@ -279,8 +309,8 @@ describe('agent CLI public surface', () => {
   });
 
   it('prints a browser-free capability catalog with the Phase 1 gaps closed', () => {
-    const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    const output = execFileSync(process.execPath, [tsxCli, 'scripts/agent/cli.ts', 'capabilities'], {
+    const tsxLoader = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+    const output = execFileSync(process.execPath, ['--import', tsxLoader, 'scripts/agent/cli.ts', 'capabilities'], {
       cwd: repoRoot,
       encoding: 'utf8',
       timeout: 30_000,
@@ -338,5 +368,19 @@ describe('agent CLI public surface', () => {
       code: 'usage_error',
       message: 'open requires --file <path.fsp>.',
     });
+  });
+
+  it('package CLI exports current project without pre-flush expectedRevisionId', () => {
+    const source = readFileSync(path.join(repoRoot, 'scripts/agent/cli.ts'), 'utf8');
+    const runPackageStart = source.indexOf('async function runPackage');
+    const runPackageEnd = source.indexOf('async function runVisualPreflight', runPackageStart);
+    expect(runPackageStart).toBeGreaterThanOrEqual(0);
+    expect(runPackageEnd).toBeGreaterThan(runPackageStart);
+    const runPackageBlock = source.slice(runPackageStart, runPackageEnd);
+    expect(runPackageBlock).not.toMatch(/refreshAgentSessionRevision/);
+    expect(runPackageBlock).not.toMatch(/expectedRevisionId/);
+    expect(runPackageBlock).not.toMatch(/expectedFingerprint/);
+    expect(runPackageBlock).toMatch(/waitForIdle/);
+    expect(runPackageBlock).toMatch(/exportPackage\(/);
   });
 });

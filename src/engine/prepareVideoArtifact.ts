@@ -36,6 +36,13 @@ import {
 } from './videoRenderTiming';
 import type { VideoResolutionPresetId } from './videoPresets';
 import { resolveVideoPreset } from './videoPresets';
+import { prepareModelAssetsForRender } from './prepareModelAssetsForRender';
+import { cameraKeyframesHaveObjectAnimation } from './objectKeyframes';
+import {
+  resolveProjectForAnimatedCameraMove,
+  resolveProjectForShot,
+  type SceneContentMode,
+} from './shotSceneState';
 
 export type VideoArtifactPriority = 'foreground' | 'background';
 
@@ -182,6 +189,17 @@ async function renderAndStore(
   resolved: ReturnType<typeof resolveSpecificationDimensions>,
 ): Promise<PreparedVideoArtifact> {
   const shot = resolveShot(params.project, params.shotId);
+  const contentMode: SceneContentMode = params.specification.contentMode
+    ?? (params.specification.peopleVariant === 'clean_plate' ? 'clean_plate' : 'full_scene');
+  const resolveOptions = {
+    contentMode,
+    includeCharacterAttachments: params.specification.includeCharacterAttachments !== false,
+  };
+  const effectiveProject = cameraKeyframesHaveObjectAnimation(shot.cameraKeyframes)
+    ? resolveProjectForAnimatedCameraMove(params.project, shot, resolveOptions)
+    : resolveProjectForShot(params.project, shot, resolveOptions);
+  await prepareModelAssetsForRender(effectiveProject, params.signal);
+  throwIfCancelled(params.signal);
   const timingBuilder = createVideoRenderTimingBuilder();
   timingBuilder.markSetupStart();
 

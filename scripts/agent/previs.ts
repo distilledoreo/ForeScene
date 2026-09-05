@@ -32,6 +32,7 @@ import {
   buildShotCompositionTelemetry,
   compileProduction,
   compileCastPhaseWithPersistedEntities,
+  compilePropsPhaseWithPersistedEntities,
   compileShotList,
   contactSheetHtml,
   buildProductionReviewArtifacts,
@@ -56,6 +57,7 @@ import {
   buildSubjectIdentityMap,
   solidBlockersForRepair,
   validateShotFrame,
+  mergeFrameValidationWithVisualPreflight,
   rankFrameValidation,
   isValidationRankImproved,
   extractFramingMetrics,
@@ -67,6 +69,8 @@ import {
   type ShotCompositionTelemetry,
   type RenderProfile,
   DELIVERY_PROFILE,
+  resolveRenderAppearanceForShot,
+  resolveEmbeddedPropIntents,
   resolveRenderProfileForMode,
   renderProfileFingerprint,
   computeRenderFingerprint,
@@ -77,12 +81,19 @@ import {
   type ProductionRunTiming,
 } from '../../src/engine/previs/index';
 import type { RenderSessionShotJob } from '../../src/engine/previs/renderSession';
+import { isIntactSystemScaffoldShot } from '../../src/domain/scaffold';
 import { attachAgentRunSession, detachAgentRunSession, startAgentRunSession } from './agentSession';
 import { openAgentBrowser, waitForAgentIdle } from './browser';
 import { captureSceneScreenshot, openWorkspace } from './screenshot';
 import { createPersistentRenderSession, type PersistentRenderSession } from './renderSession';
 import { createCliAbortScope, installCliAbortBridge } from './cliAbort';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
+import {
+  deriveRenderStillsOutcome,
+  evaluateContactSheetFrames,
+  type ContactSheetFrameReport,
+} from './batchHonesty';
+import { selectPrunableShots } from './shotPrune';
 
 export interface PrevisCliOptions {
   manifestPath: string;
@@ -112,6 +123,12 @@ export interface PrevisCliOptions {
   skipControlVideos?: boolean;
   /** Export a verified .fsp backup before the production session closes. */
   finalProjectPath?: string;
+  /**
+   * Delete non-manifest user shots after compilation. Default false: only
+   * intact scaffold shots (blank Origin) are pruned; other non-manifest shots
+   * are retained and reported.
+   */
+  pruneNonManifestShots?: boolean;
 }
 
 export interface PrevisCliResult {
@@ -147,6 +164,17 @@ export interface PrevisCliResult {
   provenance?: unknown;
   partial?: boolean;
   budgetExceeded?: boolean;
+  /** Total repair passes attempted across the run (previs summary honesty). */
+  repairsAttempted?: number;
+  /** True iff --no-auto-repair disabled the repair loop for this run. */
+  repairsDisabled?: boolean;
+  /** Standalone render-stills conjunction report. */
+  shotsConsidered?: number;
+  renderedComplete?: number;
+  failedShotNumbers?: string[];
+  pendingShotNumbers?: string[];
+  /** Standalone contact-sheet per-frame preflight report. */
+  frames?: ContactSheetFrameReport['frames'];
   error?: string;
 }
 
@@ -226,6 +254,7 @@ async function renderCleanShotFrame(
     renderSession?: PersistentRenderSession;
     shotNumber?: string;
     timeSeconds?: number;
+    appearance?: RenderProfile['appearance'];
   },
 ): Promise<{
   ok: boolean;
@@ -242,6 +271,7 @@ async function renderCleanShotFrame(
   revisionId?: string;
   error?: string;
   fromCanonicalRenderer: boolean;
+  source?: 'canonical_clay_renderer' | 'canonical_projected_renderer';
 }> {
   if (options?.renderSession) {
     const result = await options.renderSession.renderShot({
@@ -250,6 +280,7 @@ async function renderCleanShotFrame(
       framePath,
       debugUiPath: options.debugUiPath,
       captureDebugUi: options.captureDebugUi,
+      appearance: options.appearance,
     });
     return {
       ok: result.ok,
@@ -259,6 +290,7 @@ async function renderCleanShotFrame(
       revisionId: result.revisionId,
       error: result.error,
       fromCanonicalRenderer: result.fromCanonicalRenderer,
+      source: result.source,
     };
   }
 
@@ -308,7 +340,7 @@ async function renderCleanShotFrame(
   }, {
     shotId,
     timeSeconds: options?.timeSeconds,
-    appearance: profile.appearance,
+    appearance: options?.appearance ?? profile.appearance,
     peopleVariant: profile.peopleVariant,
     content: profile.content,
     ...(profile.overrideDimensions
@@ -345,7 +377,11 @@ async function renderCleanShotFrame(
     height: result.height,
     pixelStats: result.pixelStats,
     revisionId: result.revisionId,
-    fromCanonicalRenderer: result.source === 'canonical_clay_renderer',
+    fromCanonicalRenderer: result.source === 'canonical_clay_renderer'
+      || result.source === 'canonical_projected_renderer',
+    source: result.source === 'canonical_projected_renderer'
+      ? 'canonical_projected_renderer'
+      : 'canonical_clay_renderer',
   };
 }
 
@@ -353,18 +389,19 @@ async function renderControlVideo(
   page: Page,
   shotId: string,
   videoPath: string,
+  appearance: RenderProfile['appearance'],
 ): Promise<{ ok: boolean; assetId?: string; error?: string; transfer?: AgentArtifactTransferTelemetry }> {
-  const result = await page.evaluate(async (id) => window.foreScene!.renderShotVideo({
+  const result = await page.evaluate(async ({ id, resolvedAppearance }) => window.foreScene!.renderShotVideo({
     shotId: id,
     mode: 'render',
     resolutionPreset: '1080p',
-    appearance: 'clay',
+    appearance: resolvedAppearance,
     contentMode: 'full_scene',
     // This runner owns the file artifact. Attaching here can race timeline
     // persistence and incorrectly turn a valid render into stale_revision.
     attachToShot: false,
     download: false,
-  }), shotId);
+  }), { id: shotId, resolvedAppearance: appearance });
   if (!result.ok) {
     return { ok: false, error: result.diagnostics?.[0]?.message ?? 'Control video render failed.' };
   }
@@ -587,6 +624,97 @@ async function importManifestModelAsset(
   }, { consentToken });
 }
 
+async function ensureImportedModelAssemblyGroup(
+  page: Page,
+  assetId: string,
+  objectIds: string[],
+  preferredGroupId?: string,
+): Promise<{ ok: boolean; groupId?: string; diagnostics?: unknown[] }> {
+  if (objectIds.length <= 1) return { ok: true };
+  return page.evaluate(async (input) => {
+    const project = window.foreScene!.getProjectDocument();
+    const importedObjects = input.objectIds.map((objectId) => (
+      project.scene.objects.find((object) => object.id === objectId)
+    ));
+    const sourceImportIds = [...new Set(importedObjects.flatMap((object) => (
+      object?.importedModel?.sourceImportId ? [object.importedModel.sourceImportId] : []
+    )))];
+    if (importedObjects.some((object) => !object) || sourceImportIds.length !== 1) {
+      return {
+        ok: false,
+        diagnostics: [{
+          code: 'imported_assembly_identity_unresolved',
+          severity: 'error',
+          message: `Imported asset "${input.assetId}" does not resolve to one complete source import.`,
+        }],
+      };
+    }
+    const sourceImportId = sourceImportIds[0]!;
+    const groups = project.scene.objectGroups ?? {};
+    let existing = input.preferredGroupId ? groups[input.preferredGroupId] : undefined;
+    if (!existing) {
+      for (const group of Object.values(groups)) {
+        if (group.objectIds.length !== input.objectIds.length) continue;
+        let sameMembers = true;
+        for (const objectId of group.objectIds) {
+          if (!input.objectIds.includes(objectId)) {
+            sameMembers = false;
+            break;
+          }
+        }
+        if (sameMembers) {
+          existing = group;
+          break;
+        }
+      }
+    }
+    if (existing?.sourceImportId === sourceImportId) return { ok: true, groupId: existing.id };
+    const created = await window.foreScene!.createObjectGroup({
+      name: `${input.assetId} assembly`,
+      objectIds: input.objectIds,
+      sourceImportId,
+    });
+    return {
+      ok: created.ok,
+      groupId: created.groupId,
+      diagnostics: created.diagnostics,
+    };
+  }, { assetId, objectIds, preferredGroupId });
+}
+
+function collectManifestSemanticBindings(
+  manifest: PrevisProductionManifestV1,
+  state: PrevisRunState,
+): { bindings: Record<string, string>; groupBindings: Record<string, string> } {
+  const bindings: Record<string, string> = {};
+  const groupBindings: Record<string, string> = {};
+  const entities = [
+    ...manifest.cast.map((entry) => ({ id: entry.id, key: `cast.${entry.id}` })),
+    ...(manifest.props ?? []).map((entry) => ({ id: entry.id, key: `props.${entry.id}` })),
+    ...(manifest.assets ?? []).map((entry) => ({ id: entry.id, key: `assets.${entry.id}` })),
+  ];
+  for (const entity of entities) {
+    const mapping = state.entities[entity.key];
+    if (mapping?.objectId) bindings[entity.id] = mapping.objectId;
+    if (mapping?.groupId) groupBindings[entity.id] = mapping.groupId;
+  }
+  return { bindings, groupBindings };
+}
+
+async function synchronizeManifestProductionConfiguration(
+  page: Page,
+  manifest: PrevisProductionManifestV1,
+  state: PrevisRunState,
+) {
+  const semantic = collectManifestSemanticBindings(manifest, state);
+  return page.evaluate(async (input) => {
+    const bound = await window.foreScene!.bindManifestAssets(input);
+    const configuration = window.foreScene!.inspectProductionConfiguration();
+    const validation = window.foreScene!.validateProductionConfiguration({ manifest: input.manifest });
+    return { bound, configuration, validation };
+  }, { manifest, ...semantic });
+}
+
 async function analyzeManifestSavedRigCharacter(
   page: Page,
   asset: ResolvedManifestCharacterAsset,
@@ -708,6 +836,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
   let sourceRevisionId: string | undefined;
   let resultRevisionId: string | undefined;
   let repairMs = 0;
+  let repairsAttemptedTotal = 0;
+  const pruneNonManifest = options.pruneNonManifestShots ?? false;
 
   await mkdir(outputDir, { recursive: true });
   await mkdir(path.join(outputDir, 'logs'), { recursive: true });
@@ -727,7 +857,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     };
   }
 
-  const manifest = parsed.manifest;
+  const embeddedPropResolution = resolveEmbeddedPropIntents(parsed.manifest);
+  const manifest = embeddedPropResolution.manifest;
+  await writeJson(path.join(outputDir, 'logs', 'derived-semantic-intents.json'), {
+    embeddedProps: embeddedPropResolution.derived,
+  });
   const consentToken = options.allowHeavyCharacterImports
     ? 'agent:previs:allow-heavy-character-imports'
     : undefined;
@@ -1276,6 +1410,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       sourceSha256?: string;
       ok: boolean;
       objectIds?: string[];
+      groupId?: string;
       reused?: boolean;
       warnings?: string[];
       diagnostics?: unknown[];
@@ -1285,12 +1420,40 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       const entityKey = `assets.${asset.id}`;
       const existing = state.entities[entityKey];
       if (existing?.objectId) {
+        const objectIds = existing.objectIds ?? [existing.objectId];
+        const assembly = await ensureImportedModelAssemblyGroup(
+          session.page,
+          asset.id,
+          objectIds,
+          existing.groupId,
+        );
+        if (!assembly.ok) {
+          await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+            importedModels: importedModelResults,
+            assembly,
+          });
+          return {
+            ok: false,
+            phase: 'props',
+            projectId: state.projectId,
+            manifestHash,
+            runStatePath,
+            diagnostics: assembly.diagnostics,
+            error: `Imported model asset "${asset.id}" could not restore its persistent assembly group.`,
+          };
+        }
+        state = upsertEntity(state, entityKey, {
+          ...existing,
+          objectIds,
+          ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
+        });
         importedModelResults.push({
           id: asset.id,
           sourcePath: asset.sourcePath,
           sourceSha256: asset.sourceSha256,
           ok: true,
-          objectIds: existing.objectIds ?? [existing.objectId],
+          objectIds,
+          ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
           reused: true,
         });
         continue;
@@ -1337,6 +1500,26 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           error: `Imported model asset "${asset.id}" failed.`,
         };
       }
+      const assembly = await ensureImportedModelAssemblyGroup(session.page, asset.id, objectIds);
+      if (!assembly.ok) {
+        await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
+          importedModels: importedModelResults,
+          assembly,
+        });
+        return {
+          ok: false,
+          phase: 'props',
+          projectId: state.projectId,
+          manifestHash,
+          runStatePath,
+          diagnostics: assembly.diagnostics,
+          error: `Imported model asset "${asset.id}" could not create a persistent assembly group.`,
+        };
+      }
+      importedModelResults[importedModelResults.length - 1] = {
+        ...importedModelResults.at(-1)!,
+        ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
+      };
       if (asset.semanticRole === 'subject') {
         const roleApplied = await applyPlanOnPage(session.page, {
           version: 1,
@@ -1367,32 +1550,30 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       state = upsertEntity(state, entityKey, {
         objectId: objectIds[0],
         objectIds,
-        ...(objectIds.length > 1 ? { groupId: `asset.${asset.id}` } : {}),
+        ...(assembly.groupId ? { groupId: assembly.groupId } : {}),
         refs: Object.fromEntries(objectIds.map((id) => [id, id])),
         sourceSha256: asset.sourceSha256,
       });
     }
     if (importedModelResults.length > 0) {
-      const bindings = Object.fromEntries(
-        importedModelResults.flatMap((result) => result.objectIds?.[0] ? [[result.id, result.objectIds[0]]] : []),
-      );
-      const bindingResult = Object.keys(bindings).length > 0
-        ? await session.page.evaluate(async (input) => window.foreScene!.bindManifestAssets(input), {
-          manifest,
-          bindings,
-        })
-        : undefined;
       await writeJson(path.join(outputDir, 'logs', 'scene-assets.json'), {
         importedModels: importedModelResults,
-        bindingResult,
       });
       await writeJson(runStatePath, state);
     }
 
     if (state.phases.props !== 'complete') {
-      if (compiled.props.plan.commands.length > 0) {
+      // Re-resolve props after imported cast assets have concrete ids. This is
+      // required for zero-command semantic aliases such as embedded props.
+      const propCompilation = compilePropsPhaseWithPersistedEntities(
+        manifest,
+        compiled.cast.context,
+        state.entities,
+      );
+      let applied: Awaited<ReturnType<typeof applyPlanOnPage>> | undefined;
+      if (propCompilation.plan.commands.length > 0) {
         state = setPhase(state, 'props', 'in_progress');
-        const applied = await applyPlanOnPage(session.page, compiled.props.plan);
+        applied = await applyPlanOnPage(session.page, propCompilation.plan);
         await writeJson(path.join(outputDir, 'logs', 'scene-props.json'), applied);
         if (!applied.ok) {
           state = setPhase(state, 'props', 'failed');
@@ -1407,14 +1588,41 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             error: 'Props apply failed.',
           };
         }
-        for (const [key, mapping] of Object.entries(compiled.context.entities)) {
-          if (key.startsWith('props.')) {
-            state = upsertEntity(state, key, resolveMappingIds(mapping, applied.summary?.createdRefs));
-          }
+      }
+      for (const [key, mapping] of Object.entries(propCompilation.context.entities)) {
+        if (key.startsWith('props.')) {
+          state = upsertEntity(state, key, resolveMappingIds(mapping, applied?.summary?.createdRefs));
         }
       }
       state = setPhase(state, 'props', 'complete');
       await writeJson(runStatePath, state);
+    }
+
+    // Persist the resolved semantic universe before shot compilation so the
+    // compiler can author closed-world visibility from durable contracts.
+    const preShotSemanticSync = await synchronizeManifestProductionConfiguration(
+      session.page,
+      manifest,
+      state,
+    );
+    await writeJson(
+      path.join(outputDir, 'logs', 'production-configuration-pre-shot.json'),
+      preShotSemanticSync,
+    );
+    if (!preShotSemanticSync.bound.ok || !preShotSemanticSync.validation.ok) {
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        phase: 'shots',
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        diagnostics: [
+          ...preShotSemanticSync.bound.diagnostics,
+          ...preShotSemanticSync.validation.diagnostics,
+        ],
+        error: 'Resolved production semantics could not be prepared before shot compilation.',
+      };
     }
 
     // Re-compile shots against resolved entity ids from run-state.
@@ -1543,22 +1751,73 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         });
       }
     }
-    // Final prune — drop blank Origin and any leftover non-manifest shots.
-    const extras = liveShots.filter((shot) => !keepShotNumbers.has(shot.shotNumber));
-    if (extras.length > 0) {
+    // Final prune — drop intact scaffold shots (blank Origin). Non-manifest
+    // user shots survive unless the operator passed --prune-non-manifest-shots.
+    const liveProjectForPrune = await session.page.evaluate(
+      () => window.foreScene!.getProjectDocument(),
+    ) as LocationProject;
+    const pruneDecision = selectPrunableShots(
+      liveProjectForPrune.shots.map((shot) => ({
+        id: shot.id,
+        shotNumber: shot.shotNumber,
+        isIntactScaffold: isIntactSystemScaffoldShot(shot),
+      })),
+      keepShotNumbers,
+      { pruneNonManifest },
+    );
+    // Never delete down to zero shots.
+    const prunable = liveShots.length - pruneDecision.prune.length >= 1
+      ? pruneDecision.prune
+      : [];
+    if (prunable.length > 0) {
       const prune = await applyPlanOnPage(session.page, {
         version: 1,
         planId: 'previs-shot-prune',
-        commands: extras.map((shot) => ({
+        commands: prunable.map((shot) => ({
           op: 'shot.delete' as const,
           shot: { id: shot.id },
         })),
       });
-      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), { extras, prune });
+      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), {
+        pruned: prunable,
+        retainedNonManifest: pruneDecision.retainedNonManifest,
+        pruneNonManifestAuthorized: pruneNonManifest,
+        prune,
+      });
       liveShots = await session.page.evaluate(() => window.foreScene!.listShots());
+    } else if (pruneDecision.retainedNonManifest.length > 0) {
+      await writeJson(path.join(outputDir, 'logs', 'shots-prune.json'), {
+        pruned: [],
+        retainedNonManifest: pruneDecision.retainedNonManifest,
+        pruneNonManifestAuthorized: pruneNonManifest,
+        note: 'Non-manifest shots were retained. Pass --prune-non-manifest-shots to remove them explicitly.',
+      });
     }
     state = setPhase(state, 'shots', 'complete');
     await writeJson(runStatePath, state);
+
+    const semanticSync = await synchronizeManifestProductionConfiguration(
+      session.page,
+      manifest,
+      state,
+    );
+    await writeJson(path.join(outputDir, 'logs', 'production-configuration.json'), semanticSync);
+    if (!semanticSync.bound.ok || !semanticSync.validation.ok) {
+      state = setPhase(state, 'shots', 'failed');
+      await writeJson(runStatePath, state);
+      return {
+        ok: false,
+        phase: 'shots',
+        projectId: state.projectId,
+        manifestHash,
+        runStatePath,
+        diagnostics: [
+          ...semanticSync.bound.diagnostics,
+          ...semanticSync.validation.diagnostics,
+        ],
+        error: 'Compiled production semantics did not persist as a valid prepared configuration.',
+      };
+    }
     timing.compilationMs = Date.now() - compilationStartedAt;
 
     timeBudget?.assertWithinBudget('render_review_frames');
@@ -1609,6 +1868,9 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           locationId: definition.locationId,
           framePath: path.join(outputDir, 'shots', `${definition.shotNumber}.png`),
           renderFingerprint: renderFingerprint?.key,
+          appearance: currentShot
+            ? resolveRenderAppearanceForShot(renderProfile, currentShot)
+            : renderProfile.appearance,
         });
       }
 
@@ -1669,7 +1931,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           state = upsertShotState(state, frame.shotNumber, {
             render: 'complete',
             framePath: frame.framePath,
-            renderSource: 'canonical_clay_renderer',
+            renderSource: frame.source,
             renderFingerprint: frame.renderFingerprint,
             renderCacheHit: false,
             pixelStats: frame.pixelStats,
@@ -1705,7 +1967,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             continue;
           }
           try {
-            const video = await renderControlVideo(session.page, shotId, videoPath);
+            const videoShot = renderProject.shots.find((item) => item.id === shotId);
+            const videoAppearance = videoShot
+              ? resolveRenderAppearanceForShot(renderProfile, videoShot)
+              : renderProfile.appearance;
+            const video = await renderControlVideo(session.page, shotId, videoPath, videoAppearance);
             await writeJson(path.join(outputDir, 'logs', `video-${definition.shotNumber}.json`), video);
             if (!video.ok) throw new Error(video.error ?? 'Control video render failed.');
             controlVideosRendered += 1;
@@ -1847,6 +2113,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
 
         repairAttempts += 1;
+        repairsAttemptedTotal += 1;
         const repairStartedAt = Date.now();
         const rankBefore = rankFrameValidation(finalResult);
         const metricsBefore = extractFramingMetrics(
@@ -1872,6 +2139,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
             debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
             renderSession,
             shotNumber: definition.shotNumber,
+            appearance: resolveRenderAppearanceForShot(renderProfile, shot),
           },
         );
         if (!reframe.ok || !reframe.fromCanonicalRenderer) {
@@ -1963,6 +2231,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
               debugUiPath: path.join(outputDir, 'debug', `${definition.shotNumber}-ui.png`),
               renderSession,
               shotNumber: definition.shotNumber,
+              appearance: resolveRenderAppearanceForShot(renderProfile, shot),
             },
           );
           if (rollbackFrame.ok && rollbackFrame.fromCanonicalRenderer) {
@@ -2017,7 +2286,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         state = upsertShotState(state, definition.shotNumber, {
           render: 'complete',
           framePath,
-          renderSource: 'canonical_clay_renderer',
+          renderSource: reframe.source,
           pixelStats: finalPixelStats,
           repairAttempts,
           renderFingerprint: computeRenderFingerprint({
@@ -2041,6 +2310,13 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         }
         state = upsertShotState(state, definition.shotNumber, { repairAttempts });
       }
+
+      const finalVisualPreflight = await session.page.evaluate((shotId) => (
+        window.foreScene!.inspectShotVisualPreflight({
+          shotId,
+        })
+      ), shot.id);
+      finalResult = mergeFrameValidationWithVisualPreflight(finalResult, finalVisualPreflight);
 
       previousCamera = shot.camera;
       validationResults.push(finalResult);
@@ -2081,6 +2357,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
           profile: renderProfile,
           shotNumber: definition.shotNumber,
           timeSeconds: keyframe.timeSeconds,
+          appearance: resolveRenderAppearanceForShot(renderProfile, currentShot),
         });
         if (!sampled.ok) {
           // Keyframe samples are benchmark evidence, not run-critical frames.
@@ -2267,7 +2544,19 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     let packagePath: string | undefined;
     let packageTransfer: AgentArtifactTransferTelemetry | undefined;
     let packageFailed = false;
-    if (!skipPackage && !timeBudget?.isExpired()) {
+    const blockingReviewBeforePackage = mode !== 'rapid-review'
+      && validationResults.some((item) => item.status !== 'passed');
+    if (!skipPackage && blockingReviewBeforePackage) {
+      packageFailed = true;
+      state = setPhase(state, 'package', 'failed');
+      await writeJson(path.join(outputDir, 'logs', 'package-blocked-by-review.json'), {
+        reason: 'Production-integrity packaging requires every shot validation to pass.',
+        shots: validationResults
+          .filter((item) => item.status !== 'passed')
+          .map((item) => ({ shotNumber: item.shotNumber, status: item.status })),
+      });
+      await writeJson(runStatePath, state);
+    } else if (!skipPackage && !timeBudget?.isExpired()) {
       timeBudget?.assertWithinBudget('finalize');
       state = setPhase(state, 'package', 'in_progress');
       const pack = await session.page.evaluate(async () => {
@@ -2351,7 +2640,11 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     });
 
     const summary: PrevisCliResult = {
-      ok: !missingFrames && !missingControlVideos && failed === 0 && !packageFailed,
+      ok: !missingFrames
+        && !missingControlVideos
+        && failed === 0
+        && !packageFailed
+        && (mode === 'rapid-review' || reviewRequiredShotIds.length === 0),
       projectId: state.projectId,
       shotsRequested: manifest.shots.length,
       shotsCreated,
@@ -2366,6 +2659,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       warnings,
       failed,
       reviewRequiredShotIds,
+      repairsAttempted: repairsAttemptedTotal,
+      repairsDisabled: !autoRepair,
       contactSheet: contactSheetPath,
       reviewArtifacts: reviewArtifactPaths,
       package: packagePath,
@@ -2414,6 +2709,8 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
         cacheHitRate: cacheHits + cacheMisses > 0 ? cacheHits / (cacheHits + cacheMisses) : 0,
         controlVideosRendered,
         controlVideosFailed,
+        repairsAttempted: repairsAttemptedTotal,
+        repairsDisabled: !autoRepair,
         timing,
         sourceRevisionId,
         error: error.message,
@@ -2489,7 +2786,21 @@ export async function runRenderStillsCli(options: {
       framesRendered += 1;
       await writeJson(runStatePath, next);
     }
-    return { ok: true, framesRendered, runStatePath, projectId: state.projectId };
+    // Batch honesty: ok is a conjunction. A failed or unrendered compiled shot
+    // makes the batch not-ok even though other frames rendered fine.
+    const outcome = deriveRenderStillsOutcome(next.shots);
+    return {
+      ok: outcome.ok,
+      framesRendered,
+      shotsConsidered: outcome.shotsConsidered,
+      renderedComplete: outcome.rendered,
+      ...(outcome.failedShotNumbers.length > 0 ? { failedShotNumbers: outcome.failedShotNumbers } : {}),
+      ...(outcome.pendingShotNumbers.length > 0 ? { pendingShotNumbers: outcome.pendingShotNumbers } : {}),
+      ...(outcome.ok ? {} : { error: 'Render-stills batch is incomplete: '
+        + `${outcome.failedShotNumbers.length} failed, ${outcome.pendingShotNumbers.length} not rendered.` }),
+      runStatePath,
+      projectId: state.projectId,
+    };
   } finally {
     await session.close();
   }
@@ -2500,6 +2811,8 @@ export async function runContactSheetCli(options: {
   inputDir: string;
   outputPath: string;
   title?: string;
+  /** Build the sheet over existing frames even when preflight fails; ok stays false. */
+  allowPartial?: boolean;
 }): Promise<PrevisCliResult> {
   const inputDir = path.resolve(options.inputDir);
   const runStatePath = path.join(path.dirname(inputDir), 'run-state.json');
@@ -2515,15 +2828,52 @@ export async function runContactSheetCli(options: {
   const numbers = Array.isArray(shotNumbers) ? shotNumbers : await shotNumbers;
   const entries = numbers.map((shotNumber) => ({
     shotNumber,
-    name: shotNumber,
     framePath: path.join(inputDir, `${shotNumber}.png`),
-    status: state?.shots[shotNumber]?.validation ?? 'unknown',
-    warningCount: state?.shots[shotNumber]?.issues?.length ?? 0,
+    ...(state !== undefined ? { renderStatus: state.shots[shotNumber]?.render } : {}),
+  }));
+
+  // Fail-closed input contract: every frame must exist, be non-empty, and — when
+  // run-state backs the invocation — have finished rendering. A sheet over stale
+  // or missing frames must never claim ok:true.
+  const preflight = await evaluateContactSheetFrames({
+    entries,
+    pathExists,
+    readFile: (filePath) => readFile(filePath),
+  });
+
+  if (!preflight.ok && !options.allowPartial) {
+    return {
+      ok: false,
+      error: 'Contact-sheet inputs failed preflight; no sheet was built. '
+        + 'Pass --allow-partial to build a sheet over the frames that exist.',
+      diagnostics: preflight.issues.map((issue) => ({
+        severity: 'error' as const,
+        code: `contact_sheet_${issue.kind}`,
+        message: issue.message,
+        shotNumber: issue.shotNumber,
+      })),
+      frames: preflight.frames,
+    };
+  }
+
+  const includedEntries = preflight.ok
+    ? entries
+    : entries.filter((entry) => {
+      const frame = preflight.frames.find((candidate) => candidate.shotNumber === entry.shotNumber);
+      return Boolean(frame?.exists) && (frame?.byteLength ?? 0) > 0;
+    });
+
+  const sheetEntries = includedEntries.map((entry) => ({
+    shotNumber: entry.shotNumber,
+    name: entry.shotNumber,
+    framePath: entry.framePath,
+    status: state?.shots[entry.shotNumber]?.validation ?? 'unknown',
+    warningCount: state?.shots[entry.shotNumber]?.issues?.length ?? 0,
   }));
 
   const spec = buildContactSheetSpec({
     title: options.title ?? 'ForeScene Contact Sheet',
-    shots: entries,
+    shots: sheetEntries,
   });
   const htmlPath = `${options.outputPath}.html`;
   await writeFile(htmlPath, contactSheetHtml({
@@ -2543,5 +2893,19 @@ export async function runContactSheetCli(options: {
     await browser.close();
   }
 
-  return { ok: true, contactSheet: path.resolve(options.outputPath) };
+  return {
+    ok: preflight.ok,
+    ...(preflight.ok ? {} : {
+      partial: true,
+      error: 'Contact sheet was built over a partial frame set; ok stays false.',
+      diagnostics: preflight.issues.map((issue) => ({
+        severity: 'error' as const,
+        code: `contact_sheet_${issue.kind}`,
+        message: issue.message,
+        shotNumber: issue.shotNumber,
+      })),
+    }),
+    contactSheet: path.resolve(options.outputPath),
+    frames: preflight.frames,
+  };
 }

@@ -8,6 +8,7 @@ import type {
   Transform,
 } from '../domain/types';
 import { cloneHumanPose, humanPosesEqual } from './humanPose';
+import { normalizeProjectedStyleSettings } from '../domain/defaults';
 
 /** What geometry a shot resolve should keep visible for export / preview. */
 export type SceneContentMode =
@@ -180,11 +181,36 @@ export function resolveSceneObjectsForShot(
 
 export function resolveProjectForShot(
   project: LocationProject,
-  shot: Pick<Shot, 'objectOverrides'>,
+  shot: Pick<Shot, 'objectOverrides'> & Partial<Pick<Shot, 'linkedPanoId'>>,
   options: ResolveShotSceneOptions = {},
 ): LocationProject {
+  const hasExplicitPanoramaRouting = shot.linkedPanoId !== undefined;
+  const linkedPano = typeof shot.linkedPanoId === 'string'
+    ? project.panoRefs.find((pano) => pano.id === shot.linkedPanoId)
+    : undefined;
+  const projectedStyle = normalizeProjectedStyleSettings(project.settings.projectedStyle);
+
   return {
     ...project,
+    ...(hasExplicitPanoramaRouting
+      ? {
+        // A shot-level panorama assignment is authoritative. Restricting this
+        // transient render project to that panorama prevents the global
+        // canonical/secondary fallback from leaking another location into the
+        // shot. A null or stale assignment deliberately resolves to no usable
+        // projector so projected rendering fails closed.
+        panoRefs: linkedPano ? [linkedPano] : [],
+        settings: {
+          ...project.settings,
+          projectedStyle: {
+            ...projectedStyle,
+            panoId: linkedPano?.id,
+            secondaryPanoId: undefined,
+            blendMode: 'primary_only' as const,
+          },
+        },
+      }
+      : {}),
     scene: {
       ...project.scene,
       objects: resolveSceneObjectsForShot(project, shot, options),

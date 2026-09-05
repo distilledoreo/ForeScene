@@ -300,6 +300,11 @@ import {
   listAgentArtifacts,
   persistAgentArtifact,
 } from './artifactRegistry';
+import {
+  previewAgentGenerativeWorldRequest,
+  renderAgentGenerativeWorldDepthPrior,
+  runAgentMockGenerativeWorldBackend,
+} from './generativeWorldControl';
 
 function readInspectionContext(): AgentInspectionContext {
   const projectState = useProjectStore.getState();
@@ -1033,8 +1038,11 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return result;
     },
 
-    async applyPlan(plan: unknown): Promise<AgentPlanApplyResult> {
-      return applyAgentPlan(plan);
+    async applyPlan(
+      plan: unknown,
+      options?: { expectedRevisionId?: string },
+    ): Promise<AgentPlanApplyResult> {
+      return applyAgentPlan(plan, options);
     },
 
     async applyVerifiedProxyReplacement(
@@ -1169,6 +1177,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           summary: batch.summary,
           importBudget: batch.analysis,
           verifiedRevisionId: batch.verifiedRevisionId,
+          reused: batch.reused,
           warnings: batch.warnings,
         };
       } catch (error) {
@@ -1873,6 +1882,18 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
 
     inspectProductionConfiguration() {
       return inspectAgentProductionConfiguration();
+    },
+
+    previewGenerativeWorldRequest(input) {
+      return previewAgentGenerativeWorldRequest(input);
+    },
+
+    runMockGenerativeWorldBackend(input) {
+      return runAgentMockGenerativeWorldBackend(input);
+    },
+
+    renderGenerativeWorldDepthPrior(input) {
+      return renderAgentGenerativeWorldDepthPrior(input);
     },
 
     validateProductionConfiguration(input) {

@@ -35,6 +35,67 @@ describe('per-shot scene state', () => {
     expect(person.transform.position).not.toEqual([4, 0.875, -2]);
   });
 
+  it('makes an explicit shot panorama the only projected-style source', () => {
+    const project = createDefaultProject();
+    const primary = {
+      id: 'pano-ruins',
+      name: 'Ruins',
+      imageAssetId: 'asset-ruins',
+      type: 'ai_global_reference' as const,
+      projection: 'equirectangular' as const,
+      origin: [0, 1.65, 0] as [number, number, number],
+      rotation: [0, 0, 0] as [number, number, number],
+      width: 2048,
+      height: 1024,
+      isCanonical: true,
+      createdAt: new Date(0).toISOString(),
+    };
+    const armory = {
+      ...primary,
+      id: 'pano-armory',
+      name: 'Armory',
+      isCanonical: false,
+    };
+    project.panoRefs.push(primary, armory);
+    project.settings.projectedStyle = {
+      ...project.settings.projectedStyle!,
+      panoId: primary.id,
+      secondaryPanoId: armory.id,
+      blendMode: 'primary_dominant',
+    };
+
+    const resolved = resolveProjectForShot(project, {
+      ...project.shots[0]!,
+      linkedPanoId: armory.id,
+    });
+
+    expect(resolved.panoRefs.map((pano) => pano.id)).toEqual([armory.id]);
+    expect(resolved.settings.projectedStyle).toMatchObject({
+      panoId: armory.id,
+      blendMode: 'primary_only',
+    });
+    expect(resolved.settings.projectedStyle?.secondaryPanoId).toBeUndefined();
+    expect(project.panoRefs).toHaveLength(2);
+    expect(project.settings.projectedStyle?.panoId).toBe(primary.id);
+  });
+
+  it('fails closed for an explicitly unlinked or stale shot panorama', () => {
+    const project = createDefaultProject();
+    const unlinked = resolveProjectForShot(project, {
+      ...project.shots[0]!,
+      linkedPanoId: null,
+    });
+    const stale = resolveProjectForShot(project, {
+      ...project.shots[0]!,
+      linkedPanoId: 'missing-pano',
+    });
+
+    expect(unlinked.panoRefs).toEqual([]);
+    expect(stale.panoRefs).toEqual([]);
+    expect(unlinked.settings.projectedStyle?.panoId).toBeUndefined();
+    expect(stale.settings.projectedStyle?.panoId).toBeUndefined();
+  });
+
   it('classifies built-in and imported people consistently for clean plates', () => {
     const project = createDefaultProject();
     const mannequin = createSceneObject('human_dummy', 1);

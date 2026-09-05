@@ -24,6 +24,7 @@ export async function invokeAgentCli(input: {
   url: string;
   profile: string;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }): Promise<AgentCliInvocation> {
   const command = input.args[0];
@@ -42,6 +43,7 @@ export async function invokeAgentCli(input: {
       profile: input.profile,
       cwd: input.cwd ?? input.repoRoot,
       repoRoot: input.repoRoot,
+      env: input.env,
       timeoutMs: input.timeoutMs ?? 180_000,
     });
     return {

@@ -181,12 +181,21 @@ function orientAndFitTemplate(
   template: THREE.Object3D,
   orientation: PoseableCharacterOrientation,
   targetHeight: number,
+  centerForSceneObject = true,
 ): { oriented: THREE.Group; fittedHeight: number } {
   const canonical = prepareCanonicalAutorigMesh({
     source: template,
     orientation,
     targetHeightMeters: targetHeight,
   });
+  // Canonical autorig meshes are grounded (local feet at Y=ground), while a
+  // SceneObject transform addresses the center of its declared dimensions.
+  // Recenter the runtime child so the rendered mesh occupies the same world
+  // AABB used by selection, camera solving, staging, and composition telemetry.
+  if (centerForSceneObject) {
+    canonical.root.position.y -= orientation.groundLevelMeters + canonical.heightMeters / 2;
+    canonical.root.updateMatrixWorld(true);
+  }
   return { oriented: canonical.root, fittedHeight: canonical.heightMeters };
 }
 
@@ -707,7 +716,9 @@ export function createAutorigPreviewInstance(params: {
 
   const orientation = params.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 };
   const height = params.approximateHeightMeters ?? 1.75;
-  const { oriented } = orientAndFitTemplate(template, orientation, height);
+  // The marker wizard works in grounded mesh coordinates; unlike a SceneObject
+  // runtime child, its preview root must keep local feet at Y=ground.
+  const { oriented } = orientAndFitTemplate(template, orientation, height, false);
 
   const previewMaterial = params.material ?? new THREE.MeshStandardMaterial({
     color: 0x94a3b8,

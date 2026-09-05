@@ -25,11 +25,27 @@ The Agent CLI is the public automation surface. **Before authoring**, query capa
 npm run agent:capabilities
 ```
 
+If command syntax is uncertain, query it through the stateless public discovery
+surface instead of guessing flags or inspecting implementation source:
+
+```bash
+npm run agent:describe -- --command previs
+npm run agent:previs -- --help
+npm run agent:schema
+```
+
 Stdout is one JSON envelope. Read `result.capabilities`: if a capability is `true`, use the documented `npm run agent:*` command for that operation. See `docs/agent-capability-matrix.md`.
 
 Every command writes one envelope to stdout (`ok`, `operation`, `operationId`, `durationMs`, `warnings`, `error`, `result`). Parse that object. Human progress and `[agent-op]` heartbeats are on stderr and are not the machine contract. Exit `0` success, `1` failure, `2` usage error.
 
 If a long-running command hangs, cancel with `npm run agent:cancel -- --operation <id>` (or omit `--operation` for the latest active record). Do not kill Chromium.
+
+### Selector and batch-honesty guarantees
+
+- Every `--shot`/`--shots` selector accepts the canonical shot id or the shot number; leading zeros are normalized (`010`, `10`, and `0010` address the same shot). Selectors resolve once before the command runs; ambiguity fails closed with candidate ids, and render results echo both `shotId` and `shotNumber`.
+- Batch `ok` is a conjunction. `agent:render-stills` reports `ok:false` with `failedShotNumbers`/`pendingShotNumbers` when any tracked shot failed or is unrendered. Standalone `agent:contact-sheet` fails closed on missing/empty/unrendered frames (per-shot `frames` report with sha256); pass `--allow-partial` only when a partial sheet is explicitly wanted — `ok` stays `false`.
+- `agent:previs -- --no-auto-repair` is authoritative: the summary reports `repairsDisabled: true` and `repairsAttempted: 0`. After compilation the runner prunes only intact scaffold shots (the blank Origin); non-manifest user shots are retained and reported unless `--prune-non-manifest-shots` is passed.
+- `agent:frame` stdout never contains inline image payloads: it returns the output path plus `sha256`, `byteLength`, `revisionId`, pixel stats, and pose telemetry. Command success is still not visual approval.
 
 ## Benchmark mode
 
@@ -422,6 +438,9 @@ Useful documented CLI commands when inspecting a live session:
 - `npm run agent:frame -- --shot <id> --mode clay --output <png>` — clean PNG and pixel stats.
 - `npm run agent:verify` — idle/busy plus visual and health gates; not proof that a frame is visually ready.
 - `npm run agent:cancel` / `npm run agent:operations` — stop or list CLI operations without killing Chromium.
+- `npm run agent:world-preview -- --shots <ids> --output <request.json>` — emit backend-neutral semantic/camera priors without invoking external inference.
+- `npm run agent:world-mock -- --shots <ids> --output <result.json>` — exercise the generative-world contract deterministically; mock output is schema evidence only.
+- `npm run agent:world-depth -- --shot <id> --time <seconds> --resolution <WIDTHxHEIGHT> --output <depth.npy>` — render a clean-plate, top-left row-major NumPy float32 camera-Z prior in metres; zero means no geometry.
 
 Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes. Parse stdout envelopes; do not scrape stderr for success.
 

@@ -50,6 +50,7 @@ import {
   type PrevisDiagnostic,
 } from './manifestDiagnostics';
 import { isSupportedPrevisPosePreset } from './posePresets';
+import { HUMAN_JOINT_IDS } from '../humanPose';
 
 export interface PrevisManifestParseResult {
   manifest?: PrevisProductionManifestV1;
@@ -134,7 +135,7 @@ export function parsePrevisProductionManifest(input: unknown): PrevisManifestPar
   const cast = parseCast(root.cast, castIds, errors, warnings);
   const props = root.props === undefined
     ? undefined
-    : parseProps(root.props, propIds, errors, warnings);
+    : parseProps(root.props, propIds, castIds, errors, warnings);
   const assets = root.assets === undefined
     ? undefined
     : parseAssets(root.assets, assetIds, errors, warnings);
@@ -501,6 +502,7 @@ function parseCast(
 function parseProps(
   value: unknown,
   propIds: Set<string>,
+  castIds: Set<string>,
   errors: PrevisDiagnostic[],
   warnings: PrevisDiagnostic[],
 ): PrevisPropDefinition[] {
@@ -541,6 +543,31 @@ function parseProps(
       dimensions = readVec3(record.dimensions, `${path}.dimensions`, errors);
     }
     const color = readOptionalString(record.color, `${path}.color`, errors, warnings);
+    let embeddedIn: PrevisPropDefinition['embeddedIn'];
+    if (record.embeddedIn !== undefined) {
+      if (!record.embeddedIn || typeof record.embeddedIn !== 'object' || Array.isArray(record.embeddedIn)) {
+        errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.embeddedIn must be an object.`, {
+          path: `${path}.embeddedIn`,
+        }));
+      } else {
+        const embedded = record.embeddedIn as Record<string, unknown>;
+        const subject = readNonemptyString(embedded.subject, `${path}.embeddedIn.subject`, errors);
+        const joint = embedded.joint === undefined
+          ? undefined
+          : readEnum(embedded.joint, HUMAN_JOINT_IDS, `${path}.embeddedIn.joint`, errors);
+        if (subject && !castIds.has(subject)) {
+          errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.unknownReference, `${path}.embeddedIn.subject references unknown cast "${subject}".`, {
+            path: `${path}.embeddedIn.subject`,
+            entityId: subject,
+          }));
+        } else if (subject) {
+          embeddedIn = {
+            subject,
+            ...(joint ? { joint } : {}),
+          } as PrevisPropDefinition['embeddedIn'];
+        }
+      }
+    }
 
     if (id && name && primitive) {
       result.push({
@@ -549,6 +576,7 @@ function parseProps(
         primitive,
         ...(dimensions ? { dimensions } : {}),
         ...(color !== undefined ? { color } : {}),
+        ...(embeddedIn ? { embeddedIn } : {}),
       });
     }
   });
@@ -834,6 +862,9 @@ function parseShotMotion(
   if (record.renderControlVideo !== undefined && typeof record.renderControlVideo !== 'boolean') {
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.renderControlVideo must be a boolean.`, { path: `${path}.renderControlVideo` }));
   }
+  if (record.autoCompose !== undefined && typeof record.autoCompose !== 'boolean') {
+    errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidType, `${path}.autoCompose must be a boolean.`, { path: `${path}.autoCompose` }));
+  }
   if (!Array.isArray(record.keyframes) || record.keyframes.length < 2) {
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, `${path}.keyframes must contain at least two entries.`, { path: `${path}.keyframes` }));
     return undefined;
@@ -872,7 +903,12 @@ function parseShotMotion(
     errors.push(previsError(PREVIS_DIAGNOSTIC_CODES.invalidRange, 'motion durationSeconds must equal the final keyframe time.', { path }));
     return undefined;
   }
-  return { durationSeconds, ...(renderControlVideo !== undefined ? { renderControlVideo } : {}), keyframes };
+  return {
+    durationSeconds,
+    ...(renderControlVideo !== undefined ? { renderControlVideo } : {}),
+    ...(typeof record.autoCompose === 'boolean' ? { autoCompose: record.autoCompose } : {}),
+    keyframes,
+  };
 }
 
 function parseMotionStaging(

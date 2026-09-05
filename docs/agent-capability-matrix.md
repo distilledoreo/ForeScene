@@ -10,6 +10,20 @@ Query the live catalog without opening a browser:
 npm run agent:capabilities
 ```
 
+Discover exact command syntax or the public plan/result schema without opening
+a browser:
+
+```bash
+npm run agent:describe -- --command previs
+npm run agent:previs -- --help
+npm run agent:schema
+```
+
+`agent:describe` and command-local `--help` return the same compact,
+machine-readable command descriptor. `agent:schema` returns Agent plan limits,
+executable operations, and result shapes. Production-manifest entry points link
+to `docs/previs-production-manifest.md` and the checked-in generic examples.
+
 Stdout is a stable JSON envelope. `result.capabilities` is the compact boolean map:
 
 ```json
@@ -35,6 +49,9 @@ implementation.
 | Save / export project backup | `project.save` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cancel a running CLI operation | `operation.cancel` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | List CLI operations | `operation.list` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Preview backend-neutral generative-world request and HY-World 2 camera priors | `world.request.preview` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Run deterministic generative-world backend mock | `world.backend.mockRun` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Render raw NumPy float32 camera-Z depth prior | `world.depth.render` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Preview mutation plan | `project.previewPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Apply plan | `project.applyPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Analyze character | `character.analyze` | ✅ | ✅ | ✅ | ✅ | ✅ |

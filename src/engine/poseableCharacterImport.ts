@@ -24,6 +24,7 @@ import {
   CURRENT_AUTORIG_RIG_GENERATION_VERSION,
 } from './poseableRigNormalize';
 import { prepareCanonicalAutorigMesh } from './autorigCanonicalMesh';
+import { HUMAN_MANNEQUIN_REFERENCE_DIMENSIONS } from './humanMannequinModel';
 import { loadPoseableSource, type LoadedPoseableSource } from './poseableSourceLoader';
 import { analyzeHumanoidSkeleton, type HumanoidMappingAnalysis } from './importedRig/analyzeSkeleton';
 import { validateHumanoidMapping } from './importedRig/mappingValidation';
@@ -357,10 +358,24 @@ function applyOrientationAndHeight(
 
   return {
     restTransform,
-    dimensions: [finalSize.x, finalSize.y, finalSize.z],
+    dimensions: humanoidPresentationDimensions(
+      [finalSize.x, finalSize.y, finalSize.z],
+      finalSize.y || approximateHeightMeters,
+    ),
     warnings,
     vertexCount,
   };
+}
+
+/** Person imports keep a humanoid presentation volume even when source mesh is planar. */
+function humanoidPresentationDimensions(fitted: Vec3, height: number): Vec3 {
+  const [refWidth, refHeight, refDepth] = HUMAN_MANNEQUIN_REFERENCE_DIMENSIONS;
+  const scale = height / Math.max(refHeight, 1e-6);
+  return [
+    Math.max(fitted[0], refWidth * scale),
+    height,
+    Math.max(fitted[2], refDepth * scale),
+  ];
 }
 
 async function importExistingRigCharacter(
@@ -456,7 +471,7 @@ async function importExistingRigCharacter(
     name: file.name.replace(/\.(glb|gltf|fbx)$/i, '') || 'Poseable character',
     category: 'helper',
     transform: createTransform([0, Math.max(orientation.groundLevelMeters + height / 2, height / 2), 0]),
-    dimensions: fitted.size[0] > 0 ? fitted.size : [0.55, options.approximateHeightMeters, 0.55],
+    dimensions: humanoidPresentationDimensions(fitted.size, height),
     visible: true,
     locked: false,
     stagingRole: 'person',
@@ -573,9 +588,7 @@ export async function importPoseableCharacter(
       Math.max(orientation.groundLevelMeters + height / 2, height / 2),
       fitted.restTransform.position[2],
     ]),
-    dimensions: fitted.dimensions[0] > 0
-      ? fitted.dimensions
-      : [0.55, approximateHeightMeters, 0.55],
+    dimensions: humanoidPresentationDimensions(fitted.dimensions, height),
     visible: true,
     locked: false,
     stagingRole: 'person',

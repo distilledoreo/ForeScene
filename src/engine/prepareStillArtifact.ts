@@ -18,10 +18,12 @@ import {
 } from './stillArtifactTypes';
 import {
   renderStillArtifact,
+  resolveProjectForStillSpecification,
   type RenderedStillArtifact,
 } from './stillArtifactRender';
 import type { DepthRangeMeters } from './depthRender';
 import { recordPreparedMediaMetric } from './preparedMediaMetrics';
+import { prepareModelAssetsForRender } from './prepareModelAssetsForRender';
 
 export interface PreparedStillArtifact {
   fingerprint: StillArtifactFingerprint;
@@ -189,6 +191,13 @@ async function renderPrepared(
   fingerprint: StillArtifactFingerprint,
   signal?: AbortSignal,
 ): Promise<PreparedStillArtifact> {
+  throwIfCancelled(signal);
+  const effective = resolveProjectForStillSpecification(
+    params.projectSnapshot,
+    shot,
+    params.specification,
+  );
+  await prepareModelAssetsForRender(effective.project, signal);
   throwIfCancelled(signal);
   const renderFn = params.render ?? testRenderOverride ?? renderStillArtifact;
   const rendered = await renderFn({

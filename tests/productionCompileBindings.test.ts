@@ -86,6 +86,37 @@ function vec3Distance(a: Vec3, b: Vec3): number {
 }
 
 describe('production compile group bindings', () => {
+  it('aliases embedded props to their prepared host without authoring or restaging proxy geometry', () => {
+    const embedded = manifest({
+      props: [{
+        id: 'prop.shield',
+        name: 'Embedded shield',
+        primitive: 'shield',
+        embeddedIn: { subject: 'cast.lead', joint: 'leftHand' },
+      }],
+      shots: [{
+        ...manifest().shots[0]!,
+        requirements: { visibleProps: ['prop.shield'] },
+      }],
+    });
+    const cast = compileCastPhase(embedded, createEmptyCompiledContext());
+    const props = compilePropsPhase(embedded, cast.context);
+
+    expect(props.plan.commands).toEqual([]);
+    expect(props.context.entities['props.prop.shield']).toEqual(
+      props.context.entities['cast.cast.lead'],
+    );
+
+    const batch = compileShotBatch(embedded, props.context, embedded.shots, 0);
+    const visibleHostStages = batch.plan.commands.filter((command) => (
+      command.op === 'shot.stageObject'
+      && command.visible === true
+      && 'ref' in command.object
+      && command.object.ref === props.context.entities['cast.cast.lead']?.objectId
+    ));
+    expect(visibleHostStages).toHaveLength(1);
+  });
+
   it('binds landmarked existing-project locations without replacement geometry', () => {
     const project = createDefaultProject();
     const ruins = createSceneObject('floor');
@@ -231,8 +262,8 @@ describe('production compile group bindings', () => {
       shots: [{
         id: 'shot.monster',
         shotNumber: '01',
-        name: 'Monster',
-        description: 'Imported multipart monster',
+        name: 'Monster sprint',
+        description: 'The imported multipart monster runs through the room.',
         locationId: 'location.interior',
         subjects: ['hand-monster'],
         blocking: [{ subject: 'hand-monster', placement: { type: 'location_slot', slot: 'center' } }],
@@ -273,6 +304,10 @@ describe('production compile group bindings', () => {
     expect(motionTransforms).toHaveLength(2);
     expect(motionTransforms[0]!.position).not.toEqual(motionTransforms[1]!.position);
     expect(Math.min(...motionTransforms.map((transform) => transform.position[1]))).toBeGreaterThanOrEqual(0);
+    expect(motionTransforms.every((transform) => Math.abs(transform.rotation[0]) > 12)).toBe(true);
+    expect(motionTransforms[0]!.rotation).toEqual(motionTransforms[1]!.rotation);
+    expect(Math.min(...motionTransforms.map((transform) => transform.position[1])))
+      .toBeGreaterThan(Math.min(palm.dimensions[1], finger.dimensions[1]) / 2);
   });
 
   it('compiles group-only prepared locations without template geometry', () => {

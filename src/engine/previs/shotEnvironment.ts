@@ -71,6 +71,14 @@ export function getShotEnvironmentContract(
   return undefined;
 }
 
+/** Explicit production instruction that this shot must not consume panorama references. */
+export function shotExpectsNoPanorama(
+  project: LocationProject,
+  shot: Pick<Shot, 'id' | 'shotNumber' | 'productionShotId'>,
+): boolean {
+  return getShotEnvironmentContract(project, shot)?.expectNoPanorama === true;
+}
+
 /**
  * Resolve the explicit panorama for a prepared location.
  *
@@ -108,6 +116,14 @@ export function resolveShotEnvironment(
   const expectedPanoId = contract.expectedPanoId
     ?? location.defaultPanoId
     ?? location.panoIds?.[0];
+  if (contract.expectNoPanorama) {
+    return {
+      contractPresent: true,
+      contract,
+      locationId: location.id,
+      diagnostics,
+    };
+  }
   if (!expectedPanoId) {
     diagnostics.push({
       code: 'expected_panorama_missing',
@@ -194,13 +210,18 @@ export function inspectShotEnvironment(
     });
   }
 
-  if (resolution.contractPresent && resolution.expectedPanoId !== shot.linkedPanoId) {
+  const panoramaMismatch = resolution.contract?.expectNoPanorama
+    ? shot.linkedPanoId !== null && shot.linkedPanoId !== undefined
+    : resolution.expectedPanoId !== shot.linkedPanoId;
+  if (resolution.contractPresent && panoramaMismatch) {
     diagnostics.push({
       code: 'wrong_panorama_linked',
       severity: 'error',
-      message: shot.linkedPanoId
-        ? `Shot "${shot.id}" links panorama "${shot.linkedPanoId}" instead of expected "${resolution.expectedPanoId}".`
-        : `Shot "${shot.id}" has no linked panorama; expected "${resolution.expectedPanoId}".`,
+      message: resolution.contract?.expectNoPanorama
+        ? `Shot "${shot.id}" links panorama "${shot.linkedPanoId}" but its environment contract requires no panorama.`
+        : shot.linkedPanoId
+          ? `Shot "${shot.id}" links panorama "${shot.linkedPanoId}" instead of expected "${resolution.expectedPanoId}".`
+          : `Shot "${shot.id}" has no linked panorama; expected "${resolution.expectedPanoId}".`,
       shotId: shot.id,
       locationId: resolution.locationId,
       expectedPanoId: resolution.expectedPanoId,

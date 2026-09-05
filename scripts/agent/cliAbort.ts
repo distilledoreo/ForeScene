@@ -7,11 +7,12 @@ import type { Page } from '@playwright/test';
 export interface CliAbortScope {
   readonly signal: AbortSignal;
   throwIfAborted: () => void;
+  abort: () => void;
   dispose: () => void;
 }
 
 export interface CliAbortScopeOptions {
-  /** Invoked synchronously when the scope aborts (SIGINT/SIGTERM or explicit dispose). */
+  /** Invoked synchronously when the scope aborts (SIGINT/SIGTERM or explicit abort). */
   onAbort?: () => void | Promise<void>;
 }
 
@@ -32,14 +33,18 @@ export function createCliAbortScope(options: CliAbortScopeOptions = {}): CliAbor
     void options.onAbort?.();
   };
 
-  const dispose = () => {
-    if (controller.signal.aborted) return;
-    controller.abort();
-    notifyAbort();
+  const cleanup = () => {
     for (const remove of handlers.splice(0)) remove();
   };
 
-  const onSignal = () => dispose();
+  const abort = () => {
+    if (controller.signal.aborted) return;
+    controller.abort();
+    notifyAbort();
+    cleanup();
+  };
+
+  const onSignal = () => abort();
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   handlers.push(() => {
@@ -53,7 +58,8 @@ export function createCliAbortScope(options: CliAbortScopeOptions = {}): CliAbor
       if (!controller.signal.aborted) return;
       throw abortError();
     },
-    dispose,
+    abort,
+    dispose: cleanup,
   };
 }
 

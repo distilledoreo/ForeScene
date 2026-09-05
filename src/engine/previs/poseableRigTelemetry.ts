@@ -224,8 +224,24 @@ export function resolvePoseableHumanoidTelemetry(params: {
   if (resolvedRig) {
     const raw = rigPositions(resolvedRig.rig);
     if (usablePositions(raw.positions)) {
+      // Saved/autorig marker packages use grounded local coordinates, whereas
+      // SceneObject transforms are center-based. Older packages may already be
+      // centered, so normalize from the actual feet rather than assuming one
+      // convention. This mirrors runtime mesh placement and keeps rig telemetry
+      // inside the declared scene-object bounds.
+      const footPositions = [raw.positions.leftFoot, raw.positions.rightFoot]
+        .filter((value): value is Vec3 => Boolean(value));
+      const feetY = footPositions.length > 0
+        ? footPositions.reduce((sum, value) => sum + value[1], 0) / footPositions.length
+        : undefined;
+      const localYOffset = feetY === undefined
+        ? 0
+        : (-params.object.dimensions[1] / 2) - feetY;
       const world = Object.fromEntries(
-        Object.entries(raw.positions).map(([key, value]) => [key, objectLocalToWorld(params.object, value!)]),
+        Object.entries(raw.positions).map(([key, value]) => [
+          key,
+          objectLocalToWorld(params.object, [value![0], value![1] + localYOffset, value![2]]),
+        ]),
       ) as Partial<Record<HumanJointId, Vec3>>;
       const derived = deriveLandmarks(world);
       return {

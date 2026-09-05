@@ -12,6 +12,7 @@ import {
   buildCameraMatrices,
   buildOtsRepairProfile,
   buildRepairPlan,
+  buildSubjectBoundsForRepair,
   buildShotCompositionTelemetry,
   createInitialRunState,
   cropHeightFraction,
@@ -22,6 +23,7 @@ import {
   isCanonicalFrame,
   isRepairableIssue,
   migrateRenderPipelineVersion,
+  objectWorldAabb,
   otsHardAccept,
   PREVIS_RENDER_PIPELINE_VERSION,
   preflightContactSheet,
@@ -154,6 +156,29 @@ describe('render pixel stats', () => {
 });
 
 describe('screen projection', () => {
+  it('builds world bounds from rotated object geometry', () => {
+    const wall: SceneObject = {
+      id: 'wall-rotated',
+      name: 'Corridor wall',
+      type: 'wall',
+      dimensions: [15.8, 3, 0.16],
+      transform: {
+        position: [98.1, 1.5, 0],
+        rotation: [0, 90, 0],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      locked: false,
+      color: '#888888',
+    } as SceneObject;
+
+    const bounds = objectWorldAabb(wall);
+
+    expect(bounds.max[0] - bounds.min[0]).toBeCloseTo(0.16, 6);
+    expect(bounds.max[1] - bounds.min[1]).toBeCloseTo(3, 6);
+    expect(bounds.max[2] - bounds.min[2]).toBeCloseTo(15.8, 6);
+  });
+
   it('projects AABB corners into NDC and pixel space', () => {
     const camera = makeCamera({
       position: [0, 1.6, 4],
@@ -283,6 +308,65 @@ describe('camera solver V2', () => {
     );
     const depthRatio = Math.max(distA, distB) / Math.max(1e-4, Math.min(distA, distB));
     expect(depthRatio).toBeLessThan(1.35);
+  });
+
+  it('backs away far enough to keep a deep multipart assembly complete', () => {
+    const creature = subjectBoundsFromPlacement({
+      id: 'creature',
+      position: [0, 0, 0],
+      width: 1.05,
+      height: 1.25,
+      depth: 1.3,
+      requireCompleteAssembly: true,
+    });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '011',
+        camera: { template: 'medium', subjects: ['creature'], angle: 'front' },
+      }),
+      subjects: [creature],
+      aspectRatio: 16 / 9,
+    });
+    const projected = projectAabb(
+      { min: creature.min, max: creature.max },
+      buildCameraMatrices(solved.camera, 1280, 720),
+    );
+
+    expect(solved.hardPass).toBe(true);
+    expect(projected.behindCamera).toBe(false);
+    expect(projected.clipped).toBe(false);
+  });
+
+  it('keeps depth-separated subjects readable in a generic full shot', () => {
+    const leader = subjectBoundsFromPlacement({ id: 'leader', position: [0, 0, 0] });
+    const pursuer = subjectBoundsFromPlacement({
+      id: 'pursuer',
+      position: [0, 0, -1.2],
+      width: 1.05,
+      height: 1.25,
+      depth: 1.3,
+      requireCompleteAssembly: true,
+    });
+    const solved = solveShotCamera({
+      shot: definition({
+        shotNumber: '012',
+        camera: {
+          template: 'full',
+          subjects: ['leader', 'pursuer'],
+          angle: 'three_quarter',
+        },
+      }),
+      subjects: [leader, pursuer],
+      aspectRatio: 16 / 9,
+    });
+    const matrices = buildCameraMatrices(solved.camera, 1280, 720);
+    const leaderProjection = projectAabb({ min: leader.min, max: leader.max }, matrices);
+    const pursuerProjection = projectAabb({ min: pursuer.min, max: pursuer.max }, matrices);
+
+    expect(solved.hardPass).toBe(true);
+    expect(leaderProjection.clipped).toBe(false);
+    expect(pursuerProjection.clipped).toBe(false);
+    expect(Math.abs(leaderProjection.centerX - pursuerProjection.centerX)).toBeGreaterThanOrEqual(0.08);
   });
 
   it('OTS aims at upper torso so primary head is not mid-frame', () => {
@@ -600,6 +684,107 @@ describe('camera solver V2', () => {
       aspectRatio: 16 / 9,
     });
     expect(solved.camera.position.every(Number.isFinite)).toBe(true);
+  });
+});
+
+describe('bound production assembly telemetry', () => {
+  it('projects every member of a bound multipart subject as one assembly', () => {
+    const project = createDefaultProject() as LocationProject;
+    const part = (id: string, x: number): SceneObject => ({
+      id,
+      name: id === 'creature-core' ? 'Creature Core' : 'Detached Eye Stalk',
+      type: 'imported_model',
+      transform: {
+        position: [x, 0.5, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+      },
+      dimensions: [0.5, 1, 0.5],
+      visible: true,
+      locked: false,
+      color: '#888888',
+      stagingRole: 'prop',
+    } as SceneObject);
+    project.scene.objects = [part('creature-core', -0.8), part('creature-eye', 0.8)];
+    project.scene.objectGroups = {
+      'creature-group': {
+        id: 'creature-group',
+        name: 'Creature assembly',
+        objectIds: ['creature-core', 'creature-eye'],
+      },
+    };
+    project.workflow.production = {
+      schemaVersion: 1,
+      bindings: { creature: { kind: 'group', groupId: 'creature-group' } },
+      locations: {},
+      shotContracts: {},
+    };
+    const shot = makeShot(makeCamera({
+      position: [0, 1, 6],
+      target: [0, 0.5, 0],
+      fovDegrees: 40,
+    }), '013');
+    project.shots = [shot];
+
+    const telemetry = buildShotCompositionTelemetry({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '013',
+        subjects: ['creature'],
+        camera: { template: 'full', subjects: ['creature'] },
+      }),
+    });
+
+    expect(telemetry.subjects.creature?.visible).toBe(true);
+    expect(telemetry.subjects.creature?.completeAssemblyInFrame).toBe(true);
+    expect(telemetry.subjects.creature?.assemblyBounds?.widthCoverage).toBeGreaterThan(0.2);
+
+    const repairBounds = buildSubjectBoundsForRepair({
+      project,
+      shot,
+      definition: definition({
+        shotNumber: '013',
+        subjects: ['creature'],
+        camera: { template: 'full', subjects: ['creature'] },
+      }),
+    });
+    expect(repairBounds).toHaveLength(1);
+    expect(repairBounds[0]?.requireCompleteAssembly).toBe(true);
+    expect((repairBounds[0]?.max[0] ?? 0) - (repairBounds[0]?.min[0] ?? 0)).toBeGreaterThan(1.5);
+
+    const closeShot = {
+      ...shot,
+      camera: makeCamera({
+        position: [0, 0.8, 1],
+        target: [0, 0.5, 0],
+        fovDegrees: 35,
+      }),
+    };
+    const closeDefinition = definition({
+      shotNumber: '013',
+      subjects: ['creature'],
+      camera: { template: 'full', subjects: ['creature'] },
+      requirements: { visibleSubjects: ['creature'] },
+    });
+    const closeTelemetry = buildShotCompositionTelemetry({
+      project,
+      shot: closeShot,
+      definition: closeDefinition,
+    });
+    const validation = validateShotFrame({
+      project,
+      shot: closeShot,
+      definition: closeDefinition,
+      frameExists: true,
+      frameByteSize: 4096,
+      telemetry: closeTelemetry,
+      fromCanonicalRenderer: true,
+    });
+    expect(validation.status).toBe('failed');
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required_subject_incomplete_framing', subject: 'creature' }),
+    ]));
   });
 });
 

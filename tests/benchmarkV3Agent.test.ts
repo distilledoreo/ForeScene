@@ -259,7 +259,7 @@ describe('ForeScene Benchmark V3-Agent', () => {
     expect(result.failure?.operation).toBe(timedOutStage);
     expect(result.failure?.class).toBe(timedOutStage === 'candidate' ? 'MODEL_FAILURE' : 'INFRASTRUCTURE_FAILURE');
     expect(productionCalls).toBe(timedOutStage === 'candidate' ? 0 : 1);
-  });
+  }, 30_000);
 
   it('runs Fake A and Fake B through the real V3-Agent path with one model invocation and no auto-repair', async () => {
     const inputRoot = await fixtureInputRoot();
@@ -334,5 +334,5 @@ describe('ForeScene Benchmark V3-Agent', () => {
     expect(collapsed.collapse).toBe(true);
     expect(collapsed.warnings.join('\n')).toMatch(/benchmark-collapse detected/);
     expect(collapsed.pairs[0]?.candidatePlan).toBe('IDENTICAL');
-  });
+  }, 30_000);
 });

@@ -9,6 +9,7 @@ import {
   createBlankGrayboxProject,
   createInitialRunState,
   compileCastPhaseWithPersistedEntities,
+  compilePropsPhaseWithPersistedEntities,
   diffPrevisManifests,
   firstIncompletePhase,
   hashPrevisManifest,
@@ -84,6 +85,35 @@ describe('previs production manifest', () => {
     expect(result.manifest?.shots.map((shot) => shot.shotNumber)).toEqual([
       '010', '020', '030', '040',
     ]);
+  });
+
+  it('parses embedded prop aliases and validates their host joint', () => {
+    const input = loadExample('minimal-dialogue.json') as Record<string, unknown>;
+    input.props = [{
+      id: 'shield',
+      name: 'Shield embedded in Alex',
+      primitive: 'shield',
+      embeddedIn: { subject: 'alex', joint: 'leftHand' },
+    }];
+    const valid = parsePrevisProductionManifest(input);
+    expect(valid.errors).toEqual([]);
+    expect(valid.manifest?.props?.[0]?.embeddedIn).toEqual({
+      subject: 'alex',
+      joint: 'leftHand',
+    });
+
+    const invalid = structuredClone(input) as Record<string, unknown>;
+    invalid.props = [{
+      id: 'shield',
+      name: 'Broken embedded shield',
+      primitive: 'shield',
+      embeddedIn: { subject: 'missing-host', joint: 'not-a-joint' },
+    }];
+    const rejected = parsePrevisProductionManifest(invalid);
+    expect(rejected.errors.map((error) => error.code)).toEqual(expect.arrayContaining([
+      'unknown_reference',
+      'unsupported_value',
+    ]));
   });
 
   it('parses the music-video fixture with two locations', () => {
@@ -178,6 +208,7 @@ describe('previs production manifest', () => {
     input.shots[0]!.motion = {
       durationSeconds: 2,
       renderControlVideo: true,
+      autoCompose: true,
       keyframes: [
         { timeSeconds: 0, camera: { position: [0, 1, 2], target: [0, 1, 0] } },
         { timeSeconds: 2, staging: [{ subject: 'alex', visible: true, transform: { position: [1, 0, 0] } }] },
@@ -186,6 +217,10 @@ describe('previs production manifest', () => {
     const result = parsePrevisProductionManifest(input);
     expect(result.errors).toEqual([]);
     expect(result.manifest?.shots[0]?.motion?.keyframes).toHaveLength(2);
+    expect(result.manifest?.shots[0]?.motion?.autoCompose).toBe(true);
+
+    (input.shots[0]!.motion as Record<string, unknown>).autoCompose = 'true';
+    expect(parsePrevisProductionManifest(input).errors.some((item) => item.path?.endsWith('.autoCompose'))).toBe(true);
 
     input.shots[0]!.motion = { durationSeconds: 3, keyframes: [{ timeSeconds: 0 }, { timeSeconds: 2 }] };
     expect(parsePrevisProductionManifest(input).errors.some((item) => item.code === 'invalid_range')).toBe(true);
@@ -323,6 +358,52 @@ describe('previs compilers', () => {
     expect(stage).toBeTruthy();
   });
 
+  it('frames an interior-room medium of one imported character at human distance, not room scale', () => {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Imported cast e2e', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast: [{
+        id: 'joseph',
+        type: 'imported_character',
+        source: './joseph.glb',
+        rigMode: 'preserve-existing',
+      }],
+      shots: [{
+        id: 'joseph-medium',
+        shotNumber: '010',
+        name: 'Joseph medium',
+        description: 'Joseph holds a guarded stance.',
+        locationId: 'room',
+        subjects: ['joseph'],
+        camera: { template: 'medium', subjects: ['joseph'] },
+      }],
+    });
+    const compiled = compileProduction(parsed.manifest!);
+    const resolved = compileShotList(parsed.manifest!, {
+      ...compiled.context,
+      entities: {
+        ...compiled.context.entities,
+        'cast.joseph': { objectId: 'obj_imported_joseph', refs: { obj_imported_joseph: 'obj_imported_joseph' } },
+      },
+    });
+    const created = resolved.flatMap((batch) => batch.plan.commands).find((command) => (
+      command.op === 'shot.create'
+    ));
+    expect(created?.op).toBe('shot.create');
+    if (created?.op !== 'shot.create') return;
+    const camera = created.shot.camera;
+    expect(camera?.position).toBeDefined();
+    expect(camera?.target).toBeDefined();
+    if (!camera?.position || !camera.target) return;
+    const distance = Math.hypot(
+      camera.position[0] - camera.target[0],
+      camera.position[1] - camera.target[1],
+      camera.position[2] - camera.target[2],
+    );
+    expect(distance).toBeLessThan(3.5);
+  });
+
   function compileCastRebuild(cast: Array<Record<string, unknown>>) {
     const parsed = parsePrevisProductionManifest({
       version: 1,
@@ -384,6 +465,50 @@ describe('previs compilers', () => {
     expect(rebuilt.importedCharacters?.map((entry) => entry.entityKey)).toEqual(['cast.joseph']);
   });
 
+  it('recompiles primitive props without mistaking planned refs for live entities', () => {
+    const parsed = parsePrevisProductionManifest(loadExample('minimal-dialogue.json'));
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+
+    expect(compiled.props.context.entities['props.table']?.objectId).toBe('prop_table');
+    const rebuilt = compilePropsPhaseWithPersistedEntities(
+      manifest,
+      compiled.cast.context,
+      {},
+    );
+
+    expect(rebuilt.plan.commands.filter((command) => command.op === 'object.create')).toHaveLength(1);
+    expect(rebuilt.context.entities['props.table']?.objectId).toBe('prop_table');
+  });
+
+  it('recompiles embedded props against the persisted live cast without proxy geometry', () => {
+    const input = loadExample('minimal-dialogue.json') as Record<string, unknown>;
+    input.props = [{
+      id: 'shield',
+      name: 'Alex shield',
+      primitive: 'shield',
+      embeddedIn: { subject: 'alex', joint: 'leftHand' },
+    }];
+    const parsed = parsePrevisProductionManifest(input);
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const compiled = compileProduction(manifest);
+    const liveAlex = {
+      objectId: 'obj_live_alex',
+      refs: { obj_live_alex: 'obj_live_alex' },
+    };
+
+    const rebuilt = compilePropsPhaseWithPersistedEntities(
+      manifest,
+      compiled.cast.context,
+      { 'cast.alex': liveAlex },
+    );
+
+    expect(rebuilt.plan.commands).toEqual([]);
+    expect(rebuilt.context.entities['props.shield']).toEqual(liveAlex);
+  });
+
   it('merges partial motion transforms with each actor\'s static shot transform', () => {
     const input = structuredClone(loadExample('minimal-dialogue.json')) as {
       shots: Array<Record<string, unknown>>;
@@ -416,7 +541,11 @@ describe('previs compilers', () => {
     expect(staticStage?.op).toBe('shot.stageObject');
     expect(timeline?.op).toBe('shot.timeline.replace');
     if (staticStage?.op !== 'shot.stageObject' || timeline?.op !== 'shot.timeline.replace') return;
+    const inheritedTransform = timeline.keyframes[0]!.objects?.find((entry) => (
+      'ref' in entry.object && entry.object.ref === 'cast_alex'
+    ))?.transform;
     const animatedTransform = timeline.keyframes[1]!.objects?.[0]?.transform;
+    expect(inheritedTransform).toEqual(staticStage.transform);
     expect(animatedTransform).toEqual({
       position: staticStage.transform!.position,
       rotation: [0, 1, 0],

@@ -131,6 +131,9 @@ export class PersistentRenderSession {
       revisionId: result.revisionId,
       error: result.ok ? undefined : (result.diagnostics?.[0]?.message ?? 'Clean frame render failed.'),
       fromCanonicalRenderer: isCanonicalSource(result.source),
+      source: isCanonicalSource(result.source)
+        ? result.source as 'canonical_clay_renderer' | 'canonical_projected_renderer'
+        : undefined,
       renderProfileId: this.profile.id,
       renderFingerprint: job.renderFingerprint,
     };
@@ -140,7 +143,7 @@ export class PersistentRenderSession {
     job: RenderSessionShotJob,
     signal?: AbortSignal,
   ): Promise<BrowserRenderResult> {
-    const input = buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds);
+    const input = buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds, job.appearance);
     const result = await this.page.evaluate(async (payload) => {
       const abortFn = (window as unknown as {
         __foreSceneCliAbortRequested?: () => Promise<boolean>;
@@ -271,7 +274,12 @@ export class PersistentRenderSession {
       return [await this.renderShot(jobs[0]!, signal)];
     }
 
-    const inputs = jobs.map((job) => buildRenderInputFromProfile(this.profile, job.shotId, job.timeSeconds));
+    const inputs = jobs.map((job) => buildRenderInputFromProfile(
+      this.profile,
+      job.shotId,
+      job.timeSeconds,
+      job.appearance,
+    ));
     const batch = await this.page.evaluate(async (payload) => {
       const abortFn = (window as unknown as {
         __foreSceneCliAbortRequested?: () => Promise<boolean>;

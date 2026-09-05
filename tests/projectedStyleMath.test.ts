@@ -161,9 +161,12 @@ describe('synthetic directional projection sampling', () => {
     const wall = createSceneObject('wall', 1);
     const person = createSceneObject('human_dummy', 1);
     const sun = createSceneObject('sun_marker', 1);
+    const importedCreature = createSceneObject('imported_model', 1);
+    importedCreature.stagingRole = 'prop';
     expect(shouldReceiveProjectedStyle(wall)).toBe(true);
     expect(shouldReceiveProjectedStyle(person)).toBe(false);
     expect(shouldReceiveProjectedStyle(sun)).toBe(false);
+    expect(shouldReceiveProjectedStyle(importedCreature)).toBe(false);
   });
 
   it('shader embeds the same pure GLSL helpers used by JS', () => {
@@ -183,7 +186,7 @@ describe('synthetic directional projection sampling', () => {
     expect(materials).not.toMatch(/#include\s*<lights_physical_fragment>/);
     expect(materials).toContain('#include <aomap_fragment>');
     expect(materials).toContain('reflectedLight.indirectDiffuse = diffuseColor.rgb');
-    expect(materials).toContain('projected-style-v10');
+    expect(materials).toContain('projected-style-v11');
   });
 
   it('sampleSyntheticDirectionalPano covers seam UVs without NaN', () => {

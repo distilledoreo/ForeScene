@@ -158,20 +158,28 @@ function normalizedPrototype(params: {
   if (existing) return existing;
   const template = templates.get(params.sourceAssetId);
   if (!template) throw new Error('Imported rig source is not loaded.');
+  // Keep the prototype root identity-only: createInstance applies the
+  // SceneObject transform to that root. Canonical orientation, fitting, and
+  // centering belong on a child so they are not overwritten by staging.
   const wrapper = new THREE.Group();
   wrapper.name = 'forescene-imported-rig-prototype';
-  wrapper.quaternion.copy(canonicalOrientationQuaternion(params.binding.orientation));
-  wrapper.add(template);
-  wrapper.updateMatrixWorld(true);
-  const bounds = new THREE.Box3().setFromObject(wrapper);
+  const canonical = new THREE.Group();
+  canonical.name = 'forescene-imported-rig-canonical';
+  canonical.quaternion.copy(canonicalOrientationQuaternion(params.binding.orientation));
+  canonical.add(template);
+  wrapper.add(canonical);
+  canonical.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(canonical);
   const size = bounds.getSize(new THREE.Vector3());
   const sourceHeight = size.y > 1e-6 ? size.y : Math.max(size.x, size.z, 1);
-  wrapper.scale.setScalar(params.binding.approximateHeightMeters / sourceHeight);
-  wrapper.updateMatrixWorld(true);
-  const fitted = new THREE.Box3().setFromObject(wrapper);
-  wrapper.position.set(
+  canonical.scale.setScalar(params.binding.approximateHeightMeters / sourceHeight);
+  canonical.updateMatrixWorld(true);
+  const fitted = new THREE.Box3().setFromObject(canonical);
+  canonical.position.set(
     -(fitted.min.x + fitted.max.x) * 0.5,
-    params.binding.orientation.groundLevelMeters - fitted.min.y,
+    params.binding.orientation.groundLevelMeters
+      - fitted.min.y
+      - params.binding.approximateHeightMeters / 2,
     -(fitted.min.z + fitted.max.z) * 0.5,
   );
   wrapper.updateMatrixWorld(true);
@@ -206,7 +214,7 @@ export function createImportedRiggedPoseableCharacter(params: {
         const prototype = normalizedPrototype({ sourceAssetId: params.sourceAssetId, binding: params.binding });
         const instance = cloneSkinnedPrototypeInstance(prototype);
         instance.name = object.name;
-        instance.userData[sourceRootKey] = instance.children[0];
+        instance.userData[sourceRootKey] = instance.children[0]?.children[0];
         instance.userData.importedRigPreserved = true;
         const targetHeight = object.dimensions[1] || params.binding.approximateHeightMeters;
         // The prototype is already fitted to the binding's canonical height.

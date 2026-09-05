@@ -28,6 +28,9 @@
  *   npm run agent:contact-sheet -- --input artifacts/previs/shots --output artifacts/previs/contact-sheet.png
  *   npm run agent:visual-preflight -- --shots 01,02
  *   npm run agent:asset-contract
+ *   npm run agent:world-preview -- --shots 01,02
+ *   npm run agent:world-mock -- --shots 01,02
+ *   npm run agent:world-depth -- --shot 02 --time 1.5 --resolution 640x360 --output artifacts/depth.npy
  *   npm run agent:verify -- --json
  *   npm run agent:frame -- --shot 01 --mode projected --output artifacts/01.projected.png
  *
@@ -36,7 +39,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { openAgentBrowser, waitForAgentIdle, type AgentBrowserSession } from './browser';
 import { createCliAbortScope, installCliAbortBridge, type CliAbortScope } from './cliAbort';
@@ -51,7 +54,6 @@ import {
 import { verifyPackageAgainstExportPlan } from '../../src/engine/agent/packageVerification';
 import { runRefinementCli } from './refinement';
 import {
-  refreshAgentSessionRevision,
   saveAgentArtifactToFile,
   toCliArtifactTransfer,
   type AgentArtifactTransferTelemetry,
@@ -68,7 +70,8 @@ import {
   resolveAgentRenderAppearance,
   type AgentRenderAppearance,
 } from './cliCapabilities';
-import { buildAgentCliHelpDocument } from './cliCommands';
+import { buildAgentCliHelpDocument, describeAgentCliCommand } from './cliCommands';
+import { getAgentSchema } from '../../src/engine/agent/discovery';
 import {
   AGENT_CLI_EXIT,
   AgentCliUsageError,
@@ -85,11 +88,15 @@ import {
   requestCliOperationCancel,
 } from './cliOperation';
 import { createCliInvocationIdentity, publishCliInvocationIdentity } from './cliIdentity';
+import { writeCliEvidence } from './cliEvidence';
 import {
   resolveCliCommandShotUsage,
+  resolveCliShotReferences,
   toOptionalRequestedShotIds,
-  toVisualCollectionInput,
+  type CliShotReference,
+  type ResolveCliShotReferencesResult,
 } from './cliShotSelection';
+import { buildFrameCliResult } from './frameResult';
 
 let activeCliCommand: string | undefined;
 let activeCliOperation: ReturnType<typeof beginCliOperation> | undefined;
@@ -99,7 +106,9 @@ const cliStdout: CliStdoutContext = {
 };
 
 function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(wrapAgentCliStdout(cliStdout, value), null, 2)}\n`);
+  const envelope = wrapAgentCliStdout(cliStdout, value);
+  writeCliEvidence(envelope, envelope.ok ? AGENT_CLI_EXIT.success : AGENT_CLI_EXIT.failure);
+  process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
 }
 
 function printErr(message: string): void {
@@ -149,6 +158,18 @@ function resolveFrameContent(value?: string): 'full_scene' | 'characters_only' |
     return value === 'full' ? 'full_scene' : value;
   }
   throw new AgentCliUsageError('--content must be full_scene, characters_only, or full.');
+}
+
+function resolveImageDimensions(value?: string): { width?: number; height?: number } {
+  if (!value) return {};
+  const match = /^(\d+)x(\d+)$/i.exec(value.trim());
+  if (!match) throw new AgentCliUsageError('--resolution must be WIDTHxHEIGHT (for example 640x360).');
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new AgentCliUsageError('--resolution dimensions must be positive integers.');
+  }
+  return { width, height };
 }
 
 function parseArgs(argv: string[]) {
@@ -317,23 +338,32 @@ async function runShotPanorama(options: {
 }) {
   requireExplicitWrite('agent:shot-panorama', options.writeAccess);
   const panoId = options.pano === 'null' || options.pano === '' ? null : options.pano;
-  const looksLikeShotNumber = /^\d+$/.test(options.shotId.trim());
   await withSession({ ...options, command: 'shot-panorama' }, async (session) => {
+    const shot = await resolveRequiredShot(session, 'shot-panorama', options.shotId);
+    if (!shot) return;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.setShotPanorama({
-        shot: input.looksLikeShotNumber
-          ? { shotNumber: input.shotId }
-          : { id: input.shotId },
+        shot: { id: input.shotId },
         panoId: input.panoId,
       })
     ), {
-      shotId: options.shotId,
+      shotId: shot.id,
       panoId,
-      looksLikeShotNumber,
     });
     printJson(result);
     if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
   });
+}
+
+async function resolveOptionalArtifactOutput(output: string | undefined): Promise<string | undefined> {
+  if (!output) return undefined;
+  const resolved = path.resolve(output);
+  try {
+    if ((await stat(resolved)).isDirectory()) return undefined;
+  } catch {
+    // Treat missing paths as explicit file targets.
+  }
+  return resolved;
 }
 
 async function runModelImport(options: {
@@ -349,6 +379,7 @@ async function runModelImport(options: {
 }) {
   requireExplicitWrite('agent:import-model', options.writeAccess);
   const target = path.resolve(options.file);
+  const output = await resolveOptionalArtifactOutput(options.output);
   await withSession(options, async (session) => {
     await session.page.locator('[data-agent-model-import-input]').setInputFiles(target);
     const result = await session.page.evaluate(async (input) => {
@@ -365,12 +396,11 @@ async function runModelImport(options: {
       consentToken: options.consentToken ?? (options.allowHeavyModelImports ? 'allow-heavy-model-imports' : undefined),
       extremeConfirmation: options.consentToken === 'IMPORT' ? 'IMPORT' : undefined,
     });
-    if (options.output) {
-      const output = path.resolve(options.output);
+    if (output) {
       await mkdir(path.dirname(output), { recursive: true });
       await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
     }
-    printJson({ ...result, ...(options.output ? { output: path.resolve(options.output) } : {}) });
+    printJson({ ...result, ...(output ? { output } : {}) });
     if (!result.ok) process.exitCode = 1;
   });
 }
@@ -542,6 +572,10 @@ async function runFrame(options: {
   output: string;
 }) {
   await withSession(options, async (session) => {
+    // Resolve the selector once at the CLI boundary so --shot accepts canonical
+    // ids and shot numbers (padding-normalized) with identical semantics.
+    const shot = await resolveRequiredShot(session, 'frame', options.shotId);
+    if (!shot) return;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.renderShotFrame({
         shotId: input.shotId,
@@ -551,23 +585,30 @@ async function runFrame(options: {
         content: input.content,
       })
     ), {
-      shotId: options.shotId,
+      shotId: shot.id,
       timeSeconds: options.timeSeconds,
       appearance: options.appearance,
       peopleVariant: options.peopleVariant,
       content: options.content,
     });
     if (!result.ok || !result.pngDataUrl) {
-      printJson(result);
+      printJson({ ...result, shotNumber: shot.shotNumber });
       process.exitCode = AGENT_CLI_EXIT.failure;
       return;
     }
     const comma = result.pngDataUrl.indexOf(',');
     if (comma < 0) throw new Error('Agent frame response did not contain a data URL.');
+    const bytes = Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64');
     const target = path.resolve(options.output);
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, Buffer.from(result.pngDataUrl.slice(comma + 1), 'base64'));
-    printJson({ ...result, pngDataUrl: undefined, output: target, appearance: options.appearance });
+    await writeFile(target, bytes);
+    printJson(buildFrameCliResult({
+      result,
+      output: target,
+      appearance: options.appearance,
+      bytes,
+      shotNumber: shot.shotNumber,
+    }));
   });
 }
 
@@ -609,7 +650,7 @@ async function runSaveProject(options: {
     ));
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
-    if (result.ok && result.artifact?.artifactId) {
+    if (result.ok && 'artifact' in result && result.artifact?.artifactId) {
       const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
       savedPath = saved.savedPath;
       transfer = toCliArtifactTransfer(saved);
@@ -660,20 +701,91 @@ const REVIEW_PASSES = [
   },
 ] as const;
 
+async function listCliShotReferences(session: AgentBrowserSession): Promise<CliShotReference[]> {
+  return session.page.evaluate(() => window.foreScene!.listShots());
+}
+
+function printShotResolutionFailure(command: string, selector: string, failure: Extract<ResolveCliShotReferencesResult, { ok: false }>): void {
+  const ambiguous = failure.ambiguous.length > 0;
+  printJson({
+    ok: false,
+    status: 'failed',
+    command,
+    shotId: selector,
+    revisionId: '',
+    width: 0,
+    height: 0,
+    diagnostics: [{
+      severity: 'error' as const,
+      code: ambiguous ? 'ambiguous_target' : 'target_not_found',
+      message: failure.error,
+      ...(ambiguous
+        ? { candidates: failure.ambiguous.flatMap((entry) => entry.candidates.map((candidate) => candidate.id)) }
+        : {}),
+    }],
+  });
+  process.exitCode = AGENT_CLI_EXIT.failure;
+}
+
+/**
+ * Resolve one CLI shot selector (canonical id or shot number, padding-normalized)
+ * against the live project before calling an API that takes exact ids.
+ * Prints a target_not_found / ambiguous_target result envelope and sets the
+ * failure exit code when resolution fails; callers must return without the API call.
+ */
+async function resolveRequiredShot(
+  session: AgentBrowserSession,
+  command: string,
+  selector: string,
+): Promise<CliShotReference | undefined> {
+  const resolved = resolveCliShotReferences(await listCliShotReferences(session), [selector]);
+  if (!resolved.ok) {
+    printShotResolutionFailure(command, selector, resolved);
+    return undefined;
+  }
+  return resolved.shots[0];
+}
+
+/**
+ * Resolve engine passthrough selections (verify / visual-preflight).
+ *
+ * Selectors that resolve are replaced with canonical ids; unknown selectors are
+ * passed through untouched so the documented engine contract — explicit unknown
+ * or empty selections fail collectVisualPreflightValidation and unmatched ids
+ * appear in the JSON result and provenance — stays intact. Ambiguous selectors
+ * hard-fail because passing one through would silently change meaning.
+ */
+async function resolvePassthroughShotIds(
+  session: AgentBrowserSession,
+  requested: readonly string[] | undefined,
+): Promise<{ ok: true; shotIds?: string[] } | { ok: false }> {
+  if (requested === undefined) return { ok: true };
+  const available = await listCliShotReferences(session);
+  const shotIds: string[] = [];
+  for (const selector of requested) {
+    const resolved = resolveCliShotReferences(available, [selector]);
+    if (resolved.ok) {
+      shotIds.push(resolved.shots[0]!.id);
+      continue;
+    }
+    if (resolved.ambiguous.length > 0) {
+      printShotResolutionFailure('verify', selector, resolved);
+      return { ok: false };
+    }
+    shotIds.push(selector);
+  }
+  return { ok: true, shotIds };
+}
+
 async function resolveShotIds(
   session: AgentBrowserSession,
   requestedIds: string[],
 ): Promise<Array<{ id: string; shotNumber: string }>> {
-  const available = await session.page.evaluate(() => window.foreScene!.listShots());
+  const available = await listCliShotReferences(session);
   const requested = requestedIds.length > 0 ? requestedIds : available.map((shot) => shot.id);
-  const resolved = requested.map((requestedId) => (
-    available.find((shot) => shot.id === requestedId || shot.shotNumber === requestedId)
-  ));
-  const missing = requested.filter((id, index) => !resolved[index]);
-  if (missing.length > 0) {
-    throw new Error(`Unknown shot id or number: ${missing.join(', ')}.`);
-  }
-  return resolved as Array<{ id: string; shotNumber: string }>;
+  const resolved = resolveCliShotReferences(available, requested);
+  if (!resolved.ok) throw new Error(resolved.error);
+  return resolved.shots;
 }
 
 function dataUrlBytes(dataUrl: string): Buffer {
@@ -809,6 +921,8 @@ async function runVideo(options: {
   download: boolean;
 }) {
   await withSession(options, async (session) => {
+    const shot = await resolveRequiredShot(session, 'video', options.shotId);
+    if (!shot) return;
     const contentMode = options.content === 'full' ? 'full_scene' : options.content;
     const result = await session.page.evaluate(async (input) => (
       window.foreScene!.renderShotVideo({
@@ -819,7 +933,13 @@ async function runVideo(options: {
         attachToShot: input.attachToShot,
         download: false,
       })
-    ), { ...options, content: contentMode });
+    ), {
+      shotId: shot.id,
+      resolution: options.resolution,
+      appearance: options.appearance,
+      content: contentMode,
+      attachToShot: options.attachToShot,
+    });
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
     if (options.download && options.output && result.ok && result.artifact?.artifactId) {
@@ -829,6 +949,7 @@ async function runVideo(options: {
     }
     printJson({
       ...result,
+      shotNumber: shot.shotNumber,
       savedPath,
       transfer,
       provenance: (await session.page.evaluate(() => window.foreScene!.getStatus())).provenance,
@@ -860,7 +981,7 @@ async function withSession<T>(
   const operation = beginCliOperation({
     type: options.command ? commandToOperationName(options.command) : cliStdout.operation,
     profile: options.profile,
-    onCancel: () => abortScope.dispose(),
+    onCancel: () => abortScope.abort(),
   });
   cliStdout.operationId = operation.record.operationId;
   let session: AgentBrowserSession | undefined;
@@ -948,6 +1069,7 @@ async function previewOrApply(
     writeAccess: boolean;
     persistWrite: boolean;
     profile?: string;
+    expectedRevision?: string;
   },
 ) {
   const raw = await readFile(path.resolve(planPath), 'utf8');
@@ -962,13 +1084,17 @@ async function previewOrApply(
     if (command === 'apply') {
       await waitForAgentIdle(session.page);
     }
-    const result = await session.page.evaluate(async ({ commandName, planJson }) => {
+    const result = await session.page.evaluate(async ({ commandName, planJson, expectedRevisionId }) => {
       const api = window.foreScene;
       if (!api) throw new Error('window.foreScene is not available');
       if (commandName === 'preview') return api.previewPlan(planJson);
       await api.waitForIdle({ timeoutMs: 60_000 });
-      return api.applyPlan(planJson);
-    }, { commandName: command, planJson: plan });
+      return api.applyPlan(planJson, expectedRevisionId ? { expectedRevisionId } : undefined);
+    }, {
+      commandName: command,
+      planJson: plan,
+      expectedRevisionId: options.expectedRevision,
+    });
     printJson(result);
     if (!result || typeof result !== 'object' || !('ok' in result) || !(result as { ok: boolean }).ok) {
       process.exitCode = 1;
@@ -1010,11 +1136,12 @@ async function runVerify(options: {
   output?: string;
   shotIds?: string[];
 }) {
-  const visualInput = toVisualCollectionInput({
-    explicit: options.shotIds !== undefined,
-    shotIds: options.shotIds ?? [],
-  });
   await withSession(options, async (session) => {
+    // Resolve selectors that match to canonical ids; unknown selectors pass
+    // through untouched so the engine-side unmatched-report contract holds.
+    const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
+    if (!passthrough.ok) return;
+    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
       await waitForAgentIdle(session.page);
@@ -1153,18 +1280,30 @@ async function runPackage(options: {
     persistWrite: options.persistWrite,
     profile: options.profile,
   }, async (session) => {
-    await waitForAgentIdle(session.page);
-    const revision = await refreshAgentSessionRevision(session.page).catch(() => ({ revisionId: undefined }));
+    let shotIds = options.shotIds;
+    if (shotIds !== undefined) {
+      const resolved = resolveCliShotReferences(await listCliShotReferences(session), shotIds);
+      if (!resolved.ok) {
+        printShotResolutionFailure('package', shotIds.join(', '), resolved);
+        return;
+      }
+      // Preserve [] so the export API rejects an explicit empty selection.
+      shotIds = resolved.shots.map((shot) => shot.id);
+    }
     printErr('[agent] starting package export…');
 
     const result = await session.page.evaluate(async (input) => {
-      await window.foreScene!.waitForIdle({ timeoutMs: 60_000 });
-      return window.foreScene!.exportPackage({
+      const api = window.foreScene!;
+      await api.waitForIdle({ timeoutMs: 60_000 });
+      // Export the current in-browser project; do not thread a Node-side revision
+      // snapshot captured before waitForIdle — save/frame/flush can advance it.
+      return api.exportPackage({
         shotIds: input.shotIds,
         download: false,
-        expectedRevisionId: input.expectedRevisionId,
       });
-    }, { shotIds: options.shotIds, expectedRevisionId: revision.revisionId });
+    }, {
+      shotIds,
+    });
 
     let savedPath: string | undefined;
     let transfer: AgentArtifactTransferTelemetry | undefined;
@@ -1195,11 +1334,12 @@ async function runVisualPreflight(options: {
   profile?: string;
   shotIds?: string[];
 }) {
-  const visualInput = toVisualCollectionInput({
-    explicit: options.shotIds !== undefined,
-    shotIds: options.shotIds ?? [],
-  });
   await withSession(options, async (session) => {
+    // Resolve selectors that match to canonical ids; unknown selectors pass
+    // through untouched so the engine-side unmatched-report contract holds.
+    const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
+    if (!passthrough.ok) return;
+    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
     const result = await session.page.evaluate((input) => {
       const api = window.foreScene!;
       const collected = api.collectVisualPreflightValidation(input);
@@ -1234,6 +1374,12 @@ async function runAssetContract(options: {
   shotId?: string;
 }) {
   await withSession(options, async (session) => {
+    let shotId: string | undefined;
+    if (options.shotId !== undefined) {
+      const shot = await resolveRequiredShot(session, 'asset-contract', options.shotId);
+      if (!shot) return;
+      shotId = shot.id;
+    }
     const result = await session.page.evaluate((shotId) => {
       const api = window.foreScene!;
       const assetPoseContract = api.inspectAssetPoseContract(shotId ? { shotId } : {});
@@ -1247,8 +1393,104 @@ async function runAssetContract(options: {
         assetPoseContract,
         provenance: api.getStatus().provenance,
       };
-    }, options.shotId);
+    }, shotId);
     printJson(result);
+  });
+}
+
+async function runGenerativeWorldBoundary(options: {
+  command: 'world-preview' | 'world-mock';
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  requestedShots?: string[];
+  output?: string;
+}) {
+  await withSession(options, async (session) => {
+    let resolvedShotIds: string[] | undefined;
+    if (options.requestedShots !== undefined) {
+      if (options.requestedShots.length === 0) {
+        printJson({
+          ok: false,
+          diagnostics: [{
+            severity: 'error' as const,
+            code: 'target_not_found',
+            message: 'An explicit shot selection cannot be empty.',
+          }],
+        });
+        process.exitCode = AGENT_CLI_EXIT.failure;
+        return;
+      }
+      const resolved = resolveCliShotReferences(
+        await listCliShotReferences(session),
+        options.requestedShots,
+      );
+      if (!resolved.ok) {
+        printShotResolutionFailure(options.command, options.requestedShots.join(', '), resolved);
+        return;
+      }
+      resolvedShotIds = resolved.shots.map((shot) => shot.id);
+    }
+    const result = await session.page.evaluate(({ command, shotIds }) => {
+      const api = window.foreScene!;
+      return command === 'world-preview'
+        ? api.previewGenerativeWorldRequest({ shotIds })
+        : api.runMockGenerativeWorldBackend({ shotIds });
+    }, {
+      command: options.command,
+      shotIds: resolvedShotIds,
+    });
+    if (options.output) {
+      const output = path.resolve(options.output);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+      printJson({ ...result, output });
+    } else {
+      printJson(result);
+    }
+    if (!result.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
+async function runGenerativeWorldDepth(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  requestedShot: string;
+  timeSeconds?: number;
+  resolution?: string;
+  output: string;
+}) {
+  const dimensions = resolveImageDimensions(options.resolution);
+  await withSession(options, async (session) => {
+    const shot = await resolveRequiredShot(session, 'world-depth', options.requestedShot);
+    if (!shot) return;
+    const result = await session.page.evaluate(async (input) => {
+      const api = window.foreScene!;
+      return api.renderGenerativeWorldDepthPrior({
+        shotId: input.shotId,
+        timeSeconds: input.timeSeconds,
+        width: input.width,
+        height: input.height,
+      });
+    }, {
+      shotId: shot.id,
+      timeSeconds: options.timeSeconds,
+      ...dimensions,
+    });
+    let savedPath: string | undefined;
+    let transfer: AgentArtifactTransferTelemetry | undefined;
+    if (result.ok && 'artifact' in result && result.artifact?.artifactId) {
+      const saved = await saveAgentArtifactToFile(session.page, result.artifact.artifactId, options.output);
+      savedPath = saved.savedPath;
+      transfer = toCliArtifactTransfer(saved);
+    }
+    printJson({ ...result, shotNumber: shot.shotNumber, savedPath, transfer });
+    if (!result.ok || !savedPath) process.exitCode = AGENT_CLI_EXIT.failure;
   });
 }
 
@@ -1256,7 +1498,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   activeCliCommand = args.command;
   cliStdout.operation = commandToOperationName(args.command);
-  if (agentCliCommandRequiresProfile(args.command)) {
+  if (!args.helpRequested && agentCliCommandRequiresProfile(args.command)) {
     args.profile = requireExplicitAgentProfile(args.profile);
     cliStdout.profile = args.profile;
   }
@@ -1265,6 +1507,26 @@ async function main() {
     + (args.rigMode ? ` rigMode=${args.rigMode}` : '')
     + ((args.mode || args.appearance) ? ` appearance=${args.mode ?? args.appearance}` : ''),
   );
+
+  if (args.helpRequested) {
+    const description = describeAgentCliCommand(args.command);
+    if (!description) throw new AgentCliUsageError(`Unknown Agent CLI command: ${args.command}`);
+    printJson(description);
+    return;
+  }
+
+  if (args.command === 'describe') {
+    if (!args.describeCommand) throw new AgentCliUsageError('describe requires --command <cli-command>.');
+    const description = describeAgentCliCommand(args.describeCommand);
+    if (!description) throw new AgentCliUsageError(`Unknown Agent CLI command: ${args.describeCommand}`);
+    printJson(description);
+    return;
+  }
+
+  if (args.command === 'schema') {
+    printJson(getAgentSchema());
+    return;
+  }
 
   if (args.command === 'capabilities') {
     printJson(buildAgentCliCapabilitiesDocument());
@@ -1516,6 +1778,7 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       profile: args.profile,
+      ...(args.command === 'apply' && args.expectedRevision ? { expectedRevision: args.expectedRevision } : {}),
     });
     return;
   }
@@ -1618,6 +1881,37 @@ async function main() {
     return;
   }
 
+  if (args.command === 'world-preview' || args.command === 'world-mock') {
+    await runGenerativeWorldBoundary({
+      command: args.command,
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      requestedShots: toOptionalRequestedShotIds(args.shotSelection),
+      output: args.output,
+    });
+    return;
+  }
+
+  if (args.command === 'world-depth') {
+    const usage = resolveCliCommandShotUsage('world-depth', args.shotSelection);
+    if (!args.output) throw new AgentCliUsageError('world-depth requires --output <depth.npy>.');
+    await runGenerativeWorldDepth({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      requestedShot: usage.shotId!,
+      timeSeconds: args.timeSeconds,
+      resolution: args.resolution,
+      output: args.output,
+    });
+    return;
+  }
+
   if (args.command === 'run') {
     if (!args.plan) throw new Error('--plan is required for run');
     requireExplicitWrite('run', args.writeAccess);
@@ -1669,27 +1963,53 @@ async function main() {
         file: process.env.FORESCENE_BENCHMARK_PROJECT_PACKAGE,
       });
     }
-    const result = await runProduction({
-      manifestPath: args.manifest,
-      url: args.url,
-      headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
-      writeAccess: args.writeAccess,
-      persistWrite: args.persistWrite,
-      resetProject: args.resetProject,
-      updateManifest: args.updateManifest,
-      initializeOnly: args.initializeOnly,
-      outputDir: args.output ?? 'artifacts/production',
-      skipPackage: args.skipPackage,
-      profileDir: args.profile,
-      allowHeavyCharacterImports: args.allowHeavyCharacterImports,
-      mode,
-      autoRepair: args.autoRepair,
-      maxRepairPasses: args.maxRepairPasses,
-      timeBudgetSeconds: args.timeBudgetSeconds,
-      finalProjectPath: args.finalProject,
+    let cancellationObserved = false;
+    const productionOperation = beginCliOperation({
+      type: commandToOperationName('production'),
+      profile: args.profile,
+      message: 'Production orchestration requested.',
+      onCancel: () => { cancellationObserved = true; },
     });
-    printJson(result);
-    if (!result.ok) process.exitCode = 1;
+    cliStdout.operationId = productionOperation.record.operationId;
+    activeCliOperation = productionOperation;
+    await productionOperation.start('Production orchestration in progress.');
+    try {
+      const result = await runProduction({
+        manifestPath: args.manifest,
+        url: args.url,
+        headless: args.headless || process.env.CI === 'true' || !process.stdout.isTTY,
+        writeAccess: args.writeAccess,
+        persistWrite: args.persistWrite,
+        resetProject: args.resetProject,
+        updateManifest: args.updateManifest,
+        initializeOnly: args.initializeOnly,
+        outputDir: args.output ?? 'artifacts/production',
+        skipPackage: args.skipPackage,
+        profileDir: args.profile,
+        allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+        mode,
+        autoRepair: args.autoRepair,
+        maxRepairPasses: args.maxRepairPasses,
+        timeBudgetSeconds: args.timeBudgetSeconds,
+        pruneNonManifestShots: args.pruneNonManifestShots,
+        finalProjectPath: args.finalProject,
+      });
+      if (cancellationObserved || productionOperation.record.cancelRequested) {
+        await productionOperation.cancel('Production cancellation was requested.');
+      } else if (result.ok) {
+        await productionOperation.complete(`Production ${result.status}.`);
+      } else {
+        await productionOperation.fail(result.error ?? `Production ${result.status}.`);
+      }
+      printJson(result);
+      if (!result.ok) process.exitCode = 1;
+    } catch (error) {
+      await productionOperation.fail(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      if (activeCliOperation === productionOperation) activeCliOperation = undefined;
+      productionOperation.dispose();
+    }
     return;
   }
 
@@ -1711,6 +2031,10 @@ async function main() {
       skipPackage: args.skipPackage,
       profileDir: args.profile,
       allowHeavyCharacterImports: args.allowHeavyCharacterImports,
+      autoRepair: args.autoRepair,
+      maxRepairPasses: args.maxRepairPasses,
+      timeBudgetSeconds: args.timeBudgetSeconds,
+      pruneNonManifestShots: args.pruneNonManifestShots,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;
@@ -1738,6 +2062,7 @@ async function main() {
     const result = await runContactSheetCli({
       inputDir: args.input,
       outputPath: args.output,
+      allowPartial: args.allowPartial,
     });
     printJson(result);
     if (!result.ok) process.exitCode = 1;
@@ -1750,6 +2075,7 @@ async function main() {
 main().catch((error: unknown) => {
   const { envelope, exitCode } = envelopeFromError(cliStdout, error);
   printErr(`[agent] ${envelope.error?.message ?? 'Command failed.'}`);
+  writeCliEvidence(envelope, exitCode);
   process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
   process.exitCode = exitCode;
 });

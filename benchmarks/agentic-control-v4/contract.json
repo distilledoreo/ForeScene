@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "agentic-control-v4",
+  "family": "fresh-profile-recovery",
+  "description": "Cheap-agent fresh-profile recovery: open seed, inspect, save backup, reopen .fsp on a different browser profile, re-inspect identity continuity.",
+  "seedPackage": "../agentic-control-v2/seed/operator-corridor.fsp",
+  "artifacts": {
+    "savedProject": "project.fsp",
+    "candidateReport": "work/candidate-report.json",
+    "clayFrame": "work/artifacts/clay-frame.png"
+  },
+  "thresholds": {
+    "minBytes": 1024
+  },
+  "scoring": {
+    "checkRepositoryDrift": true
+  }
+}

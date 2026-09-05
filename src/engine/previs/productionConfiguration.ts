@@ -5,9 +5,17 @@ import type {
   ProductionLocationDefinition,
   ProductionObjectClass,
   SceneObject,
+  ShotActionContract,
 } from '../../domain/types';
-import type { PrevisProductionManifestV1 } from './manifest';
+import type { PrevisProductionManifestV1, PrevisShotDefinition } from './manifest';
 import type { ProductionBindingMode } from './productionBindingMode';
+import { resolvePrevisPosePresetId } from './posePresets';
+import { getHumanPosePreset } from '../humanPosePresets';
+import {
+  inferNativeActionPose,
+  inferRigidLocomotionRotation,
+  resolveReadableMotionSubjectPosition,
+} from './actionIntent';
 
 export type ProductionConfigurationDiagnosticCode =
   | 'missing_binding'
@@ -23,7 +31,9 @@ export type ProductionConfigurationDiagnosticCode =
   | 'required_poseable_asset_static'
   | 'unclassified_dynamic_object'
   | 'expected_panorama_missing'
-  | 'panorama_not_in_location';
+  | 'panorama_not_in_location'
+  | 'action_binding_missing'
+  | 'action_contract_invalid';
 
 export interface ProductionConfigurationDiagnostic {
   code: ProductionConfigurationDiagnosticCode;
@@ -71,10 +81,126 @@ export function getProductionConfiguration(project: LocationProject): Production
   };
 }
 
+/** Convert authored blocking and motion into persistent, inspectable action intent. */
+export function deriveShotActionContracts(
+  definition: PrevisShotDefinition,
+  options: {
+    poseableEntityIds?: ReadonlySet<string>;
+    rigidLocomotionEntityIds?: ReadonlySet<string>;
+    resolvePose?: (entityId: string, requestedPose: string) => {
+      resolvedPose?: string;
+      relationship: import('../../domain/types').PoseResolutionRelationship;
+      requiresReview: boolean;
+    };
+  } = {},
+): ShotActionContract[] {
+  const resolvePose = options.resolvePose ?? ((_entityId: string, requestedPose: string) => {
+    const native = getHumanPosePreset(requestedPose);
+    if (native) return { resolvedPose: native.id, relationship: 'exact' as const, requiresReview: false };
+    const resolvedPose = resolvePrevisPosePresetId(requestedPose);
+    return resolvedPose
+      ? { resolvedPose, relationship: 'approximate' as const, requiresReview: true }
+      : { relationship: 'contradictory' as const, requiresReview: true };
+  });
+  const actions: ShotActionContract[] = [];
+  const poseableEntityIds = options.poseableEntityIds ?? new Set<string>();
+  const rigidLocomotionEntityIds = options.rigidLocomotionEntityIds ?? new Set<string>();
+  for (const blocking of definition.blocking ?? []) {
+    const requestedPose = blocking.pose
+      ?? (!definition.motion && poseableEntityIds.has(blocking.subject)
+        ? inferNativeActionPose(definition, blocking.subject)
+        : undefined);
+    if (!requestedPose) continue;
+    const resolution = resolvePose(blocking.subject, requestedPose);
+    actions.push({
+      actionId: `${definition.id}:${blocking.subject}:static-pose`,
+      entityId: blocking.subject,
+      mode: 'static_pose',
+      durationSeconds: 0,
+      samples: [{
+        timeSeconds: 0,
+        requestedPose,
+        ...(resolution.resolvedPose ? { resolvedPose: resolution.resolvedPose } : {}),
+        poseRelationship: resolution.relationship,
+        requiresReview: resolution.requiresReview,
+      }],
+    });
+  }
+
+  if (!definition.motion) return actions;
+  const samplesByEntity = new Map<string, ShotActionContract['samples']>();
+  for (const [keyframeIndex, keyframe] of definition.motion.keyframes.entries()) {
+    for (const staging of keyframe.staging ?? []) {
+      const inferredPose = poseableEntityIds.has(staging.subject)
+        ? inferNativeActionPose(definition, staging.subject, keyframeIndex)
+        : undefined;
+      if (
+        staging.visible === undefined
+        && !staging.transform?.position
+        && !staging.transform?.rotation
+        && !staging.posePreset
+        && !inferredPose
+      ) continue;
+      const samples = samplesByEntity.get(staging.subject) ?? [];
+      const requestedPose = staging.posePreset ?? inferredPose;
+      const inferredRotation = rigidLocomotionEntityIds.has(staging.subject)
+        && !staging.transform?.rotation
+        ? inferRigidLocomotionRotation(definition, staging.subject)
+        : undefined;
+      const resolution = requestedPose
+        ? resolvePose(staging.subject, requestedPose)
+        : undefined;
+      const resolvedPosition = staging.transform?.position
+        ? (
+          resolveReadableMotionSubjectPosition(definition, keyframe, staging.subject)
+          ?? staging.transform.position
+        )
+        : undefined;
+      samples.push({
+        timeSeconds: keyframe.timeSeconds,
+        ...(staging.visible !== undefined ? { visible: staging.visible } : {}),
+        ...(resolvedPosition ? { position: resolvedPosition } : {}),
+        ...(staging.transform?.rotation
+          ? { rotation: [...staging.transform.rotation] }
+          : inferredRotation
+            ? { rotation: inferredRotation }
+            : {}),
+        ...(requestedPose
+          ? {
+              requestedPose,
+              ...(resolution?.resolvedPose ? { resolvedPose: resolution.resolvedPose } : {}),
+              ...(resolution
+                ? {
+                    poseRelationship: resolution.relationship,
+                    requiresReview: resolution.requiresReview,
+                  }
+                : {}),
+            }
+          : {}),
+      });
+      samplesByEntity.set(staging.subject, samples);
+    }
+  }
+  for (const [entityId, samples] of samplesByEntity) {
+    actions.push({
+      actionId: `${definition.id}:${entityId}:timeline`,
+      entityId,
+      mode: 'timeline',
+      durationSeconds: definition.motion.durationSeconds,
+      samples: samples.sort((a, b) => a.timeSeconds - b.timeSeconds),
+    });
+  }
+  return actions;
+}
+
 function manifestEntities(manifest: PrevisProductionManifestV1): ManifestEntity[] {
   return [
     ...manifest.cast.map((entry) => ({ id: entry.id, kind: 'cast' as const })),
     ...(manifest.props ?? []).map((entry) => ({ id: entry.id, kind: 'prop' as const })),
+    ...(manifest.assets ?? []).map((entry) => ({
+      id: entry.id,
+      kind: entry.semanticRole === 'character' ? 'cast' as const : 'prop' as const,
+    })),
     ...manifest.locations.map((entry) => ({ id: entry.id, kind: 'location' as const })),
   ];
 }
@@ -286,6 +412,7 @@ function validateEnvironmentContracts(
       ));
       continue;
     }
+    if (environment.expectNoPanorama) continue;
     const expectedPanoId = environment.expectedPanoId
       ?? location.defaultPanoId
       ?? location.panoIds?.[0];
@@ -310,6 +437,37 @@ function validateEnvironmentContracts(
         `Panorama "${expectedPanoId}" is not prepared for location "${location.id}".`,
         { shotId, locationId: location.id },
       ));
+    }
+  }
+}
+
+function validateActionContracts(
+  config: ProductionConfiguration,
+  diagnostics: ProductionConfigurationDiagnostic[],
+): void {
+  for (const [shotId, contract] of Object.entries(config.shotContracts)) {
+    for (const action of contract.actions ?? []) {
+      if (!config.bindings[action.entityId]) {
+        diagnostics.push(diagnostic(
+          'action_binding_missing',
+          `Shot "${shotId}" action "${action.actionId}" references unbound entity "${action.entityId}".`,
+          { shotId, entityId: action.entityId },
+        ));
+      }
+      const invalidDuration = !Number.isFinite(action.durationSeconds) || action.durationSeconds < 0;
+      const invalidSamples = action.samples.length === 0 || action.samples.some((sample) => (
+        !Number.isFinite(sample.timeSeconds)
+        || sample.timeSeconds < 0
+        || sample.timeSeconds > action.durationSeconds
+        || (sample.requestedPose !== undefined && sample.resolvedPose === undefined)
+      ));
+      if (invalidDuration || invalidSamples) {
+        diagnostics.push(diagnostic(
+          'action_contract_invalid',
+          `Shot "${shotId}" action "${action.actionId}" has invalid timing or an unresolved pose sample.`,
+          { shotId, entityId: action.entityId },
+        ));
+      }
     }
   }
 }
@@ -430,7 +588,13 @@ export function validateProductionConfiguration(
   }
 
   for (const [target, owners] of targetOwners) {
-    if (owners.length > 1) {
+    const embeddedAliases = new Set(
+      (manifest.props ?? [])
+        .filter((prop) => prop.embeddedIn && owners.includes(prop.id) && owners.includes(prop.embeddedIn.subject))
+        .map((prop) => prop.id),
+    );
+    const nonAliasOwners = owners.filter((owner) => !embeddedAliases.has(owner));
+    if (owners.length > 1 && nonAliasOwners.length !== 1) {
       diagnostics.push(diagnostic('ambiguous_duplicate_binding', `Production target "${target}" is bound to multiple entities: ${owners.join(', ')}.`, {
         entityId: owners[0],
       }));
@@ -442,6 +606,7 @@ export function validateProductionConfiguration(
   }
   validateRequiredPoseability(project, manifest, config, diagnostics);
   validateEnvironmentContracts(project, config, diagnostics);
+  validateActionContracts(config, diagnostics);
 
   return {
     ok: diagnostics.length === 0,

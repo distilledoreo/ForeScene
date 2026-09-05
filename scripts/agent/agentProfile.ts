@@ -15,6 +15,8 @@ export const DEFAULT_AGENT_PROFILE_RELATIVE = '.forescene-agent/browser-profile'
 
 export const STATELESS_AGENT_CLI_COMMANDS = [
   'capabilities',
+  'describe',
+  'schema',
   'help',
   'operations',
   'cancel',

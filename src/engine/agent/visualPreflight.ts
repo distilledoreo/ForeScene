@@ -20,6 +20,11 @@ import type {
 } from './protocol';
 import { inspectAgentShotDiagnostics } from './shotDiagnostics';
 import { getShotEffectiveState } from './spatialShotState';
+import {
+  getProductionConfiguration,
+  resolveProductionBindingObjectIds,
+} from '../previs/productionConfiguration';
+import { inspectShotActionContinuity } from './actionContinuity';
 
 const MIN_VISIBLE_FRACTION = 0.08;
 const MIN_COVERAGE = 0.01;
@@ -121,6 +126,8 @@ export function resolveVisualPreflightSubjectPolicy(input: {
   allowUnresolvedSetDressing?: boolean;
   /** Object ids actually scored as subjects. When omitted, candidates are treated as identified. */
   scoredSubjectIds?: string[];
+  /** Persisted production-location objects are explicit environment, not unresolved dressing. */
+  environmentObjectIds?: string[];
 }): {
   environmentOnly: boolean;
   allowUnresolvedSetDressing: boolean;
@@ -142,9 +149,10 @@ export function resolveVisualPreflightSubjectPolicy(input: {
   const identified = new Set(
     input.scoredSubjectIds !== undefined ? input.scoredSubjectIds : candidateSubjectIds,
   );
+  const environmentIds = new Set(input.environmentObjectIds ?? []);
   const unresolvedVisibleObjectIds = explicit
     ? []
-    : listVisibleRenderableObjectIds(input.objects).filter((id) => !identified.has(id));
+    : listVisibleRenderableObjectIds(input.objects).filter((id) => !identified.has(id) && !environmentIds.has(id));
   return {
     environmentOnly: explicit,
     allowUnresolvedSetDressing,
@@ -158,10 +166,16 @@ export function resolveVisualPreflightSubjectPolicy(input: {
   };
 }
 
-export function collectVisualPreflightSampleTimes(shot: Shot, requestedTimeSeconds?: number): number[] {
+export function collectVisualPreflightSampleTimes(
+  shot: Shot,
+  requestedTimeSeconds?: number,
+  actionSampleTimes: readonly number[] = [],
+): number[] {
   if (requestedTimeSeconds !== undefined) return [requestedTimeSeconds];
   const keyframes = [...shot.cameraKeyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
-  if (keyframes.length === 0) return [0];
+  if (keyframes.length === 0) {
+    return [...new Set([0, ...actionSampleTimes])].sort((a, b) => a - b);
+  }
 
   const times = new Set<number>();
   const start = keyframes[0]!.timeSeconds;
@@ -173,6 +187,10 @@ export function collectVisualPreflightSampleTimes(shot: Shot, requestedTimeSecon
   } else if (end > start) {
     times.add((start + end) / 2);
   }
+  // Authored action samples are semantic contract checkpoints. Always inspect
+  // them even when they do not coincide with a camera keyframe; MAX_SAMPLE_TIMES
+  // only limits extra camera samples, never production action guarantees.
+  for (const timeSeconds of actionSampleTimes) times.add(timeSeconds);
   for (const keyframe of keyframes) {
     if (times.size >= MAX_SAMPLE_TIMES) break;
     times.add(keyframe.timeSeconds);
@@ -218,14 +236,55 @@ function evaluateVisualPreflightAtTime(input: {
   const presentIds = new Set(subjects.map((subject) => subject.objectId));
   const missingSubjectIds = (requestedSubjectIds ?? []).filter((id) => !presentIds.has(id));
   const missingRequested = missingSubjectIds.length > 0;
+  const configuration = getProductionConfiguration(project);
+  const productionContract = configuration.shotContracts[shot.id];
+  const productionLocations = Object.values(configuration.locations);
+  const environmentObjectIds = productionLocations.length > 0
+    ? productionLocations.flatMap((location) => [
+        ...location.objectIds,
+        ...location.objectGroupIds.flatMap((groupId) => (
+          project.scene.objectGroups?.[groupId]?.objectIds ?? []
+        )),
+      ])
+    : [];
+  const scoredSubjectIds = [...new Set([
+    ...subjects.flatMap((subject) => (
+      project.scene.objectGroups?.[subject.objectId]?.objectIds ?? [subject.objectId]
+    )),
+    ...(productionContract?.presence?.expectedVisibleObjectIds ?? []),
+    ...(productionContract?.presence?.expectedVisibleGroupIds.flatMap((groupId) => (
+      project.scene.objectGroups?.[groupId]?.objectIds ?? []
+    )) ?? []),
+  ])];
   const policy = resolveVisualPreflightSubjectPolicy({
     shot: effectiveShot,
     objects: effectiveObjects,
     requestedSubjectIds,
     environmentOnly: input.environmentOnly,
     allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
-    scoredSubjectIds: subjects.map((subject) => subject.objectId),
+    scoredSubjectIds,
+    environmentObjectIds,
   });
+  const intentionalCropObjectIds = new Set(
+    (productionContract?.composition?.subjects ?? []).flatMap((constraint) => {
+      if (constraint.completeAssemblyInFrame !== false) return [];
+      const binding = configuration.bindings[constraint.entityId];
+      return binding ? resolveProductionBindingObjectIds(project, binding) : [];
+    }),
+  );
+  const intentionalForegroundObjectIds = new Set(
+    (productionContract?.composition?.occlusionIntent ?? []).flatMap((intent) => {
+      const binding = configuration.bindings[intent.foregroundEntityId];
+      return binding ? resolveProductionBindingObjectIds(project, binding) : [];
+    }),
+  );
+  const hasRequiredCropLandmarks = (subject: typeof subjects[number]): boolean => {
+    const landmarks = subject.humanLandmarks;
+    return Boolean(
+      landmarks?.headTop?.inFrame
+      && (landmarks.shoulders?.inFrame || landmarks.chest?.inFrame),
+    );
+  };
   const unresolvedVisible = !policy.environmentOnly
     && policy.unresolvedVisibleObjectIds.length > 0
     && subjects.length === 0
@@ -245,7 +304,14 @@ function evaluateVisualPreflightAtTime(input: {
     && !missingRequested
     && policy.candidateSubjectIds.length > 0;
 
-  const hidden = subjects.filter((subject) => subject.visibleFraction < MIN_VISIBLE_FRACTION || subject.behindCamera);
+  const hidden = subjects.filter((subject) => (
+    subject.behindCamera
+    || (subject.visibleFraction < MIN_VISIBLE_FRACTION
+      && !(intentionalCropObjectIds.has(subject.objectId) && hasRequiredCropLandmarks(subject))
+      && !(intentionalForegroundObjectIds.has(subject.objectId)
+        && subject.visibleFraction >= 0.02
+        && subject.screenCoverage >= 0.03))
+  ));
   const visibilityFailed = missingRequested
     || accidentalEmpty
     || unresolvedVisible
@@ -282,12 +348,15 @@ function evaluateVisualPreflightAtTime(input: {
     },
   });
 
-  const coverageValues = subjects.map((subject) => subject.screenCoverage);
+  // Landmark-crop templates are validated by the head/upper-body crop gate;
+  // their full-body AABB coverage is intentionally outside generic bands.
+  const coverageSubjects = subjects.filter((subject) => !intentionalCropObjectIds.has(subject.objectId));
+  const coverageValues = coverageSubjects.map((subject) => subject.screenCoverage);
   const minCoverage = coverageValues.length > 0 ? Math.min(...coverageValues) : 0;
   const maxCoverage = coverageValues.length > 0 ? Math.max(...coverageValues) : 0;
   const coverageFailed = accidentalEmpty
     || unresolvedVisible
-    || (subjects.length > 0 && (minCoverage < MIN_COVERAGE || maxCoverage > MAX_COVERAGE));
+    || (coverageSubjects.length > 0 && (minCoverage < MIN_COVERAGE || maxCoverage > MAX_COVERAGE));
   checks.push({
     id: 'framing_coverage',
     status: statusFromFailed(coverageFailed, !policy.environmentOnly && minCoverage > 0 && minCoverage < 0.03),
@@ -344,7 +413,16 @@ function evaluateVisualPreflightAtTime(input: {
     measured: { alignment, environmentOnly: policy.environmentOnly ? 1 : 0 },
   });
 
-  const cropped = subjects.filter((subject) => subject.clipped);
+  const cropped = subjects.filter((subject) => {
+    if (!subject.clipped) return false;
+    if (!intentionalCropObjectIds.has(subject.objectId)) return true;
+    if (intentionalForegroundObjectIds.has(subject.objectId)) {
+      return subject.visibleFraction < 0.02 || subject.screenCoverage < 0.03;
+    }
+    // Medium and close compositions may intentionally crop the lower body,
+    // but they still fail closed if the head or upper torso leaves frame.
+    return !hasRequiredCropLandmarks(subject);
+  });
   checks.push({
     id: 'cropping',
     status: statusFromFailed(
@@ -370,7 +448,7 @@ function evaluateVisualPreflightAtTime(input: {
     && alignment < 0.2;
   checks.push({
     id: 'motion_continuity',
-    status: statusFromFailed(motionFailed, shot.cameraKeyframes.length >= 2 && maxSubjectMotion < 0.02 && cameraMotion < 0.02),
+    status: statusFromFailed(motionFailed, false),
     message: motionFailed
       ? 'Subjects move but the camera does not follow them.'
       : 'Motion continuity is consistent with the shot timeline.',
@@ -380,6 +458,32 @@ function evaluateVisualPreflightAtTime(input: {
       keyframeCount: shot.cameraKeyframes.length,
     },
   });
+
+  const actionContinuity = inspectShotActionContinuity({
+    project,
+    shot,
+    timeSeconds: diagnosticsResult.sampledTimeSeconds ?? input.timeSeconds ?? 0,
+  });
+  if (actionContinuity?.expectedCount) {
+    checks.push({
+      id: 'action_continuity',
+      status: statusFromFailed(!actionContinuity.ok, false),
+      message: actionContinuity.ok
+        ? 'Persisted action intent matches the shot-effective timeline state.'
+        : actionContinuity.reviewRequiredCount > 0
+          ? 'Persisted action intent includes an unapproved approximate pose substitution.'
+          : 'Shot-effective pose, visibility, or trajectory diverges from persisted action intent.',
+      measured: {
+        expectedCount: actionContinuity.expectedCount,
+        matchedCount: actionContinuity.matchedCount,
+        missingBindingCount: actionContinuity.missingBindingCount,
+        poseMismatchCount: actionContinuity.poseMismatchCount,
+        trajectoryMismatchCount: actionContinuity.trajectoryMismatchCount,
+        visibilityMismatchCount: actionContinuity.visibilityMismatchCount,
+        reviewRequiredCount: actionContinuity.reviewRequiredCount,
+      },
+    });
+  }
 
   return {
     checks,
@@ -432,7 +536,14 @@ export function inspectShotVisualPreflight(input: {
     };
   }
 
-  const sampleTimes = collectVisualPreflightSampleTimes(shot, input.timeSeconds);
+  const configuration = getProductionConfiguration(input.project);
+  const actionSampleTimes = (configuration.shotContracts[shot.id]?.actions ?? [])
+    .flatMap((action) => action.samples.map((sample) => sample.timeSeconds));
+  const sampleTimes = collectVisualPreflightSampleTimes(
+    shot,
+    input.timeSeconds,
+    actionSampleTimes,
+  );
   const samples: AgentVisualPreflightSample[] = [];
   const aggregatedById = new Map<AgentVisualPreflightCheck['id'], AgentVisualPreflightCheck>();
   const allSubjects: AgentVisualPreflightResult['subjects'] = [];
@@ -505,6 +616,8 @@ export function inspectShotVisualPreflight(input: {
     }
   }
 
+  const productionContract = configuration.shotContracts[shot.id];
+  const productionLocations = Object.values(configuration.locations);
   const policy = resolveVisualPreflightSubjectPolicy({
     shot,
     objects: getShotEffectiveState(input.project, shot.id, input.timeSeconds)?.objects
@@ -512,7 +625,23 @@ export function inspectShotVisualPreflight(input: {
     requestedSubjectIds: input.subjectIds,
     environmentOnly: input.environmentOnly,
     allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
-    scoredSubjectIds: allSubjects.map((subject) => subject.objectId),
+    scoredSubjectIds: [...new Set([
+      ...allSubjects.flatMap((subject) => (
+        input.project.scene.objectGroups?.[subject.objectId]?.objectIds ?? [subject.objectId]
+      )),
+      ...(productionContract?.presence?.expectedVisibleObjectIds ?? []),
+      ...(productionContract?.presence?.expectedVisibleGroupIds.flatMap((groupId) => (
+        input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
+      )) ?? []),
+    ])],
+    environmentObjectIds: productionLocations.length > 0
+      ? productionLocations.flatMap((location) => [
+          ...location.objectIds,
+          ...location.objectGroupIds.flatMap((groupId) => (
+            input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
+          )),
+        ])
+      : [],
   });
   const gateStatus = visualGateStatusFromChecks(checks, missingSubjectIds.size);
 

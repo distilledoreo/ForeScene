@@ -179,7 +179,40 @@ describe('texture-free model conversion', () => {
     disposeScene(rebuiltScene);
   });
 
-  it('strips glTF material and texture references before conversion', async () => {
+  it('keeps a durable URI rekey renderable while the live viewport still holds the import URI', async () => {
+    const result = await importModelJob({
+      kind: 'file',
+      file: file([
+        'o Panel\n',
+        'v 0 0 0\n',
+        'v 1 0 0\n',
+        'v 0 1 0\n',
+        'f 1 2 3\n',
+      ], 'panel.obj', 'text/plain'),
+    }, { mode: 'separate' });
+    const item = result.items[0]!;
+    const liveProject = createDefaultProject();
+    liveProject.scene.objects = [item.object];
+    liveProject.assets.assets[item.asset.id] = item.asset;
+    const liveScene = buildScene(liveProject, { showHelpers: false });
+
+    const durable = encodePackedGrayboxMesh(
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      new Uint32Array([0, 1, 2]),
+    );
+    const exportProject = structuredClone(liveProject);
+    exportProject.assets.assets[item.asset.id]!.uri = durable.uri;
+    const exportScene = buildScene(exportProject, { showHelpers: false });
+    const exported = exportScene.getObjectByName(item.object.name)!;
+
+    expect(exported.userData.missingAssetPlaceholder).not.toBe(true);
+    expect((exported as THREE.Mesh).geometry).toBeTruthy();
+
+    disposeScene(exportScene);
+    disposeScene(liveScene);
+  });
+
+  it('preserves texture-free material identity while removing texture references', async () => {
     const binary = new ArrayBuffer(44);
     new Float32Array(binary, 0, 9).set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     new Uint16Array(binary, 36, 3).set([0, 1, 2]);
@@ -196,7 +229,12 @@ describe('texture-free model conversion', () => {
       ],
       images: [{ uri: 'data:image/png;base64,not-decoded' }],
       textures: [{ source: 0 }],
-      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      materials: [{
+        name: 'Skin_and_Stalk_Procedural',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 0 },
+        },
+      }],
       meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
       nodes: [{ mesh: 0 }],
       scenes: [{ nodes: [0] }],
@@ -209,8 +247,13 @@ describe('texture-free model conversion', () => {
     }, { mode: 'separate' });
 
     expect(result.items[0].object.importedModel?.triangleCount).toBe(1);
-    expect(result.warnings.join(' ')).toContain('Removed');
+    expect(result.warnings.join(' ')).toContain('texture-free color identity');
     expect(result.items[0].asset.uri).not.toContain('not-decoded');
+    expect(result.items[0].object).toMatchObject({
+      surfaceStyle: 'solid',
+      color: '#8f665f',
+    });
+    expect(result.items[0].asset.metadata?.sourceMaterialName).toBe('Skin_and_Stalk_Procedural');
   });
 
   it('keeps canonical mesh assets through undo and prunes only on saved deletion', () => {

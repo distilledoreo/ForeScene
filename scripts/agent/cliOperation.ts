@@ -217,6 +217,7 @@ export function beginCliOperation(input: {
       await beat(update.message, update.progress);
     },
     async complete(message) {
+      if (isTerminalCliOperationState(record.state)) return;
       record.state = 'completed';
       record.progress = 1;
       record.message = message ?? 'Operation completed.';
@@ -224,12 +225,14 @@ export function beginCliOperation(input: {
       handle.dispose();
     },
     async fail(message) {
+      if (isTerminalCliOperationState(record.state)) return;
       record.state = 'failed';
       record.message = message ?? 'Operation failed.';
       await persist();
       handle.dispose();
     },
     async cancel(message) {
+      if (isTerminalCliOperationState(record.state)) return;
       record.state = 'cancelled';
       record.cancelRequested = true;
       record.message = message ?? 'Operation cancelled.';

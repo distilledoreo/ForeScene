@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createBlankGrayboxProject } from '../src/engine/previs/blankProject';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import { createDefaultProject, createSceneObject, createShot } from '../src/domain/defaults';
-import type { LocationProject, ObjectGroup, Transform } from '../src/domain/types';
+import type { LocationProject, ObjectGroup, Transform, Vec3 } from '../src/domain/types';
 import { createId } from '../src/utils/ids';
 import { inspectAgentShotDiagnostics } from '../src/engine/agent/shotDiagnostics';
 import { identifyFloorY } from '../src/engine/agent/spatialShotState';
@@ -191,6 +191,36 @@ describe('agent API robustness', () => {
     const group = inspectAgentObjectGroup(result.groupId!);
     expect(group?.objectIds).toEqual([a.id, b.id]);
     expect(listAgentObjectGroups().length).toBe(1);
+  });
+
+  it('idempotently links a legacy multipart group to its shared source import', async () => {
+    const project = useProjectStore.getState().project;
+    const importedInfo = {
+      sourceName: 'creature.glb', sourceFormat: 'glb', sourceKind: 'model' as const,
+      vertexCount: 8, triangleCount: 12, meshCount: 1, importMode: 'separate' as const,
+      sourceImportId: 'import-creature', geometrySimplified: false as const,
+      hierarchyFlattened: true as const,
+    };
+    const a = createSceneObject('imported_model', 1);
+    const b = createSceneObject('imported_model', 2);
+    a.importedModel = importedInfo;
+    b.importedModel = importedInfo;
+    useProjectStore.setState({
+      project: {
+        ...project,
+        scene: {
+          ...project.scene,
+          objects: [...project.scene.objects, a, b],
+          objectGroups: { legacy: { id: 'legacy', name: 'Creature', objectIds: [a.id, b.id] } },
+        },
+      },
+    });
+    const result = await createAgentObjectGroup({
+      name: 'Creature', objectIds: [a.id, b.id], sourceImportId: 'import-creature',
+    });
+    expect(result).toMatchObject({ ok: true, groupId: 'legacy' });
+    expect(inspectAgentObjectGroup('legacy')?.sourceImportId).toBe('import-creature');
+    expect(listAgentObjectGroups()).toHaveLength(1);
   });
 
   it('preserves pairwise member offsets when staging object groups', async () => {
@@ -624,7 +654,20 @@ describe('agent API robustness', () => {
       }],
     };
     const heroObject = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'human_dummy');
+    const wall = useProjectStore.getState().project.scene.objects.find((object) => object.type === 'wall');
     expect(heroObject).toBeTruthy();
+    expect(wall).toBeTruthy();
+
+    const location = await defineAgentProductionLocation({
+      location: {
+        id: 'loc',
+        objectIds: [wall!.id],
+        objectGroupIds: [],
+        anchors: {},
+        blockerObjectIds: [wall!.id],
+      },
+    });
+    expect(location.ok).toBe(true);
 
     const bound = await bindAgentManifestAssets({
       manifest,
@@ -635,6 +678,31 @@ describe('agent API robustness', () => {
     expect(status.manifestBound).toBe(true);
     expect(status.bindingCount).toBe(1);
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.hero).toBe(heroObject!.id);
+    const production = useProjectStore.getState().project.workflow.production!;
+    expect(production.bindings).toMatchObject({
+      hero: { kind: 'object', objectId: heroObject!.id },
+      loc: { kind: 'location', locationId: 'loc' },
+    });
+    expect(production.locations.loc?.objectIds).toEqual([wall!.id]);
+    expect(Object.values(production.shotContracts)).toEqual([
+      expect.objectContaining({
+        presence: expect.objectContaining({
+          expectedVisibleObjectIds: [heroObject!.id],
+          allowUnspecifiedDynamicObjects: false,
+        }),
+        environment: expect.objectContaining({
+          locationId: 'loc',
+          expectNoPanorama: true,
+        }),
+        composition: {
+          subjects: [{ entityId: 'hero', completeAssemblyInFrame: false }],
+        },
+      }),
+    ]);
+    expect(validateAgentProductionConfiguration({ manifest })).toMatchObject({
+      ok: true,
+      diagnostics: [],
+    });
   });
 
   it('accepts a production asset id when binding an imported model', async () => {
@@ -653,22 +721,60 @@ describe('agent API robustness', () => {
       shots: [{
         id: 'shot_1',
         shotNumber: '001',
-        name: 'Monster shot',
-        description: 'Ordinary imported model subject.',
+        name: 'Monster sprint',
+        description: 'The ordinary imported model subject runs through the room.',
         locationId: 'loc',
         subjects: ['hand-monster'],
         camera: { template: 'medium' as const, subjects: ['hand-monster'] },
+        motion: {
+          durationSeconds: 2,
+          keyframes: [{
+            timeSeconds: 0,
+            staging: [{ subject: 'hand-monster', transform: { position: [0, 0, -2] as Vec3 } }],
+          }, {
+            timeSeconds: 2,
+            staging: [{ subject: 'hand-monster', transform: { position: [0, 0, 2] as Vec3 } }],
+          }],
+        },
       }],
     };
     const object = useProjectStore.getState().project.scene.objects[0]!;
+    const secondPart = createSceneObject('box');
+    useProjectStore.setState((state) => ({
+      project: {
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          objects: [...state.project.scene.objects, secondPart],
+        },
+      },
+    }));
+    const group = await createAgentObjectGroup({
+      name: 'Hand monster assembly',
+      objectIds: [object.id, secondPart.id],
+    });
+    expect(group.ok).toBe(true);
 
     const bound = await bindAgentManifestAssets({
       manifest,
       bindings: { 'hand-monster': object.id },
+      groupBindings: { 'hand-monster': group.groupId! },
     });
 
     expect(bound.ok).toBe(true);
     expect(useProjectStore.getState().project.workflow.productionManifestAssetBindings?.['hand-monster']).toBe(object.id);
+    expect(useProjectStore.getState().project.workflow.production?.bindings['hand-monster']).toEqual({
+      kind: 'group',
+      groupId: group.groupId,
+    });
+    expect(Object.values(useProjectStore.getState().project.workflow.production?.shotContracts ?? {})[0]?.presence)
+      .toMatchObject({ expectedVisibleGroupIds: [group.groupId] });
+    const action = Object.values(
+      useProjectStore.getState().project.workflow.production?.shotContracts ?? {},
+    )[0]?.actions?.find((candidate) => candidate.entityId === 'hand-monster');
+    expect(action?.samples).toHaveLength(2);
+    expect(action?.samples[0]?.rotation?.[0]).toBeGreaterThan(12);
+    expect(action?.samples[0]?.rotation).toEqual(action?.samples[1]?.rotation);
   });
 
   it('persists typed production bindings and validates a prepared location', async () => {

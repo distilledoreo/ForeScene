@@ -10,12 +10,15 @@ export interface BenchmarkRunLayout {
   runRoot: string;
   harnessDir: string;
   profileDir: string;
+  freshProfileDir: string;
   recoveryProfileDir: string;
   projectDir: string;
   workDir: string;
   artifactDir: string;
   lifecycleDir: string;
   logsDir: string;
+  evidenceDir: string;
+  evidenceManifestPath: string;
   specPath: string;
   briefPath: string;
   doctorPath: string;
@@ -36,12 +39,15 @@ export async function createBenchmarkRunLayout(runRoot: string): Promise<Benchma
     runRoot: resolvedRoot,
     harnessDir: path.join(resolvedRoot, 'harness'),
     profileDir: path.join(resolvedRoot, 'profile'),
+    freshProfileDir: path.join(resolvedRoot, 'profile-fresh'),
     recoveryProfileDir: path.join(resolvedRoot, 'profile-recovery'),
     projectDir: path.join(resolvedRoot, 'project'),
     workDir: path.join(resolvedRoot, 'work'),
     artifactDir: path.join(resolvedRoot, 'work', 'artifacts'),
     lifecycleDir: path.join(resolvedRoot, 'lifecycle'),
     logsDir: path.join(resolvedRoot, 'logs'),
+    evidenceDir: path.join(resolvedRoot, 'harness', 'evidence', 'cli'),
+    evidenceManifestPath: path.join(resolvedRoot, 'harness', 'evidence.json'),
     specPath: path.join(resolvedRoot, 'harness', 'spec.json'),
     briefPath: path.join(resolvedRoot, 'harness', 'brief.json'),
     doctorPath: path.join(resolvedRoot, 'harness', 'doctor.json'),
@@ -57,11 +63,13 @@ export async function createBenchmarkRunLayout(runRoot: string): Promise<Benchma
   };
   await mkdir(layout.harnessDir, { recursive: true });
   await mkdir(layout.profileDir, { recursive: true });
+  await mkdir(layout.freshProfileDir, { recursive: true });
   await mkdir(layout.recoveryProfileDir, { recursive: true });
   await mkdir(layout.projectDir, { recursive: true });
   await mkdir(layout.artifactDir, { recursive: true });
   await mkdir(layout.lifecycleDir, { recursive: true });
   await mkdir(layout.logsDir, { recursive: true });
+  await mkdir(layout.evidenceDir, { recursive: true });
   return layout;
 }
 

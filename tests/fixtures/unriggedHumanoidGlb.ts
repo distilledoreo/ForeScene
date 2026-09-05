@@ -1,9 +1,12 @@
+import {
+  HUMANOID_FIXTURE_POSITION_MAX,
+  HUMANOID_FIXTURE_POSITION_MIN,
+  HUMANOID_FIXTURE_POSITIONS,
+} from './humanoidMeshPositions';
+
 /** Small, genuinely unrigged humanoid-shaped GLB used for saved-rig autorig coverage. */
 export function unriggedHumanoidGlb(options: { nodeName?: string } = {}): ArrayBuffer {
-  const positions = Buffer.from(new Float32Array([
-    -0.2, 0, 0, 0.2, 0, 0, 0, 1.5, 0,
-    -0.5, 1, 0, -0.2, 1, 0, -0.2, 1.5, 0,
-  ]).buffer);
+  const positions = Buffer.from(HUMANOID_FIXTURE_POSITIONS.buffer);
   const bin = positions;
   const gltf = {
     asset: { version: '2.0' },
@@ -14,8 +17,8 @@ export function unriggedHumanoidGlb(options: { nodeName?: string } = {}): ArrayB
       componentType: 5126,
       count: 6,
       type: 'VEC3',
-      min: [-0.5, 0, 0],
-      max: [0.2, 1.5, 0],
+      min: HUMANOID_FIXTURE_POSITION_MIN,
+      max: HUMANOID_FIXTURE_POSITION_MAX,
     }],
     meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
     nodes: [{ name: options.nodeName ?? 'UnriggedHumanoid', mesh: 0 }],

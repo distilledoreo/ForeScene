@@ -181,6 +181,8 @@ export interface ProjectedMaterialParams {
   fallbackColor: THREE.ColorRepresentation;
   /** When true, materials mark themselves disposable (export path). */
   disposable?: boolean;
+  /** Discard zero-coverage fragments so the aligned panorama remains visible. */
+  hideUnprojectedGeometry?: boolean;
 
   occlusionTexture?: THREE.CubeTexture;
   occlusionNearMeters?: number;
@@ -232,6 +234,7 @@ export function createProjectedStyleMaterial(params: ProjectedMaterialParams): T
   const occlusionSoftness = params.settings.occlusionSoftness ?? 1;
   const occlusionFastMode = params.settings.occlusionFilterMode === 'fast';
   const debugCoverage = params.settings.occlusionDebugMode === 'coverage';
+  const hideUnprojectedGeometry = params.hideUnprojectedGeometry === true;
   const blendMode = params.settings.blendMode ?? 'primary_only';
   const blendModeId = blendMode === 'secondary_only'
     ? 1
@@ -277,6 +280,7 @@ export function createProjectedStyleMaterial(params: ProjectedMaterialParams): T
     shader.uniforms.projectedSecondaryOcclusionFaceSize = { value: params.secondaryOcclusionFaceSize ?? 512 };
 
     shader.uniforms.projectedDebugCoverage = { value: debugCoverage ? 1 : 0 };
+    shader.uniforms.projectedHideUnprojectedGeometry = { value: hideUnprojectedGeometry ? 1 : 0 };
     shader.uniforms.projectedBlendMode = { value: blendModeId };
     shader.uniforms.projectedPrimaryTexelConstant = {
       value: texelConstant(params.panoramaWidth ?? 8_192, params.panoramaHeight ?? 4_096),
@@ -332,6 +336,7 @@ uniform float projectedSecondaryOcclusionNear;
 uniform float projectedSecondaryOcclusionFar;
 uniform float projectedSecondaryOcclusionFaceSize;
 uniform int projectedDebugCoverage;
+uniform int projectedHideUnprojectedGeometry;
 uniform float projectedPrimaryTexelConstant;
 uniform float projectedSecondaryTexelConstant;
 varying vec3 vProjectedWorldPos;
@@ -536,6 +541,9 @@ float projectedLogQualityAt(vec3 worldPos, vec3 origin, float texelConstant, flo
       diffuseColor.rgb = mix(owned, vec3(1.0), feather);
     }
   } else {
+    if (projectedHideUnprojectedGeometry == 1 && coverage <= VISIBILITY_EPSILON) {
+      discard;
+    }
     vec3 projectedColor = weightTotal > SCORE_EPSILON
       ? (primarySample * primaryWeight + secondarySample * secondaryWeight)
         / max(weightTotal, SCORE_EPSILON)
@@ -570,12 +578,13 @@ if (projectedLighting <= 0.001) {
   };
 
   material.customProgramCacheKey = () => (
-    `projected-style-v10:${params.settings.fallbackMode}:`
+    `projected-style-v11:${params.settings.fallbackMode}:`
     + `${params.disposable ? 'd' : 's'}:`
     + `${useOcclusion ? 'o' : 'n'}:`
     + `${useSecondary ? 's' : 'p'}:`
     + `${useSecondaryOcclusion ? 'so' : 'sn'}:`
     + `${debugCoverage ? 'c' : 'x'}:`
+    + `${hideUnprojectedGeometry ? 'h' : 'f'}:`
     + `${blendMode}`
   );
 

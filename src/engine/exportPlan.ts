@@ -71,6 +71,7 @@ import {
 } from './videoPerformance';
 import { computeCameraMoveFrameCount, DEFAULT_VIDEO_FRAME_RATE } from './videoPresets';
 import { getExportSelectionWarnings, getShotWarnings } from './warnings';
+import { shotExpectsNoPanorama } from './previs/shotEnvironment';
 
 export const EXPORT_PLAN_SCHEMA_VERSION = 1 as const;
 
@@ -447,6 +448,7 @@ function planShotArtifacts(
   const canonicalAsset = canonical ? project.assets.assets[canonical.imageAssetId] : undefined;
   const grayboxAsset = graybox ? project.assets.assets[graybox.imageAssetId] : undefined;
   const linkedPanoAsset = linkedPano ? project.assets.assets[linkedPano.imageAssetId] : undefined;
+  const omitPanoramaReferences = shotExpectsNoPanorama(project, shot);
   const aiResultAssetId = shot.assets.aiResultFrameAssetId ?? shot.assets.finalBaseFrameAssetId;
   const canProject = canUseProjectedAppearance(project);
   const peopleMode = settings.peopleExportMode;
@@ -465,7 +467,8 @@ function planShotArtifacts(
     : [];
   // Writer requires a real registry asset — a pano record alone is not enough to produce.
   const hasCubemapSource = Boolean(
-    settings.includeCubemap
+    !omitPanoramaReferences
+    && settings.includeCubemap
     && ((canonical && canonicalAsset) || (linkedPano && linkedPanoAsset)),
   );
   const aiResultAsset = aiResultAssetId
@@ -524,7 +527,9 @@ function planShotArtifacts(
   }
 
   if (settings.includePanoCrop) {
-    if (linkedPano && shot.panoCrop && linkedPanoAsset) {
+    if (omitPanoramaReferences) {
+      artifacts.push(omitArtifact(shot.id, 'pano-crop', 'production-contract-no-panorama'));
+    } else if (linkedPano && shot.panoCrop && linkedPanoAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'pano-crop',
@@ -551,7 +556,9 @@ function planShotArtifacts(
   }
 
   if (settings.includeFullPano) {
-    if (canonical && canonicalAsset) {
+    if (omitPanoramaReferences) {
+      artifacts.push(omitArtifact(shot.id, 'global-reference', 'production-contract-no-panorama'));
+    } else if (canonical && canonicalAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'global-reference',
@@ -573,7 +580,9 @@ function planShotArtifacts(
   }
 
   if (settings.includeCubemap) {
-    if (hasCubemapSource) {
+    if (omitPanoramaReferences) {
+      artifacts.push(omitArtifact(shot.id, 'cubemap', 'production-contract-no-panorama'));
+    } else if (hasCubemapSource) {
       const files: PlannedFile[] = [];
       for (const face of CAMERA_MOVE_CUBEMAP_FACES) {
         pushFile(files, `${rootFolder}/inputs/cubemap/${face}.png`, 'image', false);
@@ -594,7 +603,9 @@ function planShotArtifacts(
   }
 
   if (settings.includeGrayboxPano) {
-    if (graybox && grayboxAsset) {
+    if (omitPanoramaReferences) {
+      artifacts.push(omitArtifact(shot.id, 'global-graybox', 'production-contract-no-panorama'));
+    } else if (graybox && grayboxAsset) {
       artifacts.push(produceArtifact(
         shot.id,
         'global-graybox',
@@ -1024,6 +1035,7 @@ export function sharedReferenceCacheKey(
   settings: ShotExportSettings,
   kind: PlannedArtifactKind,
 ): string | null {
+  if (shotExpectsNoPanorama(project, shot)) return null;
   const canonical = project.panoRefs.find((pano) => pano.isCanonical);
   const graybox = project.panoRefs.find((pano) => pano.type === 'graybox_render');
   const linkedPano = project.panoRefs.find((pano) => pano.id === shot.linkedPanoId);

@@ -83,6 +83,42 @@ describe('agent transaction apply/undo', () => {
     expect(result.diagnostics[0]?.code).toBe('write_access_required');
   });
 
+  it('refuses apply with expectedRevisionId when the active revision differs and does not mutate', async () => {
+    useProjectSafetyStore.setState({ activeRevisionId: 'rev_actual' });
+    const before = useProjectStore.getState().project;
+    const result = await applyAgentPlan({
+      version: 1,
+      commands: [{ op: 'project.updateInfo', name: 'Stale CAS Apply' }],
+    }, { expectedRevisionId: 'rev_wrong' });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.code).toBe('stale_revision');
+    expect(result.diagnostics[0]?.message).toContain('rev_wrong');
+    expect(useProjectStore.getState().project).toBe(before);
+    useProjectSafetyStore.setState({ activeRevisionId: undefined });
+  });
+
+  it('refuses apply with expectedRevisionId when no verified revision is active', async () => {
+    useProjectSafetyStore.setState({ activeRevisionId: undefined });
+    const result = await applyAgentPlan({
+      version: 1,
+      commands: [{ op: 'project.updateInfo', name: 'No Revision Yet' }],
+    }, { expectedRevisionId: 'rev_early' });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.code).toBe('stale_revision');
+    expect(result.diagnostics[0]?.message).toContain('no verified revision is active');
+  });
+
+  it('applies when expectedRevisionId matches the active revision', async () => {
+    useProjectSafetyStore.setState({ activeRevisionId: 'rev_match' });
+    const result = await applyAgentPlan({
+      version: 1,
+      commands: [{ op: 'project.updateInfo', name: 'CAS Apply' }],
+    }, { expectedRevisionId: 'rev_match' });
+    expect(result.ok).toBe(true);
+    expect(useProjectStore.getState().project.name).toBe('CAS Apply');
+    useProjectSafetyStore.setState({ activeRevisionId: undefined });
+  });
+
   it('applies a multi-command plan in one store update', async () => {
     const seen: LocationProject[] = [];
     const unsubscribe = useProjectStore.subscribe((state, previous) => {

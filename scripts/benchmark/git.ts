@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { environmentFailure } from './failures';
 import { repoRoot } from './layout';
@@ -13,6 +16,24 @@ export interface GitIdentityRecord {
   expectedCommit: string;
   expectedCommitIsAncestor?: boolean;
   allowDirty: boolean;
+  contentFingerprint?: string;
+}
+
+async function repositoryContentFingerprint(cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['ls-files', '-co', '--exclude-standard', '-z'],
+    { cwd, encoding: 'buffer', maxBuffer: 32 * 1024 * 1024 },
+  );
+  const files = stdout.toString('utf8').split('\0').filter(Boolean).sort();
+  const digest = createHash('sha256');
+  for (const file of files) {
+    digest.update(file);
+    digest.update('\0');
+    digest.update(await readFile(path.join(cwd, file)));
+    digest.update('\0');
+  }
+  return digest.digest('hex');
 }
 
 export function allowDirtyWorkingTree(): boolean {
@@ -42,6 +63,7 @@ export async function gitIdentity(cwd = repoRoot()): Promise<GitIdentityRecord> 
       expectedCommit,
       expectedCommitIsAncestor,
       allowDirty: allowDirtyWorkingTree(),
+      contentFingerprint: await repositoryContentFingerprint(cwd),
     };
   } catch (error) {
     throw new Error(environmentFailure(
@@ -71,6 +93,15 @@ export function unauthorizedRepoModifications(
   if (after.commit !== before.commit) {
     return environmentFailure(
       `ForeScene HEAD changed during the run (${before.commit} → ${after.commit}).`,
+    );
+  }
+  if (
+    before.contentFingerprint
+    && after.contentFingerprint
+    && before.contentFingerprint !== after.contentFingerprint
+  ) {
+    return environmentFailure(
+      `ForeScene tracked/unignored content changed during the run (${before.contentFingerprint} → ${after.contentFingerprint}).`,
     );
   }
   if (after.porcelain === before.porcelain) return undefined;

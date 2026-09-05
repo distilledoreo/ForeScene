@@ -13,6 +13,7 @@ import {
   hasMissingControlVideos,
   RAPID_REVIEW_PROFILE,
   renderProfileFingerprint,
+  resolveRenderAppearanceForShot,
   resolveProductionConfig,
   resolveRenderProfileForMode,
 } from '../src/engine/previs';
@@ -32,6 +33,8 @@ describe('render profiles', () => {
     const profile = resolveRenderProfileForMode('previs');
     expect(profile.id).toBe('delivery');
     expect(profile.renderVideo).toBe(true);
+    expect(resolveRenderAppearanceForShot(profile, { linkedPanoId: 'pano-ruins' })).toBe('projected');
+    expect(resolveRenderAppearanceForShot(profile, { linkedPanoId: null })).toBe('clay');
   });
 
   it('produces stable fingerprints for cache invalidation', () => {

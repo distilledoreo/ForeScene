@@ -17,6 +17,41 @@ import type {
 } from './protocol';
 
 const OPERATION_DOCS: Record<string, AgentOperationDescription> = {
+  previewGenerativeWorldRequest: {
+    name: 'previewGenerativeWorldRequest',
+    category: 'inspect',
+    summary: 'Build and validate a backend-neutral persistent-world request plus HY-World 2.0 camera priors without running model inference.',
+    writeAccess: false,
+    input: {
+      shotIds: 'string[] (optional)',
+      desiredRepresentations: '(mesh | 3dgs)[] (optional)',
+    },
+    returns: 'AgentGenerativeWorldPreviewResult',
+  },
+  runMockGenerativeWorldBackend: {
+    name: 'runMockGenerativeWorldBackend',
+    category: 'inspect',
+    summary: 'Exercise the generative-world orchestration contract with a deterministic hardware-free backend.',
+    writeAccess: false,
+    input: {
+      shotIds: 'string[] (optional)',
+      desiredRepresentations: '(mesh | 3dgs)[] (optional)',
+    },
+    returns: 'AgentGenerativeWorldMockResult',
+  },
+  renderGenerativeWorldDepthPrior: {
+    name: 'renderGenerativeWorldDepthPrior',
+    category: 'runtime',
+    summary: 'Render a clean-plate, top-left-origin float32 camera-Z depth prior as a downloadable NumPy artifact.',
+    writeAccess: false,
+    input: {
+      shotId: 'string',
+      timeSeconds: 'number (optional)',
+      width: 'positive integer (optional)',
+      height: 'positive integer (optional)',
+    },
+    returns: 'AgentGenerativeWorldDepthResult',
+  },
   setShotPanorama: {
     name: 'setShotPanorama',
     category: 'mutation',

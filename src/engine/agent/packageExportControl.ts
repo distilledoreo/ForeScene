@@ -35,6 +35,8 @@ import type {
 } from './protocol';
 import { reconcileAndVerifyRecoveryResources } from '../recoveryResources';
 import { recordProvenanceCancellation } from './cacheTelemetry';
+import { projectFingerprint } from './planDiff';
+import { readActiveRevisionId } from './revisionSync';
 
 let abortController: AbortController | null = null;
 let latestProgress: AgentPackageExportProgressSnapshot | null = null;
@@ -165,6 +167,11 @@ export async function exportAgentPackage(
   const stillBusy = await awaitAgentNotBusy();
   if (stillBusy) return { ok: false, status: 'busy', diagnostics: stillBusy };
 
+  // Capture the caller-visible revision before recovery reconciliation and the
+  // verified export flush. Those internal durability steps may legitimately
+  // create a new revision id even when project content is unchanged.
+  const revisionAtStart = readActiveRevisionId();
+
   const liveProject = useProjectStore.getState().project;
   const recovery = await reconcileAndVerifyRecoveryResources(liveProject);
   const recoveryDiagnostics: AgentDiagnostic[] = recovery.issues.map((issue) => (
@@ -228,14 +235,27 @@ export async function exportAgentPackage(
     };
   }
 
-  if (input.expectedRevisionId && input.expectedRevisionId !== verified.revision.id) {
+  const verifiedFingerprint = projectFingerprint(verified.project);
+  const fingerprintChanged = Boolean(
+    input.expectedFingerprint && input.expectedFingerprint !== verifiedFingerprint,
+  );
+  const revisionWasAlreadyStale = Boolean(
+    !input.expectedFingerprint
+    && input.expectedRevisionId
+    && input.expectedRevisionId !== revisionAtStart
+    && input.expectedRevisionId !== verified.revision.id,
+  );
+  if (fingerprintChanged || revisionWasAlreadyStale) {
+    const expectation = input.expectedFingerprint
+      ? `fingerprint ${input.expectedFingerprint}`
+      : `revision ${input.expectedRevisionId}`;
     return {
       ok: false,
       status: 'stale_revision',
       diagnostics: [
         agentError(
           AGENT_DIAGNOSTIC_CODES.staleRevision,
-          `Expected revision ${input.expectedRevisionId} but the verified revision is ${verified.revision.id}.`,
+          `Expected ${expectation} but export verified revision ${verified.revision.id} with fingerprint ${verifiedFingerprint}.`,
         ),
       ],
       revisionId: verified.revision.id,

@@ -126,15 +126,25 @@ export function deriveDynamicObjectUniverse(
       }
     }
   }
+  const preparedLocationObjectIds = new Set<string>();
+  for (const location of Object.values(configuration.locations)) {
+    for (const objectId of location.objectIds) preparedLocationObjectIds.add(objectId);
+    for (const groupId of location.objectGroupIds) {
+      for (const objectId of groups[groupId]?.objectIds ?? []) preparedLocationObjectIds.add(objectId);
+    }
+  }
 
   return project.scene.objects.flatMap((object) => {
     const classification = classifyProductionObject(object);
     const metadata = object.metadata ?? {};
     const explicitlyDynamic = metadata.productionDynamic === true
       || metadata.conditionalSetPiece === true;
-    const isDynamic = DYNAMIC_CLASSES.has(classification)
+    const preparedStaticEnvironment = preparedLocationObjectIds.has(object.id)
+      && !boundDynamicObjectIds.has(object.id)
+      && !explicitlyDynamic;
+    const isDynamic = !preparedStaticEnvironment && (DYNAMIC_CLASSES.has(classification)
       || explicitlyDynamic
-      || boundDynamicObjectIds.has(object.id);
+      || boundDynamicObjectIds.has(object.id));
     if (!isDynamic) return [];
     return [{
       objectId: object.id,

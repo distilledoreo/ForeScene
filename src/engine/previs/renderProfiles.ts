@@ -18,6 +18,8 @@ export interface RenderProfile {
   width: number;
   height: number;
   appearance: RenderAppearance;
+  /** Resolve calibrated shot panoramas as projected delivery, while keeping explicitly unlinked shots clay. */
+  panoramaPolicy: 'profile' | 'projected_when_linked';
   /** When primary appearance cannot be produced, fall back to this pass. */
   fallbackAppearance?: RenderAppearance;
   peopleVariant?: RenderPeopleVariant;
@@ -50,6 +52,7 @@ export const RAPID_REVIEW_PROFILE: RenderProfile = {
   width: 640,
   height: 360,
   appearance: 'clay',
+  panoramaPolicy: 'profile',
   fallbackAppearance: 'clay',
   peopleVariant: 'with_people',
   content: 'full_scene',
@@ -72,6 +75,7 @@ export const DELIVERY_PROFILE: RenderProfile = {
   width: 1920,
   height: 1080,
   appearance: 'clay',
+  panoramaPolicy: 'projected_when_linked',
   peopleVariant: 'with_people',
   content: 'full_scene',
   staticSampling: 'single',
@@ -93,6 +97,7 @@ export const CONTROL_VIDEO_PROFILE: RenderProfile = {
   width: 1920,
   height: 1080,
   appearance: 'clay',
+  panoramaPolicy: 'projected_when_linked',
   peopleVariant: 'with_people',
   content: 'full_scene',
   staticSampling: 'single',
@@ -138,6 +143,7 @@ export function renderProfileFingerprint(profile: RenderProfile): string {
     profile.width,
     profile.height,
     profile.appearance,
+    profile.panoramaPolicy,
     profile.fallbackAppearance ?? '',
     profile.peopleVariant ?? '',
     profile.content ?? '',
@@ -151,4 +157,14 @@ export function renderProfileFingerprint(profile: RenderProfile): string {
     profile.renderVideo ? '1' : '0',
     profile.overrideDimensions ? '1' : '0',
   ].join('|');
+}
+
+export function resolveRenderAppearanceForShot(
+  profile: RenderProfile,
+  shot: { linkedPanoId?: string | null },
+): RenderAppearance {
+  if (profile.panoramaPolicy !== 'projected_when_linked') return profile.appearance;
+  if (typeof shot.linkedPanoId === 'string' && shot.linkedPanoId.length > 0) return 'projected';
+  if (shot.linkedPanoId === null) return 'clay';
+  return profile.appearance;
 }

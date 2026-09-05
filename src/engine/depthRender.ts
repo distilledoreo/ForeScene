@@ -31,6 +31,10 @@ export interface DepthRenderResult {
   farMeters: number;
   invert: boolean;
   encoding: 'linear-camera-depth';
+  /** Optional top-left-origin, row-major camera-Z meters. Zero means no geometry. */
+  metricDepthMeters?: Float32Array;
+  /** NumPy v1.0 `<f4` array matching metricDepthMeters with shape [height, width]. */
+  metricDepthNpy?: Blob;
 }
 
 export interface DepthMetadata {
@@ -168,6 +172,8 @@ export async function renderViewportDepth(
     /** Cameras used for the shared auto range (defaults to this frame only). */
     rangeCameras?: readonly CameraData[];
     output?: 'data-url' | 'blob';
+    /** Materialize raw metric camera-Z depth for geometry/world reconstruction. */
+    includeMetricDepth?: boolean;
   } = {},
 ): Promise<DepthRenderResult> {
   const depth = normalizeShotDepthSettings(options.depth ?? defaultShotDepthSettings);
@@ -206,13 +212,20 @@ export async function renderViewportDepth(
       clipping.near,
       clipping.far,
     );
+    const pass = options.includeMetricDepth
+      ? createDepthPassResources(width, height)
+      : undefined;
     renderDepthGrayscale(renderer, scene, camera, {
       nearMeters: range.nearMeters,
       farMeters: range.farMeters,
       invert: depth.invert === true,
       cameraNear: clipping.near,
       cameraFar: clipping.far,
-    });
+    }, pass);
+    const metricDepthMeters = pass
+      ? readMetricDepthMeters(renderer, pass, clipping.near, clipping.far)
+      : undefined;
+    pass?.dispose();
     const encoded = options.output === 'blob'
       ? { dataUrl: '', blob: await canvasToBlob(renderer.domElement, 'image/png') }
       : { dataUrl: renderer.domElement.toDataURL('image/png') };
@@ -224,6 +237,13 @@ export async function renderViewportDepth(
       farMeters: range.farMeters,
       invert: depth.invert === true,
       encoding: 'linear-camera-depth',
+      ...(metricDepthMeters ? {
+        metricDepthMeters,
+        metricDepthNpy: new Blob(
+          [encodeNpyFloat32(metricDepthMeters, [height, width])],
+          { type: 'application/x-npy' },
+        ),
+      } : {}),
     };
   } finally {
     if (scene) disposeScene(scene);
@@ -239,6 +259,7 @@ export async function renderShotDepthFrame(
     /** Shared shot-wide range; when omitted, auto/manual is resolved from this variant's scene. */
     depthRange?: DepthRangeMeters;
     output?: 'data-url' | 'blob';
+    includeMetricDepth?: boolean;
   } = {},
 ): Promise<DepthRenderResult> {
   const depth = resolveShotDepthSettings(shot);
@@ -258,7 +279,12 @@ export async function renderShotDepthFrame(
     shot.camera,
     shot.exportSettings.width,
     shot.exportSettings.height,
-    { depth: depthForRender, rangeCameras, output: options.output },
+    {
+      depth: depthForRender,
+      rangeCameras,
+      output: options.output,
+      includeMetricDepth: options.includeMetricDepth,
+    },
   );
 }
 
@@ -381,12 +407,14 @@ const DEPTH_LINEARIZE_FRAGMENT = /* glsl */`
   varying vec2 vUv;
 
   void main() {
-    float fragCoordZ = unpackRGBAToDepth(texture2D(tDepth, vUv));
-    // No geometry leaves the packed clear value at 1.0 → black.
-    if (fragCoordZ >= 0.99999) {
+    vec4 packedDepth = texture2D(tDepth, vUv);
+    // The render target clears to transparent black; geometry at the near
+    // plane is clipped, so an all-zero packed value is an unambiguous hole.
+    if (dot(abs(packedDepth), vec4(1.0)) < 0.000001) {
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
       return;
     }
+    float fragCoordZ = unpackRGBAToDepth(packedDepth);
 
     float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
     float linearDepth = -viewZ;
@@ -436,14 +464,13 @@ export function renderDepthGrayscale(
   const previousRenderTarget = renderer.getRenderTarget();
   renderer.getClearColor(previousClearColor);
 
-  const packedFar = packDepthRGBA(1);
-  const clearPacked = new THREE.Color(packedFar.r, packedFar.g, packedFar.b);
+  const clearPacked = new THREE.Color(0, 0, 0);
 
   try {
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     renderer.autoClear = true;
-    renderer.setClearColor(clearPacked, 1);
+    renderer.setClearColor(clearPacked, 0);
     scene.overrideMaterial = pass.depthMaterial;
     scene.background = null;
     scene.fog = null;
@@ -476,6 +503,88 @@ export function renderDepthGrayscale(
   }
 }
 
+/** Convert packed WebGL depth bytes to positive camera-Z meters. */
+export function unpackPackedDepthBytesToLinearCameraZ(
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+  cameraNear: number,
+  cameraFar: number,
+): number {
+  if (r === 0 && g === 0 && b === 0 && a === 0) return 0;
+  // Three.js unpackRGBAToDepth: byte significance is R, G, B, A.
+  const fragCoordZ = (
+    r / 256
+    + g / 65_536
+    + b / 16_777_216
+    + a / 4_294_967_296
+  );
+  const viewZ = (cameraNear * cameraFar)
+    / ((cameraFar - cameraNear) * fragCoordZ - cameraFar);
+  const linear = -viewZ;
+  return Number.isFinite(linear) && linear > 0 ? linear : 0;
+}
+
+/** Read the packed render target into a top-left-origin metric depth plane. */
+export function readMetricDepthMeters(
+  renderer: THREE.WebGLRenderer,
+  resources: DepthPassResources,
+  cameraNear: number,
+  cameraFar: number,
+): Float32Array {
+  const { width, height } = resources;
+  const packed = new Uint8Array(width * height * 4);
+  renderer.readRenderTargetPixels(resources.depthTarget, 0, 0, width, height, packed);
+  const output = new Float32Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = height - 1 - y;
+    for (let x = 0; x < width; x += 1) {
+      const sourceOffset = (sourceY * width + x) * 4;
+      output[y * width + x] = unpackPackedDepthBytesToLinearCameraZ(
+        packed[sourceOffset]!,
+        packed[sourceOffset + 1]!,
+        packed[sourceOffset + 2]!,
+        packed[sourceOffset + 3]!,
+        cameraNear,
+        cameraFar,
+      );
+    }
+  }
+  return output;
+}
+
+/** Encode a C-order float32 array as a portable little-endian NumPy v1.0 file. */
+export function encodeNpyFloat32(
+  values: Float32Array,
+  shape: readonly number[],
+): Uint8Array {
+  const expected = shape.reduce((total, item) => total * item, 1);
+  if (shape.length === 0 || shape.some((item) => !Number.isInteger(item) || item < 0)) {
+    throw new Error('NumPy shape must contain non-negative integers.');
+  }
+  if (expected !== values.length) {
+    throw new Error(`NumPy shape contains ${expected} values but received ${values.length}.`);
+  }
+  const tuple = shape.length === 1 ? `${shape[0]},` : shape.join(', ');
+  const baseHeader = `{'descr': '<f4', 'fortran_order': False, 'shape': (${tuple}), }`;
+  const prefixLength = 10;
+  const padding = (16 - ((prefixLength + baseHeader.length + 1) % 16)) % 16;
+  const header = `${baseHeader}${' '.repeat(padding)}\n`;
+  if (header.length > 65_535) throw new Error('NumPy v1.0 header is too large.');
+  const result = new Uint8Array(prefixLength + header.length + values.length * 4);
+  result.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 0x01, 0x00], 0);
+  new DataView(result.buffer).setUint16(8, header.length, true);
+  for (let index = 0; index < header.length; index += 1) {
+    result[prefixLength + index] = header.charCodeAt(index);
+  }
+  const data = new DataView(result.buffer, prefixLength + header.length);
+  for (let index = 0; index < values.length; index += 1) {
+    data.setFloat32(index * 4, values[index]!, true);
+  }
+  return result;
+}
+
 function collectShotDepthCameras(shot: Pick<Shot, 'camera' | 'cameraKeyframes'>): CameraData[] {
   const keyframes = getSortedCameraKeyframes(shot.cameraKeyframes ?? []);
   if (keyframes.length === 0) return [shot.camera];
@@ -497,15 +606,6 @@ function formatMeters(value: number): string {
   if (!Number.isFinite(value)) return '—';
   const rounded = value >= 10 ? value.toFixed(1) : value.toFixed(2);
   return `${rounded.replace(/\.?0+$/, '')} m`;
-}
-
-/** Pack a 0–1 depth into an RGB color matching Three.js RGBADepthPacking (A unused). */
-function packDepthRGBA(depth: number): { r: number; g: number; b: number } {
-  const v = Math.min(1, Math.max(0, depth));
-  const r = Math.floor(v * 255) / 255;
-  const g = Math.floor((v * 255 * 255) % 255) / 255;
-  const b = Math.floor((v * 255 * 255 * 255) % 255) / 255;
-  return { r, g, b };
 }
 
 function createDepthRenderer(width: number, height: number): THREE.WebGLRenderer {

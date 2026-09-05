@@ -124,6 +124,42 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     write: false,
   },
   {
+    id: 'world.request.preview',
+    label: 'Preview backend-neutral generative-world request and HY-World 2 camera priors',
+    cliCommand: 'world-preview',
+    cli: true,
+    ui: false,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: false,
+    notes: 'Read-only. Reports raw metric depth and external hardware requirements instead of invoking inference.',
+  },
+  {
+    id: 'world.backend.mockRun',
+    label: 'Run deterministic generative-world backend mock',
+    cliCommand: 'world-mock',
+    cli: true,
+    ui: false,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: false,
+    notes: 'Schema/integration proof only; does not claim external model inference.',
+  },
+  {
+    id: 'world.depth.render',
+    label: 'Render raw NumPy float32 camera-Z depth prior',
+    cliCommand: 'world-depth',
+    cli: true,
+    ui: false,
+    agentApi: true,
+    skillDocumented: true,
+    stable: true,
+    write: false,
+    notes: 'Clean plate, top-left row-major, meters; zero denotes no geometry.',
+  },
+  {
     id: 'project.previewPlan',
     label: 'Preview mutation plan',
     cliCommand: 'preview',
@@ -482,6 +518,8 @@ export function buildAgentCliCapabilitiesDocument() {
 
 export function commandToOperationName(command: string): string {
   if (command === 'help') return 'agent.help';
+  if (command === 'describe') return 'agent.describe';
+  if (command === 'schema') return 'agent.schema';
   if (command === 'frame') return 'render.frame';
   if (command === 'video') return 'render.video';
   if (command === 'cancel') return 'operation.cancel';
@@ -506,6 +544,20 @@ Query the live catalog without opening a browser:
 \`\`\`bash
 npm run agent:capabilities
 \`\`\`
+
+Discover exact command syntax or the public plan/result schema without opening
+a browser:
+
+\`\`\`bash
+npm run agent:describe -- --command previs
+npm run agent:previs -- --help
+npm run agent:schema
+\`\`\`
+
+\`agent:describe\` and command-local \`--help\` return the same compact,
+machine-readable command descriptor. \`agent:schema\` returns Agent plan limits,
+executable operations, and result shapes. Production-manifest entry points link
+to \`docs/previs-production-manifest.md\` and the checked-in generic examples.
 
 Stdout is a stable JSON envelope. \`result.capabilities\` is the compact boolean map:
 

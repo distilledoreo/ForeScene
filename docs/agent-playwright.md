@@ -188,6 +188,8 @@ Safety:
 - Pass `--update-manifest` to invalidate only changed shots (and dependents). Shot-only edits resume without `--reset-project`. Location/cast/prop edits also need `--reset-project` so creates are not duplicated.
 - `--profile` selects a persistent Playwright user-data dir (defaults to `.forescene-agent/profile`).
 - Unless `--skip-package` is set, a failed package phase makes the run `ok: false`.
+- `--no-auto-repair` disables the repair loop entirely (`repairsDisabled: true`, `repairsAttempted: 0` in the summary); `--max-repair-passes <n>` caps repair passes per shot.
+- After shot compilation the runner prunes **intact scaffold shots** (the blank Origin shot) that are not in the manifest. Non-manifest user shots are retained and reported in `logs/shots-prune.json`; pass `--prune-non-manifest-shots` to delete them explicitly.
 
 
 ## `agent:render-stills` / `agent:contact-sheet`
@@ -198,3 +200,8 @@ npm run agent:contact-sheet -- \
   --input artifacts/previs/shots \
   --output artifacts/previs/contact-sheet.png
 ```
+
+Both batch commands report honest aggregates:
+
+- `render-stills` returns `ok: false` with `failedShotNumbers` / `pendingShotNumbers` when any tracked shot failed or is still unrendered — a partial batch never claims success.
+- `contact-sheet` fails closed when a frame is missing, empty, or its run-state entry did not finish rendering; it returns a per-shot report (`frames`) with sha256 per file and builds no sheet. Pass `--allow-partial` to build a sheet over the frames that exist — `ok` stays `false` and `partial: true` is reported.
