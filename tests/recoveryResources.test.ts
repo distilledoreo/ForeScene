@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as projectSafety from '../src/engine/projectSafety';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultProject, createPanoAsset, createPanoReference } from '../src/domain/defaults';
 import { PROJECT_ASSET_RESOURCE_PREFIX } from '../src/engine/binaryIntegrity';
 import { exportAgentProjectBackup } from '../src/engine/agent/projectBackupControl';
@@ -29,12 +30,21 @@ describe('recovery resource reconciliation', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     useAgentControlStore.setState({ controlMode: 'read-only' });
     useProjectSafetyStore.getState().setFlushProject(undefined);
     await resetSafetyStorage();
   });
 
-  it('diagnoses a missing current-project recovery PNG instead of exporting', async () => {
+  it('warns on unreadable history while still validating current resources without pruning', async () => {
+    vi.spyOn(projectSafety, 'getAllRetainedBinaryResources').mockRejectedValue(new Error('Data lost due to missing file'));
+    const result = await reconcileAndVerifyRecoveryResources(createDefaultProject());
+    expect(result.ok).toBe(true);
+    expect(result.prunedHistoricalResources).toBe(0);
+    expect(result.issues).toEqual([expect.objectContaining({ code: 'unreadable-recovery-history', currentProject: false })]);
+  });
+
+  it.each([false, true])('blocks a missing current PNG even with unreadable history: %s', async (unreadable) => {
     const project = createDefaultProject();
     const asset = storeProjectAssetDataUrl(project.id, createPanoAsset({
       name: 'reference.png',
@@ -67,6 +77,7 @@ describe('recovery resource reconciliation', () => {
     const report = await runProjectHealthCheck(project);
     expect(report.issues.some((issue) => issue.code === 'missing-recovery-resource')).toBe(true);
 
+    if (unreadable) vi.spyOn(projectSafety, 'getAllRetainedBinaryResources').mockRejectedValue(new Error('Unreadable history'));
     const verification = await reconcileAndVerifyRecoveryResources(project);
     expect(verification.ok).toBe(false);
     expect(verification.issues.some((issue) => (

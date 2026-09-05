@@ -29,12 +29,13 @@ import {
   type ProjectRevisionBinaryResource,
   type ProjectRevisionRecord,
 } from './projectRevisionStore';
+import { digestFromRecoveryResourceKey } from './binaryIntegrity';
 import { dataUrlToBlob } from './fileTransfers';
 
 export interface RecoveryResourceIssue {
   key: string;
   kind: 'projectAsset' | 'model';
-  code: 'missing-recovery-resource' | 'corrupt-recovery-resource';
+  code: 'missing-recovery-resource' | 'corrupt-recovery-resource' | 'unreadable-recovery-history';
   message: string;
   currentProject: boolean;
 }
@@ -199,8 +200,22 @@ export async function reconcileAndVerifyRecoveryResources(
     }
   }
 
-  const retained = await getAllRetainedBinaryResources();
   const issues: RecoveryResourceIssue[] = [];
+  let retained: Awaited<ReturnType<typeof getAllRetainedBinaryResources>>;
+  let historyReadable = true;
+  try {
+    retained = await getAllRetainedBinaryResources();
+  } catch {
+    historyReadable = false;
+    issues.push({ key: project.id, kind: 'projectAsset', code: 'unreadable-recovery-history',
+      message: 'Retained recovery history could not be read. Current project resources are still verified; historical cleanup was skipped.',
+      currentProject: false });
+    const resources = (keys: Set<string>): ProjectRevisionBinaryResource[] => [...keys].flatMap((key) => {
+      const sha256 = digestFromRecoveryResourceKey(key);
+      return sha256 ? [{ key, sha256, byteLength: -1 }] : [];
+    });
+    retained = { projectAssets: resources(current.projectAssetKeys), models: resources(current.modelKeys) };
+  }
   const missingHistoricalProject = new Set<string>();
   const missingHistoricalModel = new Set<string>();
 
@@ -220,7 +235,7 @@ export async function reconcileAndVerifyRecoveryResources(
   }
 
   let prunedHistoricalResources = 0;
-  if (missingHistoricalProject.size + missingHistoricalModel.size > 0) {
+  if (historyReadable && missingHistoricalProject.size + missingHistoricalModel.size > 0) {
     const revisions = await listAllProjectRevisions();
     for (const revision of revisions) {
       prunedHistoricalResources += await pruneMissingFromRevision(
