@@ -1,3 +1,4 @@
+import * as revisionStore from '../src/engine/projectRevisionStore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createCameraKeyframe,
@@ -47,7 +48,31 @@ async function resetSafetyStorage() {
 
 describe('project safety revisions', () => {
   beforeEach(resetSafetyStorage);
-  afterEach(resetSafetyStorage);
+  afterEach(async () => { vi.restoreAllMocks(); await resetSafetyStorage(); });
+
+  it('recovers the active head without scanning an unreadable retained history', async () => {
+    const project = createDefaultProject();
+    project.name = 'Intact active project';
+    await saveProjectRevision(project, { reason: 'Saved active' });
+    const scan = vi.spyOn(revisionStore, 'listProjectRevisions').mockRejectedValue(new Error('Data lost due to missing file'));
+    expect((await recoverLatestProject())?.project.name).toBe(project.name);
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it('recovers the previous head when the active record fails and history is unreadable', async () => {
+    const project = createDefaultProject();
+    project.name = 'Previous known good';
+    await saveProjectRevision(project, { reason: 'Previous' });
+    const active = await saveProjectRevision({ ...project, name: 'Unreadable active' }, { reason: 'Active' });
+    const get = revisionStore.getProjectRevision;
+    vi.spyOn(revisionStore, 'getProjectRevision').mockImplementation((id) => id === active.revision.id
+      ? Promise.reject(new Error('Data lost due to missing file')) : get(id));
+    const scan = vi.spyOn(revisionStore, 'listProjectRevisions').mockRejectedValue(new Error('Unreadable history'));
+    const recovered = await recoverLatestProject();
+    expect(recovered?.project.name).toBe(project.name);
+    expect(recovered?.recoveredPreviousRevision).toBe(true);
+    expect(scan).not.toHaveBeenCalled();
+  });
 
   it('stages a verified revision and recovers the latest known-good project', async () => {
     const project = createDefaultProject();
