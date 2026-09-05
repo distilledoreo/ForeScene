@@ -190,6 +190,7 @@ export function getOrBuildSkinnedPrototype(params: {
   buffers: SkinWeightBuffers;
   materialFallback?: THREE.Material;
   referenceHeight: number;
+  centerForSceneObject?: boolean;
 }): SkinnedPrototypeEntry {
   const existing = prototypeCache.get(params.cacheKey);
   if (existing) return existing;
@@ -203,9 +204,22 @@ export function getOrBuildSkinnedPrototype(params: {
   cacheSkinnedMeshesOnInstance(built);
   // Shared across SkeletonUtils clones — must not be disposed with any one scene instance.
   markSharedSkinnedPrototypeResources(built);
+  let displayRoot: THREE.Object3D = built;
+  let referenceHeight = params.referenceHeight;
+  if (params.centerForSceneObject) {
+    // Move the completed skin AND skeleton together; moving vertices before
+    // binding changes their rotation pivots and tears even modest poses apart.
+    const box = new THREE.Box3().setFromObject(params.template);
+    referenceHeight = box.getSize(new THREE.Vector3()).y;
+    displayRoot = new THREE.Group();
+    displayRoot.add(built);
+    built.position.copy(box.getCenter(new THREE.Vector3()).negate());
+    displayRoot.updateMatrixWorld(true);
+    cacheSkinnedMeshesOnInstance(displayRoot);
+  }
   const entry: SkinnedPrototypeEntry = {
-    root: built,
-    referenceHeight: params.referenceHeight,
+    root: displayRoot,
+    referenceHeight,
     cacheKey: params.cacheKey,
   };
   prototypeCache.set(params.cacheKey, entry);

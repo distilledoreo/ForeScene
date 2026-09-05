@@ -2752,17 +2752,34 @@ export async function runRenderStillsCli(options: {
   });
   try {
     await openWorkspace(session.page, 'shots');
-    const shots = await session.page.evaluate(() => window.foreScene!.listShots());
-    let framesRendered = 0;
+    const project = await session.page.evaluate(() => window.foreScene!.getProjectDocument());
+    if (project.id !== state.projectId) {
+      return { ok: false, error: 'The active project does not match run-state.json.', projectId: project.id };
+    }
+    // This explicit refresh command must observe live edits made outside the
+    // manifest runner. Invalidate the entire batch durably before rendering,
+    // so interruption cannot leave unvisited stale frames marked complete.
     let next = state;
+    for (const shotNumber of Object.keys(state.shots)) {
+      next = upsertShotState(next, shotNumber, {
+        render: 'pending', framePath: undefined, renderSource: undefined,
+        renderFingerprint: undefined, renderCacheHit: false, pixelStats: undefined,
+      });
+    }
+    await writeJson(runStatePath, next);
+    let framesRendered = 0;
     for (const [shotNumber, shotState] of Object.entries(state.shots)) {
       if (shotState.compile !== 'complete') continue;
-      if (shotState.render === 'complete') {
-        framesRendered += 1;
+      const candidates = project.shots.filter((item) => shotState.shotId
+        ? item.id === shotState.shotId : item.shotNumber === shotNumber);
+      const shot = candidates.length === 1 ? candidates[0] : undefined;
+      if (!shot) {
+        next = upsertShotState(next, shotNumber, {
+          render: 'failed', lastError: 'Tracked shot is missing or ambiguous in the active project.',
+        });
+        await writeJson(runStatePath, next);
         continue;
       }
-      const shot = shots.find((item) => item.shotNumber === shotNumber || item.id === shotState.shotId);
-      if (!shot) continue;
       const framePath = path.join(outputDir, 'shots', `${shotNumber}.png`);
       const frame = await renderCleanShotFrame(session.page, shot.id, framePath, {
         debugUiPath: path.join(outputDir, 'debug', `${shotNumber}-ui.png`),
