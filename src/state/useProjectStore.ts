@@ -68,6 +68,14 @@ const reconciliationOptions = () => ({
   setProject: (project: ProjectStore['project']) => useProjectStore.setState({ project }),
 });
 
+function protectProjectAssets(project: ProjectStore['project']): void {
+  void synchronizeAuthoritativeProjectAssetKeys(project).catch((error: unknown) => {
+    // A damaged history must not become an unhandled startup rejection. The
+    // synchronizer remains fail-closed: it never removes existing protections.
+    console.warn('Could not synchronize retained project asset protection.', error);
+  });
+}
+
 /**
  * Narrow store-level lifecycle bridge for mutations that bypass updateShot/build-scene wrappers.
  * We intentionally watch export configuration and project/shot identity only — not arbitrary
@@ -85,12 +93,12 @@ useProjectStore.subscribe((state, previousState) => {
     rebindStillReconciliation(reconciliationOptions());
     releaseProjectAssetMemoryForProject(previous.id);
     setProjectAssetMemoryActiveProject(next.id);
-    void synchronizeAuthoritativeProjectAssetKeys(next);
+    protectProjectAssets(next);
     return;
   }
 
   if (previous.assets !== next.assets) {
-    void synchronizeAuthoritativeProjectAssetKeys(next);
+    protectProjectAssets(next);
   }
 
   const nextShotIds = new Set(next.shots.map((shot) => shot.id));
@@ -111,4 +119,4 @@ useProjectStore.subscribe((state, previousState) => {
 // Keep the currently open project's decoded media warm while allowing
 // temporary/imported/agent payloads to be reclaimed by the asset-store LRU.
 setProjectAssetMemoryActiveProject(useProjectStore.getState().project.id);
-void synchronizeAuthoritativeProjectAssetKeys(useProjectStore.getState().project);
+protectProjectAssets(useProjectStore.getState().project);

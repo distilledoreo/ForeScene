@@ -639,29 +639,36 @@ export async function recoverLatestProject(): Promise<RecoveredProject | undefin
   const heads = (await listProjectRevisionHeads())
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   for (const head of heads) {
-    const revisions = await listProjectRevisions(head.projectId);
-    const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
-    const newestFirst = [...revisions].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    const snapshots = newestFirst.filter((revision) => revision.kind === 'snapshot');
-    const olderRevisions = newestFirst.filter((revision) => revision.kind !== 'snapshot');
-    const candidates = [
-      head.activeRevisionId,
-      head.previousRevisionId,
-      ...snapshots.map((revision) => revision.id),
-      ...olderRevisions.map((revision) => revision.id),
-    ].filter((revisionId, index, all): revisionId is string => typeof revisionId === 'string' && revisionId.length > 0
-      && all.indexOf(revisionId) === index
-      && revisionById.has(revisionId));
-    for (const revisionId of candidates) {
+    const attempted = new Set<string>();
+    const tryRevision = async (revisionId: string | undefined): Promise<RecoveredProject | undefined> => {
+      if (!revisionId || attempted.has(revisionId)) return undefined;
+      attempted.add(revisionId);
       try {
         const loaded = await loadProjectRevision(revisionId);
         const recoveredPreviousRevision = revisionId !== head.activeRevisionId;
         if (recoveredPreviousRevision) await activateProjectRevision(head.projectId, revisionId);
         return { ...loaded, recoveredPreviousRevision };
       } catch {
-        // Keep walking every retained recovery point for this project before
-        // considering another local project head.
+        return undefined;
       }
+    };
+    // Read the known-good heads directly. IndexedDB getAll can fail because of
+    // one unrelated damaged retained record even when both heads remain intact.
+    for (const revisionId of [head.activeRevisionId, head.previousRevisionId]) {
+      const recovered = await tryRevision(revisionId);
+      if (recovered) return recovered;
+    }
+    // Keep history failures visible when neither head can be recovered; treating
+    // unreadable storage as an empty history could silently create a blank project.
+    const revisions = await listProjectRevisions(head.projectId);
+    const newestFirst = [...revisions].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    const candidates = [
+      ...newestFirst.filter((revision) => revision.kind === 'snapshot'),
+      ...newestFirst.filter((revision) => revision.kind !== 'snapshot'),
+    ];
+    for (const revision of candidates) {
+      const recovered = await tryRevision(revision.id);
+      if (recovered) return recovered;
     }
   }
   return undefined;
