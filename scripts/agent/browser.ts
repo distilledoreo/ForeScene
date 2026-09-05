@@ -13,6 +13,7 @@ import {
 } from './browserProfile';
 import { defaultAgentProfilePath, isDefaultAgentProfilePath, resolveAgentProfilePath } from './agentProfile';
 import { resolveForeSceneRepoRoot } from './repoRoot';
+import { resolveAgentBrowserProxy } from './browserProxy';
 
 export const REPO_ROOT = resolveForeSceneRepoRoot();
 export const AGENT_PROFILE_DIR = defaultAgentProfilePath(REPO_ROOT);
@@ -135,7 +136,7 @@ export async function waitForAgentReady(page: Page, timeoutMs = 60_000): Promise
       && status.projectLoaded
       && status.persistence?.ready,
     );
-  }, { timeout: timeoutMs });
+  }, undefined, { timeout: timeoutMs });
 }
 
 /** Ready + persistence / graybox / package export idle. */
@@ -151,6 +152,7 @@ export async function openAgentBrowser(
 ): Promise<AgentBrowserSession> {
   const url = await resolveForeSceneUrl(options.url);
   const headless = options.headless ?? false;
+  const proxy = resolveAgentBrowserProxy(url);
   const viewport = options.viewport ?? { width: 1600, height: 1000 };
   const persistWrite = options.persistWrite === true;
   const writeAccess = options.writeAccess === true || persistWrite;
@@ -178,6 +180,7 @@ export async function openAgentBrowser(
     () => chromium.launchPersistentContext(profileDir, {
       headless,
       viewport,
+      ...(proxy ? { proxy } : {}),
       timeout: BROWSER_LAUNCH_TIMEOUT_MS,
     }),
     BROWSER_LAUNCH_TIMEOUT_MS,
@@ -207,44 +210,52 @@ export async function openAgentBrowser(
     `[agent] chromium-launch profile=${profileDir} recovered=${profileRecovery.recovered ? '1' : '0'}\n`,
   );
 
-  await context.addInitScript(
-    ({ splash, write, persist }) => {
-      try {
-        window.localStorage.setItem('forescene-splash-seen', splash);
-      } catch {
-        // ignore
-      }
-      try {
-        // Always clear stale persisted write unless this launch opts into --persist-write.
-        if (persist) {
-          window.localStorage.setItem('forescene-agent-control', 'read-write');
-        } else {
-          window.localStorage.removeItem('forescene-agent-control');
+  let page: Page;
+  try {
+    await context.addInitScript(
+      ({ splash, write, persist }) => {
+        try {
+          window.localStorage.setItem('forescene-splash-seen', splash);
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
-      }
-      try {
-        if (write && !persist) {
-          window.sessionStorage.setItem('forescene-agent-control-session', 'read-write');
-        } else {
-          window.sessionStorage.removeItem('forescene-agent-control-session');
+        try {
+          // Always clear stale persisted write unless this launch opts into --persist-write.
+          if (persist) {
+            window.localStorage.setItem('forescene-agent-control', 'read-write');
+          } else {
+            window.localStorage.removeItem('forescene-agent-control');
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
-      }
-    },
-    {
-      splash: '1',
-      write: writeAccess,
-      persist: persistWrite,
-    },
-  );
+        try {
+          if (write && !persist) {
+            window.sessionStorage.setItem('forescene-agent-control-session', 'read-write');
+          } else {
+            window.sessionStorage.removeItem('forescene-agent-control-session');
+          }
+        } catch {
+          // ignore
+        }
+      },
+      {
+        splash: '1',
+        write: writeAccess,
+        persist: persistWrite,
+      },
+    );
 
-  const page = context.pages()[0] ?? await context.newPage();
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await dismissOnboarding(page);
-  await waitForAgentIdle(page);
+    page = context.pages()[0] ?? await context.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await dismissOnboarding(page);
+    await waitForAgentIdle(page);
+  } catch (error) {
+    // Initialization owns this context until a session is returned. If navigation
+    // or readiness fails, callers cannot close a session they never received.
+    await context.close().catch(() => undefined);
+    throw error;
+  }
 
   return {
     context,
