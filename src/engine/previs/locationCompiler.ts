@@ -399,6 +399,26 @@ export function compilePropsPhase(
     const entityKey = `props.${prop.id}`;
     if (entityMappingExists(next.entities[entityKey])) return;
 
+    if (prop.embeddedIn) {
+      const host = next.entities[`cast.${prop.embeddedIn.subject}`];
+      if (!host || !entityMappingExists(host)) {
+        diagnostics.push(previsError(
+          'embedded_prop_host_missing',
+          `Embedded prop "${prop.id}" host "${prop.embeddedIn.subject}" is not prepared.`,
+          { entityId: prop.id },
+        ));
+        return;
+      }
+      next.entities[entityKey] = {
+        ...host,
+        ...(host.objectIds ? { objectIds: [...host.objectIds] } : {}),
+        ...(host.refs ? { refs: { ...host.refs } } : {}),
+      };
+      next.refs[prop.id] = host.objectId ?? host.groupId ?? prop.embeddedIn.subject;
+      entityKeys.push(entityKey);
+      return;
+    }
+
     const binding = resolveCompileEntityBinding(prop.id, options);
     if (binding) {
       applyCompileEntityBinding(entityKey, prop.id, binding, next, entityKeys);
@@ -455,6 +475,24 @@ export function compilePropsPhase(
     diagnostics,
     entityKeys,
   };
+}
+
+/**
+ * Recompile props during a resumable agent run using only persisted live
+ * entities. The full production compile context already contains plan-local
+ * prop refs, so carrying those mappings into the apply phase would suppress
+ * the real creates and persist refs that never existed in the scene.
+ */
+export function compilePropsPhaseWithPersistedEntities(
+  manifest: PrevisProductionManifestV1,
+  context: CompiledProductionContext,
+  persistedEntities: Record<string, PrevisEntityMapping>,
+  options: CompilePhaseOptions = {},
+): CompilePhaseResult {
+  return compilePropsPhase(manifest, {
+    ...context,
+    entities: { ...persistedEntities },
+  }, options);
 }
 
 function mapPropPrimitive(prop: PrevisPropDefinition): {

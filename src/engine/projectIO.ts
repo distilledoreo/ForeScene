@@ -329,15 +329,23 @@ function normalizeShot(shot: Shot): Shot {
   return {
     ...shot,
     productionShotId: normalizeProductionShotId(shot.productionShotId),
-    cameraKeyframes: (shot.cameraKeyframes ?? []).map((keyframe) => ({
-      ...keyframe,
-      easing: keyframe.easing === 'easeIn'
-        || keyframe.easing === 'easeOut'
-        || keyframe.easing === 'easeInOut'
-        ? keyframe.easing
-        : 'linear',
-      objectOverrides: normalizeShotObjectOverrides(keyframe.objectOverrides),
-    })),
+    cameraKeyframes: (shot.cameraKeyframes ?? []).map((keyframe) => {
+      const { objectOverrides, ...rest } = keyframe;
+      return {
+        ...rest,
+        easing: keyframe.easing === 'easeIn'
+          || keyframe.easing === 'easeOut'
+          || keyframe.easing === 'easeInOut'
+          ? keyframe.easing
+          : 'linear',
+        // Missing keyframe staging inherits the shot staging. Preserve that
+        // distinction across save/load; an explicit empty snapshot means use
+        // build poses and must remain explicit.
+        ...(objectOverrides !== undefined
+          ? { objectOverrides: normalizeShotObjectOverrides(objectOverrides) }
+          : {}),
+      };
+    }),
     objectOverrides: normalizeShotObjectOverrides(shot.objectOverrides),
     exportSettings: normalizeShotExportSettings({
       ...exportSettings,

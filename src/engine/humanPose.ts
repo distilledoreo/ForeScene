@@ -366,7 +366,15 @@ export function interpolateHumanPose(
     };
   }
 
-  return { version: 1, joints };
+  const matchingPresetId = startPose?.presetId
+    && startPose.presetId === endPose?.presetId
+    ? startPose.presetId
+    : undefined;
+  return {
+    version: 1,
+    joints,
+    ...(matchingPresetId ? { presetId: matchingPresetId } : {}),
+  };
 }
 
 function resolveJointForInterpolation(

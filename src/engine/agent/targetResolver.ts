@@ -12,6 +12,7 @@ import {
 } from './diagnostics';
 import { listObjectsSnapshot } from './inspection';
 import type { AgentEntityReference, AgentEntityTarget, AgentKeyframeTarget } from './protocol';
+import { matchShotsByShotNumber, normalizeShotNumber } from './shotNumberMatch';
 
 export type ResolveTargetResult =
   | { ok: true; id: string; fromRef?: string }
@@ -142,15 +143,8 @@ export function resolveObjectTarget(
   };
 }
 
-function normalizeShotNumber(value: string): string {
-  return value.trim().replace(/^0+(?=\d)/, '');
-}
-
 export function matchShotsByNumber(project: LocationProject, shotNumber: string) {
-  const exact = project.shots.filter((shot) => shot.shotNumber === shotNumber);
-  if (exact.length > 0) return exact;
-  const normalized = normalizeShotNumber(shotNumber);
-  return project.shots.filter((shot) => normalizeShotNumber(shot.shotNumber) === normalized);
+  return matchShotsByShotNumber(project.shots, shotNumber);
 }
 
 export function resolveShotTarget(

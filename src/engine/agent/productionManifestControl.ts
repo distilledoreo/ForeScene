@@ -2,10 +2,20 @@
  * Agent API production manifest compiler endpoints.
  */
 
-import type { LocationProject, Workspace } from '../../domain/types';
+import type {
+  LocationProject,
+  ProductionConfiguration,
+  ProductionEntityBinding,
+  ShotProductionContract,
+  Workspace,
+} from '../../domain/types';
 import type { PrevisProductionManifestV1 } from '../previs/manifest';
 import { parsePrevisProductionManifest } from '../previs/manifestValidation';
 import { buildProductionCompileEntityBindings, buildProductionCompileLocationBindings } from '../previs/productionCompileBindings';
+import { inferExistingProjectLocationBindings } from '../previs/productionCompileBindings';
+import { deriveShotActionContracts } from '../previs/productionConfiguration';
+import { canInferNativeActionPose, canInferRigidLocomotion } from '../previs/actionIntent';
+import { resolveProductionPose } from '../previs/entityCapability';
 import { compileProduction, plansForProductionCompile } from '../previs/productionCompiler';
 import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
@@ -162,6 +172,7 @@ export function validateAgentProductionManifest(input: { manifest: unknown }): A
 export async function bindAgentManifestAssets(input: {
   manifest: unknown;
   bindings: Record<string, string>;
+  groupBindings?: Record<string, string>;
 }): Promise<AgentProductionManifestValidateResult> {
   if (useAgentControlStore.getState().controlMode !== 'read-write') {
     return {
@@ -202,6 +213,15 @@ export async function bindAgentManifestAssets(input: {
       diagnostics: [agentError('object_not_found', 'Bound scene objects not found: ' + missingObjects.join(', ') + '.')],
     };
   }
+  const missingGroups = Object.values(input.groupBindings ?? {}).filter((groupId) => (
+    !project.scene.objectGroups?.[groupId]
+  ));
+  if (missingGroups.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [agentError('group_not_found', 'Bound object groups not found: ' + missingGroups.join(', ') + '.')],
+    };
+  }
 
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructive) {
@@ -217,7 +237,19 @@ export async function bindAgentManifestAssets(input: {
         ...state.project,
         workflow: {
           ...state.project.workflow,
-          productionManifestAssetBindings: { ...input.bindings },
+          productionManifestAssetBindings: {
+            ...input.bindings,
+            ...Object.fromEntries(Object.entries(input.groupBindings ?? {}).flatMap(([entityId, groupId]) => {
+              const objectId = state.project.scene.objectGroups?.[groupId]?.objectIds[0];
+              return objectId ? [[entityId, objectId]] : [];
+            })),
+          },
+          production: buildManifestProductionConfiguration({
+            project: state.project,
+            manifest: parsed.manifest!,
+            bindings: input.bindings,
+            groupBindings: input.groupBindings ?? {},
+          }),
         },
       }),
     }));
@@ -242,6 +274,217 @@ export async function bindAgentManifestAssets(input: {
       ...bindingWarnings,
       ...mapPrevisDiagnostics(parsed.warnings.filter((item) => item.severity === 'warning')),
     ],
+  };
+}
+
+function buildManifestProductionConfiguration(input: {
+  project: LocationProject;
+  manifest: PrevisProductionManifestV1;
+  bindings: Record<string, string>;
+  groupBindings: Record<string, string>;
+}): ProductionConfiguration {
+  const existing = input.project.workflow.production;
+  const bindings: Record<string, ProductionEntityBinding> = {};
+  for (const [entityId, objectId] of Object.entries(input.bindings)) {
+    bindings[entityId] = { kind: 'object', objectId };
+  }
+  for (const [entityId, groupId] of Object.entries(input.groupBindings)) {
+    bindings[entityId] = { kind: 'group', groupId };
+  }
+
+  const preparedLocations = inferExistingProjectLocationBindings(input.project, input.manifest);
+  const boundDynamicObjectIds = new Set<string>();
+  for (const binding of Object.values(bindings)) {
+    if (binding.kind === 'object') boundDynamicObjectIds.add(binding.objectId);
+    if (binding.kind === 'group') {
+      for (const objectId of input.project.scene.objectGroups?.[binding.groupId]?.objectIds ?? []) {
+        boundDynamicObjectIds.add(objectId);
+      }
+    }
+  }
+  const locations: ProductionConfiguration['locations'] = {};
+  for (const definition of input.manifest.locations) {
+    const prepared = preparedLocations[definition.id];
+    const previous = existing?.locations[definition.id];
+    if (!prepared && !previous) continue;
+    const manifestDefinesPanoIds = definition.panoIds !== undefined;
+    const manifestDefinesDefaultPano = Object.prototype.hasOwnProperty.call(
+      definition,
+      'defaultPanoId',
+    );
+    const configuredDefaultPanoId = manifestDefinesDefaultPano
+      ? definition.defaultPanoId
+      : previous?.defaultPanoId;
+    const panoIds = [...new Set([
+      ...(manifestDefinesPanoIds ? definition.panoIds ?? [] : previous?.panoIds ?? []),
+      ...(typeof configuredDefaultPanoId === 'string' ? [configuredDefaultPanoId] : []),
+    ])];
+    locations[definition.id] = prepared
+      ? {
+          id: definition.id,
+          objectIds: prepared.objectIds.filter((objectId) => !boundDynamicObjectIds.has(objectId)),
+          objectGroupIds: [],
+          anchors: Object.fromEntries(Object.entries(prepared.anchors).map(([key, position]) => [
+            key,
+            { position: [...position] },
+          ])),
+          blockerObjectIds: prepared.blockerObjectIds.filter((objectId) => !boundDynamicObjectIds.has(objectId)),
+          ...(panoIds.length > 0 ? { panoIds } : {}),
+          ...(typeof configuredDefaultPanoId === 'string'
+            ? { defaultPanoId: configuredDefaultPanoId }
+            : {}),
+        }
+      : structuredClone(previous!);
+    bindings[definition.id] = { kind: 'location', locationId: definition.id };
+  }
+
+  const shotContracts: Record<string, ShotProductionContract> = {};
+  for (const definition of input.manifest.shots) {
+    const shot = input.project.shots.find((candidate) => (
+      candidate.shotNumber === definition.shotNumber
+      || candidate.productionShotId === definition.id
+    ));
+    const contractId = shot?.id ?? definition.id;
+    const entityIds = [...new Set([
+      ...definition.subjects,
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
+      ...(definition.requirements?.visibleSubjects ?? []),
+      ...(definition.requirements?.visibleProps ?? []),
+    ])];
+    const visibleEntityIds = [...new Set([
+      ...(definition.requirements?.visibleSubjects ?? definition.subjects),
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
+      ...(definition.requirements?.visibleProps ?? []),
+    ])];
+    const expectedVisibleObjectIds: string[] = [];
+    const expectedVisibleGroupIds: string[] = [];
+    for (const entityId of visibleEntityIds) {
+      const binding = bindings[entityId];
+      if (binding?.kind === 'object') expectedVisibleObjectIds.push(binding.objectId);
+      if (binding?.kind === 'group') expectedVisibleGroupIds.push(binding.groupId);
+    }
+    const presenceState = {
+      expectedVisibleObjectIds: [...new Set(expectedVisibleObjectIds)],
+      expectedVisibleGroupIds: [...new Set(expectedVisibleGroupIds)],
+    };
+    const location = input.manifest.locations.find((candidate) => candidate.id === definition.locationId);
+    const preparedLocation = location ? locations[location.id] : undefined;
+    const preparedPanoId = preparedLocation?.defaultPanoId ?? preparedLocation?.panoIds?.[0];
+    const manifestExplicitlyUnlinksPanorama = location?.defaultPanoId === null;
+    const greenfieldWithoutPanorama = Boolean(location)
+      && input.manifest.project.operatingMode !== 'existing-project-refinement'
+      && !preparedPanoId;
+    const environment = location && preparedLocation
+      ? manifestExplicitlyUnlinksPanorama || greenfieldWithoutPanorama
+        ? {
+            locationId: location.id,
+            expectNoPanorama: true,
+            requireProjection: false,
+          }
+        : preparedPanoId
+          ? {
+              locationId: location.id,
+              expectedPanoId: preparedPanoId,
+              requireProjection: true,
+            }
+          : undefined
+      : undefined;
+    const capabilityRequirements = entityIds.flatMap((entityId) => {
+      const binding = bindings[entityId];
+      if (!binding) return [];
+      const cast = input.manifest.cast.find((candidate) => candidate.id === entityId);
+      return [{
+        entityId,
+        requires: {
+          renderable: true,
+          ...(binding.kind === 'group' ? { rigidAssembly: true } : {}),
+          ...(cast?.type === 'imported_character'
+            ? {
+                poseable: true,
+                deforming: true,
+                ...(definition.motion ? { timelinePoseable: true } : {}),
+              }
+            : {}),
+        },
+      }];
+    });
+    const actions = deriveShotActionContracts(definition, {
+      poseableEntityIds: new Set(input.manifest.cast
+        .filter(canInferNativeActionPose)
+        .map((entry) => entry.id)),
+      rigidLocomotionEntityIds: new Set(entityIds
+        .filter((entityId) => canInferRigidLocomotion(input.manifest, entityId))),
+      resolvePose: (entityId, requestedPose) => resolveProductionPose({
+        project: input.project,
+        entityId,
+        requestedPose,
+        shotId: definition.id,
+      }),
+    });
+    const requireCompleteAssembly = [
+      'establishing',
+      'wide',
+      'full',
+      'two_shot',
+      'insert',
+      'profile',
+      'low_angle',
+      'high_angle',
+      'overhead',
+    ].includes(definition.camera.template);
+    const compositionSubjects = [...new Set([
+      ...definition.camera.subjects,
+      ...(definition.camera.foregroundSubject ? [definition.camera.foregroundSubject] : []),
+    ])]
+      .filter((entityId) => Boolean(bindings[entityId]))
+      .map((entityId) => ({
+        entityId,
+        completeAssemblyInFrame: requireCompleteAssembly,
+      }));
+    const occlusionIntent = definition.camera.foregroundSubject && definition.camera.subjects[0]
+      ? [{
+          foregroundEntityId: definition.camera.foregroundSubject,
+          backgroundEntityId: definition.camera.subjects[0],
+        }]
+      : undefined;
+    shotContracts[contractId] = {
+      presence: {
+        ...presenceState,
+        allowUnspecifiedDynamicObjects: false,
+        ...(definition.motion
+          ? {
+              base: structuredClone(presenceState),
+              timeline: definition.motion.keyframes.map((keyframe) => ({
+                timeSeconds: keyframe.timeSeconds,
+                ...structuredClone(presenceState),
+              })),
+            }
+          : {}),
+      },
+      ...(environment ? { environment } : {}),
+      ...(compositionSubjects.length > 0
+        ? {
+            composition: {
+              subjects: compositionSubjects,
+              ...(occlusionIntent ? { occlusionIntent } : {}),
+            },
+          }
+        : {}),
+      ...(capabilityRequirements.length > 0 ? { capabilityRequirements } : {}),
+      ...(actions.length > 0 ? { actions } : {}),
+    };
+  }
+
+  return {
+    schemaVersion: 1,
+    bindings,
+    locations,
+    shotContracts,
+    ...(existing?.poseSubstitutions
+      ? { poseSubstitutions: structuredClone(existing.poseSubstitutions) }
+      : {}),
   };
 }
 

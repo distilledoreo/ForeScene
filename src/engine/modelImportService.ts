@@ -9,6 +9,7 @@
 import { MODEL_ASSET_URI_PREFIX } from './importedMesh';
 import {
   importModelJob,
+  type ModelImportAnalysis,
   type ModelImportBatchResult,
   type ModelImportJob,
   type ModelImportOptions,
@@ -18,9 +19,88 @@ import { sha256Digest } from './binaryIntegrity';
 import { touchProject } from '../state/slices/touchProject';
 import { useProjectSafetyStore } from '../state/useProjectSafetyStore';
 import { useProjectStore } from '../state/useProjectStore';
+import type { ProjectAsset, SceneObject } from '../domain/types';
 
 export interface ProjectModelImportResult extends ModelImportBatchResult {
   verifiedRevisionId?: string;
+  reused?: boolean;
+}
+
+function findExistingModelImportByContentHash(contentHash: string): { asset: ProjectAsset; object: SceneObject } | undefined {
+  const project = useProjectStore.getState().project;
+  const asset = Object.values(project.assets.assets).find((entry) => (
+    entry.type === 'model'
+    && entry.contentHash === contentHash
+    && entry.resolutionStatus === 'available'
+  ));
+  if (!asset) return undefined;
+  const object = project.scene.objects.find((entry) => (
+    entry.type === 'imported_model' && entry.modelAssetId === asset.id
+  ));
+  if (!object) return undefined;
+  return { asset, object };
+}
+
+function reusedImportAnalysis(
+  sourceFile: File,
+  options: ModelImportOptions,
+  triangleCount: number,
+  vertexCount: number,
+): ModelImportAnalysis {
+  const mode = options.mode ?? 'separate';
+  return {
+    sourceFilename: sourceFile.name,
+    fileSize: sourceFile.size,
+    instancesExpanded: false,
+    topMeshes: [],
+    warnings: [],
+    loadedVertexCount: vertexCount,
+    triangleCount,
+    meshNodeCount: 1,
+    instanceCount: 1,
+    expandedInstanceCount: 1,
+    uniquePositionBytes: 0,
+    uniqueIndexBytes: 0,
+    outputPositionBytes: 0,
+    outputIndexBytes: 0,
+    mode,
+    normalBytes: 0,
+    transformationBytes: 0,
+    combinedTemporaryBytes: 0,
+    packedBytes: 0,
+    base64Bytes: 0,
+    gpuBytes: 0,
+    projectStorageBytes: 0,
+    estimatedPeakHeapBytes: 0,
+    safetyBudgetBytes: 0,
+    tier: 'standard',
+    exceeded: [],
+  };
+}
+
+function reusedImportBatch(
+  existing: { asset: ProjectAsset; object: SceneObject },
+  sourceFile: File,
+  options: ModelImportOptions,
+): ModelImportBatchResult {
+  const imported = existing.object.importedModel;
+  const triangleCount = imported?.triangleCount ?? 0;
+  const vertexCount = imported?.vertexCount ?? 0;
+  return {
+    items: [{ asset: existing.asset, object: existing.object }],
+    summary: {
+      sourceName: sourceFile.name,
+      sourceFormat: sourceFile.name.split('.').pop()?.toLowerCase() ?? 'glb',
+      mode: options.mode ?? 'separate',
+      totalObjects: 1,
+      totalVertices: vertexCount,
+      totalTriangles: triangleCount,
+      sourceNodeCount: 1,
+      combined: (options.mode ?? 'separate') === 'combined',
+    },
+    warnings: [],
+    analysis: reusedImportAnalysis(sourceFile, options, triangleCount, vertexCount),
+  };
 }
 
 /** Convert a model, then register all of its assets and objects atomically. */
@@ -28,6 +108,22 @@ export async function importModelIntoProject(
   job: ModelImportJob,
   options: ModelImportOptions,
 ): Promise<ProjectModelImportResult> {
+  if (job.kind === 'file') {
+    const contentHash = await sha256Digest(await job.file.arrayBuffer());
+    const existing = findExistingModelImportByContentHash(contentHash);
+    if (existing) {
+      useProjectStore.setState((state) => ({
+        ...state,
+        selectedObjectIds: [existing.object.id],
+        buildMode: 'select',
+      }));
+      return {
+        ...reusedImportBatch(existing, job.file, options),
+        reused: true,
+      };
+    }
+  }
+
   const batch = await importModelJob(job, options);
   const runDestructiveProjectMutation = useProjectSafetyStore
     .getState().runDestructiveProjectMutation;

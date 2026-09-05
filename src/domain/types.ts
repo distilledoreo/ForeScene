@@ -204,6 +204,8 @@ export interface ShotPresenceContract extends ShotPresenceState {
 export interface ShotEnvironmentContract {
   locationId: string;
   expectedPanoId?: string;
+  /** Explicitly require this shot to remain unlinked from every panorama. */
+  expectNoPanorama?: boolean;
   requireProjection?: boolean;
   minimumProjectionCoverage?: number;
 }
@@ -295,11 +297,31 @@ export interface PoseSubstitutionApproval {
   approvedBy?: string;
 }
 
+export interface ShotActionSample {
+  timeSeconds: number;
+  visible?: boolean;
+  position?: Vec3;
+  rotation?: Vec3;
+  requestedPose?: string;
+  resolvedPose?: string;
+  poseRelationship?: PoseResolutionRelationship;
+  requiresReview?: boolean;
+}
+
+export interface ShotActionContract {
+  actionId: string;
+  entityId: string;
+  mode: 'static_pose' | 'timeline';
+  durationSeconds: number;
+  samples: ShotActionSample[];
+}
+
 export interface ShotProductionContract {
   presence?: ShotPresenceContract;
   environment?: ShotEnvironmentContract;
   composition?: ShotCompositionConstraintSet;
   capabilityRequirements?: EntityCapabilityRequirement[];
+  actions?: ShotActionContract[];
 }
 
 export interface ProductionConfiguration {

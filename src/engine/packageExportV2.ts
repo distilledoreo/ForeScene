@@ -993,7 +993,7 @@ async function appendShotPackageToZipV2(
     throwIfAborted(signal);
     emit('packaging', 'Writing prompts…');
     zip.file(v2(`${rootFolder}/prompts/image_gen_prompt.txt`), generateImagePrompt(shotProject, shot));
-    zip.file(v2(`${rootFolder}/prompts/video_gen_prompt.txt`), generateVideoPrompt(shot));
+    zip.file(v2(`${rootFolder}/prompts/video_gen_prompt.txt`), generateVideoPrompt(shot, project));
     zip.file(v2(`${rootFolder}/prompts/negative_prompt.txt`), shot.promptOverrides.negativePrompt || '');
     finishUnit('packaging', 'Prompts written');
   }

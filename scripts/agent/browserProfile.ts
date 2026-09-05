@@ -4,6 +4,7 @@
  * A dead owner is cleaned. A live owner is reported and left untouched.
  */
 
+import { readFileSync } from 'node:fs';
 import { lstat, readlink, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -34,6 +35,16 @@ export interface BrowserProfileRecovery {
 
 export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === 'linux') {
+    try {
+      const status = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const commandEnd = status.lastIndexOf(')');
+      const state = commandEnd >= 0 ? status.slice(commandEnd + 2).charAt(0) : '';
+      if (state === 'Z' || state === 'X') return false;
+    } catch {
+      // Fall through to the portable signal probe.
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -43,6 +54,50 @@ export function isPidAlive(pid: number): boolean {
     // EPERM: the process exists but we cannot signal it.
     return true;
   }
+}
+
+export interface BrowserProfileTermination {
+  ownerPid?: number;
+  terminated: boolean;
+  recovery: BrowserProfileRecovery;
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !isPidAlive(pid);
+}
+
+/** Stop only the Chromium process that owns this exact persistent profile. */
+export async function terminateChromiumProfileOwner(
+  profileDir: string,
+): Promise<BrowserProfileTermination> {
+  const owner = await readChromiumLockOwner(profileDir);
+  const ownerPid = owner?.pid;
+  let terminated = false;
+  if (typeof ownerPid === 'number' && ownerPid !== process.pid && isPidAlive(ownerPid)) {
+    try {
+      process.kill(ownerPid, 'SIGTERM');
+      terminated = await waitForPidExit(ownerPid, 2_000);
+      if (!terminated && isPidAlive(ownerPid)) {
+        process.kill(ownerPid, 'SIGKILL');
+        terminated = await waitForPidExit(ownerPid, 2_000);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      terminated = true;
+    }
+  } else if (typeof ownerPid === 'number' && !isPidAlive(ownerPid)) {
+    terminated = true;
+  }
+  return {
+    ownerPid,
+    terminated,
+    recovery: await recoverChromiumProfileLocks(profileDir),
+  };
 }
 
 export function parseChromiumLockTarget(target: string): { hostname?: string; pid?: number } {

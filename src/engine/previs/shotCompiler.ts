@@ -2,7 +2,11 @@
  * Shot-list batch compiler — semantic shots → Agent API plans.
  */
 
-import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../agent/protocol';
+import type {
+  AgentTimelineObjectInput,
+  ForeSceneAgentCommand,
+  ForeSceneAgentPlan,
+} from '../agent/protocol';
 import type { LocationProject, ShotPresenceContract, Transform, Vec3 } from '../../domain/types';
 import { resolveManifestEntityMemberTransforms } from './manifestEntityTransforms';
 import {
@@ -25,6 +29,15 @@ import {
 } from './cameraSolver';
 import { validateShotDefinition } from './shotValidator';
 import { resolvePrevisPosePresetId } from './posePresets';
+import {
+  canInferRigidLocomotion,
+  canInferNativeActionPose,
+  inferNativeActionPose,
+  inferRigidLocomotionRotation,
+  resolveReadableMotionCamera,
+  resolveReadableMotionSubjectPosition,
+} from './actionIntent';
+import { centerTransformForBoundsPlant, centerTransformForFootPlant } from '../groundPivot';
 import { defaultPropDimensions } from './propDimensions';
 import {
   deriveDynamicObjectUniverse,
@@ -202,34 +215,35 @@ function compileSingleShot(
     }
   }
 
-  const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).map(([id, position]) => {
+  const subjectBounds: SubjectBounds[] = Object.entries(subjectPositions).flatMap(([id, position]) => {
     const character = characterById(manifest, id);
     const prop = (manifest.props ?? []).find((item) => item.id === id);
+    if (prop?.embeddedIn) return [];
     const blocking = blockingResults[id];
     // Yaw from staging rotation (Y axis degrees → radians).
     const yawRadians = blocking?.rotation
       ? (blocking.rotation[1] * Math.PI) / 180
       : undefined;
     if (character) {
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         position,
         height: character.height ?? 1.75,
         width: 0.55,
         depth: 0.55,
         yawRadians,
-      });
+      })];
     }
     if (prop) {
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         position,
         width: dims[0],
         height: dims[1],
         depth: dims[2],
         yawRadians,
-      });
+      })];
     }
     const importedAsset = manifest.assets?.find((item) => (
       item.id === id && (item.type === 'imported_model' || item.type === 'primitive_proxy')
@@ -237,7 +251,7 @@ function compileSingleShot(
     if (importedAsset) {
       const assetDimensions = manifestAssetDimensions(manifest, context, options.presenceProject, id)
         ?? [1.3, 1.3, 1.3] as Vec3;
-      return subjectBoundsFromPlacement({
+      return [subjectBoundsFromPlacement({
         id,
         // Imported-model blocking positions are floor contacts. Keep camera
         // bounds aligned with the grounded transform emitted below instead of
@@ -247,9 +261,10 @@ function compileSingleShot(
         height: assetDimensions[1],
         depth: assetDimensions[2],
         yawRadians,
-      });
+        requireCompleteAssembly: true,
+      })];
     }
-    return subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians });
+    return [subjectBoundsFromPlacement({ id, position, height: 1.75, yawRadians })];
   });
 
   const locationBlockers = resolveLocationBlockers(
@@ -443,6 +458,7 @@ function compileSingleShot(
     ...(shot.camera.foregroundSubject ? [shot.camera.foregroundSubject] : []),
     ...(shot.requirements?.visibleProps ?? []),
   ]);
+  const shotStagingCommandStart = commands.length;
 
   for (const character of manifest.cast) {
     const entityMapping = context.entities[`cast.${character.id}`];
@@ -450,7 +466,9 @@ function compileSingleShot(
       || visibleIds.has(character.id);
     const isVisible = visibleIds.has(character.id);
     const blocking = blockingResults[character.id];
-    const requestedPose = requestedPoseBySubject[character.id] ?? character.defaultPose;
+    const requestedPose = requestedPoseBySubject[character.id]
+      ?? character.defaultPose
+      ?? (canInferNativeActionPose(character) ? inferNativeActionPose(shot, character.id) : undefined);
     const pose = resolveCompilerPose(character.id, requestedPose)
       ?? (!options.presenceProject?.workflow.production ? blocking?.posePreset : undefined);
 
@@ -490,6 +508,11 @@ function compileSingleShot(
     const entityMapping = context.entities[`props.${prop.id}`];
     const inShot = visibleIds.has(prop.id);
     const blocking = blockingResults[prop.id];
+    if (prop.embeddedIn) {
+      // Visibility and transforms are owned by the host character. The prop's
+      // production binding aliases that same renderable object/group.
+      continue;
+    }
     if (inShot) {
       const position = subjectPositions[prop.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
@@ -602,15 +625,29 @@ function compileSingleShot(
   }
 
   if (shot.motion) {
+    // Timeline object snapshots are absolute. Seed every keyframe with the
+    // shot's authored static staging so a camera-only move cannot fall back to
+    // project-wide parked transforms after persistence or presence repair.
+    const staticTimelineObjects = mergeTimelineObjects(commands
+      .slice(shotStagingCommandStart)
+      .flatMap((command): AgentTimelineObjectInput[] => command.op === 'shot.stageObject'
+        ? [{
+            object: command.object,
+            ...(command.transform ? { transform: command.transform } : {}),
+            ...(command.visible !== undefined ? { visible: command.visible } : {}),
+            ...(command.humanPose ? { humanPose: command.humanPose } : {}),
+            ...(command.posePreset ? { posePreset: command.posePreset } : {}),
+          }]
+        : []));
     commands.push({
       op: 'shot.timeline.replace',
       shot: shotTarget,
       durationSeconds: shot.motion.durationSeconds,
       keyframes: shot.motion.keyframes.map((keyframe) => ({
         timeSeconds: keyframe.timeSeconds,
-        camera: keyframe.camera ?? {},
+        camera: resolveReadableMotionCamera(shot, keyframe) ?? {},
         ...(() => {
-          const objects = [
+          const animatedObjects = [
             ...(keyframe.staging?.flatMap((staging) => {
               const castMapping = context.entities[`cast.${staging.subject}`];
               const propMapping = context.entities[`props.${staging.subject}`];
@@ -621,7 +658,33 @@ function compileSingleShot(
                 : (manifest.props ?? []).some((item) => item.id === staging.subject)
                   ? 'prop'
                   : 'asset';
-              const resolvedPose = resolveCompilerPose(staging.subject, staging.posePreset);
+              const stagedCharacter = manifest.cast.find((item) => item.id === staging.subject);
+              const inferredPose = canInferNativeActionPose(stagedCharacter)
+                ? inferNativeActionPose(shot, staging.subject, shot.motion!.keyframes.indexOf(keyframe))
+                : undefined;
+              const resolvedPose = resolveCompilerPose(
+                staging.subject,
+                staging.posePreset ?? inferredPose,
+              );
+              const rigidLocomotionRotation = canInferRigidLocomotion(manifest, staging.subject)
+                && !staging.transform?.rotation
+                ? inferRigidLocomotionRotation(shot, staging.subject)
+                : undefined;
+              const readablePosition = resolveReadableMotionSubjectPosition(
+                shot,
+                keyframe,
+                staging.subject,
+              );
+              const effectiveStaging = rigidLocomotionRotation || readablePosition
+                ? {
+                    ...staging,
+                    transform: {
+                      ...staging.transform,
+                      ...(readablePosition ? { position: readablePosition } : {}),
+                      ...(rigidLocomotionRotation ? { rotation: rigidLocomotionRotation } : {}),
+                    },
+                  }
+                : staging;
               const stagedAssetDimensions = assetMapping
                 ? manifestAssetDimensions(manifest, context, options.presenceProject, staging.subject)
                 : undefined;
@@ -630,10 +693,16 @@ function compileSingleShot(
                 project: options.presenceProject,
                 fallbackRef: previsRef(prefix, staging.subject),
                 effectiveStaticTransform: effectiveStaticTransforms[staging.subject],
-                staging,
+                staging: effectiveStaging,
                 resolvedPose,
                 groundOffsetY: stagedAssetDimensions
                   ? stagedAssetDimensions[1] / 2
+                  : undefined,
+                groundedRotationHeight: rigidLocomotionRotation
+                  ? (stagedAssetDimensions?.[1] ?? stagedCharacter?.height ?? 1.75)
+                  : undefined,
+                groundedRotationDimensions: rigidLocomotionRotation
+                  ? stagedAssetDimensions
                   : undefined,
               });
             }) ?? []),
@@ -642,6 +711,10 @@ function compileSingleShot(
               visible: closedWorldPresence.expectedVisibleObjectIds.has(objectId),
             })) ?? []),
           ];
+          const objects = mergeTimelineObjects([
+            ...staticTimelineObjects,
+            ...animatedObjects,
+          ]);
           return objects.length > 0 ? { objects } : {};
         })(),
       })),
@@ -668,6 +741,22 @@ function compileSingleShot(
       fovDegrees: cameraSolve.camera.fovDegrees,
     },
   };
+}
+
+function mergeTimelineObjects(
+  entries: readonly AgentTimelineObjectInput[],
+): AgentTimelineObjectInput[] {
+  const merged = new Map<string, AgentTimelineObjectInput>();
+  for (const entry of entries) {
+    const key = JSON.stringify(entry.object);
+    const previous = merged.get(key);
+    merged.set(key, {
+      ...(previous ?? {}),
+      ...entry,
+      object: entry.object,
+    });
+  }
+  return [...merged.values()];
 }
 
 function resolveCompilerPresence(
@@ -808,6 +897,9 @@ function buildKeyframeStagingObjects(input: {
   resolvedPose?: string;
   /** Imported-model manifest positions are floor contacts, matching static blocking placement. */
   groundOffsetY?: number;
+  groundedRotationHeight?: number;
+  /** Exact live assembly bounds when available; stronger than a centerline foot pivot. */
+  groundedRotationDimensions?: Vec3;
 }): Array<{
   object: { id: string } | { ref: string };
   visible?: boolean;
@@ -821,11 +913,17 @@ function buildKeyframeStagingObjects(input: {
   };
   if (input.staging.transform) {
     const requestedPosition = input.staging.transform.position;
-    const targetTransform: Transform = {
-      position: requestedPosition
+    const rotation = input.staging.transform.rotation ?? baseTransform.rotation;
+    const centerPosition: Vec3 = requestedPosition
         ? [requestedPosition[0], requestedPosition[1] + (input.groundOffsetY ?? 0), requestedPosition[2]]
-        : baseTransform.position,
-      rotation: input.staging.transform.rotation ?? baseTransform.rotation,
+        : baseTransform.position;
+    const targetTransform: Transform = {
+      position: input.groundedRotationDimensions
+        ? centerTransformForBoundsPlant(centerPosition, rotation, input.groundedRotationDimensions)
+        : input.groundedRotationHeight
+          ? centerTransformForFootPlant(centerPosition, rotation, input.groundedRotationHeight)
+          : centerPosition,
+      rotation,
       scale: input.staging.transform.scale ?? baseTransform.scale,
     };
     if (input.mapping?.groupId && input.mapping.objectIds?.length) {

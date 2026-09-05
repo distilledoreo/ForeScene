@@ -67,7 +67,10 @@ CLI launches always clear a stale localStorage write seed unless `--persist-writ
 `importModel({ file, mode })` uses the shared model conversion and local-recovery
 commit path behind **Import 3D scene**. It creates texture-free graybox geometry,
 registers its binary payloads, and adds the resulting objects in the same protected
-project mutation. It requires `read-write` access. Heavy geometry returns a
+project mutation. Importing the same file bytes again (matching stored `contentHash`)
+reuses the existing model asset and imported object instead of creating duplicates;
+the result includes `reused: true` when binding is reused. It requires `read-write`
+access. Heavy geometry returns a
 structured `requiresConsent` result until its caller sends the explicit
 `allow-heavy-model-imports` token; extreme imports also require the literal
 `IMPORT` confirmation.
@@ -463,6 +466,7 @@ Supported plan commands:
 - `project.updateInfo`
 - `object.create` / `object.update` / `object.delete` / `object.duplicate`
 - `shot.create` / `shot.rename` / `shot.updateDescription` / `shot.updateCamera`
+- `shot.frameSubjects` — solver-backed framing intent (see below)
 - `shot.select` / `shot.copyStagingToNext` / `shot.stageObject` / `shot.clearStaging` / `shot.delete`
 - `landmark.create` / `landmark.update` / `landmark.delete` / `landmark.linkObject`
 - `shot.timeline.replace` / `shot.timeline.clear` / `shot.timeline.setDuration`
@@ -510,6 +514,29 @@ Plan-local `ref` values bind created entities so later commands can target them.
 
 Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale projects.
 
+### `shot.frameSubjects` — cinematic framing as a plan command
+
+```js
+await window.foreScene.previewPlan({
+  version: 1,
+  planId: 'medium-two-shot',
+  commands: [{
+    op: 'shot.frameSubjects',
+    shot: { id: 'shot-id' },
+    subjects: [{ id: 'actor-object-id' }],
+    composition: 'medium', // establishing | wide | full_body/full | medium | medium_close_up | close_up | three_quarter_tracking | over_the_shoulder | two_shot
+  }],
+});
+```
+
+The plan compiler solves the camera with the same solver as the `frameSubjects`
+Agent API primitive and expands the command into an equivalent
+`shot.updateCamera` against the mid-plan project state. That means framing
+intent composes with staging commands in one plan and inherits the whole plan
+lifecycle: preview diff, atomic apply, fingerprint checks, and undo. Solver
+warnings (for example an unknown composition falling back to `medium`) surface
+as plan warnings; an unresolvable shot or subject target fails the whole plan.
+
 ## Apply and undo
 
 `applyPlan` / `undoLastPlan` require read-write mode. They wait for persistence idle (`criticalWrite` / graybox / package export) before committing, then:
@@ -521,6 +548,11 @@ Optional `expectedFingerprint` (from a prior inspect/preview) rejects stale proj
 5. Record an in-memory history entry for `undoLastPlan()`
 
 If persistence throws after the live commit, the catch path restores the exact pre-plan project and selection (no history entry).
+
+`applyPlan(plan, { expectedRevisionId })` adds a compare-and-swap guard: the
+apply refuses with `stale_revision` when the live verified revision is missing
+or different (same contract as `expectedRevisionId` on package export). The CLI
+exposes it as `npm run agent:apply -- --plan plan.json --write --expected-revision <id>`.
 
 `undoLastPlan()` restores the preceding project only when the current fingerprint still matches the applied result. Manual edits after apply refuse undo.
 

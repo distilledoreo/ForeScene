@@ -138,6 +138,9 @@ interface LoadedModel {
 interface SourceMeshUnit {
   sourceNodeName: string | undefined;
   sourceNodePath: string;
+  /** Texture-free material identity retained from the authored source. */
+  sourceMaterialName?: string;
+  sourceColor?: string;
   positions: Float32Array;
   indices: Uint32Array;
   /** Center of world-space AABB for this unit. */
@@ -319,9 +322,9 @@ async function importDirectModel(
     const warnings = uniqueWarnings([
       ...initialWarnings,
       ...loaded.warnings,
-      // material/texture stripping
+      // Production-safe texture-free material conversion.
       ...(loaded.materialCount > 0 || loaded.textureCount > 0
-        ? [`Removed ${loaded.materialCount} material${loaded.materialCount === 1 ? '' : 's'} and ${loaded.textureCount} texture reference${loaded.textureCount === 1 ? '' : 's'} for graybox rendering.`]
+        ? [`Converted ${loaded.materialCount} authored material${loaded.materialCount === 1 ? '' : 's'} to texture-free color identity and removed ${loaded.textureCount} texture reference${loaded.textureCount === 1 ? '' : 's'}.`]
         : []),
       ...(loaded.animationCount > 0
         ? [`Ignored ${loaded.animationCount} animation clip${loaded.animationCount === 1 ? '' : 's'}; imported the static scene pose.`]
@@ -481,6 +484,7 @@ async function buildSeparateResult(args: BuildArgs): Promise<ModelImportBatchRes
         sourceImportId,
         sourceNodeName: source.sourceNodeName,
         sourceNodePath: source.sourceNodePath,
+        sourceMaterialName: source.sourceMaterialName,
         sourceNodeCount: sourceUnits.length,
         importMode: 'separate',
         vertexCount: source.vertexCount,
@@ -502,6 +506,7 @@ async function buildSeparateResult(args: BuildArgs): Promise<ModelImportBatchRes
       category: 'architecture',
       locked: false,
       visible: true,
+      ...(source.sourceColor ? { surfaceStyle: 'solid' as const, color: source.sourceColor } : {}),
       modelAssetId: assetId,
       importedModel: {
         sourceName,
@@ -740,6 +745,9 @@ function collectSourceMeshUnits(root: THREE.Object3D): SourceMeshUnit[] {
     const sourceNodePath = paths[ci];
     const rawName = sourceMeshName(mesh);
     const sourceNodeName = rawName || undefined;
+    const sourceMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const sourceMaterialName = sourceMaterial?.name?.trim() || undefined;
+    const sourceColor = textureFreeSourceColor(sourceMaterial);
 
     const isInstanced = (mesh as THREE.InstancedMesh).isInstancedMesh;
     if (isInstanced) {
@@ -826,6 +834,8 @@ function collectSourceMeshUnits(root: THREE.Object3D): SourceMeshUnit[] {
       units.push({
         sourceNodeName,
         sourceNodePath,
+        sourceMaterialName,
+        sourceColor,
         positions,
         indices,
         center,
@@ -889,6 +899,8 @@ function collectSourceMeshUnits(root: THREE.Object3D): SourceMeshUnit[] {
       units.push({
         sourceNodeName,
         sourceNodePath,
+        sourceMaterialName,
+        sourceColor,
         positions,
         indices,
         center,
@@ -903,6 +915,24 @@ function collectSourceMeshUnits(root: THREE.Object3D): SourceMeshUnit[] {
   }
 
   return units;
+}
+
+function textureFreeSourceColor(material: THREE.Material | undefined): string | undefined {
+  if (!material) return undefined;
+  const named = material.name.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  const color = (material as THREE.Material & { color?: THREE.Color }).color;
+  const hasAuthoredColor = Boolean(color
+    && !(color.r > 0.97 && color.g > 0.97 && color.b > 0.97));
+  if (hasAuthoredColor && color) return `#${color.getHexString()}`;
+  // Procedural DCC materials often arrive without a baked base color. Preserve
+  // their explicit semantic identity with conservative, readable albedos.
+  if (/\b(pupil|black|charcoal)\b/.test(named)) return '#171717';
+  if (/\b(iris)\b/.test(named)) return '#557c70';
+  if (/\b(sclera|eye white)\b/.test(named)) return '#e7e2d7';
+  if (/\b(nail|keratin|claw|horn|bone)\b/.test(named)) return '#b8a58b';
+  if (/\b(skin|flesh|stalk|eyelid)\b/.test(named)) return '#8f665f';
+
+  return undefined;
 }
 
 function sourceMeshName(mesh: THREE.Mesh): string {
@@ -1035,7 +1065,7 @@ async function loadGltf(file: File, format: 'glb' | 'gltf'): Promise<LoadedModel
     );
   }
   const described = describeLoadedRoot(gltf.scene);
-  described.materialCount += strippedMaterialCount;
+  described.materialCount = Math.max(described.materialCount, strippedMaterialCount);
   described.textureCount += strippedTextureCount;
   described.animationCount = gltf.animations.length;
   return described;
@@ -1126,6 +1156,22 @@ function sanitizeGltfDocument(document: Record<string, unknown>): {
   const materials = Array.isArray(document.materials) ? document.materials : [];
   const textures = Array.isArray(document.textures) ? document.textures : [];
   const images = Array.isArray(document.images) ? document.images : [];
+  // Keep material slots and base colors so multipart production assets retain
+  // readable identity. Remove every texture-bearing field and material
+  // extension; the durable runtime remains intentionally texture-free.
+  materials.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const material = entry as Record<string, unknown>;
+    delete material.normalTexture;
+    delete material.occlusionTexture;
+    delete material.emissiveTexture;
+    delete material.extensions;
+    const pbr = material.pbrMetallicRoughness;
+    if (pbr && typeof pbr === 'object') {
+      delete (pbr as Record<string, unknown>).baseColorTexture;
+      delete (pbr as Record<string, unknown>).metallicRoughnessTexture;
+    }
+  });
   const meshes = Array.isArray(document.meshes) ? document.meshes : [];
   meshes.forEach((mesh) => {
     if (!mesh || typeof mesh !== 'object') return;
@@ -1133,12 +1179,10 @@ function sanitizeGltfDocument(document: Record<string, unknown>): {
       ? (mesh as { primitives: Array<Record<string, unknown>> }).primitives
       : [];
     primitives.forEach((primitive) => {
-      delete primitive.material;
       const extensions = primitive.extensions as Record<string, unknown> | undefined;
       if (extensions) delete extensions.KHR_materials_variants;
     });
   });
-  delete document.materials;
   delete document.textures;
   delete document.images;
   delete document.samplers;

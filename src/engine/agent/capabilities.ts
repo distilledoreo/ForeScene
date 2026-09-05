@@ -74,6 +74,9 @@ export const AGENT_INSPECT_COMMANDS = [
   'production.renderCache.explain',
   'production.run.get',
   'production.run.list',
+  'world.request.preview',
+  'world.backend.mockRun',
+  'world.depth.render',
 ] as const;
 
 /** Mutation / plan commands available when write access is enabled. */

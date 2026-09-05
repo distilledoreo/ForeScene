@@ -8,11 +8,13 @@ import {
 import { parseProject } from '../src/engine/projectIO';
 import {
   buildDepthMetadata,
+  encodeNpyFloat32,
   formatDepthRangeLegend,
   shouldExportAnyDepth,
   shouldExportCameraMoveDepth,
   shouldExportDepthReferenceFrames,
   shouldExportViewportDepth,
+  unpackPackedDepthBytesToLinearCameraZ,
 } from '../src/engine/depthRender';
 import { createShotPackageManifest } from '../src/engine/exportManifest';
 import { generateImagePrompt, generateVideoPrompt } from '../src/engine/prompts';
@@ -91,6 +93,25 @@ describe('shot depth settings', () => {
       frameRate: 30,
     });
     expect(formatDepthRangeLegend({ nearMeters: 0.5, farMeters: 18.2 })).toBe('Near 0.5 m → Far 18.2 m');
+  });
+
+  it('decodes packed WebGL depth to metric camera Z and reserves transparent black for holes', () => {
+    expect(unpackPackedDepthBytesToLinearCameraZ(0, 0, 0, 0, 0.1, 100)).toBe(0);
+    expect(unpackPackedDepthBytesToLinearCameraZ(128, 0, 0, 0, 0.1, 100))
+      .toBeCloseTo(0.1998002, 6);
+  });
+
+  it('encodes top-left row-major metric depth as portable NumPy float32', () => {
+    const encoded = encodeNpyFloat32(Float32Array.from([0, 1.25, 2.5, 5]), [2, 2]);
+    expect([...encoded.slice(0, 8)]).toEqual([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0]);
+    const view = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+    const headerLength = view.getUint16(8, true);
+    const header = new TextDecoder().decode(encoded.slice(10, 10 + headerLength));
+    expect(header).toContain("'descr': '<f4'");
+    expect(header).toContain("'shape': (2, 2)");
+    expect((10 + headerLength) % 16).toBe(0);
+    expect(view.getFloat32(10 + headerLength + 4, true)).toBe(1.25);
+    expect(view.getFloat32(10 + headerLength + 12, true)).toBe(5);
   });
 
   it('lists depth still, motion, reference frames, and depth.json in the package manifest', () => {

@@ -40,11 +40,31 @@ export function locationPrimitiveBlockers(
       : primitive.position[1] + hy;
     const cx = primitive.position[0];
     const cz = primitive.position[2];
+    const yaw = ((primitive.rotation?.[1] ?? 0) * Math.PI) / 180;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const [lx, lz] of [
+      [-hx, -hz],
+      [hx, -hz],
+      [-hx, hz],
+      [hx, hz],
+    ] as const) {
+      const wx = cx + lx * cos + lz * sin;
+      const wz = cz - lx * sin + lz * cos;
+      minX = Math.min(minX, wx);
+      maxX = Math.max(maxX, wx);
+      minZ = Math.min(minZ, wz);
+      maxZ = Math.max(maxZ, wz);
+    }
     blockers.push({
       objectId: primitive.ref ?? `loc_${location.id}_blocker_${index}`,
       type: primitive.type,
-      min: [cx - hx, Math.max(0, centerY - hy), cz - hz],
-      max: [cx + hx, centerY + hy, cz + hz],
+      min: [minX, Math.max(0, centerY - hy), minZ],
+      max: [maxX, centerY + hy, maxZ],
     });
   }
   void location;

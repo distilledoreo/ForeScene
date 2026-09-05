@@ -108,6 +108,11 @@ export interface ProductionRunOptions {
   skipPackage?: boolean;
   profileDir?: string;
   allowHeavyCharacterImports?: boolean;
+  /**
+   * Delete non-manifest user shots after compilation (default false: only
+   * intact scaffold shots are pruned; others are retained and reported).
+   */
+  pruneNonManifestShots?: boolean;
 }
 
 export interface ProductionRunResult {
@@ -144,6 +149,10 @@ export interface ProductionRunResult {
   passed: number;
   warnings: number;
   failed: number;
+  /** Total repair passes attempted across the run. */
+  repairsAttempted: number;
+  /** True iff the repair loop was disabled (--no-auto-repair). */
+  repairsDisabled: boolean;
 
   diagnostics?: PrevisDiagnostic[];
   /** Filesystem paths to run artifacts (contact sheet, package, etc.). */

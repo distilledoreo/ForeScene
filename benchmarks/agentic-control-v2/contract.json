@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "agentic-control-v2",
+  "family": "operator-intent",
+  "description": "Cheap-agent operator intent: discover CLI from prose brief, open seed, inspect, render one clay frame, save, reopen, re-inspect, optional package export.",
+  "seedPackage": "seed/operator-corridor.fsp",
+  "render": {
+    "shotSelector": "first",
+    "mode": "clay",
+    "artifact": "work/artifacts/clay-frame.png"
+  },
+  "artifacts": {
+    "savedProject": "project.fsp",
+    "candidateReport": "work/candidate-report.json",
+    "packageExport": "work/artifacts/export-package.zip"
+  },
+  "thresholds": {
+    "minBytes": 1024
+  },
+  "scoring": {
+    "requirePackageWhenCapable": true,
+    "checkRepositoryDrift": true
+  }
+}

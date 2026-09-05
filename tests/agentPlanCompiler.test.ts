@@ -207,3 +207,115 @@ describe('browser API previewPlan', () => {
     expect(useProjectStore.getState().project.scene.objects).toHaveLength(project.scene.objects.length);
   });
 });
+
+describe('shot.frameSubjects plan op', () => {
+  it('expands solver-backed framing into an ordinary camera update that composes with staging', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const cameraBefore = structuredClone(shot.camera);
+    const prepared = prepareAgentPlan({
+      version: 1,
+      description: 'Frame the lead',
+      commands: [
+        {
+          op: 'object.create',
+          ref: 'lead',
+          object: { type: 'human_dummy', name: 'Lead', position: [0, 0, 2] },
+        },
+        {
+          op: 'shot.stageObject',
+          shot: { id: shot.id },
+          object: { ref: 'lead' },
+          visible: true,
+        },
+        {
+          op: 'shot.frameSubjects',
+          shot: { id: shot.id },
+          subjects: [{ ref: 'lead' }],
+          composition: 'medium',
+        },
+      ],
+    }, {
+      project,
+      workspace: 'shots',
+      selectedObjectIds: [],
+      selectedShotId: shot.id,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    const shotAfter = prepared.prepared.nextProject.shots.find((candidate) => candidate.id === shot.id);
+    expect(shotAfter).toBeDefined();
+    expect(shotAfter?.camera.position).not.toEqual(cameraBefore.position);
+    expect(prepared.prepared.summary.affectedShotIds).toContain(shot.id);
+  });
+
+  it('warns on unknown composition instead of failing', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const prepared = prepareAgentPlan({
+      version: 1,
+      commands: [
+        {
+          op: 'object.create',
+          ref: 'lead',
+          object: { type: 'human_dummy', name: 'Lead', position: [0, 0, 2] },
+        },
+        {
+          op: 'shot.frameSubjects',
+          shot: { id: shot.id },
+          subjects: [{ ref: 'lead' }],
+          composition: 'dutch_extreme',
+        },
+      ],
+    }, {
+      project,
+      workspace: 'shots',
+      selectedObjectIds: [],
+    });
+    expect(prepared.ok).toBe(true);
+    expect(prepared.warnings.some((warning) => warning.code === 'frame_subjects_composition')).toBe(true);
+  });
+
+  it('fails the whole plan when a subject target cannot be resolved', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const prepared = prepareAgentPlan({
+      version: 1,
+      commands: [
+        {
+          op: 'shot.frameSubjects',
+          shot: { id: shot.id },
+          subjects: [{ id: 'object_does_not_exist' }],
+        },
+      ],
+    }, {
+      project,
+      workspace: 'shots',
+      selectedObjectIds: [],
+    });
+    expect(prepared.ok).toBe(false);
+    if (!prepared.ok) {
+      expect(prepared.diagnostics.some((diagnostic) => diagnostic.code === 'target_not_found')).toBe(true);
+    }
+  });
+
+  it('rejects shot.frameSubjects without subjects at parse time', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0]!;
+    const prepared = prepareAgentPlan({
+      version: 1,
+      commands: [
+        {
+          op: 'shot.frameSubjects',
+          shot: { id: shot.id },
+          subjects: [],
+        } as never,
+      ],
+    }, {
+      project,
+      workspace: 'shots',
+      selectedObjectIds: [],
+    });
+    expect(prepared.ok).toBe(false);
+  });
+});

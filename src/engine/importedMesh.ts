@@ -112,6 +112,7 @@ export function createImportedMeshNode(
   object: SceneObject,
   assets: AssetRegistry | undefined,
   material: THREE.Material,
+  options?: { centerNonSetMesh?: boolean },
 ): THREE.Object3D {
   const root = new THREE.Group();
   const asset = object.modelAssetId ? assets?.assets[object.modelAssetId] : undefined;
@@ -130,6 +131,14 @@ export function createImportedMeshNode(
       safeDimensionRatio(object.dimensions[1], sourceSize.y) * object.transform.scale[1],
       safeDimensionRatio(object.dimensions[2], sourceSize.z) * object.transform.scale[2],
     );
+    // Person/prop subjects are center-staged so contact plant can run.
+    // Untagged imports and set architecture keep their source AABB.
+    if (
+      (object.stagingRole === 'person' || object.stagingRole === 'prop')
+      && options?.centerNonSetMesh !== false
+    ) {
+      centerMeshOnGeometryBounds(mesh);
+    }
     root.add(mesh);
     root.userData.importedModelAssetId = asset.id;
     // Keep the historical geometry/material surface available to importer
@@ -177,25 +186,22 @@ export function resetImportedMeshCacheForTests() {
 }
 
 function acquireGeometry(asset: ProjectAsset): THREE.BufferGeometry {
-  const cached = geometryCache.get(asset.id);
-  if (cached && cached.assetUri === asset.uri) {
+  // A durable save may rekey an imported model from its transient import URI
+  // to an immutable recovery-resource URI while the live viewport still owns
+  // the old geometry. Keep those identities side by side until their own
+  // references drain instead of turning the export rebuild into a placeholder.
+  const cacheKey = `${asset.id}\u0000${asset.uri}`;
+  const cached = geometryCache.get(cacheKey);
+  if (cached) {
     if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
     cached.disposeTimer = undefined;
     cached.references += 1;
     return cached.geometry;
   }
-  if (cached) {
-    if (cached.references > 0) {
-      throw new Error('The imported mesh asset changed while it was in use.');
-    }
-    if (cached.disposeTimer) clearTimeout(cached.disposeTimer);
-    cached.geometry.dispose();
-    geometryCache.delete(asset.id);
-  }
 
   const geometry = decodeGeometry(asset);
-  geometry.userData.panorefImportedCacheKey = asset.id;
-  geometryCache.set(asset.id, {
+  geometry.userData.panorefImportedCacheKey = cacheKey;
+  geometryCache.set(cacheKey, {
     assetUri: asset.uri,
     geometry,
     references: 1,
@@ -332,6 +338,16 @@ function createMissingAssetLabel(name: string): THREE.Sprite | undefined {
   sprite.scale.set(2.4, 0.45, 1);
   sprite.userData.missingAssetLabel = true;
   return sprite;
+}
+
+function centerMeshOnGeometryBounds(mesh: THREE.Mesh): void {
+  const box = mesh.geometry.boundingBox;
+  if (!box) return;
+  mesh.position.set(
+    -0.5 * (box.min.x + box.max.x) * mesh.scale.x,
+    -0.5 * (box.min.y + box.max.y) * mesh.scale.y,
+    -0.5 * (box.min.z + box.max.z) * mesh.scale.z,
+  );
 }
 
 function safeDimensionRatio(current: number, source: number) {

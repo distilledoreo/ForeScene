@@ -156,6 +156,22 @@ describe('imported humanoid composition telemetry', () => {
     expect(telemetry.landmarkConfidence).toBeGreaterThan(0.8);
   });
 
+  it('recenters grounded rig markers into the center-based scene object', () => {
+    const { project, subject } = createImportedHumanoidFixture();
+    const groundedRig = createMarkerRig();
+    groundedRig.markers = groundedRig.markers?.map((marker) => ({
+      ...marker,
+      position: [marker.position[0], marker.position[1] + 1, marker.position[2]],
+    }));
+    addRig(project, groundedRig);
+
+    const resolved = resolvePoseableHumanoidTelemetry({ object: subject, assets: project.assets });
+
+    expect(resolved?.positions.leftFoot?.[1]).toBeCloseTo(0, 8);
+    expect(resolved?.positions.rightFoot?.[1]).toBeCloseTo(0, 8);
+    expect(resolved?.positions.head?.[1]).toBeCloseTo(2.1, 8);
+  });
+
   it('constructs anatomical body bounds from rig joints instead of embedded accessories', () => {
     const { project, shot, subject } = createRigOnlyFixture();
     subject.dimensions = [4, 2, 2];

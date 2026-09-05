@@ -4,6 +4,7 @@ import type { ProductionConfiguration } from '../src/domain/types';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
 import {
   classifyProductionObject,
+  deriveShotActionContracts,
   validateProductionConfiguration,
 } from '../src/engine/previs/productionConfiguration';
 
@@ -69,6 +70,89 @@ function validPreparedProject() {
 }
 
 describe('production configuration validation', () => {
+  it('turns unambiguous authored action language into persisted exact native poses', () => {
+    const definition = manifest().shots[0]!;
+    definition.name = 'Sprint chase';
+    definition.blocking = [{
+      subject: 'cast.lead',
+      placement: { type: 'location_slot', slot: 'center' },
+    }];
+    definition.motion = {
+      durationSeconds: 2,
+      keyframes: [{
+        timeSeconds: 0,
+        staging: [{ subject: 'cast.lead', transform: { position: [0, 0.875, 0] } }],
+      }, {
+        timeSeconds: 2,
+        staging: [{ subject: 'cast.lead', transform: { position: [0, 0.875, 4] } }],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition, {
+      poseableEntityIds: new Set(['cast.lead']),
+    });
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'timeline',
+      samples: [
+        { requestedPose: 'walk-contact-left', resolvedPose: 'walk-contact-left', requiresReview: false },
+        { requestedPose: 'walk-contact-left', resolvedPose: 'walk-contact-left', requiresReview: false },
+      ],
+    });
+  });
+
+  it('derives persistent static-pose and timeline action intent from a shot manifest', () => {
+    const definition = manifest().shots[0]!;
+    definition.blocking = [{
+      subject: 'cast.lead',
+      placement: { type: 'location_slot', slot: 'center' },
+      pose: 'shield-ready',
+    }];
+    definition.motion = {
+      durationSeconds: 2,
+      keyframes: [{
+        timeSeconds: 0,
+        staging: [{
+          subject: 'cast.lead',
+          posePreset: 'walk-contact-left',
+          transform: { position: [0, 0.875, 0] },
+        }],
+      }, {
+        timeSeconds: 2,
+        staging: [{
+          subject: 'cast.lead',
+          posePreset: 'walk-contact-right',
+          transform: { position: [0, 0.875, 4] },
+        }],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition);
+
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'static_pose',
+      samples: [{ requestedPose: 'shield-ready', resolvedPose: 'elbows-bent' }],
+    });
+    expect(actions[1]).toMatchObject({
+      entityId: 'cast.lead',
+      mode: 'timeline',
+      durationSeconds: 2,
+      samples: [
+        { timeSeconds: 0, resolvedPose: 'walk-contact-left', position: [0, 0.875, 0] },
+        { timeSeconds: 2, resolvedPose: 'walk-contact-right', position: [0, 0.875, 4] },
+      ],
+    });
+    expect(actions[0]!.samples[0]).toMatchObject({
+      poseRelationship: 'approximate',
+      requiresReview: true,
+    });
+    expect(actions[1]!.samples.every((sample) => sample.poseRelationship === 'exact')).toBe(true);
+  });
+
   it('accepts prepared object, group, and location bindings', () => {
     const project = validPreparedProject();
     const result = validateProductionConfiguration(project, manifest());
@@ -76,6 +160,23 @@ describe('production configuration validation', () => {
     expect(result.ok).toBe(true);
     expect(result.diagnostics).toEqual([]);
     expect(result.checkedEntityIds).toEqual(['cast.lead', 'prop.table', 'location.interior']);
+  });
+
+  it('allows declared embedded props to alias their host production object', () => {
+    const project = validPreparedProject();
+    const heroId = (project.workflow.production!.bindings['cast.lead'] as { kind: 'object'; objectId: string }).objectId;
+    project.workflow.production!.bindings['prop.table'] = { kind: 'object', objectId: heroId };
+    const embeddedManifest = manifest();
+    embeddedManifest.props = [{
+      id: 'prop.table',
+      name: 'Embedded table fixture',
+      primitive: 'box',
+      embeddedIn: { subject: 'cast.lead', joint: 'leftHand' },
+    }];
+
+    const result = validateProductionConfiguration(project, embeddedManifest);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it('reports missing and stale binding targets before compilation', () => {
@@ -142,6 +243,73 @@ describe('production configuration validation', () => {
     const result = validateProductionConfiguration(project, manifest());
     expect(result.ok).toBe(false);
     expect(result.diagnostics.some((item) => item.code === 'required_poseable_asset_static')).toBe(true);
+  });
+
+  it('rejects malformed action intent and actions for unbound entities', () => {
+    const project = validPreparedProject();
+    project.workflow.production!.shotContracts['shot.001'] = {
+      actions: [{
+        actionId: 'shot.001:missing:timeline',
+        entityId: 'cast.missing',
+        mode: 'timeline',
+        durationSeconds: 1,
+        samples: [{ timeSeconds: 2, requestedPose: 'walking' }],
+      }],
+    };
+
+    const result = validateProductionConfiguration(project, manifest());
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'action_binding_missing',
+      'action_contract_invalid',
+    ]));
+  });
+
+  it('persists a stable deformation-free locomotion orientation', () => {
+    const definition = manifest().shots[0]!;
+    definition.name = 'Sprint chase';
+    definition.subjects = ['cast.lead', 'asset.pursuer'];
+    definition.camera = { template: 'full', subjects: ['cast.lead', 'asset.pursuer'], angle: 'three_quarter' };
+    definition.motion = {
+      durationSeconds: 3,
+      autoCompose: true,
+      keyframes: [{
+        timeSeconds: 0,
+        camera: { position: [1.2, 1.6, -2], target: [0, 0.9, -5.8], fovDegrees: 50 },
+        staging: [
+          { subject: 'cast.lead', transform: { position: [0, 0.875, -5.3] } },
+          { subject: 'asset.pursuer', transform: { position: [0, 0, -6.5] } },
+        ],
+      }, {
+        timeSeconds: 3,
+        camera: { position: [1.2, 1.6, 8.6], target: [0, 0.9, 4.8], fovDegrees: 50 },
+        staging: [
+          { subject: 'cast.lead', transform: { position: [0, 0.875, 5.3] } },
+          { subject: 'asset.pursuer', transform: { position: [0, 0, 4.1] } },
+        ],
+      }],
+    };
+
+    const actions = deriveShotActionContracts(definition, {
+      rigidLocomotionEntityIds: new Set(['cast.lead', 'asset.pursuer']),
+    });
+
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action.mode).toBe('timeline');
+      expect(action.samples[0]?.rotation?.[0]).toBeGreaterThan(12);
+      expect(action.samples[0]?.rotation).toEqual(action.samples[1]?.rotation);
+      expect(action.samples[0]?.position?.[0]).not.toBe(0);
+      expect(action.samples[0]?.position?.[2]).toBe(
+        action.entityId === 'cast.lead' ? -5.3 : -6.5,
+      );
+    }
+    const leadY = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[1] ?? 0;
+    expect(leadY).toBe(0.875);
+    const leadX = actions.find((action) => action.entityId === 'cast.lead')?.samples[0]?.position?.[0] ?? 0;
+    const pursuerX = actions.find((action) => action.entityId === 'asset.pursuer')?.samples[0]?.position?.[0] ?? 0;
+    expect(pursuerX - leadX).toBeCloseTo(1.12, 5);
   });
 
   it('derives dynamic classification from prepared object semantics', () => {

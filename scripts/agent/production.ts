@@ -78,6 +78,8 @@ function mapPrevisResultToProductionRun(
     controlVideosRendered: result.controlVideosRendered ?? 0,
     controlVideosFailed: result.controlVideosFailed ?? 0,
     passed: result.passed ?? 0,
+    repairsAttempted: result.repairsAttempted ?? 0,
+    repairsDisabled: result.repairsDisabled ?? false,
     warnings: result.warnings ?? 0,
     failed: result.failed ?? 0,
     diagnostics: result.diagnostics as ProductionRunResult['diagnostics'],
@@ -126,6 +128,7 @@ export async function runProduction(options: ProductionRunOptions): Promise<Prod
     autoRepair: config.autoRepair,
     maxRepairPasses: config.maxRepairPasses,
     timeBudgetSeconds: config.timeBudgetSeconds,
+    pruneNonManifestShots: options.pruneNonManifestShots,
     skipControlVideos: !config.renderProfile.renderVideo,
   });
 

@@ -8,7 +8,7 @@ import { loadV3LiteContract, v3LiteManifestSha256 } from '../scripts/benchmark/v
 import { runV3LiteDoctor } from '../scripts/benchmark/v3LiteDoctor';
 import { prepareV3LiteRun, runV3Lite } from '../scripts/benchmark/v3LiteRun';
 import { gradeV3LiteQuality } from '../scripts/benchmark/v3LiteQuality';
-import { analyzeRgbaFrame } from '../scripts/benchmark/v3LitePixelGate';
+import { analyzeRgbaFrame, requiredSubjectFramingFailure } from '../scripts/benchmark/v3LitePixelGate';
 import { encodePngRgba } from '../scripts/benchmark/pngRgba';
 import { validateV3LiteTechnical } from '../scripts/benchmark/v3LiteValidator';
 import { parseAgentCliArgs } from '../scripts/agent/cliArgs';
@@ -51,6 +51,20 @@ function fakeFetch(): typeof fetch {
     status: 200,
     text: async () => '<html><title>ForeScene</title><div id="root"></div></html>',
   })) as unknown as typeof fetch;
+}
+
+function variedPng(): Buffer {
+  const data = new Uint8Array(32 * 32 * 4);
+  for (let y = 0; y < 32; y += 1) {
+    for (let x = 0; x < 32; x += 1) {
+      const i = (y * 32 + x) * 4;
+      data[i] = (x * 17) % 256;
+      data[i + 1] = (y * 23) % 256;
+      data[i + 2] = 40 + ((x + y) * 7) % 180;
+      data[i + 3] = 255;
+    }
+  }
+  return encodePngRgba({ width: 32, height: 32, data });
 }
 
 describe('ForeScene Benchmark V3-Lite', () => {
@@ -387,6 +401,140 @@ describe('ForeScene Benchmark V3-Lite', () => {
       }
     }
     expect(analyzeRgbaFrame(varied, 48, 48).mostlyGray).toBe(false);
+  });
+
+  it('rejects the archived Phase 0 catastrophic crop without rejecting an ordinary accessory crop', () => {
+    const phaseZeroShot01 = {
+      shotNumber: '01',
+      subjects: {
+        'hand-monster': {
+          visible: true,
+          bounds: { clipped: true, behindCamera: false },
+          bodyBounds: { clipped: true, behindCamera: false },
+          assemblyBounds: {
+            clipped: true,
+            behindCamera: false,
+            unclipped: {
+              widthCoverage: 1.6237576511584824,
+              heightCoverage: 2.993040133117908,
+              areaCoverage: 4.859971816374606,
+            },
+          },
+          completeAssemblyInFrame: false,
+        },
+      },
+      blockers: [
+        { objectId: 'ruins-a', projectedArea: 0.36930110074425937, nearCamera: false },
+        { objectId: 'ruins-b', projectedArea: 0.08456660165490547, nearCamera: false },
+        { objectId: 'ruins-c', projectedArea: 0.07794222670567677, nearCamera: false },
+      ],
+    };
+    const failure = requiredSubjectFramingFailure(phaseZeroShot01, 'hand-monster');
+    expect(failure).toMatchObject({
+      code: 'required_subject_severely_out_of_frame',
+      measured: {
+        subject: 'hand-monster',
+        bodyClipped: true,
+        assemblyClipped: true,
+        completeAssemblyInFrame: false,
+        blockerCount: 3,
+        dominantBlockerArea: 0.36930110074425937,
+      },
+    });
+
+    const ordinaryAccessoryCrop = {
+      subjects: {
+        actor: {
+          visible: true,
+          bodyBounds: { clipped: false, behindCamera: false },
+          assemblyBounds: {
+            clipped: true,
+            behindCamera: false,
+            unclipped: { widthCoverage: 0.55, heightCoverage: 1.05, areaCoverage: 0.57 },
+          },
+          completeAssemblyInFrame: false,
+        },
+      },
+    };
+    expect(requiredSubjectFramingFailure(ordinaryAccessoryCrop, 'actor')).toBeUndefined();
+
+    const completeInFrame = {
+      subjects: {
+        actor: {
+          visible: true,
+          bodyBounds: { clipped: false, behindCamera: false },
+          assemblyBounds: {
+            clipped: false,
+            behindCamera: false,
+            unclipped: { widthCoverage: 0.4, heightCoverage: 0.8, areaCoverage: 0.32 },
+          },
+          completeAssemblyInFrame: true,
+        },
+      },
+    };
+    expect(requiredSubjectFramingFailure(completeInFrame, 'actor')).toBeUndefined();
+  });
+
+  it('turns the archived Phase 0 crop into failed quality while preserving technical pass', async () => {
+    const runRoot = await (await import('node:fs/promises')).mkdtemp(path.join(os.tmpdir(), 'forescene-v3-lite-phase-zero-crop-'));
+    const layout = await createBenchmarkRunLayout(runRoot);
+    const loaded = await loadV3LiteContract(contractPath);
+    const png = variedPng();
+    await mkdir(path.join(layout.artifactDir, 'shots'), { recursive: true });
+    await Promise.all(loaded.contract.requiredStills.map((artifact) => (
+      writeFile(path.join(layout.artifactDir, artifact), png)
+    )));
+    await writeFile(path.join(layout.artifactDir, 'shots', '01.composition.json'), JSON.stringify({
+      shotNumber: '01',
+      subjects: {
+        'hand-monster': {
+          visible: true,
+          bodyBounds: { clipped: true, behindCamera: false },
+          assemblyBounds: {
+            clipped: true,
+            behindCamera: false,
+            unclipped: {
+              widthCoverage: 1.6237576511584824,
+              heightCoverage: 2.993040133117908,
+              areaCoverage: 4.859971816374606,
+            },
+          },
+          completeAssemblyInFrame: false,
+        },
+      },
+      blockers: [{ objectId: 'ruins-a', projectedArea: 0.36930110074425937, nearCamera: false }],
+    }));
+    await writeFile(path.join(layout.artifactDir, 'shots', '02.composition.json'), JSON.stringify({
+      shotNumber: '02',
+      subjects: {
+        'joseph-amputated': { visible: true },
+        'hand-monster': { visible: true },
+      },
+    }));
+    await writeFile(path.join(layout.artifactDir, 'shots', '03.composition.json'), JSON.stringify({
+      shotNumber: '03',
+      subjects: {
+        'joseph-final': { visible: true },
+        shield: { visible: true },
+        'wrist-blade': { visible: true },
+      },
+    }));
+
+    const grade = await gradeV3LiteQuality(loaded.contract, layout, { ok: true, checks: [] });
+    expect(grade).toMatchObject({
+      status: 'failed',
+      ok: false,
+      source: 'pixel-evidence',
+      technicalPass: true,
+      pixel: { ok: false, visuallyControlled: false },
+    });
+    expect(grade.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        artifact: 'creature-final.png',
+        status: 'failed',
+        code: 'required_subject_severely_out_of_frame',
+      }),
+    ]));
   });
 
   it('reports missing quality evidence as ungraded rather than as technical infrastructure failure', async () => {

@@ -123,6 +123,9 @@ describe('imported rig runtime integration', () => {
     await character.ensureLoaded();
     const material = new THREE.MeshStandardMaterial();
     const instanceA = character.createInstance(objectA, material);
+    const instanceBounds = new THREE.Box3().setFromObject(instanceA);
+    expect(instanceBounds.min.y).toBeCloseTo(0, 4);
+    expect(instanceBounds.max.y).toBeCloseTo(1.75, 4);
     const instanceB = character.createInstance(objectB, material);
     character.applyPose(instanceA, objectA.humanPose);
     character.applyPose(instanceB, objectB.humanPose);

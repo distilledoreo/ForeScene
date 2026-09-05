@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "agentic-control-v3",
+  "family": "import-idempotency",
+  "description": "Cheap-agent import idempotency: open seed, inspect, import ordinary-cube.glb twice, confirm counts do not duplicate, save project.fsp.",
+  "seedPackage": "seed/import-empty.fsp",
+  "importModel": {
+    "fixtureSource": "tests/fixtures/ordinary-cube.glb",
+    "runRelativePath": "ordinary-cube.glb"
+  },
+  "artifacts": {
+    "savedProject": "project.fsp",
+    "candidateReport": "work/candidate-report.json"
+  },
+  "thresholds": {
+    "minBytes": 1024
+  },
+  "scoring": {
+    "checkRepositoryDrift": true
+  }
+}

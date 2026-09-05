@@ -107,6 +107,69 @@ export async function createAgentObjectGroup(
     };
   }
 
+  const requestedIds = [...new Set(input.objectIds)];
+  const existing = Object.values(objectGroups(project)).find((candidate) => (
+    candidate.objectIds.length === requestedIds.length
+    && candidate.objectIds.every((objectId) => requestedIds.includes(objectId))
+  ));
+  if (existing && (!input.sourceImportId || existing.sourceImportId === input.sourceImportId)) {
+    return {
+      ok: true,
+      status: 'completed',
+      groupId: existing.id,
+      group: summarizeGroup(project, existing),
+      diagnostics: [],
+    };
+  }
+
+  if (existing && input.sourceImportId && !existing.sourceImportId) {
+    const importedMembersMatch = requestedIds.every((objectId) => (
+      project.scene.objects.find((object) => object.id === objectId)
+        ?.importedModel?.sourceImportId === input.sourceImportId
+    ));
+    if (!importedMembersMatch) {
+      return {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError(
+          'group_source_import_mismatch',
+          `Existing group "${existing.id}" cannot be linked to source import "${input.sourceImportId}".`,
+        )],
+      };
+    }
+    const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
+    if (!runDestructive) {
+      return {
+        ok: false,
+        status: 'failed',
+        diagnostics: [agentError('persistence_not_ready', 'Project persistence is not ready.')],
+      };
+    }
+    const repaired = { ...existing, sourceImportId: input.sourceImportId };
+    const verified = await runDestructive('Link object group to source import', () => {
+      useProjectStore.setState((state) => ({
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            objectGroups: {
+              ...objectGroups(state.project),
+              [existing.id]: repaired,
+            },
+          },
+        }),
+      }));
+    });
+    return {
+      ok: true,
+      status: 'completed',
+      groupId: existing.id,
+      group: summarizeGroup(useProjectStore.getState().project, repaired),
+      revisionId: verified?.revision.id,
+      diagnostics: [],
+    };
+  }
+
   const groupId = createId('group');
   const group: ObjectGroup = {
     id: groupId,

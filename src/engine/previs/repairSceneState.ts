@@ -9,6 +9,7 @@ import type { LocationProject, Shot, Vec3 } from '../../domain/types';
 import { resolveProjectForShot } from '../shotSceneState';
 import { subjectBoundsFromPlacement, type SubjectBounds } from './cameraSolver';
 import type { PrevisShotDefinition } from './manifest';
+import { getProductionConfiguration } from './productionConfiguration';
 
 const SOLID_TYPES = new Set([
   'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
@@ -42,17 +43,53 @@ export function buildSubjectBoundsForRepair(params: {
   const bounds: SubjectBounds[] = [];
   for (const id of ids) {
     const name = params.subjectNames?.[id] ?? id;
-    const object = resolved.scene.objects.find((candidate) => (
-      candidate.name === name
-      || candidate.name.toLowerCase() === name.toLowerCase()
-      || candidate.name.toLowerCase().includes(id.toLowerCase())
-      || candidate.id === id
-    ));
-    if (!object) continue;
+    const configuration = getProductionConfiguration(resolved);
+    const binding = [id, `cast.${id}`, `prop.${id}`, `assets.${id}`]
+      .map((key) => configuration.bindings[key])
+      .find(Boolean);
+    const objects = binding?.kind === 'group'
+      ? (resolved.scene.objectGroups?.[binding.groupId]?.objectIds ?? []).flatMap((objectId) => {
+          const object = resolved.scene.objects.find((candidate) => candidate.id === objectId);
+          return object ? [object] : [];
+        })
+      : binding?.kind === 'object'
+        ? resolved.scene.objects.filter((candidate) => candidate.id === binding.objectId)
+        : resolved.scene.objects.filter((candidate) => (
+            candidate.name === name
+            || candidate.name.toLowerCase() === name.toLowerCase()
+            || candidate.name.toLowerCase().includes(id.toLowerCase())
+            || candidate.id === id
+          )).slice(0, 1);
+    const visibleObjects = objects.filter((object) => object.visible !== false);
+    if (visibleObjects.length === 0) continue;
+
+    if (visibleObjects.length > 1) {
+      const boxes = visibleObjects.map((object) => {
+        const half: Vec3 = [
+          object.dimensions[0] * object.transform.scale[0] / 2,
+          object.dimensions[1] * object.transform.scale[1] / 2,
+          object.dimensions[2] * object.transform.scale[2] / 2,
+        ];
+        return {
+          min: object.transform.position.map((value, index) => value - half[index]!) as Vec3,
+          max: object.transform.position.map((value, index) => value + half[index]!) as Vec3,
+        };
+      });
+      const min: Vec3 = [0, 1, 2].map((axis) => Math.min(...boxes.map((box) => box.min[axis]!))) as Vec3;
+      const max: Vec3 = [0, 1, 2].map((axis) => Math.max(...boxes.map((box) => box.max[axis]!))) as Vec3;
+      bounds.push({
+        id,
+        min,
+        max,
+        position: [(min[0] + max[0]) / 2, min[1], (min[2] + max[2]) / 2],
+        requireCompleteAssembly: true,
+      });
+      continue;
+    }
+
+    const object = visibleObjects[0]!;
 
     // Effective visibility already merged by resolveProjectForShot.
-    if (object.visible === false) continue;
-
     const height = object.dimensions[1] * object.transform.scale[1];
     const width = object.dimensions[0] * object.transform.scale[0];
     const depth = object.dimensions[2] * object.transform.scale[2];
@@ -66,6 +103,7 @@ export function buildSubjectBoundsForRepair(params: {
       width,
       depth,
       yawRadians: yaw,
+      requireCompleteAssembly: binding?.kind === 'group',
     }));
   }
   return bounds;
