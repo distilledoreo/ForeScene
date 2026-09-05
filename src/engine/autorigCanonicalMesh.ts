@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PoseableCharacterOrientation, Vec3 } from '../domain/types';
+import type { PoseableCharacterOrientation, PoseableRestTransform, PoseableRigAsset, Vec3 } from '../domain/types';
 
 export interface CanonicalAutorigMesh {
   /** The exact normalized rest mesh used by preview, fitting, and skinning. */
@@ -127,4 +127,33 @@ export function extractCanonicalTopology(root: THREE.Object3D): Uint32Array {
     vertexOffset += position.count;
   });
   return Uint32Array.from(triangles);
+}
+
+/** Exact source-to-bind placement, including wizard orientation/refit changes. */
+export function captureAutorigRestTransform(root: THREE.Object3D): PoseableRestTransform {
+  const euler = new THREE.Euler().setFromQuaternion(root.quaternion, 'XYZ');
+  return {
+    position: root.position.toArray(),
+    rotation: [euler.x, euler.y, euler.z].map(THREE.MathUtils.radToDeg) as Vec3,
+    scale: root.scale.toArray(),
+  };
+}
+
+/** Restore the mesh in the SAME coordinates as saved bones and skin weights. */
+export function prepareAutorigBindMesh(source: THREE.Object3D, rig: PoseableRigAsset): CanonicalAutorigMesh {
+  if (!rig.restTransform) return prepareCanonicalAutorigMesh({
+    source,
+    orientation: rig.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 },
+    targetHeightMeters: rig.generationSettings?.approximateHeightMeters ?? 1.75,
+  });
+  const root = new THREE.Group();
+  root.add(source.clone(true));
+  root.position.fromArray(rig.restTransform.position);
+  root.rotation.set(...rig.restTransform.rotation.map(THREE.MathUtils.degToRad) as Vec3, 'XYZ');
+  root.scale.fromArray(rig.restTransform.scale);
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  return { root, bounds: { min: box.min.toArray(), max: box.max.toArray() },
+    size: size.toArray(), heightMeters: size.y };
 }

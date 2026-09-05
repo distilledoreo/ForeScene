@@ -209,7 +209,7 @@ const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> 
     required: ['--profile <isolated-dir>', '--write'], optional: [...COMMON_SESSION_FLAGS, '--output <dir> (default artifacts/previs)'],
     result: 'Per-shot still render counts with failedShotNumbers and pendingShotNumbers; ok is false when any compiled shot is unrendered or failed.',
     notes: [
-      'Resumes from run-state.json written by agent:previs; run previs first.',
+      'Refreshes all tracked compiled stills from the live project, including previously complete frames; run agent:previs first.',
       'ok is a conjunction: a batch with one failed or stale shot reports ok:false with per-shot details.',
     ],
   },

@@ -81,7 +81,7 @@ import {
   type AutorigWizardStepId,
 } from '../../engine/autorig/regionDraftStore';
 import { autoLabelBodyRegions } from '../../engine/autorig/regions';
-import { extractCanonicalTopology, extractCanonicalVertexPositions } from '../../engine/autorigCanonicalMesh';
+import { captureAutorigRestTransform, extractCanonicalTopology, extractCanonicalVertexPositions } from '../../engine/autorigCanonicalMesh';
 import { buildSkinnedCharacterFromTemplate } from '../../engine/autorigSkinnedMesh';
 import {
   generatePartialRegionConstrainedSkinWeights,
@@ -1578,7 +1578,7 @@ export function AutorigRigWizardDialog({
 
   const canContinueJoints = !issues.some((issue) => issue.code === 'missing');
   const hasBlockingPoseIssues = poseIssues.some((issue) => issue.severity === 'blocking');
-  const canApply = canContinueJoints
+  const canApply = Boolean(meshSource) && canContinueJoints
     && Boolean(previewBuffers)
     && !preparing
     && !autoRepairChecking
@@ -1604,7 +1604,10 @@ export function AutorigRigWizardDialog({
   };
 
   const handleApply = () => {
-    const nextRig = applyFittedSkeletonToRig(rig, applyFitted);
+    if (!meshSource) return;
+    const nextRig = applyFittedSkeletonToRig({
+      ...rig, restTransform: captureAutorigRestTransform(meshSource),
+    }, applyFitted);
     const sessionBuffers = previewSessionRef.current?.buffers ?? previewBuffers;
     onSave(nextRig, {
       regionOverrides,

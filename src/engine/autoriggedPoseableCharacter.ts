@@ -49,6 +49,7 @@ import {
   extractCanonicalTopology,
   extractCanonicalVertexPositions,
   prepareCanonicalAutorigMesh,
+  prepareAutorigBindMesh,
 } from './autorigCanonicalMesh';
 import { generateRegionMapForCanonicalRoot } from './autorig/generateRegionMap';
 import { generateRegionConstrainedSkinWeights } from './autorig/regionConstrainedWeights';
@@ -288,7 +289,7 @@ export function createAutoriggedPoseableCharacterShell(params: {
             });
             let prototype = getCachedSkinnedPrototype(protoKey);
             if (!prototype) {
-              const { oriented } = orientAndFitTemplate(template, orientation, height);
+              const { root: oriented } = prepareAutorigBindMesh(template, rig);
               prototype = getOrBuildSkinnedPrototype({
                 cacheKey: protoKey,
                 template: oriented,
@@ -296,6 +297,7 @@ export function createAutoriggedPoseableCharacterShell(params: {
                 buffers,
                 materialFallback: material,
                 referenceHeight: height,
+                centerForSceneObject: true,
               });
             }
 
@@ -417,11 +419,7 @@ export async function generateSkinWeightsForRigAsset(params: {
   const template = templates.get(params.sourceAssetId);
   if (!template) throw new Error('Poseable source mesh is not loaded.');
 
-  const canonical = prepareCanonicalAutorigMesh({
-    source: template,
-    orientation: params.rig.orientation ?? { frontAxis: '+z', upAxis: '+y', groundLevelMeters: 0 },
-    targetHeightMeters: params.rig.generationSettings?.approximateHeightMeters ?? 1.75,
-  });
+  const canonical = prepareAutorigBindMesh(template, params.rig);
   const jointPositions = jointPositionsFromRig(params.rig);
   const positions = extractCanonicalVertexPositions(canonical.root);
 
@@ -643,9 +641,8 @@ export async function ensureAutoriggedCharactersForProject(
               if (!template) return;
               const buffers = getCachedSkinBuffers(skinKey);
               if (!buffers) return;
-              const orientation = rig.orientation ?? { frontAxis: '+z' as const, upAxis: '+y' as const, groundLevelMeters: 0 };
               const refHeight = rig.generationSettings?.approximateHeightMeters ?? 1.75;
-              const { oriented } = orientAndFitTemplate(template, orientation, refHeight);
+              const { root: oriented } = prepareAutorigBindMesh(template, rig);
               getOrBuildSkinnedPrototype({
                 cacheKey: skinnedPrototypeCacheKey({
                   assetId: source.assetId,
@@ -656,6 +653,7 @@ export async function ensureAutoriggedCharactersForProject(
                 rig,
                 buffers,
                 referenceHeight: refHeight,
+                centerForSceneObject: true,
               });
               notifyReady();
             })
