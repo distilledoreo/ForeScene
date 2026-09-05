@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "id": "music-video-v2-panorama-triad-v3-agent",
+  "benchmarkId": "music-video-v2-panorama-triad",
+  "basePackage": "seed/what_im_fighting_for_panorama_triad_base.fsp",
+  "project": {
+    "name": "music-video-v2-panorama-triad",
+    "operatingMode": "existing-project-refinement",
+    "description": "V3-Agent harness facts for the music-video-v2 panorama-triad. Preserve the imported environment-only base.",
+    "aspectRatio": "16:9",
+    "frameRate": 24
+  },
+  "locations": [
+    {
+      "id": "ruins",
+      "name": "Roman ruins",
+      "description": "Use the existing environment at landmark ruins_platform.",
+      "template": "ruins",
+      "panoIds": ["pano_ms9pmx85_pgw9px"],
+      "defaultPanoId": "pano_ms9pmx85_pgw9px"
+    },
+    {
+      "id": "corridor",
+      "name": "Roman ruins corridor",
+      "description": "Use the existing environment at landmark corridor_center. No corridor-specific styled panorama exists.",
+      "template": "corridor",
+      "panoIds": [],
+      "defaultPanoId": null
+    },
+    {
+      "id": "armory",
+      "name": "Armory",
+      "description": "Use the existing environment at landmark armory_center.",
+      "template": "armory",
+      "panoIds": ["pano_ms9pmxdn_xdnia1"],
+      "defaultPanoId": "pano_ms9pmxdn_xdnia1"
+    }
+  ],
+  "cast": [
+    {
+      "id": "joseph-amputated",
+      "name": "Joseph J2 Amputated",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Amputated.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Amputated.fsrig"
+    },
+    {
+      "id": "joseph-final",
+      "name": "Joseph J3 Final",
+      "type": "imported_character",
+      "source": "assets/Roman Joseph Final.glb",
+      "rigMode": "saved-rig",
+      "rigPackage": "assets/Roman Joseph Final.fsrig"
+    }
+  ],
+  "assets": [
+    {
+      "id": "hand-monster",
+      "type": "imported_model",
+      "source": "assets/Hand_Monster_v3.glb",
+      "importMode": "ordinary_model",
+      "semanticRole": "subject",
+      "required": true
+    }
+  ],
+  "props": [
+    { "id": "shield", "name": "Left-arm shield", "primitive": "shield" },
+    { "id": "wrist-blade", "name": "Right wrist-mounted short sword prosthetic", "primitive": "sword" }
+  ],
+  "knownSubjects": [
+    "hand-monster",
+    "joseph-amputated",
+    "joseph-final",
+    "shield",
+    "wrist-blade"
+  ],
+  "requiredArtifacts": [
+    "creature-final.png",
+    "chase-start.png",
+    "chase-mid.png",
+    "chase-end.png",
+    "chase-motion.mp4",
+    "fighter-final.png",
+    "contact-sheet.png",
+    "final-project.fsp",
+    "run-report.json",
+    "validation-report.json"
+  ],
+  "requiredStills": [
+    "creature-final.png",
+    "chase-start.png",
+    "chase-mid.png",
+    "chase-end.png",
+    "fighter-final.png",
+    "contact-sheet.png"
+  ],
+  "requiredMotion": [
+    "chase-motion.mp4"
+  ],
+  "shots": [
+    {
+      "id": "mv3-shot-01",
+      "shotNumber": "01",
+      "name": "H1 newborn hand creature",
+      "description": "H1 newborn hand creature still. Required output: creature-final.png.",
+      "locationId": "ruins",
+      "subjects": ["hand-monster"],
+      "intent": "still",
+      "requiredSubjects": ["hand-monster"],
+      "stillArtifacts": ["creature-final.png"]
+    },
+    {
+      "id": "mv3-shot-02",
+      "shotNumber": "02",
+      "name": "Sprint chase toward armory",
+      "description": "Three-second chase. Required outputs: chase-start.png, chase-mid.png, chase-end.png, chase-motion.mp4.",
+      "locationId": "corridor",
+      "subjects": ["joseph-amputated", "hand-monster"],
+      "intent": "motion-required",
+      "requiredSubjects": ["joseph-amputated", "hand-monster"],
+      "stillArtifacts": ["chase-start.png", "chase-mid.png", "chase-end.png"],
+      "motionArtifacts": ["chase-motion.mp4"],
+      "durationSeconds": 3
+    },
+    {
+      "id": "mv3-shot-03",
+      "shotNumber": "03",
+      "name": "J3 battle-ready stance",
+      "description": "J3 battle-ready still. Required output: fighter-final.png.",
+      "locationId": "armory",
+      "subjects": ["joseph-final", "shield", "wrist-blade"],
+      "intent": "still",
+      "requiredSubjects": ["joseph-final", "shield", "wrist-blade"],
+      "stillArtifacts": ["fighter-final.png"]
+    }
+  ],
+  "quality": {
+    "hardExecutionFailure": false,
+    "evidenceFile": "quality-report.json",
+    "missingEvidence": "not-graded"
+  }
+}

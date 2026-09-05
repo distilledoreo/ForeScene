@@ -60,6 +60,8 @@
     "benchmark:coverage-import": "node scripts/coverage-import-benchmark.mjs",
     "benchmark:doctor": "node --import tsx scripts/benchmark/doctor.ts",
     "benchmark:run": "node --import tsx scripts/benchmark/entry.ts",
+    "benchmark:agent": "node --import tsx scripts/benchmark/v3AgentRun.ts",
+    "benchmark:compare": "node --import tsx scripts/benchmark/v3AgentCompare.ts",
     "benchmark:agentic-control": "node --import tsx scripts/benchmark/agenticControlRun.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",

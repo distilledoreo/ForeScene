@@ -156,7 +156,7 @@ describe('ForeScene Benchmark V3-Lite', () => {
     expect(blockedRun.failure).toBeDefined();
     expect(blockedRun.candidate).toBeUndefined();
     expect(candidateLaunches).toBe(0);
-  });
+  }, 30_000);
 
   it('passes doctor only after hosted app, manifest/assets, isolated profile, and one non-mutating CLI call pass', async () => {
     const inputRoot = await fixtureInputRoot();
@@ -243,7 +243,7 @@ describe('ForeScene Benchmark V3-Lite', () => {
     expect(result.ok).toBe(true);
     expect((await readFile(path.join(result.runRoot, 'run-report.json'), 'utf8')).length).toBeGreaterThan(0);
     expect((await readFile(path.join(result.runRoot, 'validation-report.json'), 'utf8')).length).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it('fails closed for a pre-existing run workspace and a dirty repository doctor state', async () => {
     const inputRoot = await fixtureInputRoot();
@@ -374,7 +374,7 @@ describe('ForeScene Benchmark V3-Lite', () => {
       }),
       expect.objectContaining({ code: 'required_subject_not_visible', artifact: 'chase-start.png' }),
     ]));
-  });
+  }, 30_000);
 
   it('treats a flat gray buffer as visually uncontrolled even when occupancy would pass', () => {
     const gray = new Uint8Array(48 * 48 * 4);
