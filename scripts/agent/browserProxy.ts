@@ -43,25 +43,14 @@ export function resolveAgentBrowserProxy(
   if ((proxyUrl.pathname && proxyUrl.pathname !== '/') || proxyUrl.search || proxyUrl.hash) {
     throw new Error('Agent browser proxy URL cannot include a path, query, or fragment.');
   }
-  const hasCredentials = Boolean(proxyUrl.username || proxyUrl.password);
-  if (hasCredentials && proxyUrl.protocol.startsWith('socks')) {
-    throw new Error('Chromium does not support authenticated SOCKS proxies.');
-  }
-
-  let username: string | undefined;
-  let password: string | undefined;
-  if (hasCredentials) {
-    try {
-      username = decodeURIComponent(proxyUrl.username);
-      password = decodeURIComponent(proxyUrl.password);
-    } catch {
-      throw new Error('Agent browser proxy credentials contain invalid percent encoding.');
-    }
-    if (!username) throw new Error('Agent browser HTTP proxy credentials require a username.');
+  if (proxyUrl.username || proxyUrl.password) {
+    // Playwright copies Chromium proxy authentication into unscoped origin HTTP
+    // credentials. An origin 401 can receive them even when that origin bypasses
+    // the proxy, so never import environment proxy credentials into the browser.
+    throw new Error('Agent browser proxy URLs with credentials are not supported. Use an unauthenticated local forwarding proxy.');
   }
   return {
     server: `${proxyUrl.protocol}//${proxyUrl.host}`,
     ...(bypassEntries.length > 0 ? { bypass: bypassEntries.join(',') } : {}),
-    ...(hasCredentials ? { username, password } : {}),
   };
 }

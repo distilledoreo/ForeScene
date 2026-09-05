@@ -46,13 +46,19 @@ describe('agent browser environment proxy', () => {
     })).toBeUndefined();
   });
 
-  it('extracts decoded HTTP credentials without placing them in the proxy server string', () => {
+  it.each([
+    'http://user%40name:p%3Ass%2Fword@[::1]:3128',
+    'https://username@proxy.example:8443',
+    'http://:password@proxy.example:3128',
+  ])('rejects credentials that Chromium could reuse for a bypassed origin HTTP challenge', (HTTPS_PROXY) => {
+    expect(() => resolveAgentBrowserProxy('https://forescene.example', { HTTPS_PROXY }))
+      .toThrow('Use an unauthenticated local forwarding proxy.');
+  });
+
+  it('keeps unauthenticated HTTPS and IPv6 proxy configuration usable', () => {
     expect(resolveAgentBrowserProxy('https://forescene.example', {
-      HTTPS_PROXY: 'http://user%40name:p%3Ass%2Fword@[::1]:3128',
-    })).toEqual({ server: 'http://[::1]:3128', username: 'user@name', password: 'p:ss/word' });
-    expect(resolveAgentBrowserProxy('https://forescene.example', {
-      HTTPS_PROXY: 'https://username@proxy.example:8443',
-    })).toEqual({ server: 'https://proxy.example:8443', username: 'username', password: '' });
+      HTTPS_PROXY: 'https://[::1]:8443',
+    })).toEqual({ server: 'https://[::1]:8443' });
   });
 
   it.each([
