@@ -2541,6 +2541,17 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       }
     }
 
+    // A render-only run has no package export to flush its authored state.
+    // Persist explicitly before reporting completion or closing Chromium.
+    const persisted = await session.page.evaluate(async () => window.foreScene!.refreshRevision());
+    if (!persisted.revisionId || persisted.diagnostics.some((item) => item.severity === 'error')) {
+      throw new Error(persisted.diagnostics.find((item) => item.severity === 'error')?.message
+        ?? 'Previs could not persist its final project revision.');
+    }
+    await writeJson(path.join(outputDir, 'logs', 'final-persistence.json'), persisted);
+    state.revisionId = persisted.revisionId;
+    await writeJson(runStatePath, state);
+
     let packagePath: string | undefined;
     let packageTransfer: AgentArtifactTransferTelemetry | undefined;
     let packageFailed = false;
@@ -2622,7 +2633,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
     ].filter((value): value is string => Boolean(value));
 
     const endStatus = await session.page.evaluate(() => window.foreScene!.getStatus());
-    resultRevisionId = renderSession.toDescriptor().revisionId ?? endStatus.revisionId;
+    resultRevisionId = endStatus.revisionId ?? persisted.revisionId;
 
     const passed = validationResults.filter((item) => item.status === 'passed').length;
     const warnings = validationResults.filter((item) => (
