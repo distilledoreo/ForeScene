@@ -7,7 +7,7 @@ import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { getCanonicalPano } from '../../domain/selectors';
-import { listMissingProjectAssets } from '../projectAssetRecovery';
+import { listMissingProjectAssets, type ProjectOpenResult } from '../projectAssetRecovery';
 import {
   readProjectFileWithWarnings,
   validateProjectPackage as validateProjectPackageBlob,
@@ -71,10 +71,10 @@ function missingAssetSummaries(project: ReturnType<typeof useProjectStore.getSta
 }
 
 async function commitImportedProject(
-  importedProject: ReturnType<typeof useProjectStore.getState>['project'],
+  loadImportedProject: () => Promise<ProjectOpenResult>,
   reason: string,
   preserveCurrentAsRecovery: boolean,
-): Promise<{ revisionId?: string; persistenceConfirmed: boolean }> {
+): Promise<ProjectOpenResult & { revisionId?: string; persistenceConfirmed: boolean }> {
   const runDestructive = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   const flushProject = useProjectSafetyStore.getState().flushProject;
   if (!runDestructive) {
@@ -87,13 +87,20 @@ async function commitImportedProject(
     });
   }
 
+  let opened: ProjectOpenResult | undefined;
   await runDestructive(reason, async () => {
-    useProjectStore.getState().setProject(importedProject);
+    // Stage imported payloads only after the old project's recovery writes.
+    // Their cleanup may otherwise delete a same-ID import namespace before
+    // its assets become referenced by the newly committed live project.
+    opened = await loadImportedProject();
+    useProjectStore.getState().setProject(opened.project);
     useAppModeStore.getState().setAppMode('studio');
   });
+  if (!opened) throw new Error('Project import was not applied.');
 
   const verified = flushProject ? await flushProject(`Verified save after ${reason}`) : undefined;
   return {
+    ...opened,
     revisionId: verified?.revision.id,
     persistenceConfirmed: Boolean(verified),
   };
@@ -116,11 +123,9 @@ export async function openAgentProjectPackage(
   }
 
   try {
-    const opened = await readProjectFileWithWarnings(input.file);
-    const importedProject = opened.project;
-    const { revisionId, persistenceConfirmed } = await commitImportedProject(
-      importedProject,
-      `Imported project: ${importedProject.name}`,
+    const { project: importedProject, warnings, revisionId, persistenceConfirmed } = await commitImportedProject(
+      () => readProjectFileWithWarnings(input.file),
+      `Imported project file: ${input.file.name}`,
       input.preserveCurrentAsRecovery ?? true,
     );
     setLoadedProjectSource('import', input.file.name);
@@ -138,7 +143,7 @@ export async function openAgentProjectPackage(
       panoCount: importedProject.panoRefs.length,
       canonicalPanoId: canonical?.id,
       persistenceConfirmed,
-      diagnostics: opened.warnings.map((warning) => agentError('import_warning', warning.message)),
+      diagnostics: warnings.map((warning) => agentError('import_warning', warning.message)),
     };
   } catch (error) {
     return {
@@ -222,7 +227,7 @@ export async function cloneAgentProjectRevision(
     }
 
     const { revisionId, persistenceConfirmed } = await commitImportedProject(
-      cloned,
+      async () => ({ project: cloned, warnings: [] }),
       `Cloned revision ${input.revisionId}`,
       true,
     );

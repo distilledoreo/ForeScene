@@ -466,6 +466,7 @@ async function createRevisionRecord(
       if (asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
       try {
         const resource = await ensureModelResource(sourceAsset);
+        asset.storageKey = resource.key;
         asset.uri = `${MODEL_ASSET_URI_PREFIX}${resource.key}`;
         modelAssetKeys.push(resource.key);
         models.push(resource);
