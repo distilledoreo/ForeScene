@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultProject, createLandmark, createSceneObject } from '../src/domain/defaults';
 import type { ProductionConfiguration, Vec3 } from '../src/domain/types';
 import type { PrevisProductionManifestV1 } from '../src/engine/previs/manifest';
-import { compileCastPhase, compilePropsPhase, createEmptyCompiledContext } from '../src/engine/previs/locationCompiler';
+import { compileCastPhase, compileLocationsPhase, compilePropsPhase, createEmptyCompiledContext } from '../src/engine/previs/locationCompiler';
+import { prepareAgentPlan } from '../src/engine/agent/planCompiler';
+import { resolveSceneObjectsForShot } from '../src/engine/shotSceneState';
 import {
   buildProductionCompileEntityBindings,
   buildProductionCompileLocationBindings,
@@ -152,6 +154,100 @@ describe('production compile group bindings', () => {
     expect(compiled.locations.plan.commands).toEqual([]);
     expect(compiled.context.locationOrigins.ruins).toEqual([0, 1.2, 0]);
     expect(compiled.context.locationAnchors.ruins?.platform).toEqual([0, 1.2, -4]);
+  });
+
+  it('keeps a resumed multipart subject visible when its imported members are parked in an inactive location', () => {
+    const project = createDefaultProject();
+    const floorA = createSceneObject('floor');
+    const floorB = createSceneObject('floor');
+    floorB.transform.position = [100, 0, 0];
+    const wall = createSceneObject('box');
+    wall.transform.position = [0, 1, -5];
+    project.scene.objects = [floorA, floorB, wall];
+    project.landmarks = [
+      { ...createLandmark(1, [0, 1.2, 0]), name: 'room_a_center' },
+      { ...createLandmark(2, [100, 1.2, 0]), name: 'room_b_center' },
+    ];
+    project.workflow.production = undefined;
+    const input = manifest({
+      project: { name: 'Existing set', aspectRatio: '16:9', operatingMode: 'existing-project-refinement' },
+      locations: [
+        { id: 'room_a', name: 'Room A', template: 'interior_room' },
+        { id: 'room_b', name: 'Room B', template: 'interior_room' },
+      ],
+      cast: [],
+      props: [],
+      assets: [{ id: 'creature', type: 'imported_model', semanticRole: 'subject' }],
+      shots: [{
+        id: 'shot.creature', shotNumber: '01', name: 'Creature', description: 'Creature in room B',
+        locationId: 'room_b', subjects: ['creature'],
+        camera: { template: 'wide', subjects: ['creature'] },
+      }, {
+        id: 'shot.empty', shotNumber: '02', name: 'Empty room', description: 'Room A is empty',
+        locationId: 'room_a', subjects: [],
+        camera: { template: 'wide', subjects: [] },
+      }],
+    });
+    const initialLocations = inferExistingProjectLocationBindings(project, input);
+    const palm = createSceneObject('box');
+    palm.productionClass = 'dynamic_subject';
+    palm.transform.position = [0, 0.5, 0];
+    const finger = createSceneObject('box', 2);
+    // A logical assembly can include a member whose own category looks static.
+    finger.category = 'environment';
+    finger.transform.position = [0.8, 0.5, 0];
+    const parkedActor = createSceneObject('human_dummy');
+    const parkedProp = createSceneObject('box');
+    parkedProp.stagingRole = 'prop';
+    project.scene.objects.push(palm, finger, parkedActor, parkedProp);
+    project.scene.objectGroups = {
+      creatureAssembly: { id: 'creatureAssembly', name: 'Creature assembly', objectIds: [palm.id, finger.id] },
+    };
+    project.workflow.production = {
+      schemaVersion: 1,
+      bindings: { creature: { kind: 'group', groupId: 'creatureAssembly' } },
+      locations: {}, shotContracts: {},
+    };
+    const context = createEmptyCompiledContext();
+    context.entities['assets.creature'] = {
+      objectId: palm.id, objectIds: [palm.id, finger.id], groupId: 'creatureAssembly',
+    };
+    const initialContext = compileLocationsPhase(input, context, {
+      locationBindings: initialLocations, preparedProject: project,
+    }).context;
+    const initialBatch = compileShotBatch(input, initialContext, input.shots, 0, { presenceProject: project });
+    const firstApply = prepareAgentPlan(initialBatch.plan, { project, workspace: 'shots', selectedObjectIds: [] });
+    expect(firstApply.ok).toBe(true);
+    if (!firstApply.ok) return;
+    const reopened = JSON.parse(JSON.stringify(firstApply.prepared.nextProject)) as typeof project;
+    const existingShot = reopened.shots.find((shot) => shot.shotNumber === '01')!;
+    const emptyShot = reopened.shots.find((shot) => shot.shotNumber === '02')!;
+    expect(resolveSceneObjectsForShot(reopened, existingShot).filter((object) => object.visible).map((object) => object.id))
+      .toEqual(expect.arrayContaining([palm.id, finger.id]));
+    const emptyVisibleIds = resolveSceneObjectsForShot(reopened, emptyShot)
+      .filter((object) => object.visible).map((object) => object.id);
+    expect(emptyVisibleIds).not.toContain(palm.id);
+    expect(emptyVisibleIds).not.toContain(finger.id);
+
+    const resumedLocations = inferExistingProjectLocationBindings(reopened, input);
+    const resumedContext = compileLocationsPhase(input, context, {
+      locationBindings: resumedLocations, preparedProject: reopened,
+    }).context;
+    const resumedBatch = compileShotBatch(input, resumedContext, [input.shots[0]!], 0, {
+      presenceProject: reopened, existingShotIds: { '01': existingShot.id },
+    });
+    const resumedApply = prepareAgentPlan(resumedBatch.plan, { project: reopened, workspace: 'shots', selectedObjectIds: [] });
+    expect(resumedApply.ok).toBe(true);
+    if (!resumedApply.ok) return;
+    const after = resumedApply.prepared.nextProject;
+    const resumedShot = after.shots.find((shot) => shot.id === existingShot.id)!;
+    expect(resolveSceneObjectsForShot(after, resumedShot).filter((object) => object.visible).map((object) => object.id))
+      .toEqual(expect.arrayContaining([palm.id, finger.id]));
+    expect(after.shots).toHaveLength(reopened.shots.length);
+    expect(after.scene.objects).toEqual(reopened.scene.objects);
+    expect(resumedLocations).toEqual(initialLocations);
+    expect(resumedLocations.room_a?.objectIds).toEqual([floorA.id, wall.id]);
+    expect(resumedLocations.room_a?.blockerObjectIds).toEqual([wall.id]);
   });
 
   it('resolves prepared group bindings for compile phases', () => {
