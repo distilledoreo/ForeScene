@@ -487,7 +487,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       return collectVisualPreflightResults({
         shots: listShotsSnapshot(project),
         requestedShotIds: input.shotIds,
-        inspect: (shotId) => inspectShotVisualPreflight({ project, shotId }),
+        inspect: (shotId) => inspectShotVisualPreflight({ ...input, project, shotId }),
       });
     },
 
@@ -760,6 +760,8 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
         shotId: resolved.id,
         timeSeconds: input.timeSeconds,
         subjectIds: input.subjectIds,
+        environmentObjectIds: input.environmentObjectIds,
+        appearance: input.appearance,
         environmentOnly: input.environmentOnly,
         allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
       });

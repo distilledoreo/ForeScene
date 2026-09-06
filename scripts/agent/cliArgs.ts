@@ -62,6 +62,8 @@ export interface AgentCliArgs {
   consentToken?: string;
   profile?: string;
   shotSelection: CliShotSelection;
+  subjectIds?: string[];
+  environmentObjectIds?: string[];
   timeSeconds?: number;
   resolution?: string;
   appearance?: string;
@@ -212,6 +214,17 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.finalize = true;
     } else if (token === '--shot' || token === '--shots') {
       args.shotSelection = appendCliShotFlag(args.shotSelection, token, argv[++index]);
+    } else if (token === '--subjects' || token === '--environment-objects') {
+      if (args.command !== 'verify' && args.command !== 'visual-preflight') {
+        throw new Error(`${token} is supported only by verify and visual-preflight`);
+      }
+      const value = argv[++index];
+      const ids = value?.split(',').map((id) => id.trim());
+      if (!value || value.startsWith('--') || !ids?.length || ids.some((id) => !id)) {
+        throw new Error(`${token} requires a nonempty comma-separated list of object IDs`);
+      }
+      const key = token === '--subjects' ? 'subjectIds' : 'environmentObjectIds';
+      args[key] = [...new Set([...(args[key] ?? []), ...ids])];
     } else if (token === '--time') {
       const value = Number(argv[++index]);
       if (!Number.isFinite(value)) throw new Error('--time must be a finite number');
@@ -220,6 +233,10 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.resolution = argv[++index];
     } else if (token === '--appearance') {
       args.appearance = argv[++index];
+      if ((args.command === 'verify' || args.command === 'visual-preflight')
+        && (!args.appearance || args.appearance.startsWith('--'))) {
+        throw new Error('--appearance requires clay or projected');
+      }
     } else if (token === '--content') {
       args.content = argv[++index];
     } else if (token === '--no-attach') {
@@ -228,6 +245,10 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.noDownload = true;
     } else if (token === '--mode') {
       args.mode = argv[++index];
+      if ((args.command === 'verify' || args.command === 'visual-preflight')
+        && (!args.mode || args.mode.startsWith('--'))) {
+        throw new Error('--mode requires clay or projected');
+      }
     } else if (token === '--no-auto-repair') {
       args.noAutoRepair = true;
       args.autoRepair = false;
@@ -258,5 +279,14 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
     }
   }
 
+  if (args.command === 'verify' || args.command === 'visual-preflight') {
+    if (args.mode !== undefined && args.appearance !== undefined && args.mode !== args.appearance) {
+      throw new Error('--mode and --appearance must agree');
+    }
+    args.appearance ??= args.mode;
+    if (args.appearance !== undefined && args.appearance !== 'clay' && args.appearance !== 'projected') {
+      throw new Error('--appearance must be clay or projected');
+    }
+  }
   return args;
 }

@@ -59,6 +59,13 @@ export interface AgentCliCommandDescription {
 }
 
 const COMMON_SESSION_FLAGS = ['--url <url>', '--headless'] as const;
+const VISUAL_SELECTION_FLAGS = [
+  '--subjects <comma-separated-object-ids>',
+  '--environment-objects <comma-separated-object-ids>',
+  '--appearance <clay|projected>',
+  '--mode <clay|projected> (alias for --appearance)',
+] as const;
+const VISUAL_SELECTION_NOTE = 'Subject and environment IDs apply to every selected shot. Required subjects still fail when hidden/missing, even if also listed as environment. Environment classification does not hide geometry or disable occlusion. Appearance defaults to clay; projected matches panorama renders that omit duplicate set proxies and requires a resolved panorama.';
 
 const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> = {
   capabilities: {
@@ -166,15 +173,15 @@ const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> 
   },
   verify: {
     command: 'verify', operation: 'verify.project', usage: 'npm run agent:verify -- --profile <dir> [--shot <ids>] [--output <screenshot.png>]', write: false,
-    required: ['--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, '--shot <id-or-number>', '--shots <comma-separated-ids>', '--workspace <build|shots>', '--output <screenshot.png>'],
+    required: ['--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, ...VISUAL_SELECTION_FLAGS, '--shot <id-or-number>', '--shots <comma-separated-ids>', '--workspace <build|shots>', '--output <screenshot.png>'],
     result: 'Visual preflight, asset pose contract, project health, provenance, and optional screenshot.',
-    notes: ['Omitted --shot/--shots validates every shot; unknown explicit selections fail visual validation and unmatched ids appear in the JSON result and provenance.'],
+    notes: ['Omitted --shot/--shots validates every shot; unknown explicit selections fail visual validation and unmatched ids appear in the JSON result and provenance.', VISUAL_SELECTION_NOTE],
   },
   'visual-preflight': {
     command: 'visual-preflight', operation: 'verify.visualPreflight', usage: 'npm run agent:visual-preflight -- --profile <dir> [--shot <ids>]', write: false,
-    required: ['--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, '--shot <id-or-number>', '--shots <comma-separated-ids>'],
+    required: ['--profile <isolated-dir>'], optional: [...COMMON_SESSION_FLAGS, ...VISUAL_SELECTION_FLAGS, '--shot <id-or-number>', '--shots <comma-separated-ids>'],
     result: 'Per-shot visual preflight results, unmatched ids, and recorded validation evidence.',
-    notes: ['Same --shot/--shots contract as verify.'],
+    notes: ['Same --shot/--shots contract as verify.', VISUAL_SELECTION_NOTE],
   },
   'asset-contract': {
     command: 'asset-contract', operation: 'verify.assetContract', usage: 'npm run agent:asset-contract -- --profile <dir> [--shot <id-or-number>]', write: false,
@@ -307,6 +314,7 @@ export function buildAgentCliHelpDocument() {
     renderModes: {
       frame: 'Clay, projected, and depth are `--mode` (alias `--appearance`) on `frame`. Default clay.',
       video: 'Same `--mode` / `--appearance` contract as `frame`.',
+      validation: '`verify` / `visual-preflight` accept --appearance clay|projected (default clay), --subjects <object-ids>, and --environment-objects <object-ids>. Projected matches the canonical panorama render. Environment classification never disables required subject checks or real occlusion.',
     },
     projectLifecycle: {
       open: '`open --file <package.fsp> --write` stages the package and calls openProjectPackage.',

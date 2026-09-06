@@ -5,7 +5,9 @@
  */
 
 import type { LocationProject, SceneObject, Shot, Vec3 } from '../../domain/types';
-import { cameraForward } from '../sync';
+import { cameraForward, resolveShotLinkedPano } from '../sync';
+import { getSceneObjectStagingRole } from '../shotSceneState';
+import { isHiddenProjectedSetProxy } from '../sceneObjectVisibility';
 import {
   AGENT_DIAGNOSTIC_CODES,
   agentError,
@@ -14,6 +16,7 @@ import {
 import type {
   AgentValidationGateStatus,
   AgentVisualPreflightCheck,
+  AgentVisualPreflightOptions,
   AgentVisualPreflightResult,
   AgentVisualPreflightSample,
   AgentVisualPreflightSubjectPolicy,
@@ -198,13 +201,10 @@ export function collectVisualPreflightSampleTimes(
   return [...times].sort((a, b) => a - b);
 }
 
-function evaluateVisualPreflightAtTime(input: {
+function evaluateVisualPreflightAtTime(input: AgentVisualPreflightOptions & {
   project: LocationProject;
   shot: Shot;
   timeSeconds?: number;
-  subjectIds?: string[];
-  environmentOnly?: boolean;
-  allowUnresolvedSetDressing?: boolean;
 }): {
   checks: AgentVisualPreflightCheck[];
   subjects: ReturnType<typeof inspectAgentShotDiagnostics>['subjects'];
@@ -239,14 +239,15 @@ function evaluateVisualPreflightAtTime(input: {
   const configuration = getProductionConfiguration(project);
   const productionContract = configuration.shotContracts[shot.id];
   const productionLocations = Object.values(configuration.locations);
-  const environmentObjectIds = productionLocations.length > 0
-    ? productionLocations.flatMap((location) => [
-        ...location.objectIds,
-        ...location.objectGroupIds.flatMap((groupId) => (
-          project.scene.objectGroups?.[groupId]?.objectIds ?? []
-        )),
-      ])
-    : [];
+  const environmentObjectIds = [
+    ...(input.environmentObjectIds ?? []),
+    ...productionLocations.flatMap((location) => [
+      ...location.objectIds,
+      ...location.objectGroupIds.flatMap((groupId) => (
+        project.scene.objectGroups?.[groupId]?.objectIds ?? []
+      )),
+    ]),
+  ];
   const scoredSubjectIds = [...new Set([
     ...subjects.flatMap((subject) => (
       project.scene.objectGroups?.[subject.objectId]?.objectIds ?? [subject.objectId]
@@ -331,7 +332,7 @@ function evaluateVisualPreflightAtTime(input: {
             : emptySetWithoutIntent
               ? 'No subjects were inferred. Environment-only scoring requires explicit intent.'
               : unresolvedSetDressingFailed
-                ? `Visible renderable content is present but not identified as a subject. Request those objects, hide them, mark the shot environment-only, or set allowUnresolvedSetDressing.`
+                ? `Enabled renderable content is not identified as a subject or environment. Use --subjects / subjectIds for required subjects and --environment-objects / environmentObjectIds for set dressing; allowUnresolvedSetDressing retains an explicit warning. Enabled does not imply visible in the camera.`
                 : unresolvedSetDressingWarning
                   ? `Visible set-dressing content is present but not identified as a subject. Opt-in allowUnresolvedSetDressing keeps this non-blocking.`
                   : hidden.length === 0
@@ -366,7 +367,9 @@ function evaluateVisualPreflightAtTime(input: {
         ? 'Subject framing cannot pass when no subjects were inferred for an ordinary shot.'
         : coverageFailed
           ? 'Subject framing is too tight or too loose.'
-          : 'Subject framing coverage is within the preflight band.',
+          : minCoverage > 0 && minCoverage < 0.03
+            ? 'Subjects are visible but small in frame (under 3% coverage). Review whether this wide framing is intentional.'
+            : 'Subject framing coverage is within the preflight band.',
     measured: { minCoverage, maxCoverage, environmentOnly: policy.environmentOnly ? 1 : 0 },
   });
 
@@ -515,13 +518,10 @@ function visualGateStatusFromChecks(
   return 'passed';
 }
 
-export function inspectShotVisualPreflight(input: {
+export function inspectShotVisualPreflight(input: AgentVisualPreflightOptions & {
   project: LocationProject;
   shotId: string;
   timeSeconds?: number;
-  subjectIds?: string[];
-  environmentOnly?: boolean;
-  allowUnresolvedSetDressing?: boolean;
 }): AgentVisualPreflightResult {
   const shot = input.project.shots.find((candidate) => candidate.id === input.shotId);
   if (!shot) {
@@ -533,6 +533,46 @@ export function inspectShotVisualPreflight(input: {
       checks: [],
       subjects: [],
       diagnostics: [agentError(AGENT_DIAGNOSTIC_CODES.targetNotFound, `No shot with id "${input.shotId}".`)],
+    };
+  }
+
+  const appearance = input.appearance ?? 'clay';
+  const unknownEnvironmentIds = (input.environmentObjectIds ?? []).filter((id) => (
+    !input.project.scene.objects.some((object) => object.id === id)
+  ));
+  const selectionErrors: AgentDiagnostic[] = [];
+  if (unknownEnvironmentIds.length > 0) {
+    selectionErrors.push(agentError('environment_object_missing',
+      `Unknown environment object id(s): ${unknownEnvironmentIds.join(', ')}.`));
+  }
+  if (appearance !== 'clay' && appearance !== 'projected') {
+    selectionErrors.push(agentError('invalid_appearance', 'Visual appearance must be clay or projected.'));
+  }
+  if (appearance === 'projected' && !resolveShotLinkedPano(input.project, shot)) {
+    selectionErrors.push(agentError('projected_panorama_missing',
+      'Projected validation requires a resolved shot panorama; link a panorama or validate clay.'));
+  }
+  if (selectionErrors.length > 0) {
+    return {
+      ok: false, gateStatus: 'failed', shotId: shot.id, appearance,
+      score: 0, checks: [], subjects: [], diagnostics: selectionErrors,
+    };
+  }
+  if (appearance === 'projected') {
+    // Match buildScene's canonical projected render before computing occlusion
+    // or subject policy. Explicitly requesting an omitted proxy still fails as
+    // a missing subject. Never suppress imported models or props as environment.
+    input = {
+      ...input,
+      project: {
+        ...input.project,
+        scene: {
+          ...input.project.scene,
+          objects: input.project.scene.objects.filter((object) => (
+            !isHiddenProjectedSetProxy({ ...object, stagingRole: getSceneObjectStagingRole(object) })
+          )),
+        },
+      },
     };
   }
 
@@ -559,6 +599,7 @@ export function inspectShotVisualPreflight(input: {
       shot,
       timeSeconds: sampleInputTime,
       subjectIds: input.subjectIds,
+      environmentObjectIds: input.environmentObjectIds,
       environmentOnly: input.environmentOnly,
       allowUnresolvedSetDressing: input.allowUnresolvedSetDressing,
     });
@@ -634,19 +675,22 @@ export function inspectShotVisualPreflight(input: {
         input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
       )) ?? []),
     ])],
-    environmentObjectIds: productionLocations.length > 0
-      ? productionLocations.flatMap((location) => [
-          ...location.objectIds,
-          ...location.objectGroupIds.flatMap((groupId) => (
-            input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
-          )),
-        ])
-      : [],
+    environmentObjectIds: [
+      ...(input.environmentObjectIds ?? []),
+      ...productionLocations.flatMap((location) => [
+        ...location.objectIds,
+        ...location.objectGroupIds.flatMap((groupId) => (
+          input.project.scene.objectGroups?.[groupId]?.objectIds ?? []
+        )),
+      ]),
+    ],
   });
   const gateStatus = visualGateStatusFromChecks(checks, missingSubjectIds.size);
 
   return {
     ok: gateStatus === 'passed',
+    appearance,
+    environmentObjectIds: input.environmentObjectIds,
     gateStatus,
     shotId: shot.id,
     sampledTimeSeconds: samples[0]?.timeSeconds,
