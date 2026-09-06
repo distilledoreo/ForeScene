@@ -64,6 +64,7 @@ import {
 } from './agentProfile';
 import { activeAgentRunSession } from './agentSession';
 import { parseAgentCliArgs } from './cliArgs';
+import type { AgentVisualPreflightOptions } from '../../src/engine/agent/protocol';
 import {
   buildAgentCliCapabilitiesDocument,
   commandToOperationName,
@@ -1126,7 +1127,7 @@ async function runScreenshot(options: {
   });
 }
 
-async function runVerify(options: {
+async function runVerify(options: AgentVisualPreflightOptions & {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
@@ -1141,7 +1142,12 @@ async function runVerify(options: {
     // through untouched so the engine-side unmatched-report contract holds.
     const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
     if (!passthrough.ok) return;
-    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
+    const visualInput = {
+      ...(passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {}),
+      subjectIds: options.subjectIds,
+      environmentObjectIds: options.environmentObjectIds,
+      appearance: options.appearance,
+    };
     if (options.workspace) {
       await openWorkspace(session.page, options.workspace);
       await waitForAgentIdle(session.page);
@@ -1326,7 +1332,7 @@ async function runPackage(options: {
   });
 }
 
-async function runVisualPreflight(options: {
+async function runVisualPreflight(options: AgentVisualPreflightOptions & {
   url?: string;
   headless: boolean;
   writeAccess: boolean;
@@ -1339,7 +1345,12 @@ async function runVisualPreflight(options: {
     // through untouched so the engine-side unmatched-report contract holds.
     const passthrough = await resolvePassthroughShotIds(session, options.shotIds);
     if (!passthrough.ok) return;
-    const visualInput = passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {};
+    const visualInput = {
+      ...(passthrough.shotIds !== undefined ? { shotIds: passthrough.shotIds } : {}),
+      subjectIds: options.subjectIds,
+      environmentObjectIds: options.environmentObjectIds,
+      appearance: options.appearance,
+    };
     const result = await session.page.evaluate((input) => {
       const api = window.foreScene!;
       const collected = api.collectVisualPreflightValidation(input);
@@ -1851,6 +1862,9 @@ async function main() {
       output: args.output ?? args.screenshot,
       profile: args.profile,
       shotIds: usage.requestedShotIds,
+      subjectIds: args.subjectIds,
+      environmentObjectIds: args.environmentObjectIds,
+      appearance: args.appearance === 'projected' ? 'projected' : 'clay',
     });
     return;
   }
@@ -1864,6 +1878,9 @@ async function main() {
       persistWrite: args.persistWrite,
       profile: args.profile,
       shotIds: usage.requestedShotIds,
+      subjectIds: args.subjectIds,
+      environmentObjectIds: args.environmentObjectIds,
+      appearance: args.appearance === 'projected' ? 'projected' : 'clay',
     });
     return;
   }

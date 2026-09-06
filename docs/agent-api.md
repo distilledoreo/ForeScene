@@ -203,7 +203,13 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 
 `inspectShotDiagnostics({ shotId, timeSeconds?, subjectIds? })` returns diagnostics for explicitly requested objects of any type, or infers likely subjects when `subjectIds` is omitted. `shotNumber` is accepted as a shot target.
 
-`inspectShotVisualPreflight({ shotId | shot, timeSeconds?, subjectIds?, environmentOnly?, allowUnresolvedSetDressing? })` adds scored quality gates for subject visibility, framing/coverage, ground contact, camera direction, cropping, and motion continuity. Missing requested subjects fail the gate (`ok: false`, `gateStatus: "failed"`). Camera-direction checks use shot-effective transforms. When a shot has camera keyframes, the preflight samples start, mid, and end times and reports `samples[]` with per-sample failures.
+`inspectShotVisualPreflight({ shotId | shot, timeSeconds?, subjectIds?, environmentObjectIds?, appearance?, environmentOnly?, allowUnresolvedSetDressing? })` adds scored quality gates for subject visibility, framing/coverage, ground contact, camera direction, cropping, and motion continuity. Missing requested subjects fail the gate (`ok: false`, `gateStatus: "failed"`). Camera-direction checks use shot-effective transforms. When a shot has camera keyframes, the preflight samples start, mid, and end times and reports `samples[]` with per-sample failures.
+
+`appearance` defaults to `clay`. Use `projected` for the canonical full-scene panorama render: the same set-proxy visibility rule as the renderer excludes duplicate panorama walls from occlusion and unresolved-content checks. Floors, terrain, props, people and imported assets remain subject to the normal checks. A missing/unlinked panorama fails projected validation. The result echoes `appearance`; this is deterministic geometry preflight, not an image-model judgment of rendered pixels.
+
+`environmentObjectIds` explicitly identifies set dressing without hiding it or disabling its occlusion. Unknown environment IDs fail. Required `subjectIds` are always checked, including IDs also listed as environment. These selections are read-only and apply to each selected shot; use separate calls when shots have different required subjects. Persisted production-location bindings remain supported.
+
+Ground clearance measures the bottom of the transformed object bounds relative to the identified floor. A centered 1 m tall box at Y=0 is half buried, even if it looks seated against a panorama. Use `shot.stageObject` with center Y=0.5 for a level floor at Y=0, or API `snapObjectToFloor` for rotated/scaled bounds. `object.create.position` has its documented floor-placement conversion; `shot.stageObject.transform.position` is the stored transform, not a foot position. Reinspect after correction and save/reopen to verify persistence. Intentional wide framing may retain a coverage warning; do not change grounding or suppress required subjects to clear that warning.
 
 `ok` is true only when `gateStatus === "passed"`. A warning or failure is never a fully passed visual gate. `composeAgentValidationEvidence` / `recordRunValidation` use `gateStatus` (not just `!item.ok`) so a warning cannot be reported as `gates.visualPreflight: "passed"`.
 
@@ -212,13 +218,13 @@ Visual-gate presence is distinct from the result:
 - Omit `visualPreflight` when the caller did not request the gate → `gates.visualPreflight: "skipped"`.
 - Supply `visualPreflight: []`, or an explicit shot selection that matches nothing → requested-but-empty, `gates.visualPreflight: "failed"`, with `emptySelection` / `unmatchedShotIds` / `diagnostic`. This is never a vacuous pass.
 - `verify` and `visual-preflight` with no `--shots` on a project that has no shots omit the visual gate (skipped). Empty projects are supported; they are not treated as “every selected shot passed”.
-- `collectVisualPreflightValidation({ shotIds })` is the CLI/API composition path. Any unmatched requested id fails the selection (same rule as other CLI shot resolvers).
+- `collectVisualPreflightValidation({ shotIds?, subjectIds?, environmentObjectIds?, appearance?, environmentOnly?, allowUnresolvedSetDressing? })` is the CLI/API composition path. Any unmatched requested shot id fails the selection (same rule as other CLI shot resolvers).
 
 A legitimate environment-only shot stays supported only through **explicit intent**: `environmentOnly: true`, `shot.metadata.environmentOnly`, or `shot.metadata.shotKind === "environment"`. Those shots report `environmentOnly: true` with `subjectPolicy: "environment_only"` and N/A subject/coverage checks. Empty subject inference never silently classifies ordinary visible content as environment-only.
 
 Set-dressing policy for ordinary shots (`subjectPolicy: "subjects_expected"`):
 
-- Visible non-environment content that is not identified or scored is reported in `unresolvedVisibleObjectIds` and is never dropped from the validation summary.
+- Enabled non-environment content that is not identified or scored is reported in `unresolvedVisibleObjectIds` and is never silently dropped from the validation summary. This legacy field name refers to enabled geometry in the selected render, not a camera-frustum visibility measurement. Explicitly classify off-camera set dressing too.
 - No inferred subjects plus unresolved visible content (imported model, monster, prop, or other renderable) fails `subject_visibility`.
 - Inferred/requested subjects plus additional unresolved visible content **fails** the ordinary visual gate (`ok: false`, `gateStatus: "failed"`). The extra content cannot be silently omitted from the scored subject set while the gate still reports passed.
 - Non-blocking set dressing is an explicit persisted opt-in: `allowUnresolvedSetDressing: true` or `shot.metadata.allowUnresolvedSetDressing === true`. That path uses `subjectPolicy: "set_dressing_allowed"`, keeps the unresolved ids, and reports `gateStatus: "warning"` — never `passed` / `ok: true`.
@@ -231,11 +237,11 @@ Repair loops should call `beginShotRepairSession`, then `evaluateShotRepairCandi
 CLI:
 
 ```bash
-npm run agent:visual-preflight -- --shots 01,02
-npm run agent:asset-contract
-npm run agent:asset-contract -- --shot <shotId>
-npm run agent:verify
-npm run agent:verify -- --shots 01,02
+npm run agent:visual-preflight -- --profile <dir> --shots 01,02 --subjects <object-id> --appearance projected
+npm run agent:asset-contract -- --profile <dir>
+npm run agent:asset-contract -- --profile <dir> --shot <shotId>
+npm run agent:verify -- --profile <dir>
+npm run agent:verify -- --profile <dir> --shots 01,02 --subjects <object-id> --environment-objects <set-id> --appearance clay
 ```
 
 `verify` and `visual-preflight` pass an explicit `--shot`/`--shots` list to `collectVisualPreflightValidation`. Omitted selection validates every shot (or skips the visual gate on an empty project). An unknown requested id or an explicitly empty selection fails, and the unmatched ids/diagnostic appear in the JSON result and provenance. `frame` and `video` accept exactly one shot and reject extra ids before the browser opens. `asset-contract` accepts one optional `--shot` and rejects additional ids; the API stays `inspectAssetPoseContract({ shotId? })`.

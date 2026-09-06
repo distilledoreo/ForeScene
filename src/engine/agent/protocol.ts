@@ -997,7 +997,22 @@ export type AgentVisualPreflightSubjectPolicy =
   | 'subjects_expected'
   | 'set_dressing_allowed';
 
+export interface AgentVisualPreflightOptions {
+  /** Defaults to clay. Projected validates the canonical panorama-backed render. */
+  appearance?: 'clay' | 'projected';
+  /** Required object IDs, applied to each selected shot. */
+  subjectIds?: string[];
+  /** Explicit set dressing; remains geometry and can still occlude subjects. */
+  environmentObjectIds?: string[];
+  /** Explicit environment-only shot; subject/coverage gates become N/A. */
+  environmentOnly?: boolean;
+  /** Unresolved set dressing remains a warning, never a clean pass. Also accepted on shot.metadata. */
+  allowUnresolvedSetDressing?: boolean;
+}
+
 export interface AgentVisualPreflightResult {
+  appearance?: 'clay' | 'projected';
+  environmentObjectIds?: string[];
   /** True only when the ordinary visual gate fully passed (no failures or blocking warnings). */
   ok: boolean;
   /**
@@ -2148,18 +2163,10 @@ export interface ForeSceneBrowserApi {
     timeSeconds?: number;
     subjectIds?: string[];
   }): AgentShotDiagnostics;
-  inspectShotVisualPreflight(input: {
+  inspectShotVisualPreflight(input: AgentVisualPreflightOptions & {
     shotId?: string;
     shot?: AgentEntityTarget;
     timeSeconds?: number;
-    subjectIds?: string[];
-    /** Explicit environment-only shot; subject/coverage gates become N/A. */
-    environmentOnly?: boolean;
-    /**
-     * Persistable opt-in: unresolved visible set dressing is a warning
-     * (not a fully passed visual gate). Also accepted on `shot.metadata`.
-     */
-    allowUnresolvedSetDressing?: boolean;
   }): AgentVisualPreflightResult;
   /**
    * Select shots, run visual preflight, and report unmatched ids.
@@ -2167,7 +2174,7 @@ export interface ForeSceneBrowserApi {
    * and returns `visualPreflight: []`. An empty project with no requested
    * ids omits `visualPreflight` so the visual gate can be skipped.
    */
-  collectVisualPreflightValidation(input?: {
+  collectVisualPreflightValidation(input?: AgentVisualPreflightOptions & {
     shotIds?: string[];
   }): AgentVisualPreflightCollection;
   /**

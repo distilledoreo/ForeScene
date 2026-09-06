@@ -23,6 +23,8 @@ import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh'
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
+import { isHiddenProjectedSetProxy, shouldReceiveProjectedStyle } from './sceneObjectVisibility';
+export { shouldReceiveProjectedStyle } from './sceneObjectVisibility';
 
 export type SceneVisualTheme = 'light' | 'dark';
 
@@ -400,10 +402,9 @@ export function buildScene(
     // seams. Floors stay: they are the only 3D plane subjects can stand on
     // once the pano is the background.
     if (
-      receivesProjectedStyle
-      && object.stagingRole === 'set'
+      useProjected
+      && isHiddenProjectedSetProxy(object)
       && options.projected?.hideSetGeometry !== false
-      && !objectProvidesProjectedGroundPlane(object)
     ) continue;
     const mesh = createObject3D(
       object,
@@ -635,18 +636,6 @@ export function resolveObjectMaterial(
   }
   if (object.type === 'floor') return theme === 'dark' ? darkFloorMaterial : lightFloorMaterial;
   return materialByTheme[theme][object.category];
-}
-
-/** Helpers, landmarks, and sun markers keep clay appearance; architecture receives projection. */
-export function shouldReceiveProjectedStyle(object: SceneObject): boolean {
-  if (object.category === 'helper' || object.category === 'landmark') return false;
-  if (object.type === 'sun_marker' || object.type === 'human_dummy') return false;
-  // Imported models carry authored materials and textures. Projecting the
-  // environment panorama over them destroys production-asset identity (and
-  // previously turned multipart creatures into white silhouettes).
-  if (object.type === 'imported_model') return false;
-  if (object.stagingRole === 'person' || object.stagingRole === 'prop') return false;
-  return true;
 }
 
 function applyProjectedStyleToObject(
