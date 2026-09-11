@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { ModelImportPreservation } from '../domain/sourceModelTypes';
+import { MODEL_RESOURCE_EXTENSIONS } from './sourceModelPackage';
 import {
   ImportedModelImportMode,
   ImportedModelSourceApplication,
@@ -29,6 +31,7 @@ export const MODEL_IMPORT_ACCEPT = [
   ...DIRECT_MODEL_EXTENSIONS.map((extension) => `.${extension}`),
   '.panoscene',
   '.panoscene.zip',
+  ...MODEL_RESOURCE_EXTENSIONS.map((extension) => `.${extension}`),
 ].join(',');
 
 export const MAX_SOURCE_MODEL_BYTES = IMPORT_BUDGET_POLICY.maxSourceFileBytes;
@@ -66,6 +69,8 @@ export type ModelImportJob =
     file: File;
     sourceApplication?: ImportedModelSourceApplication;
     sourceSceneName?: string;
+    /** Files selected alongside the primary model; retained together in one source asset. */
+    resources?: readonly File[];
   }
   | {
     kind: 'bundle';
@@ -81,6 +86,8 @@ export type ModelImportMode = ImportedModelImportMode;
 
 export interface ModelImportOptions {
   mode: ModelImportMode;
+  /** Preserve source by default. Legacy conversion is explicit and remains supported. */
+  preservation?: ModelImportPreservation;
   allowHeavy?: boolean;
   extremeConfirmation?: string;
   signal?: AbortSignal;
@@ -93,6 +100,8 @@ export interface ModelImportAnalysis extends ImportBudgetEstimate {
   sourceFilename: string;
   fileSize: number;
   instancesExpanded: boolean;
+  sourcePreserved?: boolean;
+  textureBytes?: number;
   topMeshes: Array<{ name: string; path: string; vertices: number; triangles: number }>;
   warnings: string[];
 }
@@ -118,6 +127,7 @@ export interface ModelImportSummary {
   totalTriangles: number;
   sourceNodeCount: number;
   combined: boolean;
+  sourcePreserved?: boolean;
 }
 
 export interface ModelImportBatchResult {
@@ -172,12 +182,14 @@ export function createModelImportPlan(files: readonly File[]): ModelImportPlan {
   const directFiles = files.filter((file) => directFormatForFile(file));
   const nativeFiles = files.filter((file) => nativeApplicationForFile(file));
   const bundleFiles = files.filter(isSceneBundleFile);
-  const recognized = new Set<File>([...directFiles, ...nativeFiles, ...bundleFiles]);
+  const resources = files.filter((file) => MODEL_RESOURCE_EXTENSIONS.includes(fileExtension(file.name)));
+  const recognized = new Set<File>([...directFiles, ...nativeFiles, ...bundleFiles, ...resources]);
   const jobs: ModelImportJob[] = [
     ...bundleFiles.map((file) => ({ kind: 'bundle', file } as ModelImportJob)),
-    ...directFiles.map((file) => ({ kind: 'file', file } as ModelImportJob)),
+    ...directFiles.map((file) => ({ kind: 'file', file, ...(resources.length ? { resources } : {}) } as ModelImportJob)),
   ];
   const issues: ModelImportPlanIssue[] = [];
+  if (resources.length && !directFiles.length) issues.push({ fileName: resources[0].name, tone: 'error', message: 'Select a model together with its companion files, or use a complete .panoscene bundle.' });
 
   for (const nativeFile of nativeFiles) {
     const ext = fileExtension(nativeFile.name);
@@ -240,6 +252,12 @@ export async function importModelJob(
   job: ModelImportJob,
   options: ModelImportOptions,
 ): Promise<ModelImportBatchResult> {
+  if (options.mode !== 'separate' && options.mode !== 'combined') throw new Error('Model import mode must be separate or combined.');
+  if (options.preservation !== undefined && options.preservation !== 'preserve' && options.preservation !== 'graybox') throw new Error('Model preservation must be preserve or graybox.');
+  if (options.preservation !== 'graybox') {
+    const { importPreservedSource } = await import('./sourceModelImport');
+    return importPreservedSource(job, options);
+  }
   if (job.kind === 'bundle') {
     const bundled = await readSceneBundle(job.file);
     return importDirectModel(

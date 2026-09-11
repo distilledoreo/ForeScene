@@ -1,3 +1,4 @@
+import type { SourceModelDescriptor } from './sourceModelTypes';
 export type Vec3 = [number, number, number];
 export type Euler = [number, number, number];
 export type Vec2 = [number, number];
@@ -56,9 +57,11 @@ export interface ImportedModelInfo {
   sourceNodeName?: string;
   /** Deterministic path like "Environment[0]/Furniture[3]/Chair[2]". */
   sourceNodePath?: string;
-  /** Imported triangles are preserved exactly; only hierarchy/material data is flattened. */
+  /** Imported triangles are preserved exactly; legacy graybox imports flatten hierarchy/material data. */
   geometrySimplified: false;
-  hierarchyFlattened: true;
+  hierarchyFlattened: boolean;
+  /** True when original source bytes, materials, and hierarchy are retained. */
+  sourcePreserved?: boolean;
   warnings?: string[];
 }
 
@@ -524,8 +527,8 @@ export interface ShotObjectOverride {
 
 export type ShotObjectOverrides = Record<string, ShotObjectOverride>;
 
-/** Visual surface for graybox objects. Checkerboard tiles are 1m × 1m in world space. */
-export type ObjectSurfaceStyle = 'default' | 'solid' | 'checkerboard';
+/** Source keeps authored materials; other modes are non-destructive display overrides. */
+export type ObjectSurfaceStyle = 'default' | 'solid' | 'checkerboard' | 'source';
 
 export interface SceneObject {
   id: string;
@@ -546,8 +549,12 @@ export interface SceneObject {
   color?: string;
   /** Secondary hex for checkerboard dark squares. */
   secondaryColor?: string;
-  /** Canonical texture-free mesh asset used by imported graybox geometry. */
+  /** Shared original-source asset, or a legacy packed graybox mesh asset. */
   modelAssetId?: string;
+  /** Stable child-index path into an immutable source asset; omitted selects the whole scene. */
+  sourceModelNodePath?: number[];
+  /** Source lights are retained but opt-in; ForeScene lighting remains the default. */
+  sourceModelLightsEnabled?: boolean;
   /** Optional stable parent node for preserving hierarchy across asset recovery. */
   parentId?: string;
   importedModel?: ImportedModelInfo;
@@ -975,6 +982,8 @@ export interface ProjectAsset {
    */
   metadata?: Record<string, unknown> & {
     poseableRig?: PoseableRigAsset;
+    modelEncoding?: 'source';
+    sourceModel?: SourceModelDescriptor;
   };
 }
 

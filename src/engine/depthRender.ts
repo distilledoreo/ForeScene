@@ -1,3 +1,4 @@
+import { ensureSourceModelsForProject } from './sourceModelRuntime';
 import * as THREE from 'three';
 import type { CameraData, LocationProject, Shot, ShotDepthSettings } from '../domain/types';
 import {
@@ -177,6 +178,7 @@ export async function renderViewportDepth(
   } = {},
 ): Promise<DepthRenderResult> {
   const depth = normalizeShotDepthSettings(options.depth ?? defaultShotDepthSettings);
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
 
   const renderer = createDepthRenderer(width, height);
@@ -297,6 +299,7 @@ export async function resolveShotDepthRangeForExport(
   shot: Shot,
 ): Promise<DepthRangeMeters> {
   const depth = resolveShotDepthSettings(shot);
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
   const shotProject = resolveProjectForShot(project, shot, { contentMode: 'full_scene' });
   const scene = buildScene(shotProject, createFinalRenderSceneOptions());

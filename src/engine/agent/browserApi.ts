@@ -1147,7 +1147,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
           ],
         };
       }
-      const plan = createModelImportPlan([input.file]);
+      const plan = createModelImportPlan([input.file, ...(input.resources ?? [])]);
       if (plan.jobs.length !== 1 || plan.issues.some((issue) => issue.tone === 'error')) {
         const diagnostics = plan.issues
           .filter((issue) => issue.tone === 'error')
@@ -1168,6 +1168,7 @@ export function createForeSceneBrowserApi(): ForeSceneBrowserApi {
       try {
         const batch = await importModelIntoProject(plan.jobs[0]!, {
           mode: input.mode ?? 'separate',
+          preservation: input.preservation ?? 'preserve',
           allowHeavy: input.consentToken === 'allow-heavy-model-imports' || input.consentToken === 'IMPORT',
           extremeConfirmation: input.extremeConfirmation,
         });

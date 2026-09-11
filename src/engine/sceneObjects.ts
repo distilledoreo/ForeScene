@@ -20,6 +20,7 @@ import {
   resolvePoseableCharacterForObject,
 } from './poseableCharacter';
 import { createImportedMeshNode, releaseImportedGeometry } from './importedMesh';
+import { createSourceModelNode, isSourceModelAsset, isSharedSourceGeometry, isSharedSourceMaterial, releaseSourceModelInstance, updateSourceModelScale } from './sourceModelRuntime';
 import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
@@ -214,7 +215,11 @@ varying vec3 vCheckerWorldPos;`,
       .replace(
         '#include <project_vertex>',
         `#include <project_vertex>
-vCheckerWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+vec4 checkerLocalPosition = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+checkerLocalPosition = instanceMatrix * checkerLocalPosition;
+#endif
+vCheckerWorldPos = (modelMatrix * checkerLocalPosition).xyz;`,
       );
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -259,7 +264,7 @@ diffuseColor.rgb *= tileColor;`,
 }
 
 export function resolveSurfaceStyle(object: SceneObject): ObjectSurfaceStyle {
-  if (object.surfaceStyle === 'solid' || object.surfaceStyle === 'checkerboard') {
+  if (object.surfaceStyle === 'solid' || object.surfaceStyle === 'checkerboard' || object.surfaceStyle === 'source') {
     return object.surfaceStyle;
   }
   return 'default';
@@ -747,11 +752,13 @@ export function createObject3D(
     case 'sun_marker':
       node = createSunMarker(object, theme, style === 'default' ? undefined : material);
       break;
-    case 'imported_model':
-      node = createImportedMeshNode(object, assets, material, {
-        centerNonSetMesh: options?.skipImportedMeshCentering !== true,
-      });
+    case 'imported_model': {
+      const sourceAsset = object.modelAssetId ? assets?.assets[object.modelAssetId] : undefined;
+      node = sourceAsset && isSourceModelAsset(sourceAsset)
+        ? createSourceModelNode(object, sourceAsset, style === 'source' ? undefined : material)
+        : createImportedMeshNode(object, assets, material, { centerNonSetMesh: options?.skipImportedMeshCentering !== true });
       break;
+    }
     default:
       node = new THREE.Mesh(
         getSharedPrimitiveGeometry(`box:${w}:${h}:${d}`, () => new THREE.BoxGeometry(w, h, d)),
@@ -818,6 +825,7 @@ export function applySceneObjectTransform(
   if (options.applyScale !== false) {
     node.scale.fromArray(transform.scale);
   }
+  updateSourceModelScale(node, { transform });
   if (options.visible !== undefined) {
     node.visible = options.visible;
   }
@@ -1061,8 +1069,9 @@ export function createPreviewMesh(object: SceneObject, theme: SceneVisualTheme =
 export function disposePreviewMesh(node: THREE.Object3D) {
   const disposedMaterials = new Set<THREE.Material>();
   node.traverse((child) => {
+    releaseSourceModelInstance(child);
     const mesh = child as THREE.Mesh;
-    if (mesh.geometry && !SHARED_GEOMETRIES.has(mesh.geometry)) mesh.geometry.dispose();
+    if (mesh.geometry && !SHARED_GEOMETRIES.has(mesh.geometry) && !isSharedSourceGeometry(mesh.geometry) && !releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
     disposeOwnedMaterials(mesh.material, disposedMaterials);
   });
 }
@@ -1070,11 +1079,13 @@ export function disposePreviewMesh(node: THREE.Object3D) {
 export function disposeScene(scene: THREE.Scene) {
   const disposedMaterials = new Set<THREE.Material>();
   scene.traverse((object) => {
+    releaseSourceModelInstance(object);
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh) return;
     if (
       mesh.geometry
       && !SHARED_GEOMETRIES.has(mesh.geometry)
+      && !isSharedSourceGeometry(mesh.geometry)
       // Autorig skinned prototypes share BufferGeometry across clones.
       && mesh.geometry.userData?.panorefSharedSkinnedGeometry !== true
       && !releaseImportedGeometry(mesh.geometry)
@@ -1094,7 +1105,7 @@ function disposeOwnedMaterials(
   if (!material) return;
   const materials = Array.isArray(material) ? material : [material];
   materials.forEach((item) => {
-    if (SHARED_MATERIALS.has(item) || disposed.has(item)) return;
+    if (SHARED_MATERIALS.has(item) || isSharedSourceMaterial(item) || disposed.has(item)) return;
     // SkeletonUtils-shared autorig prototype materials must survive scene rebuilds.
     if (isSharedSkinnedPrototypeMaterial(item)) return;
     disposed.add(item);

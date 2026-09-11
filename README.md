@@ -94,61 +94,51 @@ See [docs/SET_BLUEPRINT.md](docs/SET_BLUEPRINT.md) for schema, limits, coordinat
 
 ## 3D Model and Scene Import
 
-Open **Build > More > Import 3D model or scene**. Import is local-only and geometry-only: source materials, textures, cameras, lights, rigs, animation, and morphs are omitted. Exact triangles are retained; the importer does not automatically decimate or otherwise simplify geometry. World-space placement is preserved with hierarchy flattened.
+Open **Build > More > Import 3D model or scene**. **Preserve original source** is the default. ForeScene stores the original file unchanged and renders it through Three.js, retaining geometry, UVs, material assignments, textures, vertex colors, transforms, hierarchy, morph targets, skins, animation clips, cameras, lights, and supported instancing. It does not execute native scene scripts.
 
-To bring in a character you intend to pose, use **Import poseable character** instead — that path keeps the source mesh intact for rigging rather than flattening it into graybox geometry.
+- **Keep objects separate** exposes each renderable node as a selectable ForeScene object. All selections reference **one shared source asset**; meshes are not flattened or duplicated into separate binaries. Moves, visibility, and shot staging are ForeScene overrides, not destructive source edits.
+- **Import as one scene** keeps the complete source hierarchy under one editable root; it does not merge geometry.
+- **Convert to graybox** explicitly uses the previous geometry-only importer. Existing graybox `.fsp` files continue to open unchanged. Textures previously discarded by that importer cannot be recovered without reimporting the original source.
 
-Recommended exports:
+The selected object's **Surface** control switches between **Original materials and textures**, category clay, solid color, and checkerboard without modifying the source. Imported lights are opt-in for complete-scene objects; ForeScene's cameras remain active. Animation clips, cameras, unused scenes, and custom metadata remain in the original source even when ForeScene has no editing or playback controls for them. For semantic humanoid posing, continue to use **Import poseable character**.
 
-- Blender: File → Export → glTF 2.0 (.glb) – include the entire scene, apply transforms if you want final world space.
-- Maya: File → Export All → FBX – include all visible objects.
-- Unreal: File → Export All → export selected level/actors as GLB.
+### Formats and portability
 
-Direct import formats are:
+Self-contained **GLB** is preferred. glTF 2.0, FBX, OBJ/MTL, STL, PLY, and `.panoscene` ZIP bundles are also accepted. Select companion `.bin`, `.mtl`, and texture files together with a direct model. Multiple-resource imports are stored in a portable archive containing the untouched original files. Missing or ambiguous dependencies cause an explicit error rather than a silently untextured import. External URLs are not fetched automatically.
 
-- GLB and embedded glTF 2.0 (preferred)
-- FBX, OBJ, STL, PLY
-- .panoscene bundles (.panoscene, .panoscene.zip)
+The glTF path configures local Draco, Meshopt, and KTX2 decoders when required; no CDN is used. Unsupported **required** glTF extensions fail import. Unsupported optional extension data is retained in the original source with a warning. FBX materials use the Three.js FBX conversion, not native Maya/Arnold shader evaluation. Preserving a source is not a promise of identical lighting or support for every DCC material graph.
 
-Import modes:
+Export `.blend`, Maya, and Unreal projects as GLB/FBX in their authoring application first. OBJ, STL, and PLY have no reliable unit metadata; source units are treated as meters. Very large geometry or decoded textures remain subject to the import memory and project-size budgets; preservation does not imply unlimited GPU capacity.
 
-- **Keep objects separate (default)**: One Mesh = one object, one InstancedMesh = one object containing all instances, no per-instance objects. Hierarchy is not recreated – world transforms are baked. Each object gets position = center of its world bounds, rotation [0,0,0], scale [1,1,1]. Move one chair without moving others.
-- **Combine into one object**: All nodes world-transformed into one asset and one object.
-
-The import report shows one summary card per source file; the individual imported nodes remain available in Layers. Imported object names preserve source node names, including meaningful numeric suffixes such as `Wall_01`; only exact duplicates receive `(2)`, `(3)`, and so on. If a recognized mesh has malformed or non-triangle geometry, that source file is rejected with the mesh name instead of silently omitting the geometry.
-
-Preserved: world-space positions/rotations/scales baked, exact triangles, instance counts aggregated. Not preserved: editable parent-child hierarchy, pivot points, materials, textures, cameras, lights, animation, rigs, deformers, morphs.
-
-Native DCC files like `.blend`, `.ma`, `.mb`, `.uproject`, `.umap`, `.uasset` are not supported for direct import. If selected, ForeScene shows a useful error guiding you to export GLB/FBX. The importer never executes native scene logic.
-
-Loaders are fetched from the existing Three.js dependency only after a user chooses that format. Each imported object is converted once to a compact graybox mesh stored with the project. Large imports may increase project size – external references are not supported in this slice. OBJ, STL, and PLY have no reliable unit metadata; 1 source unit is treated as 1 meter. External `.gltf` `.bin` sidecars and compressed Draco/Meshopt glTF are not supported; export uncompressed GLB.
-
-Pipeline handoffs can instead provide a `.panoscene` ZIP with this shape:
+Folder-structured handoffs, including textures with duplicate basenames in different folders, should use a bundle:
 
 ```text
 scene.panoscene
   forescene-scene.json
-  geometry/scene.glb
+  geometry/scene.gltf
+  geometry/scene.bin
+  textures/wall.png
 ```
-
-Example `forescene-scene.json`:
 
 ```json
 {
   "schemaVersion": 1,
-  "entry": "geometry/scene.glb",
-  "geometryOnly": true,
-  "source": {
-    "application": "blender",
-    "file": "scene.blend",
-    "version": "4.x"
-  }
+  "entry": "geometry/scene.gltf",
+  "source": { "application": "blender", "file": "scene.blend" }
 }
 ```
 
-Bundles whose manifest is still named `panoref-scene.json` are accepted unchanged.
+Legacy `panoref-scene.json` manifests are accepted. The original bundle is stored unchanged. Referenced source assets and their resources are included once in portable `.fsp` packages and verified on reopening.
 
-Imports above the encoded mesh or source-file safety limits stop with a clear error and leave the source unchanged. Heavy imports report their triangle count; no hidden simplification is performed. See [docs/heavy-model-imports.md](docs/heavy-model-imports.md) for the classification thresholds and budget math.
+Agent CLI examples:
+
+```sh
+npm run agent:import-model -- --file scene.glb --mode separate --profile ./profile --write
+npm run agent:import-model -- --file scene.gltf --resource scene.bin --resource wall.png --mode combined --profile ./profile --write
+npm run agent:import-model -- --file scene.glb --preservation graybox --profile ./profile --write
+```
+
+See [docs/source-preserving-import.md](docs/source-preserving-import.md) for the persistence contract, limitations, and acceptance tests.
 
 ## Character Rigging and Posing
 
@@ -212,7 +202,7 @@ Top-level fields include:
 - Pano reference `rotation[1]` stores the calibrated yaw offset in degrees. A value of `0` means image center (`u=0.5`) faces world `+Z`; positive values rotate that image center toward world `+X`.
 - `landmarks`: named continuity anchors used in prompts and packages.
 - `shots`: camera truth, status, linked pano, selected landmarks, per-shot object overrides, prompt overrides, and export settings.
-- `assets`: imported/rendered images, poseable-rig payloads, and texture-free model meshes. Model geometry is referenced by a stable local key (with older URI/storage schemes and base64 data URLs still accepted), and every referenced model is included in `.fsp` backups; unresolved binaries open as placeholders.
+- `assets`: imported/rendered images, poseable-rig payloads, and original-source or legacy graybox model assets. Model geometry is referenced by a stable local key (with older URI/storage schemes and base64 data URLs still accepted), and every referenced model is included in `.fsp` backups; unresolved binaries open as placeholders.
 - `settings`: project-wide settings including `settings.projectedStyle`.
 - `workflow`: persisted production-path checkpoints for reference approval, landed framing, and package export.
 

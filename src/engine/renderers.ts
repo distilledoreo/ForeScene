@@ -1,3 +1,4 @@
+import { ensureSourceModelsForProject } from './sourceModelRuntime';
 import * as THREE from 'three';
 import { CameraData, Euler, LocationProject, PanoCropSettings, Shot, Vec3 } from '../domain/types';
 import {
@@ -412,6 +413,7 @@ export async function renderGrayboxEquirectangularPano(
   height = DEFAULT_GRAYBOX_PANO_HEIGHT,
   theme: SceneVisualTheme = 'light',
 ): Promise<BlobImageRenderResult> {
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   const scene = buildScene(project, {
@@ -638,6 +640,8 @@ async function renderShotCameraMoveMp4Deterministic(
     throw new Error('MP4 export was cancelled.');
   }
 
+  await ensureSourceModelsForProject(project);
+
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height, { alpha: transparent });
   let projectedResources: ProjectedSceneResources | undefined;
@@ -863,6 +867,8 @@ async function renderShotCameraMoveMp4QuickPreview(
     progress: 0,
     message: 'Preparing scene',
   });
+
+  await ensureSourceModelsForProject(project);
 
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
@@ -1268,6 +1274,7 @@ export async function renderViewportClayOnRenderer(
     includePixelStats?: boolean;
   } = {},
 ): Promise<ImageRenderResult> {
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
   let scene: THREE.Scene | undefined;
   try {
@@ -1346,6 +1353,8 @@ export async function loadProjectedSceneResources(
   };
   const pano = assets.primary;
   const imageUrl = assets.primaryUrl;
+
+  await ensureSourceModelsForProject(project);
 
   await ensureHumanMannequinForProject(project);
   const texture = await acquireProjectedStyleTexture(imageUrl);
@@ -1457,6 +1466,7 @@ export async function renderProjectedEquirectangularPano(
   height = DEFAULT_GRAYBOX_PANO_HEIGHT,
   theme: SceneVisualTheme = 'light',
 ): Promise<ImageRenderResult> {
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   let resources: ProjectedSceneResources | undefined;
@@ -1523,6 +1533,7 @@ async function renderViewportProjectedInternal(
   includeHealth: boolean,
   output: RasterRenderOutput = 'data-url',
 ): Promise<ImageRenderResult & { projectionHealth?: ProjectionHealthMetrics }> {
+  await ensureSourceModelsForProject(project);
   await ensureHumanMannequinForProject(project);
   const renderer = createRenderer(width, height);
   let resources: ProjectedSceneResources | undefined;
@@ -1666,6 +1677,8 @@ export async function renderShotCharacterFrame(
     contentMode: 'characters_only',
     includeCharacterAttachments,
   });
+
+  await ensureSourceModelsForProject(shotProject);
 
   await ensureHumanMannequinForProject(shotProject);
   const width = shot.exportSettings.width;
@@ -1922,6 +1935,8 @@ export async function renderCameraMoveFrames(options: {
   if (signal?.aborted) {
     throw new Error('Camera move export was cancelled.');
   }
+
+  await ensureSourceModelsForProject(shotProject);
 
   await ensureHumanMannequinForProject(shotProject);
   const renderer = createRenderer(width, height, { alpha: options.transparent === true });

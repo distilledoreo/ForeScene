@@ -373,6 +373,9 @@ async function runModelImport(options: {
   writeAccess: boolean;
   persistWrite: boolean;
   file: string;
+  resources?: string[];
+  preservation?: 'preserve' | 'graybox';
+  mode?: string;
   consentToken?: string;
   allowHeavyModelImports: boolean;
   output?: string;
@@ -380,20 +383,26 @@ async function runModelImport(options: {
 }) {
   requireExplicitWrite('agent:import-model', options.writeAccess);
   const target = path.resolve(options.file);
+  const mode = options.mode ?? 'separate';
+  if (mode !== 'separate' && mode !== 'combined') throw new Error('import-model --mode must be separate or combined');
   const output = await resolveOptionalArtifactOutput(options.output);
   await withSession(options, async (session) => {
-    await session.page.locator('[data-agent-model-import-input]').setInputFiles(target);
+    await session.page.locator('[data-agent-model-import-input]').setInputFiles([target, ...(options.resources ?? []).map((resource) => path.resolve(resource))]);
     const result = await session.page.evaluate(async (input) => {
       const fileInput = document.querySelector('[data-agent-model-import-input]') as HTMLInputElement | null;
       const file = fileInput?.files?.[0];
       if (!file) throw new Error('Model file was not staged in the browser.');
       return window.foreScene!.importModel({
         file,
-        mode: 'separate',
+        mode: input.mode,
+        preservation: input.preservation,
+        resources: Array.from(fileInput!.files!).slice(1),
         consentToken: input.consentToken,
         extremeConfirmation: input.extremeConfirmation,
       });
     }, {
+      mode: mode as 'separate' | 'combined',
+      preservation: options.preservation ?? 'preserve',
       consentToken: options.consentToken ?? (options.allowHeavyModelImports ? 'allow-heavy-model-imports' : undefined),
       extremeConfirmation: options.consentToken === 'IMPORT' ? 'IMPORT' : undefined,
     });
@@ -1639,6 +1648,9 @@ async function main() {
       writeAccess: args.writeAccess,
       persistWrite: args.persistWrite,
       file: args.file,
+      resources: args.resources,
+      preservation: args.preservation,
+      mode: args.mode,
       consentToken: args.consentToken,
       allowHeavyModelImports: args.allowHeavyModelImports,
       output: args.output,

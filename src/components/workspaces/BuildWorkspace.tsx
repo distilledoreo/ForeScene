@@ -1948,9 +1948,9 @@ function PrecisionControls({
   const secondaryColor = object.secondaryColor ?? defaultSecondaryColor(primaryColor);
 
   const setSurfaceStyle = (next: ObjectSurfaceStyle) => {
-    if (next === 'default') {
+    if (next === 'default' || next === 'source') {
       onChange({
-        surfaceStyle: 'default',
+        surfaceStyle: next,
         color: undefined,
         secondaryColor: undefined,
       }, 'step');
@@ -1973,7 +1973,7 @@ function PrecisionControls({
       <Field label="Type">
         {object.type === 'imported_model' ? (
           <div className="rounded-lg border border-subtle bg-surface-muted px-3 py-2 text-sm text-secondary">
-            Imported graybox mesh
+            {object.importedModel?.sourcePreserved ? 'Preserved source model' : 'Imported graybox mesh'}
           </div>
         ) : (
           <Select value={object.type} onChange={(event) => onChange({ type: event.target.value as SceneObjectType }, 'step')}>
@@ -1994,7 +1994,7 @@ function PrecisionControls({
           {object.importedModel.sourceNodePath && (
             <div className="truncate">Path: {object.importedModel.sourceNodePath}</div>
           )}
-          <div>Mode: {object.importedModel.importMode} · world-transform baked · hierarchy flattened · texture-free</div>
+          <div>Mode: {object.importedModel.importMode} · {object.importedModel.sourcePreserved ? 'immutable source · authored hierarchy and materials retained' : 'world-transform baked · hierarchy flattened · texture-free'}</div>
           {object.importedModel.warnings && object.importedModel.warnings.length > 0 && (
             <div className="mt-1 text-amber-600">{object.importedModel.warnings[0]}</div>
           )}
@@ -2017,12 +2017,19 @@ function PrecisionControls({
           onChange={(event) => setSurfaceStyle(event.target.value as ObjectSurfaceStyle)}
           data-object-surface-style
         >
+          {object.importedModel?.sourcePreserved && <option value="source">Original materials and textures</option>}
           <option value="default">Default clay</option>
           <option value="solid">Solid color</option>
           <option value="checkerboard">1m × 1m checkerboard</option>
         </Select>
       </Field>
-      {surfaceStyle !== 'default' && (
+      {object.importedModel?.sourcePreserved && object.sourceModelNodePath === undefined && (
+        <label className="flex items-center gap-2 text-xs text-secondary">
+          <input type="checkbox" checked={object.sourceModelLightsEnabled === true} onChange={(event) => onChange({ sourceModelLightsEnabled: event.target.checked }, 'step')} data-source-lights />
+          Enable lights authored in the source scene
+        </label>
+      )}
+      {surfaceStyle !== 'default' && surfaceStyle !== 'source' && (
         <Field label={surfaceStyle === 'checkerboard' ? 'Light tile' : 'Color'}>
           <div className="flex items-center gap-2">
             <input

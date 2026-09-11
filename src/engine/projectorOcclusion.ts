@@ -8,8 +8,7 @@ import {
 import {
   computeGrayboxPanoFarPlane,
 } from './sceneBounds';
-import { createObject3D } from './sceneObjects';
-import { releaseImportedGeometry } from './importedMesh';
+import { createObject3D, disposeScene } from './sceneObjects';
 
 const DEFAULT_OCCLUSION_FACE_SIZE = 512;
 const DEFAULT_OCCLUSION_NEAR = 0.05;
@@ -96,8 +95,19 @@ function createRadialDepthMaterial(
     },
     vertexShader: /* glsl */`
       varying vec3 vOcclusionWorldPosition;
+      #include <common>
+      #include <morphtarget_pars_vertex>
+      #include <skinning_pars_vertex>
       void main() {
-        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        #include <skinbase_vertex>
+        #include <begin_vertex>
+        #include <morphtarget_vertex>
+        #include <skinning_vertex>
+        vec4 localPosition = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+        localPosition = instanceMatrix * localPosition;
+        #endif
+        vec4 worldPosition = modelMatrix * localPosition;
         vOcclusionWorldPosition = worldPosition.xyz;
         gl_Position = projectionMatrix * viewMatrix * worldPosition;
       }
@@ -138,11 +148,7 @@ export function computeProjectorFarPlane(
 }
 
 function disposeOccluderScene(scene: THREE.Scene): void {
-  scene.traverse((child) => {
-    const mesh = child as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry) return;
-    if (!releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
-  });
+  disposeScene(scene);
 }
 
 export function generateProjectorOcclusionMap(
