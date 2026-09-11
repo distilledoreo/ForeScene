@@ -116,21 +116,38 @@ export async function ensureSourceModelsForProject(
   options: { tolerateErrors?: boolean } = {},
 ): Promise<void> {
   const ids = new Set(project.scene.objects.filter((object) => object.type === 'imported_model').map((object) => object.modelAssetId));
-  for (const id of ids) {
-    const asset = id ? project.assets.assets[id] : undefined;
-    if (!asset || !isSourceModelAsset(asset) || asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
-    try {
-      await ensureSourceModel(asset);
-      const entry = entries.get(cacheKey(asset));
-      if (!entry) throw new Error(`Source model ${asset.name} did not become ready.`);
-      for (const object of project.scene.objects.filter((candidate) => candidate.modelAssetId === asset.id)) {
-        if (object.sourceModelNodePath === undefined) continue;
-        const path = object.sourceModelNodePath;
-        if (!entry.model.nodes.some((node) => node.path.length === path.length && node.path.every((part, i) => part === path[i]))) {
-          throw new Error(`Source node for ${object.name} is not present in ${asset.name}. Locate the matching original or reimport it.`);
+  // Pin every ready template until the whole barrier finishes. A later large
+  // asset may take longer than the idle TTL; early assets must still exist when
+  // the caller builds its scene. Concurrent barriers hold independent leases.
+  const held = new Set<CacheEntry>();
+  try {
+    for (const id of ids) {
+      const asset = id ? project.assets.assets[id] : undefined;
+      if (!asset || !isSourceModelAsset(asset) || asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+      try {
+        await ensureSourceModel(asset);
+        const entry = entries.get(cacheKey(asset));
+        if (!entry) throw new Error(`Source model ${asset.name} did not become ready.`);
+        if (!held.has(entry)) {
+          if (entry.timer) clearTimeout(entry.timer);
+          entry.references += 1;
+          held.add(entry);
         }
-      }
-    } catch (error) { if (!options.tolerateErrors) throw error; }
+        for (const object of project.scene.objects.filter((candidate) => candidate.modelAssetId === asset.id)) {
+          if (object.sourceModelNodePath === undefined) continue;
+          const path = object.sourceModelNodePath;
+          if (!entry.model.nodes.some((node) => node.path.length === path.length && node.path.every((part, i) => part === path[i]))) {
+            throw new Error(`Source node for ${object.name} is not present in ${asset.name}. Locate the matching original or reimport it.`);
+          }
+        }
+      } catch (error) { if (!options.tolerateErrors) throw error; }
+    }
+  } finally {
+    for (const entry of held) {
+      entry.references -= 1;
+      // Give the caller a fresh grace period to acquire its actual scene lease.
+      scheduleEviction(entry, false);
+    }
   }
 }
 

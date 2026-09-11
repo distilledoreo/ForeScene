@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as sourceModelLoader from '../src/engine/sourceModelLoader';
 import JSZip from 'jszip';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sourceFixture, sourceFixtureGlb } from './fixtures/source-model-fixture';
@@ -140,6 +141,31 @@ describe('source-preserving model imports', () => {
     expect(await getModelAsset(asset.storageKey!)).toEqual(bytes);
     const scene = buildScene(reopened); scenes.push(scene);
     expect(scene.getObjectsByProperty('isMesh', true).some((mesh: THREE.Object3D) => (mesh as THREE.Mesh).geometry.getAttribute('uv')?.count === 4)).toBe(true);
+  });
+  it('pins early templates while a later source loads past the idle timeout', async () => {
+    const later = await importFixture();
+    resetSourceModelRuntimeForTests(); // Keep bytes, discard the later template.
+    vi.useFakeTimers();
+    let load: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const early = await importFixture();
+      const originalLoad = sourceModelLoader.loadSourceModel;
+      load = vi.spyOn(sourceModelLoader, 'loadSourceModel').mockImplementationOnce(async (...args) => {
+        vi.advanceTimersByTime(31_000);
+        return originalLoad(...args);
+      });
+      const project = projectFor(early);
+      project.scene.objects.push(...later.items.map((item) => item.object));
+      later.items.forEach((item) => { project.assets.assets[item.asset.id] = item.asset; });
+      await ensureSourceModelsForProject(project);
+      expect(load).toHaveBeenCalledTimes(1);
+      const first = renderObject(early);
+      expect(first.root.userData.missingAssetPlaceholder).not.toBe(true);
+      expect(first.meshes[0].geometry.getAttribute('uv')?.count).toBe(4);
+    } finally {
+      load?.mockRestore();
+      vi.useRealTimers();
+    }
   });
   it('collects companion buffers into a portable package without rewriting the source', async () => {
     const fixture = sourceFixture({ external: true });

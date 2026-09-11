@@ -100,6 +100,7 @@ function createRadialDepthMaterial(
       #include <skinning_pars_vertex>
       void main() {
         #include <skinbase_vertex>
+        #include <morphinstance_vertex>
         #include <begin_vertex>
         #include <morphtarget_vertex>
         #include <skinning_vertex>
