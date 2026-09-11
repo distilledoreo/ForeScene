@@ -2046,6 +2046,8 @@ export interface AgentSavedRigCharacterImportInput extends AgentSavedRigCharacte
 /** Generic geometry import, shared with the manual Import 3D scene dialog. */
 export interface AgentModelImportInput {
   file: File;
+  resources?: File[];
+  preservation?: 'preserve' | 'graybox';
   mode?: ModelImportMode;
   /** Required for heavy imports; the CLI supplies this only with explicit consent. */
   consentToken?: string;

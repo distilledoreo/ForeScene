@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { LocationProject, Vec3 } from '../../domain/types';
 import { releaseImportedGeometry } from '../importedMesh';
 import { createObject3D } from '../sceneObjects';
+import { ensureSourceModelsForProject, releaseSourceModelInstance, isSharedSourceGeometry } from '../sourceModelRuntime';
 import {
   readWorldTriangle,
   triangleAreaNormal,
@@ -143,10 +144,11 @@ function toVec3(vector: THREE.Vector3): Vec3 {
 function disposeExtractedNode(root: THREE.Object3D): void {
   const released = new Set<THREE.BufferGeometry>();
   root.traverse((child) => {
+    releaseSourceModelInstance(child);
     const mesh = child as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry || released.has(mesh.geometry)) return;
     released.add(mesh.geometry);
-    if (!releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
+    if (!isSharedSourceGeometry(mesh.geometry) && !releaseImportedGeometry(mesh.geometry)) mesh.geometry.dispose();
   });
 }
 
@@ -225,6 +227,7 @@ async function forEachProjectMesh(
   progressStart = 0,
   progressSpan = 1,
 ): Promise<void> {
+  await ensureSourceModelsForProject(project);
   const objects = project.scene.objects.filter(
     (object) => object.visible && object.type !== 'sun_marker' && object.category !== 'helper',
   );
@@ -237,8 +240,39 @@ async function forEachProjectMesh(
       const mesh = child as THREE.Mesh;
       if (mesh.isMesh && mesh.geometry.getAttribute('position')) meshes.push(mesh);
     });
-    for (const mesh of meshes) await visit(mesh, object.type === 'floor');
-    disposeExtractedNode(root);
+    try {
+      for (const mesh of meshes) {
+        // Analysis gets a derived snapshot, never mutates the retained source.
+        const deforming = (mesh as THREE.SkinnedMesh).isSkinnedMesh || Boolean(mesh.morphTargetInfluences?.length);
+        let geometry = mesh.geometry;
+        if (deforming) {
+          geometry = new THREE.BufferGeometry();
+          const count = mesh.geometry.getAttribute('position').count;
+          const positions = new Float32Array(count * 3);
+          const point = new THREE.Vector3();
+          for (let i = 0; i < count; i += 1) {
+            mesh.getVertexPosition(i, point).toArray(positions, i * 3);
+            if (i && i % 65536 === 0) await yieldToMainThread();
+          }
+          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+          geometry.setIndex(mesh.geometry.index);
+        }
+        try {
+          const instanced = mesh as THREE.InstancedMesh;
+          const count = instanced.isInstancedMesh ? instanced.count : 1;
+          const matrix = new THREE.Matrix4();
+          for (let i = 0; i < count; i += 1) {
+            const snapshot = new THREE.Mesh(geometry, mesh.material);
+            snapshot.matrixWorld.copy(mesh.matrixWorld);
+            if (instanced.isInstancedMesh) {
+              instanced.getMatrixAt(i, matrix);
+              snapshot.matrixWorld.multiply(matrix);
+            }
+            await visit(snapshot, object.type === 'floor');
+          }
+        } finally { if (deforming) geometry.dispose(); }
+      }
+    } finally { disposeExtractedNode(root); }
     onProgress?.(
       progressStart + progressSpan * ((objectIndex + 1) / Math.max(1, objects.length)),
       'Preparing indexed scene geometry…',

@@ -8,6 +8,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { SceneObject } from '../../domain/types';
+import type { ModelImportPreservation } from '../../domain/sourceModelTypes';
 import {
   MODEL_IMPORT_ACCEPT,
   ModelImportMode,
@@ -41,6 +42,7 @@ export function ModelImportDialog({
   const [progress, setProgress] = useState<string>();
   const [report, setReport] = useState<ImportReportItem[]>([]);
   const [mode, setMode] = useState<ModelImportMode>('separate');
+  const [preservation, setPreservation] = useState<ModelImportPreservation>('preserve');
   const [allowHeavy, setAllowHeavy] = useState(false);
   const [pending, setPending] = useState<{ job: ModelImportJob; analysis: ModelImportAnalysis }>();
   const [extremeText, setExtremeText] = useState('');
@@ -66,11 +68,12 @@ export function ModelImportDialog({
 
     for (let index = 0; index < plan.jobs.length; index += 1) {
       const job = plan.jobs[index];
-      setProgress(`Converting ${job.file.name} (${index + 1} of ${plan.jobs.length})…`);
+      setProgress(`Importing ${job.file.name} (${index + 1} of ${plan.jobs.length})…`);
       try {
         // Sequential conversion keeps peak memory predictable on low-power devices.
         const batch = await importModelIntoProject(job, {
           mode,
+          preservation,
           allowHeavy: false,
           signal: abortRef.current.signal,
           onProgress: (value) => setProgress(value.message),
@@ -90,7 +93,7 @@ export function ModelImportDialog({
             id: `${batch.summary.sourceName}-summary`,
             tone: 'success',
             title: batch.summary.sourceName,
-            message: `Imported ${batch.summary.totalObjects} selectable object${batch.summary.totalObjects === 1 ? '' : 's'} · ${batch.summary.totalTriangles.toLocaleString()} triangles · layout preserved, hierarchy flattened`,
+            message: `Imported ${batch.summary.totalObjects} selectable object${batch.summary.totalObjects === 1 ? '' : 's'} · ${batch.summary.totalTriangles.toLocaleString()} triangles · ${batch.summary.sourcePreserved ? 'original source retained' : 'layout preserved, hierarchy flattened'}`,
           });
         }
 
@@ -129,7 +132,7 @@ export function ModelImportDialog({
     abortRef.current = controller;
     setBusy(true);
     try {
-      const batch = await importModelIntoProject(pending.job, { mode, allowHeavy: true, extremeConfirmation: extremeText, signal: controller.signal, onProgress: (value) => setProgress(value.message) });
+      const batch = await importModelIntoProject(pending.job, { mode, preservation, allowHeavy: true, extremeConfirmation: extremeText, signal: controller.signal, onProgress: (value) => setProgress(value.message) });
       onImported?.(batch.items.map((item) => item.object));
       setReport((items) => [...items, { id: `success-${pending.job.file.name}`, tone: 'success', title: pending.job.file.name, message: `Imported ${batch.summary.totalObjects} object${batch.summary.totalObjects === 1 ? '' : 's'} using binary-backed geometry.` }]);
       setPending(undefined);
@@ -196,14 +199,20 @@ export function ModelImportDialog({
                 <li><span className="font-medium text-primary">Unreal:</span> File → Export All – export selected level or actors as GLB.</li>
               </ul>
               <p className="text-xs leading-relaxed text-secondary">
-                Direct import formats: GLB, embedded glTF, FBX, OBJ, STL, PLY, .panoscene bundles. Materials, textures, cameras, lights, animation, rigs, and morphs are stripped. ForeScene keeps world-space placement, with hierarchy flattened.
+                Direct import formats: GLB, glTF, FBX, OBJ, STL, PLY, and .panoscene bundles. Preserve source keeps original bytes, textures, materials, hierarchy, rigs, morphs, and animation data. Select external BIN/MTL/textures alongside their model. GLB is recommended for a portable single-file handoff.
               </p>
             </div>
           </div>
         </div>
 
         <div className="rounded-xl border border-subtle p-3">
-          <p className="text-sm font-semibold text-primary">How to import</p>
+          <p className="text-sm font-semibold text-primary">Source preservation</p>
+          <div className="mt-2 flex flex-col gap-2 text-sm text-secondary">
+            <label className="flex items-center gap-2"><input type="radio" name="importPreservation" value="preserve" checked={preservation === 'preserve'} onChange={() => setPreservation('preserve')} disabled={busy} data-import-preservation="preserve" />Preserve original source (default)</label>
+            <label className="flex items-center gap-2"><input type="radio" name="importPreservation" value="graybox" checked={preservation === 'graybox'} onChange={() => setPreservation('graybox')} disabled={busy} data-import-preservation="graybox" />Convert to legacy texture-free graybox</label>
+          </div>
+          <p className="mt-3 text-xs text-secondary">{preservation === 'preserve' ? 'Original files are stored once. Appearance overrides and object edits do not alter the source. Unsupported required features or missing resources produce an error, not silent stripping.' : 'This explicitly discards textures, hierarchy, rigs, and animation from the imported copy. Existing graybox projects remain compatible.'}</p>
+          <p className="mt-4 text-sm font-semibold text-primary">How to import</p>
           <div className="mt-3 flex flex-col gap-2">
             <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${mode === 'separate' ? 'border-accent bg-accent-soft' : 'border-subtle hover:border-accent/50'}`}>
               <input
@@ -218,7 +227,7 @@ export function ModelImportDialog({
               />
               <div>
                 <p className="text-sm font-medium text-primary">Keep objects separate (default)</p>
-                <p className="mt-1 text-xs leading-relaxed text-secondary">One Mesh = one object. One InstancedMesh = one object containing all instances. No per-instance objects. Hierarchy not recreated – world transforms baked. Each object: position = center of world bounds, rotation [0,0,0], scale [1,1,1]. Selecting one chair selects that entire chair.</p>
+                <p className="mt-1 text-xs leading-relaxed text-secondary">{preservation === 'preserve' ? 'Each renderable node is independently selectable and refers to the same immutable source asset. Ancestor transforms, skin dependencies, materials, and instancing are retained. ForeScene edits use a separate center-pivot transform.' : 'One mesh becomes one graybox object. World transforms are baked; hierarchy and materials are flattened.'}</p>
               </div>
             </label>
             <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${mode === 'combined' ? 'border-accent bg-accent-soft' : 'border-subtle hover:border-accent/50'}`}>
@@ -234,7 +243,7 @@ export function ModelImportDialog({
               />
               <div>
                 <p className="text-sm font-medium text-primary">Combine into one object</p>
-                <p className="mt-1 text-xs leading-relaxed text-secondary">All nodes are world-transformed into one asset and one object. Good for very heavy scenes or when you need a single collision/flow blocker.</p>
+                <p className="mt-1 text-xs leading-relaxed text-secondary">{preservation === 'preserve' ? 'Keep the complete authored scene tree as one selectable object, without merging geometry. All original nodes, materials, skeletons, and instances remain intact.' : 'World-transform and combine all nodes into one texture-free mesh.'}</p>
               </div>
             </label>
           </div>
@@ -251,7 +260,7 @@ export function ModelImportDialog({
           <FileArchive className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
           <p>
             Pipeline handoffs can use a <code className="text-primary">.panoscene</code> ZIP containing
-            <code className="ml-1 text-primary">panoref-scene.json</code> and one geometry entry. Materials are still stripped.
+            <code className="ml-1 text-primary">panoref-scene.json</code> and an entry model plus its companion resources. Preserve source retains the original archive unchanged.
           </p>
         </div>
 
@@ -288,7 +297,7 @@ export function ModelImportDialog({
 function ImportAnalysis({ analysis, extremeText, setExtremeText }: { analysis: ModelImportAnalysis; extremeText: string; setExtremeText: (value: string) => void }) {
   return <div className="space-y-3 rounded-xl border border-amber-500/50 p-4" data-model-import-analysis>
     <div><p className="font-semibold text-primary">{analysis.tier === 'extreme' ? 'Extreme scene confirmation' : 'Heavy scene confirmation'}</p><p className="mt-1 text-sm text-secondary">{analysis.sourceFilename} · {(analysis.fileSize / 1048576).toFixed(1)} MB source · {analysis.meshNodeCount.toLocaleString()} mesh nodes · {analysis.instanceCount.toLocaleString()} instances</p></div>
-    <div className="grid grid-cols-2 gap-2 text-sm text-secondary"><span>Loaded vertices: {analysis.loadedVertexCount.toLocaleString()}</span><span>Triangles: {analysis.triangleCount.toLocaleString()}</span><span>Peak JS heap: {formatBytes(analysis.estimatedPeakHeapBytes)}</span><span>GPU geometry: {formatBytes(analysis.gpuBytes)}</span><span>Packed asset: {formatBytes(analysis.packedBytes)}</span><span>Project storage: {formatBytes(analysis.projectStorageBytes)}</span></div>
+    <div className="grid grid-cols-2 gap-2 text-sm text-secondary"><span>Loaded vertices: {analysis.loadedVertexCount.toLocaleString()}</span><span>Triangles: {analysis.triangleCount.toLocaleString()}</span><span>Peak JS heap: {formatBytes(analysis.estimatedPeakHeapBytes)}</span><span>GPU assets: {formatBytes(analysis.gpuBytes)}</span><span>{analysis.sourcePreserved ? 'Stored source' : 'Packed asset'}: {formatBytes(analysis.packedBytes)}</span><span>Project storage: {formatBytes(analysis.projectStorageBytes)}</span></div>
     {analysis.warnings.map((warning) => <p key={warning} className="text-xs text-amber-600">{warning}</p>)}
     <div><p className="text-xs font-semibold text-primary">Largest mesh nodes</p><ol className="mt-1 list-decimal pl-5 text-xs text-secondary">{analysis.topMeshes.map((mesh) => <li key={mesh.path}>{mesh.name}: {mesh.vertices.toLocaleString()} vertices, {mesh.triangles.toLocaleString()} triangles</li>)}</ol></div>
     {analysis.tier === 'extreme' && <label className="block text-sm text-primary">Type <strong>IMPORT</strong> to continue<input value={extremeText} onChange={(event) => setExtremeText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }} className="mt-1 block w-full rounded-lg border border-subtle bg-surface-muted px-3 py-2" data-extreme-import-confirmation /></label>}

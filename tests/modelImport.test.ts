@@ -8,7 +8,9 @@ import {
   MODEL_IMPORT_ACCEPT,
   MAX_SEPARATE_IMPORT_OBJECTS,
   createModelImportPlan,
-  importModelJob,
+  importModelJob as importOriginalModelJob,
+  type ModelImportJob,
+  type ModelImportOptions,
 } from '../src/engine/modelImport';
 import {
   encodePackedGrayboxMesh,
@@ -16,6 +18,10 @@ import {
 } from '../src/engine/importedMesh';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
 import { useProjectStore } from '../src/state/useProjectStore';
+
+// These regressions exercise the explicit, backwards-compatible graybox mode.
+const importModelJob = (job: ModelImportJob, options: ModelImportOptions) =>
+  importOriginalModelJob(job, { ...options, preservation: 'graybox' });
 
 beforeAll(() => {
   if (typeof ProgressEvent !== 'undefined') return;

@@ -227,7 +227,10 @@ function normalizeEuler(value: unknown, fallback: Euler): Euler {
 
 function normalizeSceneObject(object: SceneObject & { projectionStamp?: unknown }): SceneObject {
   const { projectionStamp: _ignored, ...normalized } = object;
-  const surfaceStyle = normalized.surfaceStyle === 'solid' || normalized.surfaceStyle === 'checkerboard'
+  if (normalized.sourceModelNodePath !== undefined && (!Array.isArray(normalized.sourceModelNodePath) || normalized.sourceModelNodePath.length > 256 || !normalized.sourceModelNodePath.every((index) => Number.isSafeInteger(index) && index >= 0))) {
+    throw new Error('Invalid preserved-source node path.');
+  }
+  const surfaceStyle = normalized.surfaceStyle === 'solid' || normalized.surfaceStyle === 'checkerboard' || normalized.surfaceStyle === 'source'
     ? normalized.surfaceStyle
     : normalized.surfaceStyle === 'default'
       ? 'default'
