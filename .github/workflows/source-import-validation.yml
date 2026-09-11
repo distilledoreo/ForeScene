@@ -1,0 +1,37 @@
+name: Source import validation
+
+on:
+  push:
+    branches: [feature/source-preserving-import]
+    paths:
+      - '.github/workflows/source-import-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Package reproducible validation workspace
+        shell: bash
+        run: |
+          git ls-files -z -- . ':!output/**' ':!test-results/**' ':!playwright-report/**' ':!benchmark-results/**' | tar --null -T - -czf /tmp/forescene-source.tar.gz
+          tar -czf /tmp/forescene-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-import-workspace
+          path: |
+            /tmp/forescene-source.tar.gz
+            /tmp/forescene-dependencies.tar.gz
+          retention-days: 1
+          compression-level: 0
