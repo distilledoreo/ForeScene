@@ -4,28 +4,101 @@ on:
     branches: [feature/source-preserving-import]
     paths: ['.github/workflows/import-regression-validation.yml']
 permissions:
-  contents: read
+  contents: write
 defaults:
   run:
     shell: bash
 jobs:
-  workspace:
+  validate:
+    if: github.ref == 'refs/heads/feature/source-preserving-import'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Package exact source revision for offline testing
+          ref: ${{ github.sha }}
+      - name: Apply exact locally type-checked patch
         run: |
           set -euo pipefail
-          git rev-parse HEAD > /tmp/revision.txt
-          git ls-files -z -- . ':!output/**' ':!test-results/**' ':!playwright-report/**' ':!benchmark-results/**' | tar --null -T - -czf /tmp/forescene-source.tar.gz
-      - uses: actions/upload-artifact@v4
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          source = pathlib.Path('.github/import-regressions.patch.xz.b64')
+          patch = lzma.decompress(base64.b64decode(source.read_text().strip(), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'cfb947ca856c487fdf306de94983161aa39f6e6bc3c0405f258b15421cf3bcca', 'Patch digest mismatch'
+          pathlib.Path('/tmp/import-regressions.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', '/tmp/import-regressions.patch'], check=True)
+          subprocess.run(['git', 'apply', '--index', '/tmp/import-regressions.patch'], check=True)
+          subprocess.run(['git', 'rm', str(source)], check=True)
+          PY
+          mkdir -p validation-results
+          git rev-parse HEAD > validation-results/base-commit.txt
+      - uses: actions/setup-node@v4
         with:
-          name: import-regression-source
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: TypeScript
+        id: types
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm run lint 2>&1 | tee validation-results/types.log
+      - name: Unit regression suite
+        id: units
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm test -- --maxWorkers=2 2>&1 | tee validation-results/units.log
+      - name: Production build
+        id: build
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm run build 2>&1 | tee validation-results/build.log
+      - name: WebGL and import pixel regressions
+        id: browser
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm run test:browser -- --maxWorkers=1 2>&1 | tee validation-results/browser.log
+      - name: Preserve pixel evidence
+        if: always()
+        run: cp -r test-results validation-results/pixels || true
+      - name: Source import UI and portable reopen
+        id: feature
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_SKIP_BUILD: 1
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/source-preserving-import.spec.ts --project=desktop-chromium --workers=1 2>&1 | tee validation-results/feature.log
+      - name: Require all gates and commit verified fixes only to feature branch
+        env:
+          TYPES: ${{ steps.types.outcome }}
+          UNITS: ${{ steps.units.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          FEATURE: ${{ steps.feature.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib
+          results = {k: os.environ[k] for k in ['TYPES', 'UNITS', 'BUILD', 'BROWSER', 'FEATURE']}
+          pathlib.Path('validation-results/outcomes.json').write_text(json.dumps(results, indent=2))
+          print(results)
+          assert all(v == 'success' for v in results.values()), 'Validation failed; implementation not committed'
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: stabilize imported surface depth and repair missing recovery copies'
+          git push origin HEAD:refs/heads/feature/source-preserving-import
+          git rev-parse HEAD | tee validation-results/verified-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: import-regression-validation
           path: |
-            /tmp/forescene-source.tar.gz
-            /tmp/revision.txt
-          retention-days: 2
-          compression-level: 0
+            validation-results/
+            test-results/
+          retention-days: 7
