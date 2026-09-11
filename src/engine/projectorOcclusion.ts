@@ -96,6 +96,7 @@ function createRadialDepthMaterial(
     vertexShader: /* glsl */`
       varying vec3 vOcclusionWorldPosition;
       #include <common>
+      #include <logdepthbuf_pars_vertex>
       #include <morphtarget_pars_vertex>
       #include <skinning_pars_vertex>
       void main() {
@@ -111,9 +112,11 @@ function createRadialDepthMaterial(
         vec4 worldPosition = modelMatrix * localPosition;
         vOcclusionWorldPosition = worldPosition.xyz;
         gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        #include <logdepthbuf_vertex>
       }
     `,
     fragmentShader: /* glsl */`
+      #include <logdepthbuf_pars_fragment>
       uniform vec3 occlusionOrigin;
       uniform float occlusionNear;
       uniform float occlusionFar;
@@ -127,6 +130,7 @@ function createRadialDepthMaterial(
       }
 
       void main() {
+        #include <logdepthbuf_fragment>
         float distanceMeters = length(vOcclusionWorldPosition - occlusionOrigin);
         float normalizedDepth = clamp(
           (distanceMeters - occlusionNear) /

@@ -21,7 +21,11 @@ describe('source-preserving imports in WebGL', () => {
       page.on('console', (message) => {
         if (message.type() === 'error' && /shader|compile|INVALID_|GL_INVALID|WebGLProgram/.test(message.text())) errors.push(message.text());
       });
-      await page.setContent('<!doctype html><html><body></body></html>');
+      // IndexedDB requires an origin; about:blank/setContent is an opaque context.
+      await page.route('http://127.0.0.1:4179/**', (route) => route.fulfill({
+        contentType: 'text/html', body: '<!doctype html><html><body></body></html>',
+      }));
+      await page.goto('http://127.0.0.1:4179/');
       await page.addScriptTag({ content: bundled.outputFiles[0].text });
       const result = await page.evaluate(() => (window as unknown as {
         SourceImportGate: { runSourceModelBrowserGate: () => Promise<{ passed: string[]; texturePixels: { red: number; green: number; blue: number }; screenshot: string }> }

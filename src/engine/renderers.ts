@@ -1,3 +1,4 @@
+import { SCENE_DEPTH_PRECISION } from './rendererPrecision';
 import { ensureSourceModelsForProject } from './sourceModelRuntime';
 import * as THREE from 'three';
 import { CameraData, Euler, LocationProject, PanoCropSettings, Shot, Vec3 } from '../domain/types';
@@ -2281,6 +2282,7 @@ function createRenderer(
   options: RendererCreationOptions = {},
 ): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
+    ...SCENE_DEPTH_PRECISION,
     antialias: true,
     alpha: options.alpha === true,
     preserveDrawingBuffer: true,

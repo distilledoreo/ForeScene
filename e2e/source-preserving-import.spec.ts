@@ -34,10 +34,13 @@ test.describe('Source-preserving model import @source-import', () => {
     await enableWrites(page);
     const selected = await page.evaluate(async (id) => window.foreScene!.applyPlan({ version:1, commands:[{ op:'selection.set', objectIds:[id] }] }), snapshot.objects[0].id);
     expect(selected.ok).toBe(true);
+    await page.getByTitle('Precision drawer (I)', { exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Precision', exact: true })).toBeVisible();
     const surface = page.locator('[data-object-surface-style]');
     await expect(surface).toHaveValue('source');
     await surface.selectOption('solid'); await expect(surface).toHaveValue('solid');
     await surface.selectOption('source');
+    await page.getByRole('dialog', { name: 'Precision', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
     await page.getByRole('textbox', { name:'Selected object name' }).fill('Retained painted panel');
     await page.getByRole('textbox', { name:'Selected object name' }).blur();
     await waitForVerifiedSave(page);

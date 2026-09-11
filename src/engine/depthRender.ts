@@ -1,3 +1,4 @@
+import { SCENE_DEPTH_PRECISION } from './rendererPrecision';
 import { ensureSourceModelsForProject } from './sourceModelRuntime';
 import * as THREE from 'three';
 import type { CameraData, LocationProject, Shot, ShotDepthSettings } from '../domain/types';
@@ -613,6 +614,7 @@ function formatMeters(value: number): string {
 
 function createDepthRenderer(width: number, height: number): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
+    ...SCENE_DEPTH_PRECISION,
     antialias: false,
     alpha: false,
     preserveDrawingBuffer: true,

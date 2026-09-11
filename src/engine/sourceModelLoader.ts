@@ -34,6 +34,8 @@ interface GltfDocument {
   asset?: { version?: string };
   extensionsRequired?: string[];
   extensionsUsed?: string[];
+  nodes?: Array<{ mesh?: number; weights?: number[] }>;
+  meshes?: Array<{ weights?: number[] }>;
 }
 
 /** Read metadata without rewriting even a byte of the imported glTF/GLB. */
@@ -198,6 +200,32 @@ export async function loadSourceModel(input: SourceModelPackage, signal?: AbortS
       scenes = gltf.scenes;
       animations = gltf.animations;
       isAuthoredNode = (node) => gltf.parser.associations.get(node)?.nodes !== undefined;
+      // GLTFLoader's instancing extension constructs a new InstancedMesh, whose
+      // updateMorphTargets is intentionally empty. Restore the node-wide morph
+      // weights before rendering; otherwise WebGLMorphtargets reads undefined.
+      // All instances of a glTF node share these authored weights. Do not expand
+      // geometry or fabricate per-instance animation data.
+      for (const scene of scenes) scene.traverse((node) => {
+        const mesh = node as THREE.InstancedMesh;
+        if (!mesh.isInstancedMesh || mesh.morphTexture || mesh.morphTargetInfluences) return;
+        if (!Object.values(mesh.geometry.morphAttributes).some((attributes) => attributes.length > 0)) return;
+        THREE.Mesh.prototype.updateMorphTargets.call(mesh);
+        let owner: THREE.Object3D | null = mesh;
+        let nodeIndex: number | undefined;
+        while (owner && nodeIndex === undefined) {
+          nodeIndex = gltf.parser.associations.get(owner)?.nodes;
+          owner = owner.parent;
+        }
+        const nodeDef = nodeIndex === undefined ? undefined : document.nodes?.[nodeIndex];
+        const weights = nodeDef?.weights ?? (nodeDef?.mesh === undefined ? undefined : document.meshes?.[nodeDef.mesh]?.weights);
+        if (weights) {
+          const influences = (mesh as THREE.Mesh).morphTargetInfluences;
+          if (weights.length !== influences?.length || !weights.every(Number.isFinite)) {
+            throw new Error('Instanced source mesh has invalid morph weights.');
+          }
+          mesh.morphTargetInfluences = [...weights];
+        }
+      });
     } else if (input.format === 'fbx') {
       const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
       root = new FBXLoader(resources.manager).parse(bytes, base);

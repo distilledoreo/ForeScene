@@ -1,3 +1,4 @@
+import { SCENE_DEPTH_PRECISION } from '../../engine/rendererPrecision';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { ensureSourceModelsForProject, getSourceModelRevision, subscribeSourceModelReady, sourceModelInventoryKey } from '../../engine/sourceModelRuntime';
@@ -749,7 +750,7 @@ export function SceneViewport({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, ...SCENE_DEPTH_PRECISION });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_INTERACTIVE_PIXEL_RATIO));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.className = 'absolute inset-0 block h-full w-full touch-none';

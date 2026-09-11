@@ -106,6 +106,17 @@ describe('source-preserving model imports', () => {
     expect((meshes[0] as THREE.InstancedMesh).count).toBe(2);
     expect(meshes[0].geometry.getAttribute('position').count).toBe(4);
     expect(batch.analysis.instancesExpanded).toBe(false);
+    expect(meshes[0].morphTargetInfluences).toEqual([0.5]);
+  });
+  it('preserves node-specific morph weights when instanced source geometry is cloned', async () => {
+    const fixture = sourceFixture({ instanced: true });
+    fixture.document.nodes[1].weights = [0.75];
+    const batch = await importModelJob({ kind: 'file', file: new File([JSON.stringify(fixture.document)], 'morph-instances.gltf') }, { mode: 'separate' });
+    const first = renderObject(batch); const second = renderObject(batch);
+    expect(first.meshes[0].morphTargetInfluences).toEqual([0.75]);
+    expect(second.meshes[0].morphTargetInfluences).toEqual([0.75]);
+    expect(first.meshes[0].morphTargetInfluences).not.toBe(second.meshes[0].morphTargetInfluences);
+    expect(first.meshes[0].geometry).toBe(second.meshes[0].geometry);
   });
   it('clones skins with independent bones while retaining source geometry', async () => {
     const batch = await importFixture({ skinned: true });
@@ -146,7 +157,7 @@ describe('source-preserving model imports', () => {
     const later = await importFixture();
     resetSourceModelRuntimeForTests(); // Keep bytes, discard the later template.
     vi.useFakeTimers();
-    let load: ReturnType<typeof vi.spyOn> | undefined;
+    let load: import('vitest').MockInstance<typeof sourceModelLoader.loadSourceModel> | undefined;
     try {
       const early = await importFixture();
       const originalLoad = sourceModelLoader.loadSourceModel;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SCENE_DEPTH_PRECISION } from '../../src/engine/rendererPrecision';
 import { sourceFixtureGlb, sourceFixture } from './source-model-fixture';
 import { createDefaultProject, createCameraData, defaultProjectedStyleSettings } from '../../src/domain/defaults';
 import { importModelJob } from '../../src/engine/modelImport';
@@ -15,7 +16,7 @@ function requireTest(value: unknown, message: string): asserts value { if (!valu
 
 export async function runSourceModelBrowserGate() {
   const passed: string[] = [];
-  const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+  const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true, ...SCENE_DEPTH_PRECISION });
   renderer.setSize(128, 128); renderer.setClearColor(0x000000, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
