@@ -1,0 +1,108 @@
+diff --git a/src/engine/sourceModelRuntime.ts b/src/engine/sourceModelRuntime.ts
+--- a/src/engine/sourceModelRuntime.ts
++++ b/src/engine/sourceModelRuntime.ts
+@@ -116,21 +116,38 @@
+   options: { tolerateErrors?: boolean } = {},
+ ): Promise<void> {
+   const ids = new Set(project.scene.objects.filter((object) => object.type === 'imported_model').map((object) => object.modelAssetId));
+-  for (const id of ids) {
+-    const asset = id ? project.assets.assets[id] : undefined;
+-    if (!asset || !isSourceModelAsset(asset) || asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
+-    try {
+-      await ensureSourceModel(asset);
+-      const entry = entries.get(cacheKey(asset));
+-      if (!entry) throw new Error(`Source model ${asset.name} did not become ready.`);
+-      for (const object of project.scene.objects.filter((candidate) => candidate.modelAssetId === asset.id)) {
+-        if (object.sourceModelNodePath === undefined) continue;
+-        const path = object.sourceModelNodePath;
+-        if (!entry.model.nodes.some((node) => node.path.length === path.length && node.path.every((part, i) => part === path[i]))) {
+-          throw new Error(`Source node for ${object.name} is not present in ${asset.name}. Locate the matching original or reimport it.`);
++  // Pin every ready template until the whole barrier finishes. A later large
++  // asset may take longer than the idle TTL; early assets must still exist when
++  // the caller builds its scene. Concurrent barriers hold independent leases.
++  const held = new Set<CacheEntry>();
++  try {
++    for (const id of ids) {
++      const asset = id ? project.assets.assets[id] : undefined;
++      if (!asset || !isSourceModelAsset(asset) || asset.resolutionStatus && asset.resolutionStatus !== 'available') continue;
++      try {
++        await ensureSourceModel(asset);
++        const entry = entries.get(cacheKey(asset));
++        if (!entry) throw new Error(`Source model ${asset.name} did not become ready.`);
++        if (!held.has(entry)) {
++          if (entry.timer) clearTimeout(entry.timer);
++          entry.references += 1;
++          held.add(entry);
+         }
+-      }
+-    } catch (error) { if (!options.tolerateErrors) throw error; }
++        for (const object of project.scene.objects.filter((candidate) => candidate.modelAssetId === asset.id)) {
++          if (object.sourceModelNodePath === undefined) continue;
++          const path = object.sourceModelNodePath;
++          if (!entry.model.nodes.some((node) => node.path.length === path.length && node.path.every((part, i) => part === path[i]))) {
++            throw new Error(`Source node for ${object.name} is not present in ${asset.name}. Locate the matching original or reimport it.`);
++          }
++        }
++      } catch (error) { if (!options.tolerateErrors) throw error; }
++    }
++  } finally {
++    for (const entry of held) {
++      entry.references -= 1;
++      // Give the caller a fresh grace period to acquire its actual scene lease.
++      scheduleEviction(entry, false);
++    }
+   }
+ }
+ 
+diff --git a/src/engine/projectorOcclusion.ts b/src/engine/projectorOcclusion.ts
+--- a/src/engine/projectorOcclusion.ts
++++ b/src/engine/projectorOcclusion.ts
+@@ -100,6 +100,7 @@
+       #include <skinning_pars_vertex>
+       void main() {
+         #include <skinbase_vertex>
++        #include <morphinstance_vertex>
+         #include <begin_vertex>
+         #include <morphtarget_vertex>
+         #include <skinning_vertex>
+diff --git a/tests/sourceModelImport.test.ts b/tests/sourceModelImport.test.ts
+--- a/tests/sourceModelImport.test.ts
++++ b/tests/sourceModelImport.test.ts
+@@ -1,4 +1,5 @@
+ import * as THREE from 'three';
++import * as sourceModelLoader from '../src/engine/sourceModelLoader';
+ import JSZip from 'jszip';
+ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+ import { sourceFixture, sourceFixtureGlb } from './fixtures/source-model-fixture';
+@@ -141,6 +142,31 @@
+     const scene = buildScene(reopened); scenes.push(scene);
+     expect(scene.getObjectsByProperty('isMesh', true).some((mesh: THREE.Object3D) => (mesh as THREE.Mesh).geometry.getAttribute('uv')?.count === 4)).toBe(true);
+   });
++  it('pins early templates while a later source loads past the idle timeout', async () => {
++    const later = await importFixture();
++    resetSourceModelRuntimeForTests(); // Keep bytes, discard the later template.
++    vi.useFakeTimers();
++    let load: ReturnType<typeof vi.spyOn> | undefined;
++    try {
++      const early = await importFixture();
++      const originalLoad = sourceModelLoader.loadSourceModel;
++      load = vi.spyOn(sourceModelLoader, 'loadSourceModel').mockImplementationOnce(async (...args) => {
++        vi.advanceTimersByTime(31_000);
++        return originalLoad(...args);
++      });
++      const project = projectFor(early);
++      project.scene.objects.push(...later.items.map((item) => item.object));
++      later.items.forEach((item) => { project.assets.assets[item.asset.id] = item.asset; });
++      await ensureSourceModelsForProject(project);
++      expect(load).toHaveBeenCalledTimes(1);
++      const first = renderObject(early);
++      expect(first.root.userData.missingAssetPlaceholder).not.toBe(true);
++      expect(first.meshes[0].geometry.getAttribute('uv')?.count).toBe(4);
++    } finally {
++      load?.mockRestore();
++      vi.useRealTimers();
++    }
++  });
+   it('collects companion buffers into a portable package without rewriting the source', async () => {
+     const fixture = sourceFixture({ external: true });
+     const file = new File([fixture.text], 'scene.gltf'); const buffer = new File([fixture.buffer], 'mesh.bin');
