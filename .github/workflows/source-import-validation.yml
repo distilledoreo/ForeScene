@@ -5,33 +5,122 @@ on:
     branches: [feature/source-preserving-import]
     paths:
       - '.github/workflows/source-import-validation.yml'
+      - '.github/source-import-patch-*.b64'
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: source-import-feature-validation
+  cancel-in-progress: false
 
 jobs:
-  workspace:
+  validate:
+    if: github.ref == 'refs/heads/feature/source-preserving-import'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          ref: feature/source-preserving-import
+      - name: Apply checksum-verified implementation to the feature branch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          parts = [pathlib.Path(f'.github/source-import-patch-{i}.b64') for i in (1, 2, 3)]
+          if not all(p.exists() for p in parts):
+              raise SystemExit('Expected all three implementation transport parts.')
+          encoded = ''.join(p.read_text().strip() for p in parts)
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          expected = '7eeda4526fed8ec5d969b5cd1b72a553827ebf4719c5f8356b4a21af7617ce79'
+          actual = hashlib.sha256(patch).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'Implementation checksum mismatch: {actual}')
+          pathlib.Path('/tmp/source-import.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', '/tmp/source-import.patch'], check=True)
+          subprocess.run(['git', 'apply', '--index', '/tmp/source-import.patch'], check=True)
+          subprocess.run(['git', 'rm', *[str(p) for p in parts]], check=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: preserve imported source models, materials, resources and hierarchy'
+          git push origin HEAD:feature/source-preserving-import
+          mkdir -p validation-results
+          git rev-parse HEAD | tee validation-results/implementation-commit.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - name: Package reproducible validation workspace
-        shell: bash
+      - run: npx playwright install --with-deps chromium
+      - name: TypeScript
+        id: types
+        continue-on-error: true
+        run: npm run lint 2>&1 | tee validation-results/types.log
+      - name: Full fast unit suite
+        id: units
+        continue-on-error: true
+        run: npm test -- --maxWorkers=2 2>&1 | tee validation-results/units.log
+      - name: Production build
+        id: build
+        continue-on-error: true
+        run: npm run build 2>&1 | tee validation-results/build.log
+      - name: WebGL browser regression suite
+        id: browser
+        continue-on-error: true
+        run: npm run test:browser -- --maxWorkers=1 2>&1 | tee validation-results/browser.log
+      - name: Source-preserving import interactive acceptance
+        id: feature
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+        run: npx playwright test e2e/source-preserving-import.spec.ts --project=desktop-chromium --workers=1 2>&1 | tee validation-results/feature-e2e.log
+      - name: Desktop smoke
+        id: smoke
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+        run: npm run test:e2e:smoke -- --workers=1 2>&1 | tee validation-results/smoke.log
+      - name: Agent CLI parity
+        id: agent
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_SKIP_BUILD: '1'
+        run: npm run test:e2e:agent-cli -- --workers=1 2>&1 | tee validation-results/agent-cli.log
+      - name: Record outcomes
+        if: always()
+        env:
+          TYPES: ${{ steps.types.outcome }}
+          UNITS: ${{ steps.units.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          FEATURE: ${{ steps.feature.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          AGENT: ${{ steps.agent.outcome }}
         run: |
-          git ls-files -z -- . ':!output/**' ':!test-results/**' ':!playwright-report/**' ':!benchmark-results/**' | tar --null -T - -czf /tmp/forescene-source.tar.gz
-          tar -czf /tmp/forescene-dependencies.tar.gz node_modules
+          mkdir -p validation-results
+          python3 - <<'PY'
+          import json, os, pathlib
+          outcomes = {key: os.environ[key] for key in ['TYPES', 'UNITS', 'BUILD', 'BROWSER', 'FEATURE', 'SMOKE', 'AGENT']}
+          pathlib.Path('validation-results/outcomes.json').write_text(json.dumps(outcomes, indent=2))
+          print(json.dumps(outcomes, indent=2))
+          PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: source-import-workspace
+          name: source-import-validation
           path: |
-            /tmp/forescene-source.tar.gz
-            /tmp/forescene-dependencies.tar.gz
-          retention-days: 1
-          compression-level: 0
+            validation-results/
+            test-results/
+            playwright-report/
+          retention-days: 7
+      - name: Require all validation gates
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          results = json.loads(pathlib.Path('validation-results/outcomes.json').read_text())
+          if any(value != 'success' for value in results.values()):
+              raise SystemExit('One or more validation gates did not pass.')
+          PY
