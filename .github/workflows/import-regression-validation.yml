@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - name: Apply exact locally type-checked patch
+      - name: Apply exact locally type-checked patches
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -28,7 +28,11 @@ jobs:
           pathlib.Path('/tmp/import-regressions.patch').write_bytes(patch)
           subprocess.run(['git', 'apply', '--check', '/tmp/import-regressions.patch'], check=True)
           subprocess.run(['git', 'apply', '--index', '/tmp/import-regressions.patch'], check=True)
-          subprocess.run(['git', 'rm', str(source)], check=True)
+          review = pathlib.Path('.github/import-regression-review.patch')
+          assert hashlib.sha256(review.read_bytes()).hexdigest() == 'f99c00d0bfa3def6380fbedf683b1ad914a143ea30a403eb8c7b5b21ddb6734c', 'Review digest mismatch'
+          subprocess.run(['git', 'apply', '--check', str(review)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(review)], check=True)
+          subprocess.run(['git', 'rm', str(source), str(review)], check=True)
           PY
           mkdir -p validation-results
           git rev-parse HEAD > validation-results/base-commit.txt
@@ -91,7 +95,7 @@ jobs:
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: stabilize imported surface depth and repair missing recovery copies'
+          git commit -m 'fix: stabilize imported surface depth, morph instances and recovery storage'
           git push origin HEAD:refs/heads/feature/source-preserving-import
           git rev-parse HEAD | tee validation-results/verified-commit.txt
       - uses: actions/upload-artifact@v4
