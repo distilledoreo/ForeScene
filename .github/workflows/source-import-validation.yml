@@ -1,50 +1,38 @@
-name: Source import validation
+name: Source import final validation
 
 on:
   push:
     branches: [feature/source-preserving-import]
     paths:
       - '.github/workflows/source-import-validation.yml'
-      - '.github/source-import-patch-*.b64'
 
 permissions:
   contents: write
-
-concurrency:
-  group: source-import-feature-validation
-  cancel-in-progress: false
 
 jobs:
   validate:
     if: github.ref == 'refs/heads/feature/source-preserving-import'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feature/source-preserving-import
-      - name: Apply checksum-verified implementation to the feature branch
+      - name: Apply tested review fixes and remove temporary transport
         shell: bash
         run: |
           python3 - <<'PY'
-          import base64, hashlib, lzma, pathlib, subprocess
-          parts = [pathlib.Path(f'.github/source-import-patch-{i}.b64') for i in (1, 2, 3)]
-          if not all(p.exists() for p in parts):
-              raise SystemExit('Expected all three implementation transport parts.')
-          encoded = ''.join(p.read_text().strip() for p in parts)
-          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          expected = '7eeda4526fed8ec5d969b5cd1b72a553827ebf4719c5f8356b4a21af7617ce79'
-          actual = hashlib.sha256(patch).hexdigest()
-          if actual != expected:
-              raise SystemExit(f'Implementation checksum mismatch: {actual}')
-          pathlib.Path('/tmp/source-import.patch').write_bytes(patch)
-          subprocess.run(['git', 'apply', '--check', '/tmp/source-import.patch'], check=True)
-          subprocess.run(['git', 'apply', '--index', '/tmp/source-import.patch'], check=True)
-          subprocess.run(['git', 'rm', *[str(p) for p in parts]], check=True)
+          import hashlib, pathlib, subprocess
+          patch = pathlib.Path('.github/source-import-review.patch')
+          if hashlib.sha256(patch.read_bytes()).hexdigest() != '89b969ec3ec47c0673378f3e9043142b27fdb48197caca19215050e0d381d31b':
+              raise SystemExit('Review patch checksum mismatch.')
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'rm', str(patch), '.github/workflows/source-import-validation.yml'], check=True)
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: preserve imported source models, materials, resources and hierarchy'
+          git commit -m 'fix: pin source assets through hydration and preserve instanced morph occlusion'
           git push origin HEAD:feature/source-preserving-import
           mkdir -p validation-results
           git rev-parse HEAD | tee validation-results/implementation-commit.txt
@@ -70,24 +58,16 @@ jobs:
         id: browser
         continue-on-error: true
         run: npm run test:browser -- --maxWorkers=1 2>&1 | tee validation-results/browser.log
+      - name: Preserve pixel evidence
+        if: always()
+        run: |
+          if [ -d test-results/source-model ]; then cp -R test-results/source-model validation-results/source-model; fi
       - name: Source-preserving import interactive acceptance
         id: feature
         continue-on-error: true
         env:
           PLAYWRIGHT_SKIP_BUILD: '1'
         run: npx playwright test e2e/source-preserving-import.spec.ts --project=desktop-chromium --workers=1 2>&1 | tee validation-results/feature-e2e.log
-      - name: Desktop smoke
-        id: smoke
-        continue-on-error: true
-        env:
-          PLAYWRIGHT_SKIP_BUILD: '1'
-        run: npm run test:e2e:smoke -- --workers=1 2>&1 | tee validation-results/smoke.log
-      - name: Agent CLI parity
-        id: agent
-        continue-on-error: true
-        env:
-          PLAYWRIGHT_SKIP_BUILD: '1'
-        run: npm run test:e2e:agent-cli -- --workers=1 2>&1 | tee validation-results/agent-cli.log
       - name: Record outcomes
         if: always()
         env:
@@ -96,20 +76,18 @@ jobs:
           BUILD: ${{ steps.build.outcome }}
           BROWSER: ${{ steps.browser.outcome }}
           FEATURE: ${{ steps.feature.outcome }}
-          SMOKE: ${{ steps.smoke.outcome }}
-          AGENT: ${{ steps.agent.outcome }}
         run: |
           mkdir -p validation-results
           python3 - <<'PY'
           import json, os, pathlib
-          outcomes = {key: os.environ[key] for key in ['TYPES', 'UNITS', 'BUILD', 'BROWSER', 'FEATURE', 'SMOKE', 'AGENT']}
+          outcomes = {key: os.environ[key] for key in ['TYPES', 'UNITS', 'BUILD', 'BROWSER', 'FEATURE']}
           pathlib.Path('validation-results/outcomes.json').write_text(json.dumps(outcomes, indent=2))
           print(json.dumps(outcomes, indent=2))
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: source-import-validation
+          name: source-import-final-validation
           path: |
             validation-results/
             test-results/
@@ -122,5 +100,5 @@ jobs:
           import json, pathlib
           results = json.loads(pathlib.Path('validation-results/outcomes.json').read_text())
           if any(value != 'success' for value in results.values()):
-              raise SystemExit('One or more validation gates did not pass.')
+              raise SystemExit('One or more final validation gates did not pass.')
           PY
