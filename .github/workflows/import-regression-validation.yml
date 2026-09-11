@@ -1,0 +1,31 @@
+name: Import regression validation
+on:
+  push:
+    branches: [feature/source-preserving-import]
+    paths: ['.github/workflows/import-regression-validation.yml']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Package exact source revision for offline testing
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > /tmp/revision.txt
+          git ls-files -z -- . ':!output/**' ':!test-results/**' ':!playwright-report/**' ':!benchmark-results/**' | tar --null -T - -czf /tmp/forescene-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: import-regression-source
+          path: |
+            /tmp/forescene-source.tar.gz
+            /tmp/revision.txt
+          retention-days: 2
+          compression-level: 0
