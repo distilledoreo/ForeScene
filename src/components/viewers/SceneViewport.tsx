@@ -1,5 +1,7 @@
+import { SCENE_DEPTH_PRECISION } from '../../engine/rendererPrecision';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { ensureSourceModelsForProject, getSourceModelRevision, subscribeSourceModelReady, sourceModelInventoryKey } from '../../engine/sourceModelRuntime';
 import { objectDisplayName } from '../../domain/defaults';
 import { CameraData, Euler, LocationProject, SceneObject, SceneObjectType, ShotDepthSettings, Vec3 } from '../../domain/types';
 import {
@@ -176,6 +178,8 @@ function sceneObjectStructureSignature(project: LocationProject): string {
       color: object.color,
       secondaryColor: object.secondaryColor,
       modelAssetId: object.modelAssetId,
+      sourceModelNodePath: object.sourceModelNodePath,
+      sourceModelLightsEnabled: object.sourceModelLightsEnabled,
       poseableCharacter: object.poseableCharacter,
       importedModel: object.importedModel && {
         sourceImportId: object.importedModel.sourceImportId,
@@ -746,7 +750,7 @@ export function SceneViewport({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, ...SCENE_DEPTH_PRECISION });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_INTERACTIVE_PIXEL_RATIO));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.className = 'absolute inset-0 block h-full w-full touch-none';
@@ -1827,6 +1831,14 @@ export function SceneViewport({
     });
   }, [hasVisibleHumanMannequin]);
 
+  const [sourceModelRevision, setSourceModelRevision] = useState(getSourceModelRevision);
+  const sourceInventoryKey = sourceModelInventoryKey(project);
+  useEffect(() => {
+    const unsubscribe = subscribeSourceModelReady(() => setSourceModelRevision(getSourceModelRevision()));
+    void ensureSourceModelsForProject(projectRef.current, { tolerateErrors: true });
+    return unsubscribe;
+  }, [sourceInventoryKey]);
+
   // Keep assets context fresh for createInstance without re-hydrating adapters on every pose edit.
   useEffect(() => {
     setAutoriggedAssetsContext(project.assets);
@@ -2129,7 +2141,7 @@ export function SceneViewport({
     const secondaryOrigin = (projectedSecondary && projectedSecondary.id !== projectedPano.id)
       ? projectedSecondary.origin
       : undefined;
-    const key = computeProjectorOcclusionKey(project, primaryOrigin, secondaryOrigin);
+    const key = `${computeProjectorOcclusionKey(project, primaryOrigin, secondaryOrigin)}:source:${sourceModelRevision}`;
     if (key === occlusionKeyRef.current && primaryOcclusionRef.current) {
       return;
     }
@@ -2192,6 +2204,7 @@ export function SceneViewport({
   }, [
     occlusionWanted,
     occlusionGeometryKey,
+    sourceModelRevision,
     rendererRevisionRef.current,
     projectedPano?.id,
     projectedPano?.origin[0],
@@ -2271,6 +2284,7 @@ export function SceneViewport({
   }, [
     clearTransformGizmo,
     mannequinRevision,
+    sourceModelRevision,
     primaryOcclusionRef.current?.key,
     projectedAppearanceKey,
     projectedSecondaryTexture,

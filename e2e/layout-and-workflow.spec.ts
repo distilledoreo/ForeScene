@@ -225,6 +225,7 @@ test.describe('@smoke build interactions', () => {
     await page.locator('[data-build-import-model]').click();
     const dialog = page.getByRole('dialog', { name: /Import 3D/ });
     await expect(dialog).toBeVisible();
+    await dialog.locator('[data-import-preservation="graybox"]').check();
     await dialog.locator('[data-model-import-input]').setInputFiles({
       name: 'triangle.obj',
       mimeType: 'text/plain',

@@ -254,9 +254,9 @@ const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> 
   'import-model': {
     command: 'import-model', operation: 'model.import', usage: 'npm run agent:import-model -- --file <model.glb> --profile <dir> --write', write: true,
     required: ['--file <model.glb>', '--profile <isolated-dir>', '--write'],
-    optional: [...COMMON_SESSION_FLAGS, '--allow-heavy-imports', '--consent-token <token>', '--output <result.json>'],
-    result: 'Imported scene model object id, bounds, and diagnostics.',
-    notes: ['Imports in separate-objects mode; heavy imports require --allow-heavy-imports or --consent-token.'],
+    optional: [...COMMON_SESSION_FLAGS, '--mode <separate|combined>', '--preservation <preserve|graybox>', '--resource <path> (repeatable)', '--allow-heavy-imports', '--consent-token <token>', '--output <result.json>'],
+    result: 'Imported scene object ids, source asset references, bounds, and diagnostics.',
+    notes: ['Preserves original sources by default. Separate selections reference one shared source; use --preservation graybox for explicit conversion. Heavy imports require --allow-heavy-imports or --consent-token.'],
   },
   'import-panorama': {
     command: 'import-panorama', operation: 'panorama.import', usage: 'npm run agent:import-panorama -- --file <pano.jpg> --profile <dir> --write', write: true,

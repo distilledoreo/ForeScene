@@ -263,6 +263,22 @@ async function resolveAssetBlob(asset: ProjectAsset): Promise<Blob> {
 async function ensureProjectAssetResource(asset: ProjectAsset): Promise<ProjectRevisionBinaryResource> {
   const sourceKey = storageKeyFromAsset(asset);
   if (sourceKey?.startsWith(PROJECT_ASSET_RESOURCE_PREFIX)) {
+    // A recovered manifest can still have a live blob/data URL after its durable
+    // copy has disappeared. Only restore bytes that match the immutable key;
+    // never replace corrupt storage or silently mark a failed save as successful.
+    if (!await getProjectAssetBlob(sourceKey) && /^(blob:|data:)/.test(asset.uri)) {
+      const blob = asset.uri.startsWith('data:')
+        ? dataUrlToBlob(asset.uri)
+        : await fetch(asset.uri).then(async (response) => {
+          if (!response.ok) throw new Error(`Recovery resource ${sourceKey} is missing and its live image cannot be read.`);
+          return response.blob();
+        });
+      validateBlob(asset, blob);
+      const expectedDigest = digestFromRecoveryResourceKey(sourceKey);
+      if (!expectedDigest) throw new Error(`Recovery resource ${sourceKey} has no verifiable digest.`);
+      await verifyBinaryDigest(await blob.arrayBuffer(), expectedDigest, `Recovery resource ${sourceKey}`);
+      await putProjectAssetBlobs([{ key: sourceKey, blob, evictable: false }]);
+    }
     const existing = await verifyProjectAssetResource(asset, sourceKey);
     const sha256 = digestFromRecoveryResourceKey(sourceKey) ?? await blobSha256Digest(existing);
     return toRevisionResource({ key: sourceKey, sha256, byteLength: existing.size, mimeType: existing.type || asset.mimeType });
@@ -272,8 +288,12 @@ async function ensureProjectAssetResource(asset: ProjectAsset): Promise<ProjectR
   validateBlob(asset, blob);
   const cached = projectAssetResourceCache.get(blob);
   if (cached) {
-    const verified = await verifyProjectAssetResource(asset, cached.key, cached);
-    if (verified.size === blob.size && verified.type === blob.type) return cached;
+    // This WeakMap is only a hashing optimization, not proof of durable storage.
+    // History cleanup can remove a recovery copy while the original Blob lives on.
+    if (await getProjectAssetBlob(cached.key)) {
+      const verified = await verifyProjectAssetResource(asset, cached.key, cached);
+      if (verified.size === blob.size && verified.type === blob.type) return cached;
+    }
     projectAssetResourceCache.delete(blob);
   }
   const digest = await blobSha256Digest(blob);
@@ -314,8 +334,10 @@ async function ensureModelResource(asset: ProjectAsset): Promise<ProjectRevision
   const sourceVersion = sourceKey ? getModelAssetVersion(sourceKey) : undefined;
   const cached = sourceKey ? modelResourceCache.get(sourceKey) : undefined;
   if (cached?.byteLength === bytes.byteLength && cached.sourceVersion === sourceVersion) {
-    const verified = await verifyModelResource(asset, cached.resource.key, cached.resource);
-    if (verified.byteLength === bytes.byteLength) return cached.resource;
+    if (await getModelAsset(cached.resource.key)) {
+      const verified = await verifyModelResource(asset, cached.resource.key, cached.resource);
+      if (verified.byteLength === bytes.byteLength) return cached.resource;
+    }
     if (sourceKey) modelResourceCache.delete(sourceKey);
   }
   const digest = await sha256Digest(bytes);

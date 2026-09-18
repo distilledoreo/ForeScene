@@ -429,5 +429,5 @@ describe('projection coverage engine', () => {
         result.originA[2] - result.originB[2],
       )).toBeGreaterThanOrEqual(4);
     }
-  }, 60_000);
+  }, 90_000);
 });

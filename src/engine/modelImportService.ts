@@ -16,6 +16,7 @@ import {
 } from './modelImport';
 import { deleteModelAsset } from './modelAssetStore';
 import { sha256Digest } from './binaryIntegrity';
+import { isSourceModelAsset } from './sourceModelRuntime';
 import { touchProject } from '../state/slices/touchProject';
 import { useProjectSafetyStore } from '../state/useProjectSafetyStore';
 import { useProjectStore } from '../state/useProjectStore';
@@ -26,19 +27,25 @@ export interface ProjectModelImportResult extends ModelImportBatchResult {
   reused?: boolean;
 }
 
-function findExistingModelImportByContentHash(contentHash: string): { asset: ProjectAsset; object: SceneObject } | undefined {
+function findExistingModelImportByContentHash(contentHash: string, options: ModelImportOptions): Array<{ asset: ProjectAsset; object: SceneObject }> | undefined {
   const project = useProjectStore.getState().project;
-  const asset = Object.values(project.assets.assets).find((entry) => (
-    entry.type === 'model'
-    && entry.contentHash === contentHash
-    && entry.resolutionStatus === 'available'
-  ));
-  if (!asset) return undefined;
-  const object = project.scene.objects.find((entry) => (
-    entry.type === 'imported_model' && entry.modelAssetId === asset.id
-  ));
-  if (!object) return undefined;
-  return { asset, object };
+  const preserve = options.preservation !== 'graybox';
+  for (const asset of Object.values(project.assets.assets)) {
+    if (asset.type !== 'model' || asset.contentHash !== contentHash || asset.resolutionStatus !== 'available'
+      || isSourceModelAsset(asset) !== preserve) continue;
+    const object = project.scene.objects.find((entry) => entry.type === 'imported_model'
+      && entry.modelAssetId === asset.id && entry.importedModel?.importMode === options.mode);
+    if (!object) continue;
+    const importId = object.importedModel?.sourceImportId;
+    const objects = importId ? project.scene.objects.filter((entry) => entry.type === 'imported_model'
+      && entry.importedModel?.sourceImportId === importId) : [object];
+    const expectedCount = preserve && options.mode === 'separate' ? asset.metadata?.sourceModel?.meshNodes.length : undefined;
+    if (expectedCount !== undefined && objects.length !== expectedCount) continue;
+    const items = objects.map((entry) => ({ object: entry, asset: project.assets.assets[entry.modelAssetId!] }));
+    if (items.some((item) => !item.asset || item.asset.resolutionStatus !== 'available')) continue;
+    return items;
+  }
+  return undefined;
 }
 
 function reusedImportAnalysis(
@@ -79,27 +86,28 @@ function reusedImportAnalysis(
 }
 
 function reusedImportBatch(
-  existing: { asset: ProjectAsset; object: SceneObject },
+  items: Array<{ asset: ProjectAsset; object: SceneObject }>,
   sourceFile: File,
   options: ModelImportOptions,
 ): ModelImportBatchResult {
-  const imported = existing.object.importedModel;
-  const triangleCount = imported?.triangleCount ?? 0;
-  const vertexCount = imported?.vertexCount ?? 0;
+  const triangleCount = items.reduce((sum, item) => sum + (item.object.importedModel?.triangleCount ?? 0), 0);
+  const vertexCount = items.reduce((sum, item) => sum + (item.object.importedModel?.vertexCount ?? 0), 0);
+  const preserved = isSourceModelAsset(items[0]?.asset);
   return {
-    items: [{ asset: existing.asset, object: existing.object }],
+    items,
     summary: {
       sourceName: sourceFile.name,
       sourceFormat: sourceFile.name.split('.').pop()?.toLowerCase() ?? 'glb',
-      mode: options.mode ?? 'separate',
-      totalObjects: 1,
+      mode: options.mode,
+      totalObjects: items.length,
       totalVertices: vertexCount,
       totalTriangles: triangleCount,
-      sourceNodeCount: 1,
-      combined: (options.mode ?? 'separate') === 'combined',
+      sourceNodeCount: items.reduce((sum, item) => sum + (item.object.importedModel?.meshCount ?? 1), 0),
+      combined: options.mode === 'combined',
+      sourcePreserved: preserved,
     },
     warnings: [],
-    analysis: reusedImportAnalysis(sourceFile, options, triangleCount, vertexCount),
+    analysis: { ...reusedImportAnalysis(sourceFile, options, triangleCount, vertexCount), sourcePreserved: preserved },
   };
 }
 
@@ -108,13 +116,13 @@ export async function importModelIntoProject(
   job: ModelImportJob,
   options: ModelImportOptions,
 ): Promise<ProjectModelImportResult> {
-  if (job.kind === 'file') {
+  if (job.kind === 'file' && !job.resources?.length) {
     const contentHash = await sha256Digest(await job.file.arrayBuffer());
-    const existing = findExistingModelImportByContentHash(contentHash);
+    const existing = findExistingModelImportByContentHash(contentHash, options);
     if (existing) {
       useProjectStore.setState((state) => ({
         ...state,
-        selectedObjectIds: [existing.object.id],
+        selectedObjectIds: existing.map((item) => item.object.id),
         buildMode: 'select',
       }));
       return {
@@ -125,6 +133,15 @@ export async function importModelIntoProject(
   }
 
   const batch = await importModelJob(job, options);
+  const source = batch.items[0]?.asset;
+  if (isSourceModelAsset(source) && source.contentHash) {
+    const existing = findExistingModelImportByContentHash(source.contentHash, options);
+    if (existing) {
+      await discardImportedBinaryAssets(batch);
+      useProjectStore.setState({ selectedObjectIds: existing.map((item) => item.object.id), buildMode: 'select' });
+      return { ...reusedImportBatch(existing, job.file, options), reused: true };
+    }
+  }
   const runDestructiveProjectMutation = useProjectSafetyStore
     .getState().runDestructiveProjectMutation;
 
@@ -142,7 +159,7 @@ export async function importModelIntoProject(
     const verified = await runDestructiveProjectMutation('Before importing a model', () => {
       useProjectStore.getState().addImportedModels(enriched.items);
     });
-    return { ...batch, verifiedRevisionId: verified?.revision.id };
+    return { ...enriched, verifiedRevisionId: verified?.revision.id };
   } catch (error) {
     // A persistence failure can occur after its callback ran. Restore the exact
     // pre-import document before deleting the binary payloads, so no project can
@@ -177,7 +194,7 @@ export async function relinkModelAssetIntoProject(
   if (options.mode === 'locate' && target.contentHash && target.contentHash !== contentHash) {
     throw new Error('This file does not match the original asset. Use Replace Asset to intentionally substitute it.');
   }
-  const batch = await importModelJob({ kind: 'file', file }, { mode: 'combined' });
+  const batch = await importModelJob({ kind: 'file', file }, { mode: 'combined', preservation: isSourceModelAsset(target) ? 'preserve' : 'graybox' });
   const runDestructiveProjectMutation = useProjectSafetyStore.getState().runDestructiveProjectMutation;
   if (!runDestructiveProjectMutation) {
     await discardImportedBinaryAssets(batch);
@@ -188,6 +205,14 @@ export async function relinkModelAssetIntoProject(
     const enriched = await enrichImportedAssets(batch, file);
     const replacement = enriched.items[0]?.asset;
     if (!replacement) throw new Error('The replacement file did not produce a model asset.');
+    if (isSourceModelAsset(target)) {
+      for (const object of current.scene.objects.filter((entry) => entry.modelAssetId === targetAssetId)) {
+        const path = object.sourceModelNodePath;
+        if (path && !replacement.metadata?.sourceModel?.meshNodes.some((node) => node.path.length === path.length && node.path.every((value, i) => value === path[i]))) {
+          throw new Error('The replacement source does not contain every referenced node. Reimport it as a new scene rather than changing existing node bindings.');
+        }
+      }
+    }
     const verified = await runDestructiveProjectMutation(
       `${options.mode === 'locate' ? 'Locate' : 'Replace'} missing asset`,
       () => {
@@ -220,7 +245,7 @@ async function enrichImportedAssets(
   return {
     ...batch,
     items: batch.items.map(({ asset, object }) => ({
-      asset: {
+      asset: isSourceModelAsset(asset) ? asset : {
         ...asset,
         originalFileName: sourceFile?.name ?? asset.name,
         byteSize: sourceFile?.size,
@@ -235,7 +260,7 @@ async function enrichImportedAssets(
 }
 
 async function discardImportedBinaryAssets(batch: ModelImportBatchResult): Promise<void> {
-  await Promise.all(batch.items.map(async ({ asset }) => {
+  await Promise.all([...new Map(batch.items.map(({ asset }) => [asset.id, asset])).values()].map(async (asset) => {
     if (!asset.uri.startsWith(MODEL_ASSET_URI_PREFIX)) return;
     await deleteModelAsset(asset.uri.slice(MODEL_ASSET_URI_PREFIX.length));
   }));

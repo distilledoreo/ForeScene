@@ -298,7 +298,11 @@ varying vec3 vProjectedWorldPos;`,
       .replace(
         '#include <project_vertex>',
         `#include <project_vertex>
-vProjectedWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+vec4 projectedLocalPosition = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+projectedLocalPosition = instanceMatrix * projectedLocalPosition;
+#endif
+vProjectedWorldPos = (modelMatrix * projectedLocalPosition).xyz;`,
       );
 
     shader.fragmentShader = shader.fragmentShader

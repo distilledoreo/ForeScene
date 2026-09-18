@@ -269,7 +269,8 @@ export default function App() {
       />
       <input
         type="file"
-        accept=".glb,.gltf,.obj,.stl,.ply,.fbx,.panoscene,.panoscene.zip"
+        accept=".glb,.gltf,.obj,.stl,.ply,.fbx,.panoscene,.panoscene.zip,.bin,.mtl,.png,.jpg,.jpeg,.webp,.avif,.ktx2,.dds,.tga,.bmp,.gif"
+        multiple
         data-agent-model-import-input
         tabIndex={-1}
         aria-hidden="true"

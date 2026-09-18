@@ -52,6 +52,8 @@ export interface AgentCliArgs {
   screenshot?: string;
   input?: string;
   file?: string;
+  resources?: string[];
+  preservation?: 'preserve' | 'graybox';
   pano?: string;
   rigPackage?: string;
   proxy?: string;
@@ -170,6 +172,14 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
       args.input = argv[++index];
     } else if (token === '--file' || token === '--source') {
       args.file = argv[++index];
+    } else if (token === '--resource') {
+      const value = argv[++index];
+      if (args.command !== 'import-model' || !value || value.startsWith('--')) throw new Error('--resource requires a file path and is supported only by import-model');
+      args.resources = [...(args.resources ?? []), value];
+    } else if (token === '--preservation') {
+      const value = argv[++index];
+      if (args.command !== 'import-model' || (value !== 'preserve' && value !== 'graybox')) throw new Error('--preservation must be preserve or graybox and is supported only by import-model');
+      args.preservation = value;
     } else if (token === '--rig-package') {
       args.rigPackage = argv[++index];
     } else if (token === '--proxy') {
