@@ -182,6 +182,18 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     write: true,
   },
   {
+    id: 'project.script',
+    label: 'Compile procedural Agent script to a validated plan',
+    cliCommand: 'script',
+    cli: true,
+    ui: false,
+    agentApi: false,
+    skillDocumented: true,
+    stable: false,
+    write: true,
+    notes: 'Sandboxed Node VM emits ordinary Agent Plan commands; --write is required to apply.',
+  },
+  {
     id: 'character.analyze',
     label: 'Analyze character',
     cliCommand: 'analyze-character',
