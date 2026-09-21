@@ -629,13 +629,18 @@ function buildProgram(
       const dz = to[1] - from[1];
       const length = Math.hypot(dx, dz);
       if (length <= 0.01 || height <= 0.01) return undefined;
+      const segmentMetadata = __clone(metadata ?? {});
+      segmentMetadata.architecture = {
+        ...(segmentMetadata.architecture ?? {}),
+        baseOffset: bottomOffset,
+      };
       return scene.create('wall', {
         name,
         position: [(from[0] + to[0]) / 2, level.elevation + bottomOffset, (from[1] + to[1]) / 2],
         rotation: [0, yaw, 0],
         dimensions: [length, height, thickness],
         stagingRole: 'set',
-        metadata,
+        metadata: segmentMetadata,
       });
     }
 
