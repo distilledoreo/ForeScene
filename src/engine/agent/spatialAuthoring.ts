@@ -6,6 +6,7 @@ import {
   relationshipForSource,
   relationshipsForObject,
   resolveSceneRelationships,
+  stairClearanceWorldAabb,
   type SceneRelationshipResolution,
   type SceneSpatialRelationship,
 } from '../sceneRelationships';
@@ -382,6 +383,7 @@ function addIssue(
 
 export function validateSpatialAuthoring(project: LocationProject): AgentSpatialAuthoringReport {
   const issues: AgentSpatialAuthoringIssue[] = [];
+  const resolution = resolveSceneRelationships(project);
   const objects = project.scene.objects.filter((object) => object.visible !== false && object.type !== 'sun_marker');
   const boundsById = new Map(objects.map((object) => [object.id, boundsFor(object)]));
   const supports = objects.filter((object) => isLikelySupport(object, boundsById.get(object.id)!));
