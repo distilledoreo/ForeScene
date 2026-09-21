@@ -60,6 +60,14 @@ async function executeRemoteCommand(
       );
     }
 
+    case 'scene.capture': {
+      const { captureAgentAuthoringView } = await import('../engine/agent/authoringCapture');
+      return captureAgentAuthoringView(
+        api.getProjectDocument(),
+        args as unknown as Parameters<typeof captureAgentAuthoringView>[1],
+      );
+    }
+
     case 'shot.render': {
       const result = await api.renderShotFrame(args as unknown as Parameters<typeof api.renderShotFrame>[0]);
       const { pngDataUrl: _pngDataUrl, artifact, ...rest } = result;
