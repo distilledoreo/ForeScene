@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { LocationProject, SceneObject } from '../../domain/types';
 import { selectionBounds } from '../buildSelection';
 import { buildScene, disposeScene } from '../sceneObjects';
+import { resolveSceneRelationships } from '../sceneRelationships';
 
 export type AgentAuthoringView =
   | 'isometric'
@@ -46,12 +47,29 @@ function filteredProject(project: LocationProject, levelId?: string): {
   project: LocationProject;
   objects: SceneObject[];
 } {
-  const objects = project.scene.objects.filter((object) => (
+  const baseObjects = project.scene.objects.filter((object) => (
     object.visible !== false
     && object.type !== 'sun_marker'
     && (!levelId || architectureLevelId(object) === levelId)
   ));
-  if (!levelId) return { project, objects };
+  if (!levelId) return { project, objects: baseObjects };
+
+  // Keep semantic cutter sources that affect a selected level even when the
+  // source itself is not tagged to that level (stairs commonly span levels).
+  const selectedIds = new Set(baseObjects.map((object) => object.id));
+  const resolution = resolveSceneRelationships(project);
+  const cutterSourceIds = new Set(
+    resolution.relationships
+      .filter((relationship) => (
+        relationship.status === 'resolved'
+        && relationship.targetId
+        && selectedIds.has(relationship.targetId)
+      ))
+      .map((relationship) => relationship.sourceId),
+  );
+  const objects = project.scene.objects.filter((object) => (
+    baseObjects.includes(object) || cutterSourceIds.has(object.id)
+  ));
   return {
     project: {
       ...project,
