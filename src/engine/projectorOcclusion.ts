@@ -8,7 +8,8 @@ import {
 import {
   computeGrayboxPanoFarPlane,
 } from './sceneBounds';
-import { createObject3D, disposeScene } from './sceneObjects';
+import { createResolvedObject3D, disposeScene } from './sceneObjects';
+import { resolveSceneRelationships } from './sceneRelationships';
 
 const DEFAULT_OCCLUSION_FACE_SIZE = 512;
 const DEFAULT_OCCLUSION_NEAR = 0.05;
@@ -68,11 +69,12 @@ function buildOccluderScene(
   const scene = new THREE.Scene();
   scene.background = null;
   scene.environment = null;
+  const relationshipResolution = resolveSceneRelationships(project);
 
   for (const object of project.scene.objects) {
     if (!shouldContributeProjectionOcclusion(object)) continue;
     if (hiddenTypes.has(object.type)) continue;
-    const mesh = createObject3D(object, false, 'light', project.assets);
+    const mesh = createResolvedObject3D(project, object, false, 'light', relationshipResolution);
     mesh.userData.sceneObjectId = object.id;
     scene.add(mesh);
   }
