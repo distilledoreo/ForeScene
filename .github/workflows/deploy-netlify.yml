@@ -1,0 +1,58 @@
+name: Manual Netlify deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netlify-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify Netlify credentials
+        shell: bash
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::Missing GitHub Actions secret NETLIFY_AUTH_TOKEN."
+            exit 1
+          fi
+          if [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::error::Missing GitHub Actions secret NETLIFY_SITE_ID."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build ForeScene locally on runner
+        run: npm run build
+
+      - name: Deploy prebuilt site and functions to Netlify production
+        shell: bash
+        run: |
+          npx --yes netlify-cli@latest deploy \
+            --dir=dist \
+            --functions=netlify/functions \
+            --prod \
+            --site "$NETLIFY_SITE_ID" \
+            --auth "$NETLIFY_AUTH_TOKEN" \
+            --message "ForeScene ${GITHUB_SHA}"
