@@ -54,6 +54,7 @@ implementation.
 | Render raw NumPy float32 camera-Z depth prior | `world.depth.render` | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Preview mutation plan | `project.previewPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Apply plan | `project.applyPlan` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Compile procedural Agent script to a validated plan | `project.script` | ❌ | ❌ | ✅ | ✅ | ❌ |
 | Analyze character | `character.analyze` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Import GLB character | `character.import` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Import .fsrig saved rig | `character.importSavedRig` | ✅ | ✅ | ✅ | ✅ | ✅ |
