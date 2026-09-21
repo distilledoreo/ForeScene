@@ -550,7 +550,7 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
         });
       }
 
-      if (resolvedPortal || legacyHosted) {
+      if ((resolvedPortal || legacyHosted) && tag?.openingKind !== 'window') {
         const thresholdSupport = supportSideForPortal(object, bounds, supports, boundsById);
         if (!thresholdSupport.positive || !thresholdSupport.negative) {
           const missingSides = [
@@ -769,8 +769,8 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
   scripting: {
     architecture: {
       level: 'architecture.level({name, elevation, height}) -> level descriptor',
-      opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> opening descriptor; does not mutate by itself',
-      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> wall assembly; legacy opening declarations remain supported, but a separately placed doorway can now cut a continuous compatible wall automatically',
+      opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> bounded opening descriptor; architecture.wall places an overlapping cutter object',
+      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> one continuous wall plus overlapping semantic opening cutters; no manual wall segmentation',
       slab: 'architecture.slab({level, name?, width, depth, thickness?, center?:[x,z], role?:"floor"|"ceiling"})',
       room: 'architecture.room({level, name, boundary:[[x,z],...], thickness?, height?, openingsByEdge?}) -> free-form polygon wall loop',
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',
