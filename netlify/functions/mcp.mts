@@ -112,6 +112,7 @@ const TOOL_DEFINITIONS = [
       properties: {
         plan: { type: 'object' },
         expectedRevisionId: { type: 'string' },
+        allowSpatialErrors: { type: 'boolean', description: 'Explicitly allow new spatial preflight errors for intentionally unusual geometry.' },
       },
       required: ['plan'],
       additionalProperties: false,
@@ -284,6 +285,53 @@ async function callTool(
       if (!args.plan || typeof args.plan !== 'object' || Array.isArray(args.plan)) {
         throw new RemoteAgentRelayError('invalid_argument', 'plan must be an Agent Plan object.');
       }
+
+      const project = await runRemoteBrowserCommand(
+        token,
+        'project.document',
+        {},
+        { timeoutMs: 18_000 },
+      ) as LocationProject;
+      const prepared = prepareAgentPlan(args.plan, {
+        project,
+        workspace: 'build',
+        selectedObjectIds: [],
+        selectedShotId: project.shots[0]?.id,
+        gridSnap: false,
+      });
+      if (!prepared.ok) {
+        return {
+          ok: false,
+          blocked: true,
+          error: { code: 'invalid_plan', message: 'Plan failed local preparation before apply.' },
+          diagnostics: prepared.diagnostics,
+          warnings: prepared.warnings,
+        };
+      }
+      const baselineSpatial = validateSpatialAuthoring(project);
+      const proposedSpatial = validateSpatialAuthoring(prepared.prepared.nextProject);
+      const baselineErrorKeys = new Set(
+        baselineSpatial.issues
+          .filter((issue) => issue.severity === 'error')
+          .map((issue) => issue.code + ':' + [...issue.objectIds].sort().join(',')),
+      );
+      const newSpatialErrors = proposedSpatial.issues.filter((issue) => (
+        issue.severity === 'error'
+        && !baselineErrorKeys.has(issue.code + ':' + [...issue.objectIds].sort().join(','))
+      ));
+      if (newSpatialErrors.length > 0 && args.allowSpatialErrors !== true) {
+        return {
+          ok: false,
+          blocked: true,
+          error: {
+            code: 'spatial_validation_failed',
+            message: 'Apply blocked because the plan introduces new spatial-authoring errors. Fix them or explicitly set allowSpatialErrors=true.',
+          },
+          newSpatialErrors,
+          spatialValidation: proposedSpatial,
+        };
+      }
+
       return runRemoteBrowserCommand(
         token,
         'project.apply_plan',
