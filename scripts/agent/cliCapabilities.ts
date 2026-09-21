@@ -191,7 +191,7 @@ export const AGENT_CLI_CAPABILITY_RECORDS: AgentCliCapabilityRecord[] = [
     skillDocumented: true,
     stable: false,
     write: true,
-    notes: 'Sandboxed Node VM emits ordinary Agent Plan commands; --write is required to apply.',
+    notes: 'Restricted Node VM emits ordinary Agent Plan commands; --write is required to apply. Intended for locally generated/trusted agent scripts, not hostile multi-tenant code.',
   },
   {
     id: 'character.analyze',
