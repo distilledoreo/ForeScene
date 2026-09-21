@@ -127,6 +127,15 @@ export function parseForeSceneAgentPlan(input: unknown): AgentPlanParseResult {
     });
   }
 
+  const expandedCommandCount = commands.reduce((sum, command) => sum + expandedCommandCost(command), 0);
+  if (expandedCommandCount > AGENT_PLAN_LIMITS.maxExpandedCommands) {
+    errors.push(agentError(
+      'expanded_commands_limit',
+      `Expanded command count ${expandedCommandCount} exceeds the maximum of ${AGENT_PLAN_LIMITS.maxExpandedCommands}.`,
+      { path: 'commands' },
+    ));
+  }
+
   if (errors.length > 0) return { errors, warnings };
   if (root.version !== AGENT_PLAN_SCHEMA_VERSION || commands.length === 0) {
     return { errors, warnings };
@@ -144,6 +153,16 @@ export function parseForeSceneAgentPlan(input: unknown): AgentPlanParseResult {
   }
 
   return { plan, errors, warnings };
+}
+
+function expandedCommandCost(command: ForeSceneAgentCommand): number {
+  if (command.op === 'object.createMany' || command.op === 'object.updateMany') {
+    return command.items.length;
+  }
+  if (command.op === 'object.duplicateMany') {
+    return command.items.reduce((sum, item) => sum + 1 + (item.updates ? 1 : 0), 0);
+  }
+  return 1;
 }
 
 function coerceJsonRoot(
@@ -224,12 +243,18 @@ function parseCommand(
       return parseProjectUpdateInfo(record, path, errors, warnings);
     case 'object.create':
       return parseObjectCreate(record, path, refNames, errors, warnings);
+    case 'object.createMany':
+      return parseObjectCreateMany(record, path, refNames, errors, warnings);
     case 'object.update':
       return parseObjectUpdate(record, path, errors, warnings);
+    case 'object.updateMany':
+      return parseObjectUpdateMany(record, path, errors, warnings);
     case 'object.delete':
       return parseObjectDelete(record, path, errors, warnings);
     case 'object.duplicate':
       return parseObjectDuplicate(record, path, refNames, errors, warnings);
+    case 'object.duplicateMany':
+      return parseObjectDuplicateMany(record, path, refNames, errors, warnings);
     case 'shot.create':
       return parseShotCreate(record, path, refNames, errors, warnings);
     case 'shot.rename':
@@ -418,6 +443,45 @@ function parseObjectCreate(
   return command;
 }
 
+function parseObjectCreateMany(
+  record: Record<string, unknown>,
+  path: string,
+  refNames: Set<string>,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  if (!Array.isArray(record.items) || record.items.length === 0) {
+    errors.push(agentError('bulk_items', 'object.createMany requires a nonempty items array.', { path: `${path}.items` }));
+    return undefined;
+  }
+  if (record.items.length > AGENT_PLAN_LIMITS.maxBulkItems) {
+    errors.push(agentError(
+      'bulk_items_limit',
+      `object.createMany supports at most ${AGENT_PLAN_LIMITS.maxBulkItems} items.`,
+      { path: `${path}.items` },
+    ));
+    return undefined;
+  }
+  const items: Extract<ForeSceneAgentCommand, { op: 'object.createMany' }>['items'] = [];
+  record.items.forEach((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push(agentError('bulk_item_type', 'Bulk create item must be an object.', { path: `${path}.items[${index}]` }));
+      return;
+    }
+    const parsed = parseObjectCreate(
+      { op: 'object.create', ...(raw as Record<string, unknown>) },
+      `${path}.items[${index}]`,
+      refNames,
+      errors,
+      warnings,
+    );
+    if (parsed?.op === 'object.create') {
+      items.push({ ...(parsed.ref ? { ref: parsed.ref } : {}), object: parsed.object });
+    }
+  });
+  return items.length ? { op: 'object.createMany', items } : undefined;
+}
+
 function parseObjectUpdate(
   record: Record<string, unknown>,
   path: string,
@@ -454,6 +518,96 @@ function parseObjectDuplicate(
   const command: ForeSceneAgentCommand = { op: 'object.duplicate', object: target };
   if (ref !== undefined) command.ref = ref;
   return command;
+}
+
+function parseObjectUpdateMany(
+  record: Record<string, unknown>,
+  path: string,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  if (!Array.isArray(record.items) || record.items.length === 0) {
+    errors.push(agentError('bulk_items', 'object.updateMany requires a nonempty items array.', { path: `${path}.items` }));
+    return undefined;
+  }
+  if (record.items.length > AGENT_PLAN_LIMITS.maxBulkItems) {
+    errors.push(agentError(
+      'bulk_items_limit',
+      `object.updateMany supports at most ${AGENT_PLAN_LIMITS.maxBulkItems} items.`,
+      { path: `${path}.items` },
+    ));
+    return undefined;
+  }
+  const items: Extract<ForeSceneAgentCommand, { op: 'object.updateMany' }>['items'] = [];
+  record.items.forEach((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push(agentError('bulk_item_type', 'Bulk update item must be an object.', { path: `${path}.items[${index}]` }));
+      return;
+    }
+    const parsed = parseObjectUpdate(
+      { op: 'object.update', ...(raw as Record<string, unknown>) },
+      `${path}.items[${index}]`,
+      errors,
+      warnings,
+    );
+    if (parsed?.op === 'object.update') items.push({ object: parsed.object, updates: parsed.updates });
+  });
+  return items.length ? { op: 'object.updateMany', items } : undefined;
+}
+
+function parseObjectDuplicateMany(
+  record: Record<string, unknown>,
+  path: string,
+  refNames: Set<string>,
+  errors: AgentDiagnostic[],
+  warnings: AgentDiagnostic[],
+): ForeSceneAgentCommand | undefined {
+  if (!Array.isArray(record.items) || record.items.length === 0) {
+    errors.push(agentError('bulk_items', 'object.duplicateMany requires a nonempty items array.', { path: `${path}.items` }));
+    return undefined;
+  }
+  if (record.items.length > AGENT_PLAN_LIMITS.maxBulkItems) {
+    errors.push(agentError(
+      'bulk_items_limit',
+      `object.duplicateMany supports at most ${AGENT_PLAN_LIMITS.maxBulkItems} items.`,
+      { path: `${path}.items` },
+    ));
+    return undefined;
+  }
+  const items: Extract<ForeSceneAgentCommand, { op: 'object.duplicateMany' }>['items'] = [];
+  record.items.forEach((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push(agentError('bulk_item_type', 'Bulk duplicate item must be an object.', { path: `${path}.items[${index}]` }));
+      return;
+    }
+    const item = raw as Record<string, unknown>;
+    const parsed = parseObjectDuplicate(
+      { op: 'object.duplicate', object: item.object, ref: item.ref },
+      `${path}.items[${index}]`,
+      refNames,
+      errors,
+      warnings,
+    );
+    if (!parsed || parsed.op !== 'object.duplicate') return;
+    const updates = item.updates === undefined
+      ? undefined
+      : parseObjectUpdates(item.updates, `${path}.items[${index}].updates`, errors, warnings);
+    if (item.updates !== undefined && !updates) return;
+    if (updates && !parsed.ref) {
+      errors.push(agentError(
+        'bulk_duplicate_ref',
+        'Bulk duplicate items with updates require a ref.',
+        { path: `${path}.items[${index}].ref` },
+      ));
+      return;
+    }
+    items.push({
+      object: parsed.object,
+      ...(parsed.ref ? { ref: parsed.ref } : {}),
+      ...(updates ? { updates } : {}),
+    });
+  });
+  return items.length ? { op: 'object.duplicateMany', items } : undefined;
 }
 
 function parseShotCreate(
