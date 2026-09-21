@@ -729,6 +729,12 @@ const primitiveReference = Object.fromEntries(
         : AGENT_UPRIGHT_OBJECT_TYPES.has(type)
           ? 'position Y denotes the desired BOTTOM/floor contact; compiler stores center above it'
           : 'position is the object CENTER',
+      ...(type === 'doorway' ? {
+        behavior: 'A doorway is a semantic portal and bounded wall cutter. When it overlaps exactly one compatible wall, ForeScene derives the opening automatically; do not manually split that wall just to make the door gap.',
+      } : {}),
+      ...(type === 'stairs' ? {
+        behavior: 'Stairs carry a bounded clearance volume above their top landing. ForeScene automatically cuts the nearest eligible floor/slab layer intersecting that volume. Stairs never silently cut walls or unrelated geometry; those overlaps remain visible to validation.',
+      } : {}),
     }];
   }),
 );
@@ -749,14 +755,17 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
     'Do not guess story Y values repeatedly. Use architecture.level and architecture helpers.',
     'Raw scene.create has legacy placement semantics that vary by primitive; consult primitiveReference below.',
     'For substantial construction: build -> scene_validate -> scene_capture (top/isometric) -> correct -> apply/finalize.',
-    'Door/window openings should be authored through architecture.opening + architecture.wall so wall geometry is segmented around the opening.',
+    'Doorways are semantic portals/cutters: place the doorway overlapping one compatible wall and ForeScene cuts the wall automatically inside the bounded doorway volume.',
+    'Do not manually split a continuous wall merely to make space for a doorway. Ambiguous multi-wall overlaps are not guessed and are reported.',
+    'Stairs automatically cut only the nearest eligible horizontal floor/slab layer inside their bounded clearance volume above the top landing; they do not erase walls or arbitrary geometry.',
+    'Treat substantial unexplained intersections as evidence to investigate, not automatically as errors: hosted cutters, support contacts, assemblies, and normal wall junctions are explained relationships.',
   ],
   primitiveReference,
   scripting: {
     architecture: {
       level: 'architecture.level({name, elevation, height}) -> level descriptor',
       opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> opening descriptor; does not mutate by itself',
-      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> segmented wall assembly',
+      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> wall assembly; legacy opening declarations remain supported, but a separately placed doorway can now cut a continuous compatible wall automatically',
       slab: 'architecture.slab({level, name?, width, depth, thickness?, center?:[x,z], role?:"floor"|"ceiling"})',
       room: 'architecture.room({level, name, boundary:[[x,z],...], thickness?, height?, openingsByEdge?}) -> free-form polygon wall loop',
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',
