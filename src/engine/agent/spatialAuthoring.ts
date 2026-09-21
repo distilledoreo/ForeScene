@@ -308,6 +308,7 @@ export function inspectSceneSpatially(
   project: LocationProject,
   query: AgentObjectQuery = {},
 ): AgentSceneSpatialInspection[] {
+  const resolution = resolveSceneRelationships(project);
   const objects = project.scene.objects.filter((object) => matchesQuery(object, query));
   const allVisible = project.scene.objects.filter((object) => object.visible !== false && object.type !== 'sun_marker');
   const boundsById = new Map(allVisible.map((object) => [object.id, boundsFor(object)]));
@@ -328,6 +329,25 @@ export function inspectSceneSpatially(
       })
       .map((support) => support.id);
 
+    const intersecting = allVisible
+      .filter((other) => other.id !== object.id)
+      .filter((other) => intersects(bounds, boundsById.get(other.id)!));
+    const intersections = intersecting.map((other) => {
+      const otherBounds = boundsById.get(other.id)!;
+      const relationReason = relationshipExplainsPair(resolution, object, other);
+      const assemblyA = architectureAssemblyId(object);
+      const assemblyB = architectureAssemblyId(other);
+      const overlap = intersectionVolume(bounds, otherBounds);
+      const reason = relationReason
+        ?? (assemblyA && assemblyB && assemblyA === assemblyB ? 'same architectural assembly' : undefined)
+        ?? (expectedWallJunction(object, other, bounds, otherBounds, overlap) ? 'expected wall junction' : undefined);
+      return {
+        objectId: other.id,
+        classification: reason ? 'explained' as const : 'unexplained' as const,
+        ...(reason ? { reason } : {}),
+      };
+    });
+
     return {
       id: object.id,
       name: object.name,
@@ -341,11 +361,10 @@ export function inspectSceneSpatially(
       dimensions: cloneVec3(object.dimensions),
       worldBounds: bounds,
       architecture: architectureMetadata(object),
-      intersectsObjectIds: allVisible
-        .filter((other) => other.id !== object.id)
-        .filter((other) => intersects(bounds, boundsById.get(other.id)!))
-        .map((other) => other.id),
+      intersectsObjectIds: intersecting.map((other) => other.id),
       supportedByObjectIds,
+      relationships: relationshipsForObject(resolution, object.id),
+      intersections,
     };
   });
 }
