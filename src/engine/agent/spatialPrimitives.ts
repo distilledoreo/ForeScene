@@ -11,6 +11,10 @@ import { touchProject } from '../../state/slices/touchProject';
 import { resolveFacingYaw } from '../previs/facingSolver';
 import { objectWorldAabb } from '../previs/compositionTelemetry';
 import {
+  resolveSceneRelationships,
+  resolvedObjectWorldAabbs,
+} from '../sceneRelationships';
+import {
   solveShotCamera,
   type SubjectBounds,
 } from '../previs/cameraSolver';
@@ -202,12 +206,13 @@ function solveSubjectsCameraFromState(
   }
 
   const template = COMPOSITION_TEMPLATES[composition ?? 'medium'] ?? 'medium';
+  const relationshipResolution = resolveSceneRelationships(state.resolvedProject);
   const blockers = state.objects
-    .filter((object) => ['wall', 'box', 'column', 'arch', 'doorway'].includes(object.type))
-    .map((object) => {
-      const box = objectWorldAabb(object);
-      return { id: object.id, min: box.min, max: box.max };
-    });
+    .filter((object) => ['wall', 'box', 'column', 'arch'].includes(object.type))
+    .flatMap((object) => (
+      resolvedObjectWorldAabbs(object, relationshipResolution)
+        .map((box) => ({ id: object.id, min: box.min, max: box.max }))
+    ));
 
   const solved = solveShotCamera({
     shot: {
