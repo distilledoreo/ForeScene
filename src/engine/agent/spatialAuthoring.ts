@@ -1,6 +1,14 @@
+import * as THREE from 'three';
 import { createSceneObject } from '../../domain/defaults';
 import type { LocationProject, SceneObject, Vec3 } from '../../domain/types';
 import { objectWorldAabb } from '../previs/compositionTelemetry';
+import {
+  relationshipForSource,
+  relationshipsForObject,
+  resolveSceneRelationships,
+  type SceneRelationshipResolution,
+  type SceneSpatialRelationship,
+} from '../sceneRelationships';
 import { AGENT_CREATABLE_OBJECT_TYPES, AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 import type { AgentObjectQuery } from './protocol';
 
@@ -44,6 +52,12 @@ export interface AgentSceneSpatialInspection {
   architecture?: AgentArchitectureMetadata;
   intersectsObjectIds: string[];
   supportedByObjectIds: string[];
+  relationships: SceneSpatialRelationship[];
+  intersections: Array<{
+    objectId: string;
+    classification: 'explained' | 'unexplained';
+    reason?: string;
+  }>;
 }
 
 export type AgentSpatialIssueSeverity = 'error' | 'warning' | 'info';
@@ -175,6 +189,105 @@ function isLikelySupport(object: SceneObject, bounds: AgentWorldBounds): boolean
     && bounds.size[0] >= 1
     && bounds.size[2] >= 1
   );
+}
+
+function objectVolume(bounds: AgentWorldBounds): number {
+  return Math.max(1e-8, bounds.size[0] * bounds.size[1] * bounds.size[2]);
+}
+
+function architectureAssemblyId(object: SceneObject): string | undefined {
+  return architectureMetadata(object)?.assemblyId;
+}
+
+function relationshipExplainsPair(
+  resolution: SceneRelationshipResolution,
+  a: SceneObject,
+  b: SceneObject,
+): string | undefined {
+  const relationship = resolution.relationships.find((candidate) => (
+    candidate.status === 'resolved'
+    && (
+      (candidate.sourceId === a.id && candidate.targetId === b.id)
+      || (candidate.sourceId === b.id && candidate.targetId === a.id)
+    )
+  ));
+  if (!relationship) return undefined;
+  return relationship.kind === 'portal_host'
+    ? 'doorway portal is intentionally hosted in and cuts this wall'
+    : 'stair clearance intentionally cuts this horizontal structure';
+}
+
+function wallLike(object: SceneObject): boolean {
+  const kind = architectureMetadata(object)?.kind;
+  return object.type === 'wall' || kind === 'wall' || kind === 'wall_segment';
+}
+
+function horizontalYawDifferenceDegrees(a: SceneObject, b: SceneObject): number {
+  const normalize = (value: number) => {
+    let normalized = value % 180;
+    if (normalized < 0) normalized += 180;
+    return normalized;
+  };
+  const delta = Math.abs(normalize(a.transform.rotation[1]) - normalize(b.transform.rotation[1]));
+  return Math.min(delta, 180 - delta);
+}
+
+function expectedWallJunction(
+  a: SceneObject,
+  b: SceneObject,
+  aBounds: AgentWorldBounds,
+  bBounds: AgentWorldBounds,
+  overlapVolume: number,
+): boolean {
+  if (!wallLike(a) || !wallLike(b)) return false;
+  const assemblyA = architectureAssemblyId(a);
+  const assemblyB = architectureAssemblyId(b);
+  if (assemblyA && assemblyB && assemblyA === assemblyB) return true;
+  const ratio = overlapVolume / Math.min(objectVolume(aBounds), objectVolume(bBounds));
+  const yawDelta = horizontalYawDifferenceDegrees(a, b);
+  if (yawDelta >= 25) return ratio <= 0.35;
+  return ratio <= 0.08;
+}
+
+function supportSideForPortal(
+  doorway: SceneObject,
+  bounds: AgentWorldBounds,
+  supports: SceneObject[],
+  boundsById: ReadonlyMap<string, AgentWorldBounds>,
+): { positive: boolean; negative: boolean } {
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(doorway.transform.rotation[0]),
+    THREE.MathUtils.degToRad(doorway.transform.rotation[1]),
+    THREE.MathUtils.degToRad(doorway.transform.rotation[2]),
+    'XYZ',
+  );
+  const normal = new THREE.Vector3(0, 0, 1).applyEuler(euler);
+  normal.y = 0;
+  if (normal.lengthSq() < 1e-6) normal.set(0, 0, 1);
+  normal.normalize();
+  const depth = doorway.dimensions[2] * Math.abs(doorway.transform.scale[2]);
+  const offset = depth / 2 + 0.3;
+  const center = new THREE.Vector3(...bounds.center);
+  const thresholdY = bounds.min[1];
+  const points = [
+    center.clone().addScaledVector(normal, offset),
+    center.clone().addScaledVector(normal, -offset),
+  ];
+  const hasSupport = (point: THREE.Vector3) => supports.some((support) => {
+    if (support.id === doorway.id) return false;
+    const supportBounds = boundsById.get(support.id);
+    if (!supportBounds) return false;
+    const verticalGap = thresholdY - supportBounds.max[1];
+    return (
+      verticalGap >= -0.12
+      && verticalGap <= 0.35
+      && footprintContains(supportBounds, [point.x, thresholdY, point.z], 0.08)
+    );
+  });
+  return {
+    positive: hasSupport(points[0]!),
+    negative: hasSupport(points[1]!),
+  };
 }
 
 function matchesQuery(object: SceneObject, query: AgentObjectQuery): boolean {
