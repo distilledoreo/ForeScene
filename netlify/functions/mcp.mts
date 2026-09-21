@@ -53,7 +53,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'scene_inspect',
-    description: 'Inspect matching objects with transforms, dimensions, world-space bounds, support relationships, intersections, and architectural metadata.',
+    description: 'Inspect matching objects with transforms, dimensions, world-space bounds, supports, semantic cutter/host relationships, and explained versus unexplained intersections.'
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,7 +69,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'scene_validate',
-    description: 'Run spatial/architectural preflight. Detect axis mistakes, story misalignment, unhosted openings, unsupported elevated content, and wall intrusions before applying/finalizing a build.',
+    description: 'Run spatial/architectural preflight. Includes automatic doorway-host resolution, portal threshold support, bounded stair-clearance checks, duplicate supports, story/axis errors, and substantial unexplained intersections.'
     inputSchema: {
       type: 'object',
       properties: {
@@ -96,7 +96,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'project_script',
-    description: 'Compile a stateful ForeScene agent script against the live project and return the normal validated preview. This never applies the plan. For substantial spatial construction, call agent_reference first, prefer architecture.level/wall/opening/slab/room helpers over manual Y bookkeeping, then call scene_validate and scene_capture before applying.',
+    description: 'Compile a stateful ForeScene agent script against the live project and return the normal validated preview. This never applies the plan. Doorways placed through one compatible wall automatically cut it; stairs automatically cut the nearest eligible floor/slab layer in their bounded upper clearance. For substantial construction, call agent_reference, then scene_validate and scene_capture before applying.'
     inputSchema: {
       type: 'object',
       properties: { script: { type: 'string', minLength: 1 } },
