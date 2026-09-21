@@ -1,8 +1,8 @@
-import vm from 'node:vm';
+import * as vm from 'node:vm';
 import type { LocationProject } from '../../src/domain/types';
 import { AGENT_PLAN_LIMITS } from '../../src/engine/agent/constants';
 import { projectFingerprint } from '../../src/engine/agent/planDiff';
-import type { AgentEntityTarget, ForeSceneAgentCommand, ForeSceneAgentPlan } from '../../src/engine/agent/protocol';
+import type { ForeSceneAgentCommand, ForeSceneAgentPlan } from '../../src/engine/agent/protocol';
 
 export const AGENT_SCRIPT_LIMITS = {
   maxSourceBytes: 128 * 1024,
@@ -22,40 +22,235 @@ export interface AgentScriptCompileResult {
   timeoutMs: number;
 }
 
-type ScriptTarget = AgentEntityTarget | string | { id?: string; ref?: string; shotNumber?: string; query?: Record<string, unknown> };
+interface RawAgentScriptResult {
+  description?: string;
+  commands: ForeSceneAgentCommand[];
+}
 
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+function resolveTimeoutMs(value: number | undefined): number {
+  const timeoutMs = value ?? AGENT_SCRIPT_LIMITS.defaultTimeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('Agent script timeout must be a positive finite number.');
   }
-  return value;
+  return Math.min(Math.floor(timeoutMs), AGENT_SCRIPT_LIMITS.maxTimeoutMs);
 }
 
-function normalizeTarget(value: ScriptTarget): AgentEntityTarget {
-  if (typeof value === 'string') return { id: value };
-  if (!value || typeof value !== 'object') throw new TypeError('Expected an entity id, ref, shotNumber, query, or project entity.');
-  if (typeof value.ref === 'string') return { ref: value.ref };
-  if (typeof value.id === 'string') return { id: value.id };
-  if (typeof value.shotNumber === 'string') return { shotNumber: value.shotNumber };
-  if (value.query && typeof value.query === 'object') return { query: { ...value.query } as AgentEntityTarget & any } as AgentEntityTarget;
-  throw new TypeError('Target has no id, ref, shotNumber, or query.');
-}
+function buildProgram(projectJson: string, source: string): string {
+  return `(() => {
+    "use strict";
+    const __commands = [];
+    const __counts = { object: 0, shot: 0, landmark: 0 };
+    let __description;
 
-function matches(value: Record<string, unknown>, query: Record<string, unknown>): boolean {
-  const mode = query.match === 'contains' ? 'contains' : 'exact';
-  for (const [key, expected] of Object.entries(query)) {
-    if (key === 'match' || expected === undefined) continue;
-    const actual = value[key];
-    if (key === 'name') {
-      const left = String(actual ?? '').toLowerCase();
-      const right = String(expected).toLowerCase();
-      if (mode === 'contains' ? !left.includes(right) : left !== right) return false;
-      continue;
+    function __deepFreeze(value) {
+      if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+        Object.freeze(value);
+        for (const key of Object.keys(value)) __deepFreeze(value[key]);
+      }
+      return value;
     }
-    if (actual !== expected) return false;
+
+    function __emit(command) {
+      if (!command || typeof command !== 'object' || Array.isArray(command)) {
+        throw new TypeError('ForeScene script commands must be objects.');
+      }
+      if (__commands.length >= ${AGENT_PLAN_LIMITS.maxCommands}) {
+        throw new Error('ForeScene script command limit exceeded (${AGENT_PLAN_LIMITS.maxCommands}). Split the work into multiple scripts.');
+      }
+      __commands.push(command);
+      return command;
+    }
+
+    function __nextRef(kind) {
+      __counts[kind] += 1;
+      return 'script_' + kind + '_' + __counts[kind];
+    }
+
+    function __target(value) {
+      if (typeof value === 'string') return { id: value };
+      if (!value || typeof value !== 'object') {
+        throw new TypeError('Expected an entity id, ref, shotNumber, query, or project entity.');
+      }
+      if (typeof value.ref === 'string') return { ref: value.ref };
+      if (typeof value.id === 'string') return { id: value.id };
+      if (typeof value.shotNumber === 'string') return { shotNumber: value.shotNumber };
+      if (value.query && typeof value.query === 'object') return { query: { ...value.query } };
+      throw new TypeError('Target has no id, ref, shotNumber, or query.');
+    }
+
+    function __matches(value, query) {
+      if (!query || typeof query !== 'object') return true;
+      const mode = query.match === 'contains' ? 'contains' : 'exact';
+      for (const [key, expected] of Object.entries(query)) {
+        if (key === 'match' || expected === undefined) continue;
+        const actual = value[key];
+        if (key === 'name') {
+          const left = String(actual ?? '').toLowerCase();
+          const right = String(expected).toLowerCase();
+          if (mode === 'contains' ? !left.includes(right) : left !== right) return false;
+        } else if (actual !== expected) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    const project = __deepFreeze(${projectJson});
+
+    const target = __deepFreeze({
+      id: (id) => __deepFreeze({ id: String(id) }),
+      ref: (ref) => __deepFreeze({ ref: String(ref) }),
+      shotNumber: (shotNumber) => __deepFreeze({ shotNumber: String(shotNumber) }),
+      query: (query) => __deepFreeze({ query: { ...query } }),
+    });
+
+    const scene = __deepFreeze({
+      list: () => project.scene.objects,
+      find: (query) => project.scene.objects.find((value) => __matches(value, query)),
+      findAll: (query) => project.scene.objects.filter((value) => __matches(value, query)),
+      require(query) {
+        const value = this.find(query);
+        if (!value) throw new Error('No scene object matched ' + JSON.stringify(query));
+        return value;
+      },
+      create(type, options = {}) {
+        const { ref, ...object } = options;
+        const createdRef = typeof ref === 'string' ? ref : __nextRef('object');
+        __emit({ op: 'object.create', ref: createdRef, object: { ...object, type } });
+        return __deepFreeze({ ref: createdRef });
+      },
+      update(object, updates) {
+        __emit({ op: 'object.update', object: __target(object), updates });
+      },
+      delete(object) {
+        __emit({ op: 'object.delete', object: __target(object) });
+      },
+      duplicate(object, options = {}) {
+        const createdRef = typeof options.ref === 'string' ? options.ref : __nextRef('object');
+        __emit({ op: 'object.duplicate', object: __target(object), ref: createdRef });
+        if (options.updates && typeof options.updates === 'object') {
+          __emit({ op: 'object.update', object: { ref: createdRef }, updates: options.updates });
+        }
+        return __deepFreeze({ ref: createdRef });
+      },
+    });
+
+    const shots = __deepFreeze({
+      list: () => project.shots,
+      find: (query) => project.shots.find((value) => __matches(value, query)),
+      findAll: (query) => project.shots.filter((value) => __matches(value, query)),
+      require(query) {
+        const value = this.find(query);
+        if (!value) throw new Error('No shot matched ' + JSON.stringify(query));
+        return value;
+      },
+      create(options = {}) {
+        const { ref, ...shot } = options;
+        const createdRef = typeof ref === 'string' ? ref : __nextRef('shot');
+        __emit({ op: 'shot.create', ref: createdRef, shot });
+        return __deepFreeze({ ref: createdRef });
+      },
+      rename(shot, name) {
+        __emit({ op: 'shot.rename', shot: __target(shot), name });
+      },
+      describe(shot, description) {
+        __emit({ op: 'shot.updateDescription', shot: __target(shot), description });
+      },
+      camera(shot, camera) {
+        __emit({ op: 'shot.updateCamera', shot: __target(shot), camera });
+      },
+      frameSubjects(shot, subjects, composition) {
+        __emit({
+          op: 'shot.frameSubjects',
+          shot: __target(shot),
+          subjects: subjects.map(__target),
+          ...(composition ? { composition } : {}),
+        });
+      },
+      stage(shot, object, options = {}) {
+        __emit({ op: 'shot.stageObject', shot: __target(shot), object: __target(object), ...options });
+      },
+      clearStaging(shot, object) {
+        __emit({
+          op: 'shot.clearStaging',
+          shot: __target(shot),
+          ...(object ? { object: __target(object) } : {}),
+        });
+      },
+      delete(shot) {
+        __emit({ op: 'shot.delete', shot: __target(shot) });
+      },
+    });
+
+    const landmarks = __deepFreeze({
+      list: () => project.landmarks,
+      find: (query) => project.landmarks.find((value) => __matches(value, query)),
+      findAll: (query) => project.landmarks.filter((value) => __matches(value, query)),
+      require(query) {
+        const value = this.find(query);
+        if (!value) throw new Error('No landmark matched ' + JSON.stringify(query));
+        return value;
+      },
+      create(options = {}) {
+        const { ref, ...landmark } = options;
+        const createdRef = typeof ref === 'string' ? ref : __nextRef('landmark');
+        __emit({ op: 'landmark.create', ref: createdRef, landmark });
+        return __deepFreeze({ ref: createdRef });
+      },
+      update(landmark, updates) {
+        __emit({ op: 'landmark.update', landmark: __target(landmark), updates });
+      },
+      link(landmark, object) {
+        __emit({
+          op: 'landmark.linkObject',
+          landmark: __target(landmark),
+          object: object === null ? null : __target(object),
+        });
+      },
+      delete(landmark) {
+        __emit({ op: 'landmark.delete', landmark: __target(landmark) });
+      },
+    });
+
+    const workspace = __deepFreeze({
+      open(value) {
+        __emit({ op: 'workspace.open', workspace: value });
+      },
+    });
+
+    const plan = __deepFreeze({
+      description(value) {
+        __description = String(value);
+      },
+      command(command) {
+        return __emit(command);
+      },
+    });
+
+    ${source}
+
+    return JSON.stringify({
+      ...(__description ? { description: __description } : {}),
+      commands: __commands,
+    });
+  })()`;
+}
+
+function parseResult(serialized: unknown): RawAgentScriptResult {
+  if (typeof serialized !== 'string') {
+    throw new Error('ForeScene agent script did not produce a serialized plan.');
   }
-  return true;
+  const parsed = JSON.parse(serialized) as Partial<RawAgentScriptResult>;
+  if (!Array.isArray(parsed.commands)) {
+    throw new Error('ForeScene agent script did not produce a command array.');
+  }
+  if (parsed.commands.length > AGENT_PLAN_LIMITS.maxCommands) {
+    throw new Error(`ForeScene agent script produced ${parsed.commands.length} commands; maximum is ${AGENT_PLAN_LIMITS.maxCommands}.`);
+  }
+  if (parsed.description !== undefined && typeof parsed.description !== 'string') {
+    throw new Error('ForeScene agent script description must be a string.');
+  }
+  return parsed as RawAgentScriptResult;
 }
 
 export function compileAgentScript(
@@ -68,158 +263,19 @@ export function compileAgentScript(
   if (sourceBytes > AGENT_SCRIPT_LIMITS.maxSourceBytes) {
     throw new Error(`Agent script is ${sourceBytes} bytes; maximum is ${AGENT_SCRIPT_LIMITS.maxSourceBytes}.`);
   }
-  const requestedTimeout = options.timeoutMs ?? AGENT_SCRIPT_LIMITS.defaultTimeoutMs;
-  if (!Number.isFinite(requestedTimeout) || requestedTimeout <= 0) throw new Error('Agent script timeout must be a positive finite number.');
-  const timeoutMs = Math.min(Math.floor(requestedTimeout), AGENT_SCRIPT_LIMITS.maxTimeoutMs);
+  const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+  const projectJson = JSON.stringify(project);
+  if (!projectJson) throw new Error('Could not serialize the current ForeScene project for scripting.');
 
-  const commands: ForeSceneAgentCommand[] = [];
-  let description: string | undefined;
-  const counters = { object: 0, shot: 0, landmark: 0 };
-  const snapshot = deepFreeze(structuredClone(project));
-
-  const emit = (command: ForeSceneAgentCommand) => {
-    if (commands.length >= AGENT_PLAN_LIMITS.maxCommands) {
-      throw new Error(`ForeScene script command limit exceeded (${AGENT_PLAN_LIMITS.maxCommands}). Split the work into multiple scripts.`);
-    }
-    commands.push(structuredClone(command));
-    return command;
-  };
-  const nextRef = (kind: keyof typeof counters) => {
-    counters[kind] += 1;
-    return `script_${kind}_${counters[kind]}`;
-  };
-
-  const target = deepFreeze({
-    id: (id: string) => deepFreeze({ id: String(id) }),
-    ref: (ref: string) => deepFreeze({ ref: String(ref) }),
-    shotNumber: (shotNumber: string) => deepFreeze({ shotNumber: String(shotNumber) }),
-    query: (query: Record<string, unknown>) => deepFreeze({ query: { ...query } }),
+  const context = vm.createContext(Object.create(null), {
+    name: 'ForeScene Agent Script',
+    codeGeneration: { strings: false, wasm: false },
+    microtaskMode: 'afterEvaluate',
   });
 
-  const scene = deepFreeze({
-    list: () => snapshot.scene.objects,
-    find: (query: Record<string, unknown>) => snapshot.scene.objects.find((value) => matches(value as unknown as Record<string, unknown>, query)),
-    findAll: (query: Record<string, unknown>) => snapshot.scene.objects.filter((value) => matches(value as unknown as Record<string, unknown>, query)),
-    require(query: Record<string, unknown>) {
-      const found = this.find(query);
-      if (!found) throw new Error(`No scene object matched ${JSON.stringify(query)}`);
-      return found;
-    },
-    create(type: string, options: Record<string, unknown> = {}) {
-      const { ref, ...object } = options;
-      const createdRef = typeof ref === 'string' ? ref : nextRef('object');
-      emit({ op: 'object.create', ref: createdRef, object: { ...object, type } as any });
-      return deepFreeze({ ref: createdRef });
-    },
-    update(object: ScriptTarget, updates: Record<string, unknown>) {
-      emit({ op: 'object.update', object: normalizeTarget(object), updates });
-    },
-    delete(object: ScriptTarget) {
-      emit({ op: 'object.delete', object: normalizeTarget(object) });
-    },
-    duplicate(object: ScriptTarget, options: Record<string, unknown> = {}) {
-      const createdRef = typeof options.ref === 'string' ? options.ref : nextRef('object');
-      emit({ op: 'object.duplicate', object: normalizeTarget(object), ref: createdRef });
-      if (options.updates && typeof options.updates === 'object') {
-        emit({ op: 'object.update', object: { ref: createdRef }, updates: options.updates as Record<string, unknown> });
-      }
-      return deepFreeze({ ref: createdRef });
-    },
-  });
-
-  const shots = deepFreeze({
-    list: () => snapshot.shots,
-    find: (query: Record<string, unknown>) => snapshot.shots.find((value) => matches(value as unknown as Record<string, unknown>, query)),
-    findAll: (query: Record<string, unknown>) => snapshot.shots.filter((value) => matches(value as unknown as Record<string, unknown>, query)),
-    require(query: Record<string, unknown>) {
-      const found = this.find(query);
-      if (!found) throw new Error(`No shot matched ${JSON.stringify(query)}`);
-      return found;
-    },
-    create(options: Record<string, unknown> = {}) {
-      const { ref, ...shot } = options;
-      const createdRef = typeof ref === 'string' ? ref : nextRef('shot');
-      emit({ op: 'shot.create', ref: createdRef, shot: shot as any });
-      return deepFreeze({ ref: createdRef });
-    },
-    rename(shot: ScriptTarget, name: string) {
-      emit({ op: 'shot.rename', shot: normalizeTarget(shot), name });
-    },
-    describe(shot: ScriptTarget, text: string) {
-      emit({ op: 'shot.updateDescription', shot: normalizeTarget(shot), description: text });
-    },
-    camera(shot: ScriptTarget, camera: Record<string, unknown>) {
-      emit({ op: 'shot.updateCamera', shot: normalizeTarget(shot), camera: camera as any });
-    },
-    frameSubjects(shot: ScriptTarget, subjects: ScriptTarget[], composition?: string) {
-      emit({ op: 'shot.frameSubjects', shot: normalizeTarget(shot), subjects: subjects.map(normalizeTarget), ...(composition ? { composition } : {}) });
-    },
-    stage(shot: ScriptTarget, object: ScriptTarget, options: Record<string, unknown> = {}) {
-      emit({ op: 'shot.stageObject', shot: normalizeTarget(shot), object: normalizeTarget(object), ...options } as any);
-    },
-    clearStaging(shot: ScriptTarget, object?: ScriptTarget) {
-      emit({ op: 'shot.clearStaging', shot: normalizeTarget(shot), ...(object ? { object: normalizeTarget(object) } : {}) });
-    },
-    delete(shot: ScriptTarget) {
-      emit({ op: 'shot.delete', shot: normalizeTarget(shot) });
-    },
-  });
-
-  const landmarks = deepFreeze({
-    list: () => snapshot.landmarks,
-    find: (query: Record<string, unknown>) => snapshot.landmarks.find((value) => matches(value as unknown as Record<string, unknown>, query)),
-    create(options: Record<string, unknown> = {}) {
-      const { ref, ...landmark } = options;
-      const createdRef = typeof ref === 'string' ? ref : nextRef('landmark');
-      emit({ op: 'landmark.create', ref: createdRef, landmark: landmark as any });
-      return deepFreeze({ ref: createdRef });
-    },
-    update(landmark: ScriptTarget, updates: Record<string, unknown>) {
-      emit({ op: 'landmark.update', landmark: normalizeTarget(landmark), updates: updates as any });
-    },
-    link(landmark: ScriptTarget, object: ScriptTarget | null) {
-      emit({ op: 'landmark.linkObject', landmark: normalizeTarget(landmark), object: object === null ? null : normalizeTarget(object) });
-    },
-    delete(landmark: ScriptTarget) {
-      emit({ op: 'landmark.delete', landmark: normalizeTarget(landmark) });
-    },
-  });
-
-  const plan = deepFreeze({
-    description(value: unknown) {
-      description = String(value);
-    },
-    command(command: ForeSceneAgentCommand) {
-      return emit(command);
-    },
-  });
-
-  const workspace = deepFreeze({
-    open(value: 'build' | 'reference' | 'shots' | 'export') {
-      emit({ op: 'workspace.open', workspace: value });
-    },
-  });
-
-  const context = vm.createContext(
-    {
-      project: snapshot,
-      target,
-      scene,
-      shots,
-      landmarks,
-      workspace,
-      plan,
-      console: deepFreeze({ log: () => undefined, warn: () => undefined, error: () => undefined }),
-    },
-    {
-      name: 'ForeScene Agent Script',
-      codeGeneration: { strings: false, wasm: false },
-      microtaskMode: 'afterEvaluate',
-    },
-  );
-
+  let raw: unknown;
   try {
-    new vm.Script(`"use strict";\n${source}`, {
+    raw = new vm.Script(buildProgram(projectJson, source), {
       filename: options.fileName ?? 'forescene-agent-script.js',
       displayErrors: true,
     }).runInContext(context, { timeout: timeoutMs });
@@ -228,11 +284,12 @@ export function compileAgentScript(
     throw new Error(`ForeScene agent script failed: ${message}`);
   }
 
-  const compiledPlan: ForeSceneAgentPlan = {
+  const result = parseResult(raw);
+  const plan: ForeSceneAgentPlan = {
     version: 1,
-    ...(description ? { description } : {}),
+    ...(result.description ? { description: result.description } : {}),
     expectedFingerprint: projectFingerprint(project),
-    commands,
+    commands: result.commands,
   };
-  return { plan: compiledPlan, sourceBytes, commandCount: commands.length, timeoutMs };
+  return { plan, sourceBytes, commandCount: result.commands.length, timeoutMs };
 }
