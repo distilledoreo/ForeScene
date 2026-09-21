@@ -25,6 +25,14 @@ import { isMissingSceneObject } from './projectAssetRecovery';
 import { createProjectedStyleMaterial, isProjectedStyleMaterial } from './projectedStyleMaterials';
 import { degreesToRadians, panoYawToThreeJsYawDegrees } from './sync';
 import { isHiddenProjectedSetProxy, shouldReceiveProjectedStyle } from './sceneObjectVisibility';
+import {
+  localFragmentCenter,
+  localFragmentSize,
+  resolveSceneRelationships,
+  resolvedLocalBoxFragments,
+  type LocalBoxFragment,
+  type SceneRelationshipResolution,
+} from './sceneRelationships';
 export { shouldReceiveProjectedStyle } from './sceneObjectVisibility';
 
 export type SceneVisualTheme = 'light' | 'dark';
@@ -391,6 +399,7 @@ export function buildScene(
     );
   }
 
+  const relationshipResolution = resolveSceneRelationships(project);
   const objectsById = new Map(project.scene.objects.map((object) => [object.id, object]));
   const groupedImportedIds = new Set(
     Object.values(project.scene.objectGroups ?? {})
@@ -419,6 +428,7 @@ export function buildScene(
       {
         skipImportedMeshCentering: groupedImportedIds.has(object.id),
         skipContactShadow: groupedImportedIds.has(object.id),
+        relationshipResolution,
       },
     );
     mesh.userData.sceneObjectId = object.id;
@@ -696,7 +706,11 @@ export function createObject3D(
   _selected = false,
   theme: SceneVisualTheme = 'light',
   assets?: AssetRegistry,
-  options?: { skipImportedMeshCentering?: boolean; skipContactShadow?: boolean },
+  options?: {
+    skipImportedMeshCentering?: boolean;
+    skipContactShadow?: boolean;
+    relationshipResolution?: SceneRelationshipResolution;
+  },
 ): THREE.Object3D {
   let node: THREE.Object3D;
   let character: ReturnType<typeof resolvePoseableCharacterForObject>;
@@ -708,12 +722,27 @@ export function createObject3D(
     case 'floor':
     case 'wall':
     case 'box':
-    case 'background_card':
-      node = new THREE.Mesh(
-        getSharedPrimitiveGeometry(`box:${w}:${h}:${d}`, () => new THREE.BoxGeometry(w, h, d)),
-        material,
-      );
+    case 'background_card': {
+      const fragments = options?.relationshipResolution
+        ? resolvedLocalBoxFragments(object, options.relationshipResolution)
+        : undefined;
+      node = fragments && fragments.length !== 1
+        ? createCutBoxFragments(fragments, material)
+        : fragments?.length === 1 && (
+          fragments[0]!.min[0] !== -w / 2
+          || fragments[0]!.max[0] !== w / 2
+          || fragments[0]!.min[1] !== -h / 2
+          || fragments[0]!.max[1] !== h / 2
+          || fragments[0]!.min[2] !== -d / 2
+          || fragments[0]!.max[2] !== d / 2
+        )
+          ? createCutBoxFragments(fragments, material)
+          : new THREE.Mesh(
+              getSharedPrimitiveGeometry(`box:${w}:${h}:${d}`, () => new THREE.BoxGeometry(w, h, d)),
+              material,
+            );
       break;
+    }
     case 'column':
       node = new THREE.Mesh(
         getSharedPrimitiveGeometry(
@@ -896,6 +925,39 @@ const PROCEDURAL_SCALE_TYPES = new Set<SceneObjectType>([
 
 export function sceneObjectUsesProceduralScale(type: SceneObjectType): boolean {
   return PROCEDURAL_SCALE_TYPES.has(type);
+}
+
+function createCutBoxFragments(
+  fragments: LocalBoxFragment[],
+  material: THREE.Material,
+): THREE.Group {
+  const group = new THREE.Group();
+  for (const fragment of fragments) {
+    const size = localFragmentSize(fragment);
+    const center = localFragmentCenter(fragment);
+    const mesh = new THREE.Mesh(
+      getSharedPrimitiveGeometry(
+        `cut_box:${size[0]}:${size[1]}:${size[2]}`,
+        () => new THREE.BoxGeometry(size[0], size[1], size[2]),
+      ),
+      material,
+    );
+    mesh.position.fromArray(center);
+    group.add(mesh);
+  }
+  return group;
+}
+
+export function createResolvedObject3D(
+  project: LocationProject,
+  object: SceneObject,
+  selected = false,
+  theme: SceneVisualTheme = 'light',
+  resolution: SceneRelationshipResolution = resolveSceneRelationships(project),
+): THREE.Object3D {
+  return createObject3D(object, selected, theme, project.assets, {
+    relationshipResolution: resolution,
+  });
 }
 
 function createArch(object: SceneObject, material: THREE.Material): THREE.Group {
