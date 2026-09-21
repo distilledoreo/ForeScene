@@ -277,7 +277,6 @@ export function compileAgentScript(
   try {
     raw = new vm.Script(buildProgram(projectJson, source), {
       filename: options.fileName ?? 'forescene-agent-script.js',
-      displayErrors: true,
     }).runInContext(context, { timeout: timeoutMs });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
