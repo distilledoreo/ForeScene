@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+      NETLIFY_SITE_TARGET: forescene.distilledlabs.org
 
     steps:
       - name: Checkout
@@ -40,10 +40,6 @@ jobs:
             echo "::error::Missing GitHub Actions secret NETLIFY_AUTH_TOKEN."
             exit 1
           fi
-          if [ -z "$NETLIFY_SITE_ID" ]; then
-            echo "::error::Missing GitHub Actions secret NETLIFY_SITE_ID."
-            exit 1
-          fi
 
       - name: Install dependencies
         run: npm ci
@@ -58,6 +54,6 @@ jobs:
             --dir=dist \
             --functions=netlify/functions \
             --prod \
-            --site "$NETLIFY_SITE_ID" \
+            --site "$NETLIFY_SITE_TARGET" \
             --auth "$NETLIFY_AUTH_TOKEN" \
             --message "ForeScene ${GITHUB_SHA}"
