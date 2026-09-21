@@ -720,83 +720,47 @@ function buildProgram(
         const openings = Array.isArray(options.openings) ? options.openings.map(__clone) : [];
         openings.sort((a, b) => a.offset - b.offset);
 
-        let cursor = 0;
-        const segments = [];
-        for (let index = 0; index < openings.length; index += 1) {
-          const opening = openings[index];
+        const wall = scene.create('wall', {
+          name: wallName,
+          position: [(start[0] + end[0]) / 2, level.elevation, (start[1] + end[1]) / 2],
+          rotation: [0, yaw, 0],
+          dimensions: [length, wallHeight, thickness],
+          stagingRole: 'set',
+          metadata: __levelMetadata(level, {
+            kind: 'wall',
+            assemblyId,
+          }),
+        });
+
+        const openingObjects = [];
+        for (const opening of openings) {
           const half = opening.width / 2;
-          const openStart = Math.max(0, opening.offset - half);
-          const openEnd = Math.min(length, opening.offset + half);
-          if (!(openEnd > openStart) || opening.offset < 0 || opening.offset > length) {
+          const openStart = opening.offset - half;
+          const openEnd = opening.offset + half;
+          if (!(openEnd > openStart) || openStart < 0 || openEnd > length) {
             throw new Error('Wall opening offset/width must fall inside the wall length.');
           }
-
-          if (openStart > cursor + 0.01) {
-            const a = __wallPoint(start, end, cursor);
-            const b = __wallPoint(start, end, openStart);
-            const segment = __wallSegment(
-              level, a, b, 0, wallHeight, thickness, yaw,
-              wallName + ' segment ' + (segments.length + 1),
-              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
-            );
-            if (segment) segments.push(segment);
+          const openingTop = opening.sillHeight + opening.height;
+          if (openingTop > wallHeight + 0.01) {
+            throw new Error('Wall opening height/sill exceeds the wall height.');
           }
 
           const center = __wallPoint(start, end, opening.offset);
-          if (opening.sillHeight > 0.01) {
-            const a = __wallPoint(start, end, openStart);
-            const b = __wallPoint(start, end, openEnd);
-            const sill = __wallSegment(
-              level, a, b, 0, opening.sillHeight, thickness, yaw,
-              wallName + ' window sill',
-              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
-            );
-            if (sill) segments.push(sill);
-          }
-          const openingTop = opening.sillHeight + opening.height;
-          if (openingTop < wallHeight - 0.01) {
-            const a = __wallPoint(start, end, openStart);
-            const b = __wallPoint(start, end, openEnd);
-            const header = __wallSegment(
-              level, a, b, openingTop, wallHeight - openingTop, thickness, yaw,
-              wallName + ' opening header',
-              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
-            );
-            if (header) segments.push(header);
-          }
-
-          if (opening.kind === 'door') {
-            const doorway = scene.create('doorway', {
-              name: opening.name ?? (wallName + ' doorway'),
-              position: [center[0], level.elevation, center[1]],
-              rotation: [0, yaw, 0],
-              dimensions: [opening.width, opening.height, Math.max(thickness, 0.12)],
-              stagingRole: 'set',
-              metadata: __levelMetadata(level, {
-                kind: 'opening',
-                assemblyId,
-                hostWallId: assemblyId,
-                openingKind: 'door',
-                openingOffset: opening.offset,
-              }),
-            });
-            segments.push(doorway);
-          }
-
-          cursor = Math.max(cursor, openEnd);
-        }
-
-        if (cursor < length - 0.01) {
-          const a = __wallPoint(start, end, cursor);
-          const segment = __wallSegment(
-            level, a, end, 0, wallHeight, thickness, yaw,
-            wallName + (openings.length ? ' segment ' + (segments.length + 1) : ''),
-            __levelMetadata(level, {
-              kind: openings.length ? 'wall_segment' : 'wall',
+          const cutterDepth = Math.max(thickness + 0.06, 0.16);
+          const openingObject = scene.create('doorway', {
+            name: opening.name ?? (wallName + (opening.kind === 'window' ? ' window' : ' doorway')),
+            position: [center[0], level.elevation + opening.sillHeight, center[1]],
+            rotation: [0, yaw, 0],
+            dimensions: [opening.width, opening.height, cutterDepth],
+            stagingRole: 'set',
+            metadata: __levelMetadata(level, {
+              kind: 'opening',
               assemblyId,
+              openingKind: opening.kind,
+              openingOffset: opening.offset,
             }),
-          );
-          if (segment) segments.push(segment);
+          });
+          openingObjects.push(openingObject);
         }
 
         return __snapshot({
@@ -807,11 +771,11 @@ function buildProgram(
           to: end,
           height: wallHeight,
           thickness,
+          wall,
           openings,
-          segments,
+          openingObjects,
         });
       },
-
       room(options = {}) {
         const level = __requireLevel(options.level);
         const boundary = options.boundary;
