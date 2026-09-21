@@ -22,17 +22,23 @@ describe('spatial authoring', () => {
     bad.name = 'Ground floor slab';
     bad.dimensions = [10, 8, 0.2];
     bad.transform.position = [0, -4, 0];
-    project.scene.objects = [bad];
+
+    const legitimateWall = createSceneObject('wall', 1);
+    legitimateWall.name = 'Second floor north wall';
+    legitimateWall.dimensions = [10, 3, 0.18];
+    legitimateWall.transform.position = [0, 4.7, -4];
+
+    project.scene.objects = [bad, legitimateWall];
 
     const report = validateSpatialAuthoring(project);
     expect(report.ok).toBe(false);
-    expect(report.issues).toEqual(expect.arrayContaining([
+    const axisIssues = report.issues.filter((issue) => issue.code === 'dimension_axis_mismatch');
+    expect(axisIssues).toEqual([
       expect.objectContaining({
-        code: 'dimension_axis_mismatch',
         severity: 'error',
         objectIds: [bad.id],
       }),
-    ]));
+    ]);
   });
 
   it('returns dimensions, bounds, support, intersections, and architecture metadata', () => {
