@@ -172,6 +172,16 @@ The authoritative safety boundary remains the generated Agent Plan: unsupported 
 `plan.command(...)` remains an advanced escape hatch. It is emitted into the final plan, but arbitrary raw commands are not interpreted back into the shadow model. Use the typed `scene`, `shots`, and `landmarks` helpers when later script statements need to observe the mutation.
 
 
+## Semantic cutter relationships
+
+ForeScene resolves certain overlaps into non-destructive relationships before rendering, inspection, validation, coverage analysis, and export-oriented rendering:
+
+- **Doorway → wall:** a doorway overlapping exactly one compatible wall automatically becomes a hosted portal and cuts only the bounded doorway volume through that wall. Do not split a continuous wall just to manufacture a door gap. If multiple compatible walls overlap the doorway, ForeScene reports ambiguity instead of guessing.
+- **Stairs → upper floor/slab:** stairs carry a bounded clearance volume above the top landing. The nearest eligible horizontal floor/slab layer intersecting that clearance is cut automatically within the stair footprint. Walls and unrelated geometry are never silently deleted.
+- **Other intersections:** validation classifies known host/cutter relationships, same assemblies, supports, and ordinary wall junctions as explained. Substantial remaining overlaps are surfaced for investigation rather than blanket-rejected.
+
+These cuts are derived from authored primitives; moving or deleting the doorway/stairs immediately moves or removes the effective opening without baking destructive mesh edits.
+
 ## Recommended spatial-authoring loop
 
 For substantial scene construction, the remote MCP surface is designed for this loop:
