@@ -92,6 +92,7 @@ export interface AgentCliArgs {
   allowPartial: boolean;
   pruneNonManifestShots: boolean;
   expectedRevision?: string;
+  scriptTimeoutMs?: number;
 }
 
 export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
@@ -284,6 +285,12 @@ export function parseAgentCliArgs(argv: string[]): AgentCliArgs {
         throw new Error('--expected-revision requires a revision id');
       }
       args.expectedRevision = value;
+    } else if (token === '--script-timeout') {
+      const value = Number(argv[++index]);
+      if (args.command !== 'script' || !Number.isFinite(value) || value <= 0) {
+        throw new Error('--script-timeout requires a positive number and is supported only by script');
+      }
+      args.scriptTimeoutMs = value;
     } else if (token.startsWith('--')) {
       throw new Error(`Unknown flag: ${token}`);
     }
