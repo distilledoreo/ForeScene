@@ -461,6 +461,10 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
       room: 'architecture.room({level, name, boundary:[[x,z],...], thickness?, height?, openingsByEdge?}) -> free-form polygon wall loop',
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',
     },
+    creation: [
+      'scene.createCentered(type, {position:[centerX,centerY,centerZ], dimensions,...}) gives uniform CENTER semantics across primitive types',
+      'scene.create(...) remains available for legacy primitive-specific placement semantics',
+    ],
     spatial: [
       'scene.bounds',
       'scene.distance',
