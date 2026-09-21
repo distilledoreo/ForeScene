@@ -98,6 +98,7 @@ import {
   type ResolveCliShotReferencesResult,
 } from './cliShotSelection';
 import { buildFrameCliResult } from './frameResult';
+import { compileAgentScript } from './agentScript';
 
 let activeCliCommand: string | undefined;
 let activeCliOperation: ReturnType<typeof beginCliOperation> | undefined;
@@ -1112,6 +1113,92 @@ async function previewOrApply(
   });
 }
 
+async function runAgentScript(options: {
+  url?: string;
+  headless: boolean;
+  writeAccess: boolean;
+  persistWrite: boolean;
+  profile?: string;
+  file: string;
+  output?: string;
+  expectedRevision?: string;
+  timeoutMs?: number;
+}) {
+  const sourcePath = path.resolve(options.file);
+  const source = await readFile(sourcePath, 'utf8');
+  await withSession(options, async (session) => {
+    const project = await session.page.evaluate(() => window.foreScene!.getProjectDocument());
+    const compiled = compileAgentScript(source, project, {
+      fileName: sourcePath,
+      timeoutMs: options.timeoutMs,
+    });
+    const preview = await session.page.evaluate(
+      (plan) => window.foreScene!.previewPlan(plan),
+      compiled.plan,
+    );
+    if (options.output) {
+      const output = path.resolve(options.output);
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(compiled.plan, null, 2)}\n`, 'utf8');
+    }
+    if (!preview.ok) {
+      printJson({
+        ok: false,
+        status: 'preview_failed',
+        source: sourcePath,
+        output: options.output ? path.resolve(options.output) : undefined,
+        compiled: {
+          sourceBytes: compiled.sourceBytes,
+          commandCount: compiled.commandCount,
+          timeoutMs: compiled.timeoutMs,
+        },
+        plan: compiled.plan,
+        preview,
+      });
+      process.exitCode = AGENT_CLI_EXIT.failure;
+      return;
+    }
+    if (!options.writeAccess) {
+      printJson({
+        ok: true,
+        status: 'previewed',
+        source: sourcePath,
+        output: options.output ? path.resolve(options.output) : undefined,
+        compiled: {
+          sourceBytes: compiled.sourceBytes,
+          commandCount: compiled.commandCount,
+          timeoutMs: compiled.timeoutMs,
+        },
+        plan: compiled.plan,
+        preview,
+      });
+      return;
+    }
+    await waitForAgentIdle(session.page);
+    const applied = await session.page.evaluate(
+      ({ plan, expectedRevisionId }) => window.foreScene!.applyPlan(
+        plan,
+        expectedRevisionId ? { expectedRevisionId } : undefined,
+      ),
+      { plan: compiled.plan, expectedRevisionId: options.expectedRevision },
+    );
+    printJson({
+      ...applied,
+      status: applied.ok ? 'applied' : 'apply_failed',
+      source: sourcePath,
+      output: options.output ? path.resolve(options.output) : undefined,
+      compiled: {
+        sourceBytes: compiled.sourceBytes,
+        commandCount: compiled.commandCount,
+        timeoutMs: compiled.timeoutMs,
+      },
+      plan: compiled.plan,
+      preview,
+    });
+    if (!applied.ok) process.exitCode = AGENT_CLI_EXIT.failure;
+  });
+}
+
 async function runScreenshot(options: {
   url?: string;
   headless: boolean;
@@ -1787,6 +1874,23 @@ async function main() {
       allowHeavyModelImports: args.allowHeavyModelImports,
     });
     printJson(result);
+    return;
+  }
+
+  if (args.command === 'script') {
+    if (!args.file) throw new AgentCliUsageError('script requires --file <script.js>.');
+    if (args.writeAccess) requireExplicitWrite('script', args.writeAccess);
+    await runAgentScript({
+      url: args.url,
+      headless: args.headless,
+      writeAccess: args.writeAccess,
+      persistWrite: args.persistWrite,
+      profile: args.profile,
+      file: args.file,
+      output: args.output,
+      expectedRevision: args.expectedRevision,
+      timeoutMs: args.scriptTimeoutMs,
+    });
     return;
   }
 

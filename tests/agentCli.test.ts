@@ -54,6 +54,7 @@ describe('agent CLI discovery', () => {
       'capabilities',
       'describe',
       'schema',
+      'script',
       'import-panorama',
       'shot-panorama',
       'world-preview',
@@ -88,6 +89,7 @@ describe('agent CLI discovery', () => {
     expect(packageJson.scripts?.['agent:cancel']).toContain('cancel');
     expect(packageJson.scripts?.['agent:operations']).toContain('operations');
     expect(packageJson.scripts?.['agent:frame']).toContain('frame');
+    expect(packageJson.scripts?.['agent:script']).toContain('script');
     expect(packageJson.scripts?.['agent:import-panorama']).toContain('import-panorama');
     expect(packageJson.scripts?.['agent:shot-panorama']).toContain('shot-panorama');
     expect(packageJson.scripts?.['agent:video']).toContain('video');
@@ -104,6 +106,9 @@ describe('agent CLI discovery', () => {
     });
     expect(describeAgentCliCommand('previs')?.required).toContain('--manifest <manifest.json>');
     expect(describeAgentCliCommand('contact-sheet')?.required).toContain('--input <frames-dir>');
+    expect(describeAgentCliCommand('script')).toMatchObject({ operation: 'project.script', write: true });
+    expect(describeAgentCliCommand('script')?.required).toContain('--file <script.js>');
+    expect(parseAgentCliArgs(['script', '--file', 'build.js', '--script-timeout', '1500'])).toMatchObject({ command: 'script', file: 'build.js', scriptTimeoutMs: 1500 });
     expect(parseAgentCliArgs(['previs', '--help'])).toMatchObject({ command: 'previs', helpRequested: true });
     expect(parseAgentCliArgs(['describe', '--command', 'video'])).toMatchObject({
       command: 'describe',
@@ -327,6 +332,7 @@ describe('agent CLI public surface', () => {
     expect(parsed.operation).toBe('agent.capabilities');
     expect(parsed.result.capabilities['project.open']).toBe(true);
     expect(parsed.result.capabilities['project.save']).toBe(true);
+    expect(parsed.result.capabilities['project.script']).toBe(true);
     expect(parsed.result.capabilities['character.importSavedRig']).toBe(true);
     expect(parsed.result.capabilities['render.frame.projected']).toBe(true);
     expect(parsed.result.capabilities['render.video.projected']).toBe(true);

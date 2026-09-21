@@ -39,6 +39,7 @@
     "agent:refine": "node --import tsx scripts/agent/cli.ts refine",
     "agent:preview": "node --import tsx scripts/agent/cli.ts preview",
     "agent:apply": "node --import tsx scripts/agent/cli.ts apply",
+    "agent:script": "node --import tsx scripts/agent/cli.ts script",
     "agent:screenshot": "node --import tsx scripts/agent/cli.ts screenshot",
     "agent:frame": "node --import tsx scripts/agent/cli.ts frame",
     "agent:video": "node --import tsx scripts/agent/cli.ts video",
