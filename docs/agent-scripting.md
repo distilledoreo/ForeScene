@@ -38,9 +38,16 @@ Available globals:
 - `project`: deeply frozen read-only project snapshot.
 - `scene`: stateful query/mutation helpers plus spatial and bulk operations.
   - Query: `list`, `find`, `findAll`, `require`.
-  - Mutation: `create`, `createMany`, `update`, `updateMany`, `delete`, `duplicate`, `duplicateMany`.
+  - Mutation: `create`, `createCentered`, `createMany`, `update`, `updateMany`, `delete`, `duplicate`, `duplicateMany`.
   - Spatial: `bounds`, `distance`, `intersects`, `nearest`, `placeOn`, `align`, `lookAt`, `distribute`.
   - Procedural arrays: `linearArray`, `radialArray`.
+- `architecture`: semantic, non-template helpers for spatial construction.
+  - `level({ id?, name, elevation, height })` declares a story coordinate frame.
+  - `slab({ level, width, depth, thickness?, center?, role? })` creates a correctly oriented floor/ceiling slab.
+  - `opening({ kind, offset, width, height, sillHeight? })` declares a door/window opening.
+  - `wall({ level, from:[x,z], to:[x,z], openings? })` builds wall segments around openings instead of placing a doorway in front of solid geometry.
+  - `room({ level, boundary:[[x,z],...], openingsByEdge? })` builds an arbitrary polygon wall loop; it does not choose a room shape for the agent.
+  - `placeOnLevel(object, level, { x?, z?, gap? })` grounds content on a declared story.
 - `shots`: `list`, `find`, `findAll`, `require`, `create`, `rename`, `describe`, `camera`, `frameSubjects`, `stage`, `clearStaging`, `delete`.
 - `landmarks`: `list`, `find`, `findAll`, `require`, `create`, `update`, `link`, `delete`.
 - `target`: helpers for explicit `id`, plan-local `ref`, `shotNumber`, or query targets.
@@ -113,6 +120,18 @@ if (gap > 0.021) throw new Error('Lamp placement drifted');
 
 The live project is still unchanged during this script; only the shadow document changed.
 
+### Coordinate and placement contract
+
+ForeScene is **Y-up** and uses meters:
+
+- position: `[x, y, z]`
+- dimensions: `[width along X, height along Y, depth along Z]`
+- rotation: Euler `[x, y, z]` in **degrees**
+
+For new agent-authored geometry, prefer `scene.createCentered(...)` when you want the supplied position to always mean the object's center. Raw `scene.create(...)` retains legacy primitive-specific placement semantics: floors treat Y as the requested top surface, upright primitives treat Y as bottom/floor contact, and ordinary boxes use center placement.
+
+For substantial architecture, prefer `architecture.level/slab/wall/opening/room` so story elevations and opening segmentation are deterministic.
+
 ### Spatial helpers
 
 `scene.bounds(object)` returns a world-space AABB with `min`, `max`, `size`, and `center`. Bounds account for object dimensions, scale, and Euler rotation.
@@ -151,3 +170,18 @@ This is defense in depth for locally generated or otherwise trusted agent script
 The authoritative safety boundary remains the generated Agent Plan: unsupported operations, invalid values, stale project fingerprints, invalid targets, bulk-size violations, and expanded-operation budget violations are rejected by ForeScene's existing plan compiler before any live mutation occurs.
 
 `plan.command(...)` remains an advanced escape hatch. It is emitted into the final plan, but arbitrary raw commands are not interpreted back into the shadow model. Use the typed `scene`, `shots`, and `landmarks` helpers when later script statements need to observe the mutation.
+
+
+## Recommended spatial-authoring loop
+
+For substantial scene construction, the remote MCP surface is designed for this loop:
+
+1. Read `agent_reference`.
+2. Inspect existing geometry with `scene_inspect`.
+3. Build with `project_script`, preferring semantic architecture helpers where relevant.
+4. Run `scene_validate`.
+5. Inspect `scene_capture({ view: "top" })` and `scene_capture({ view: "isometric" })`.
+6. Correct issues and repeat validation/capture.
+7. Call `project_apply` only after the preview is spatially coherent.
+
+This workflow constrains bookkeeping and physical consistency, not creative layout decisions.
