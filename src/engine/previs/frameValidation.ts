@@ -20,6 +20,10 @@ import {
 } from './compositionConstraints';
 import { getProductionConfiguration } from './productionConfiguration';
 import type { AgentVisualPreflightResult } from '../agent/protocol';
+import {
+  resolveSceneRelationships,
+  resolvedObjectWorldAabbs,
+} from '../sceneRelationships';
 
 export type FrameValidationStatus = 'passed' | 'warning' | 'failed' | 'needs_review';
 
@@ -896,25 +900,22 @@ function isCameraInsideSolidGeometry(
   cameraPosition: Vec3,
   project: LocationProject,
 ): boolean {
+  const resolution = resolveSceneRelationships(project);
+  const margin = 0.08;
   for (const object of project.scene.objects) {
-    if (!SOLID_TYPES.has(object.type)) continue;
+    if (!SOLID_TYPES.has(object.type) || object.type === 'doorway') continue;
     if (object.visible === false) continue;
-    const dims = object.dimensions;
-    const scale = object.transform.scale;
-    const hx = (dims[0] * scale[0]) / 2;
-    const hy = (dims[1] * scale[1]) / 2;
-    const hz = (dims[2] * scale[2]) / 2;
-    const center = object.transform.position;
-    const margin = 0.08;
-    if (
-      cameraPosition[0] > center[0] - hx + margin
-      && cameraPosition[0] < center[0] + hx - margin
-      && cameraPosition[1] > center[1] - hy + margin
-      && cameraPosition[1] < center[1] + hy - margin
-      && cameraPosition[2] > center[2] - hz + margin
-      && cameraPosition[2] < center[2] + hz - margin
-    ) {
-      return true;
+    for (const bounds of resolvedObjectWorldAabbs(object, resolution)) {
+      if (
+        cameraPosition[0] > bounds.min[0] + margin
+        && cameraPosition[0] < bounds.max[0] - margin
+        && cameraPosition[1] > bounds.min[1] + margin
+        && cameraPosition[1] < bounds.max[1] - margin
+        && cameraPosition[2] > bounds.min[2] + margin
+        && cameraPosition[2] < bounds.max[2] - margin
+      ) {
+        return true;
+      }
     }
   }
   return false;

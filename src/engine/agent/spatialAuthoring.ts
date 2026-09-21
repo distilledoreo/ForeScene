@@ -1,6 +1,15 @@
+import * as THREE from 'three';
 import { createSceneObject } from '../../domain/defaults';
 import type { LocationProject, SceneObject, Vec3 } from '../../domain/types';
 import { objectWorldAabb } from '../previs/compositionTelemetry';
+import {
+  relationshipForSource,
+  relationshipsForObject,
+  resolveSceneRelationships,
+  stairClearanceWorldAabb,
+  type SceneRelationshipResolution,
+  type SceneSpatialRelationship,
+} from '../sceneRelationships';
 import { AGENT_CREATABLE_OBJECT_TYPES, AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 import type { AgentObjectQuery } from './protocol';
 
@@ -44,6 +53,12 @@ export interface AgentSceneSpatialInspection {
   architecture?: AgentArchitectureMetadata;
   intersectsObjectIds: string[];
   supportedByObjectIds: string[];
+  relationships: SceneSpatialRelationship[];
+  intersections: Array<{
+    objectId: string;
+    classification: 'explained' | 'unexplained';
+    reason?: string;
+  }>;
 }
 
 export type AgentSpatialIssueSeverity = 'error' | 'warning' | 'info';
@@ -77,6 +92,19 @@ const STRUCTURAL_TYPES = new Set<SceneObject['type']>([
   'wall',
   'doorway',
   'arch',
+]);
+
+const INTERSECTION_SOLID_TYPES = new Set<SceneObject['type']>([
+  'floor',
+  'wall',
+  'box',
+  'column',
+  'arch',
+  'doorway',
+  'stairs',
+  'terrain_mass',
+  'background_card',
+  'imported_model',
 ]);
 
 function cloneVec3(value: Vec3): Vec3 {
@@ -169,12 +197,132 @@ function isLikelySupport(object: SceneObject, bounds: AgentWorldBounds): boolean
   if (tag?.kind === 'slab') return true;
   if (object.type === 'floor') return true;
   const name = object.name.toLowerCase();
+  if (
+    object.type === 'terrain_mass'
+    && /(?:ground|terrain|land|platform|deck)/i.test(name)
+  ) return true;
   return (
-    (name.includes('floor') || name.includes('slab') || name.includes('deck'))
+    /(?:floor|slab|deck|platform)/i.test(name)
     && bounds.size[1] <= 0.6
     && bounds.size[0] >= 1
     && bounds.size[2] >= 1
   );
+}
+
+function worldBoundsFromMinMax(min: Vec3, max: Vec3): AgentWorldBounds {
+  return {
+    min: cloneVec3(min),
+    max: cloneVec3(max),
+    center: [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2,
+    ],
+    size: [
+      max[0] - min[0],
+      max[1] - min[1],
+      max[2] - min[2],
+    ],
+  };
+}
+
+function objectVolume(bounds: AgentWorldBounds): number {
+  return Math.max(1e-8, bounds.size[0] * bounds.size[1] * bounds.size[2]);
+}
+
+function architectureAssemblyId(object: SceneObject): string | undefined {
+  return architectureMetadata(object)?.assemblyId;
+}
+
+function relationshipExplainsPair(
+  resolution: SceneRelationshipResolution,
+  a: SceneObject,
+  b: SceneObject,
+): string | undefined {
+  const relationship = resolution.relationships.find((candidate) => (
+    candidate.status === 'resolved'
+    && (
+      (candidate.sourceId === a.id && candidate.targetId === b.id)
+      || (candidate.sourceId === b.id && candidate.targetId === a.id)
+    )
+  ));
+  if (!relationship) return undefined;
+  return relationship.kind === 'portal_host'
+    ? 'doorway portal is intentionally hosted in and cuts this wall'
+    : 'stair clearance intentionally cuts this horizontal structure';
+}
+
+function wallLike(object: SceneObject): boolean {
+  const kind = architectureMetadata(object)?.kind;
+  return object.type === 'wall' || kind === 'wall' || kind === 'wall_segment';
+}
+
+function horizontalYawDifferenceDegrees(a: SceneObject, b: SceneObject): number {
+  const normalize = (value: number) => {
+    let normalized = value % 180;
+    if (normalized < 0) normalized += 180;
+    return normalized;
+  };
+  const delta = Math.abs(normalize(a.transform.rotation[1]) - normalize(b.transform.rotation[1]));
+  return Math.min(delta, 180 - delta);
+}
+
+function expectedWallJunction(
+  a: SceneObject,
+  b: SceneObject,
+  aBounds: AgentWorldBounds,
+  bBounds: AgentWorldBounds,
+  overlapVolume: number,
+): boolean {
+  if (!wallLike(a) || !wallLike(b)) return false;
+  const assemblyA = architectureAssemblyId(a);
+  const assemblyB = architectureAssemblyId(b);
+  if (assemblyA && assemblyB && assemblyA === assemblyB) return true;
+  const ratio = overlapVolume / Math.min(objectVolume(aBounds), objectVolume(bBounds));
+  const yawDelta = horizontalYawDifferenceDegrees(a, b);
+  if (yawDelta >= 25) return ratio <= 0.35;
+  return ratio <= 0.08;
+}
+
+function supportSideForPortal(
+  doorway: SceneObject,
+  bounds: AgentWorldBounds,
+  supports: SceneObject[],
+  boundsById: ReadonlyMap<string, AgentWorldBounds>,
+): { positive: boolean; negative: boolean } {
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(doorway.transform.rotation[0]),
+    THREE.MathUtils.degToRad(doorway.transform.rotation[1]),
+    THREE.MathUtils.degToRad(doorway.transform.rotation[2]),
+    'XYZ',
+  );
+  const normal = new THREE.Vector3(0, 0, 1).applyEuler(euler);
+  normal.y = 0;
+  if (normal.lengthSq() < 1e-6) normal.set(0, 0, 1);
+  normal.normalize();
+  const depth = doorway.dimensions[2] * Math.abs(doorway.transform.scale[2]);
+  const offset = depth / 2 + 0.3;
+  const center = new THREE.Vector3(...bounds.center);
+  const thresholdY = bounds.min[1];
+  const points = [
+    center.clone().addScaledVector(normal, offset),
+    center.clone().addScaledVector(normal, -offset),
+  ];
+  const hasSupport = (point: THREE.Vector3) => supports.some((support) => {
+    if (support.id === doorway.id) return false;
+    const supportBounds = boundsById.get(support.id);
+    if (!supportBounds) return false;
+    const verticalGap = thresholdY - supportBounds.max[1];
+    return (
+      verticalGap >= -0.12
+      && verticalGap <= 0.35
+      && footprintContains(supportBounds, [point.x, thresholdY, point.z], 0.08)
+    );
+  });
+  return {
+    positive: hasSupport(points[0]!),
+    negative: hasSupport(points[1]!),
+  };
 }
 
 function matchesQuery(object: SceneObject, query: AgentObjectQuery): boolean {
@@ -195,6 +343,7 @@ export function inspectSceneSpatially(
   project: LocationProject,
   query: AgentObjectQuery = {},
 ): AgentSceneSpatialInspection[] {
+  const resolution = resolveSceneRelationships(project);
   const objects = project.scene.objects.filter((object) => matchesQuery(object, query));
   const allVisible = project.scene.objects.filter((object) => object.visible !== false && object.type !== 'sun_marker');
   const boundsById = new Map(allVisible.map((object) => [object.id, boundsFor(object)]));
@@ -215,6 +364,25 @@ export function inspectSceneSpatially(
       })
       .map((support) => support.id);
 
+    const intersecting = allVisible
+      .filter((other) => other.id !== object.id)
+      .filter((other) => intersects(bounds, boundsById.get(other.id)!));
+    const intersections = intersecting.map((other) => {
+      const otherBounds = boundsById.get(other.id)!;
+      const relationReason = relationshipExplainsPair(resolution, object, other);
+      const assemblyA = architectureAssemblyId(object);
+      const assemblyB = architectureAssemblyId(other);
+      const overlap = intersectionVolume(bounds, otherBounds);
+      const reason = relationReason
+        ?? (assemblyA && assemblyB && assemblyA === assemblyB ? 'same architectural assembly' : undefined)
+        ?? (expectedWallJunction(object, other, bounds, otherBounds, overlap) ? 'expected wall junction' : undefined);
+      return {
+        objectId: other.id,
+        classification: reason ? 'explained' as const : 'unexplained' as const,
+        ...(reason ? { reason } : {}),
+      };
+    });
+
     return {
       id: object.id,
       name: object.name,
@@ -228,11 +396,10 @@ export function inspectSceneSpatially(
       dimensions: cloneVec3(object.dimensions),
       worldBounds: bounds,
       architecture: architectureMetadata(object),
-      intersectsObjectIds: allVisible
-        .filter((other) => other.id !== object.id)
-        .filter((other) => intersects(bounds, boundsById.get(other.id)!))
-        .map((other) => other.id),
+      intersectsObjectIds: intersecting.map((other) => other.id),
       supportedByObjectIds,
+      relationships: relationshipsForObject(resolution, object.id),
+      intersections,
     };
   });
 }
@@ -250,6 +417,7 @@ function addIssue(
 
 export function validateSpatialAuthoring(project: LocationProject): AgentSpatialAuthoringReport {
   const issues: AgentSpatialAuthoringIssue[] = [];
+  const resolution = resolveSceneRelationships(project);
   const objects = project.scene.objects.filter((object) => object.visible !== false && object.type !== 'sun_marker');
   const boundsById = new Map(objects.map((object) => [object.id, boundsFor(object)]));
   const supports = objects.filter((object) => isLikelySupport(object, boundsById.get(object.id)!));
@@ -350,6 +518,9 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
     }
 
     if (object.type === 'doorway') {
+      const portalRelationships = relationshipForSource(resolution, object.id, 'portal_host');
+      const resolvedPortal = portalRelationships.find((relationship) => relationship.status === 'resolved');
+      const ambiguousPortal = portalRelationships.find((relationship) => relationship.status === 'ambiguous');
       const nearWall = structural.some((wall) => {
         if (wall.id === object.id || (wall.type !== 'wall' && architectureMetadata(wall)?.kind !== 'wall_segment')) return false;
         const wallBounds = boundsById.get(wall.id)!;
@@ -359,13 +530,66 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
           && bounds.min[1] <= wallBounds.max[1]
           && bounds.max[1] >= wallBounds.min[1];
       });
-      if (!tag?.hostWallId && !nearWall) {
+      const legacyHosted = Boolean(tag?.hostWallId || nearWall);
+
+      if (ambiguousPortal) {
+        addIssue(issues, {
+          code: 'ambiguous_opening_host',
+          severity: 'warning',
+          objectIds: [object.id, ...(ambiguousPortal.candidateIds ?? [])],
+          message: `Doorway "${object.name}" overlaps multiple compatible walls, so ForeScene did not guess which wall to cut.`,
+          suggestion: 'Move/rotate the doorway so it overlaps one wall clearly, or persist an explicit hostWallId.',
+        });
+      } else if (!resolvedPortal && !legacyHosted) {
         addIssue(issues, {
           code: 'unhosted_opening',
           severity: 'warning',
           objectIds: [object.id],
-          message: `Doorway "${object.name}" is not associated with or adjacent to a wall.`,
-          suggestion: 'Use architecture.opening(...) inside architecture.wall(...) so the wall is segmented around a real opening.',
+          message: `Doorway "${object.name}" does not overlap a unique compatible wall, so no automatic wall opening was derived.`,
+          suggestion: 'Place the doorway so its bounded volume overlaps the intended wall. ForeScene will cut the opening automatically.',
+        });
+      }
+
+      if (resolvedPortal || legacyHosted) {
+        const thresholdSupport = supportSideForPortal(object, bounds, supports, boundsById);
+        if (!thresholdSupport.positive || !thresholdSupport.negative) {
+          const missingSides = [
+            !thresholdSupport.positive ? 'one side' : undefined,
+            !thresholdSupport.negative ? 'the other side' : undefined,
+          ].filter(Boolean).join(' and ');
+          addIssue(issues, {
+            code: 'portal_missing_support',
+            severity: 'warning',
+            objectIds: [object.id],
+            message: `Doorway "${object.name}" has no walkable/supporting surface at ${missingSides} of its threshold.`,
+            suggestion: 'Provide floor, slab, deck, terrain, or another support surface at both sides of a normally traversable portal, or explicitly accept the intentional drop.',
+          });
+        }
+      }
+    }
+
+    if (object.type === 'stairs') {
+      const clearancePlain = stairClearanceWorldAabb(object);
+      const clearance = worldBoundsFromMinMax(clearancePlain.min, clearancePlain.max);
+      const clearanceRelationships = relationshipForSource(resolution, object.id, 'stair_clearance')
+        .filter((relationship) => relationship.status === 'resolved');
+      const cutTargets = new Set(clearanceRelationships.flatMap((relationship) => (
+        relationship.targetId ? [relationship.targetId] : []
+      )));
+      for (const candidate of objects) {
+        if (!INTERSECTION_SOLID_TYPES.has(candidate.type)) continue;
+        if (candidate.id === object.id || cutTargets.has(candidate.id)) continue;
+        const candidateBounds = boundsById.get(candidate.id);
+        if (!candidateBounds || !intersects(clearance, candidateBounds)) continue;
+        if (candidateBounds.max[1] < bounds.max[1] - 0.2) continue;
+        const overlap = intersectionVolume(clearance, candidateBounds);
+        if (overlap <= 0.01) continue;
+        addIssue(issues, {
+          code: 'stair_clearance_obstruction',
+          severity: 'warning',
+          objectIds: [object.id, candidate.id],
+          message: `Stair clearance above "${object.name}" intersects "${candidate.name}" and that object is not an automatically cut floor/slab target.`,
+          suggestion: 'Investigate the intersection: move the obstruction, resize/reorient the stairs, or model an intentional relationship explicitly.',
         });
       }
     }
@@ -415,6 +639,79 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
     }
   }
 
+  for (let i = 0; i < objects.length; i += 1) {
+    const a = objects[i]!;
+    const aBounds = boundsById.get(a.id)!;
+    for (let j = i + 1; j < objects.length; j += 1) {
+      const b = objects[j]!;
+      const bBounds = boundsById.get(b.id)!;
+      const overlap = intersectionVolume(aBounds, bBounds);
+      if (overlap <= 0.005) continue;
+
+      const relationReason = relationshipExplainsPair(resolution, a, b);
+      if (relationReason) continue;
+      const assemblyA = architectureAssemblyId(a);
+      const assemblyB = architectureAssemblyId(b);
+      if (assemblyA && assemblyB && assemblyA === assemblyB) continue;
+      if (expectedWallJunction(a, b, aBounds, bBounds, overlap)) continue;
+
+      const minVolume = Math.min(objectVolume(aBounds), objectVolume(bBounds));
+      const overlapRatio = overlap / Math.max(minVolume, 1e-8);
+      const aSupport = isLikelySupport(a, aBounds);
+      const bSupport = isLikelySupport(b, bBounds);
+
+      if (
+        aSupport
+        && bSupport
+        && overlapRatio >= 0.55
+        && Math.abs(aBounds.center[1] - bBounds.center[1]) <= 0.35
+      ) {
+        addIssue(issues, {
+          code: 'duplicate_support_overlap',
+          severity: 'warning',
+          objectIds: [a.id, b.id],
+          message: `Support surfaces "${a.name}" and "${b.name}" substantially overlap at nearly the same elevation.`,
+          suggestion: 'Check for duplicate/copanar floor, slab, deck, or platform geometry and remove or separate unintended duplicates.',
+        });
+        continue;
+      }
+
+      const stair = a.type === 'stairs' ? a : b.type === 'stairs' ? b : undefined;
+      const other = stair?.id === a.id ? b : stair ? a : undefined;
+      if (stair && other && wallLike(other) && overlapRatio >= 0.03) {
+        addIssue(issues, {
+          code: 'stair_wall_intrusion',
+          severity: 'warning',
+          objectIds: [stair.id, other.id],
+          message: `Stairs "${stair.name}" substantially intersect wall geometry "${other.name}".`,
+          suggestion: 'Investigate the stair run, landing, and wall placement; stair clearance only auto-cuts eligible horizontal floor/slab geometry.',
+        });
+        continue;
+      }
+
+      const aMovable = a.stagingRole === 'prop' || a.stagingRole === 'person' || a.type === 'human_dummy';
+      const bMovable = b.stagingRole === 'prop' || b.stagingRole === 'person' || b.type === 'human_dummy';
+      if ((aMovable && wallLike(b)) || (bMovable && wallLike(a))) {
+        // The more specific content_wall_intrusion check above owns this case.
+        continue;
+      }
+
+      if (
+        INTERSECTION_SOLID_TYPES.has(a.type)
+        && INTERSECTION_SOLID_TYPES.has(b.type)
+        && overlapRatio >= 0.18
+      ) {
+        addIssue(issues, {
+          code: 'unexplained_solid_intersection',
+          severity: 'info',
+          objectIds: [a.id, b.id],
+          message: `"${a.name}" and "${b.name}" substantially intersect with no declared host, cutter, assembly, support, or ordinary wall-junction relationship.`,
+          suggestion: 'Investigate whether the overlap is intentional. If it is, encode the relationship explicitly; otherwise move or resize the geometry.',
+        });
+      }
+    }
+  }
+
   const errorCount = issues.filter((issue) => issue.severity === 'error').length;
   const warningCount = issues.filter((issue) => issue.severity === 'warning').length;
   return {
@@ -437,6 +734,12 @@ const primitiveReference = Object.fromEntries(
         : AGENT_UPRIGHT_OBJECT_TYPES.has(type)
           ? 'position Y denotes the desired BOTTOM/floor contact; compiler stores center above it'
           : 'position is the object CENTER',
+      ...(type === 'doorway' ? {
+        behavior: 'A doorway is a semantic portal and bounded wall cutter. When it overlaps exactly one compatible wall, ForeScene derives the opening automatically; do not manually split that wall just to make the door gap.',
+      } : {}),
+      ...(type === 'stairs' ? {
+        behavior: 'Stairs carry a bounded clearance volume above their top landing. ForeScene automatically cuts the nearest eligible floor/slab layer intersecting that volume. Stairs never silently cut walls or unrelated geometry; those overlaps remain visible to validation.',
+      } : {}),
     }];
   }),
 );
@@ -457,14 +760,17 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
     'Do not guess story Y values repeatedly. Use architecture.level and architecture helpers.',
     'Raw scene.create has legacy placement semantics that vary by primitive; consult primitiveReference below.',
     'For substantial construction: build -> scene_validate -> scene_capture (top/isometric) -> correct -> apply/finalize.',
-    'Door/window openings should be authored through architecture.opening + architecture.wall so wall geometry is segmented around the opening.',
+    'Doorways are semantic portals/cutters: place the doorway overlapping one compatible wall and ForeScene cuts the wall automatically inside the bounded doorway volume.',
+    'Do not manually split a continuous wall merely to make space for a doorway. Ambiguous multi-wall overlaps are not guessed and are reported.',
+    'Stairs automatically cut only the nearest eligible horizontal floor/slab layer inside their bounded clearance volume above the top landing; they do not erase walls or arbitrary geometry.',
+    'Treat substantial unexplained intersections as evidence to investigate, not automatically as errors: hosted cutters, support contacts, assemblies, and normal wall junctions are explained relationships.',
   ],
   primitiveReference,
   scripting: {
     architecture: {
       level: 'architecture.level({name, elevation, height}) -> level descriptor',
       opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> opening descriptor; does not mutate by itself',
-      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> segmented wall assembly',
+      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> wall assembly; legacy opening declarations remain supported, but a separately placed doorway can now cut a continuous compatible wall automatically',
       slab: 'architecture.slab({level, name?, width, depth, thickness?, center?:[x,z], role?:"floor"|"ceiling"})',
       room: 'architecture.room({level, name, boundary:[[x,z],...], thickness?, height?, openingsByEdge?}) -> free-form polygon wall loop',
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',

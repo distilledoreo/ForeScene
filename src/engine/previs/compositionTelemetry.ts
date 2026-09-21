@@ -3,6 +3,10 @@
  */
 
 import * as THREE from 'three';
+import {
+  resolveSceneRelationships,
+  resolvedObjectWorldAabbs,
+} from '../sceneRelationships';
 import type {
   Bounds3,
   CameraData,
@@ -135,6 +139,7 @@ export function buildShotCompositionTelemetry(params: {
   const width = params.frameWidth ?? shot.exportSettings.width ?? 1280;
   const height = params.frameHeight ?? shot.exportSettings.height ?? 720;
   const resolved = resolveProjectForShot(project, shot);
+  const relationshipResolution = resolveSceneRelationships(resolved);
   const matrices = buildCameraMatrices(shot.camera, width, height);
 
   const subjectIds = params.definition
@@ -170,10 +175,10 @@ export function buildShotCompositionTelemetry(params: {
       SOLID_TYPES.has(candidate.type)
       && candidate.visible !== false
     ))
-    .map((candidate) => {
-      const box = objectWorldAabb(candidate);
-      return { objectId: candidate.id, min: box.min, max: box.max };
-    });
+    .flatMap((candidate) => (
+      resolvedObjectWorldAabbs(candidate, relationshipResolution)
+        .map((box) => ({ objectId: candidate.id, min: box.min, max: box.max }))
+    ));
 
   for (const key of matchKeys) {
     const subjectObjects = findObjectsBySubjectKey(resolved, key, params.subjectNames)
@@ -209,8 +214,11 @@ export function buildShotCompositionTelemetry(params: {
   const blockers: ShotCompositionBlocker[] = [];
   for (const object of props) {
     if (!SOLID_TYPES.has(object.type)) continue;
-    const bounds = projectAabb(objectWorldAabb(object), matrices);
-    if (bounds.behindCamera || bounds.areaCoverage < 0.01) continue;
+    const effectiveBounds = resolvedObjectWorldAabbs(object, relationshipResolution)
+      .map((box) => projectAabb(box, matrices))
+      .filter((bounds) => !bounds.behindCamera && bounds.areaCoverage >= 0.01);
+    if (effectiveBounds.length === 0) continue;
+    const projectedArea = Math.max(...effectiveBounds.map((bounds) => bounds.areaCoverage));
     const center = object.transform.position;
     const dist = Math.hypot(
       center[0] - shot.camera.position[0],
@@ -219,7 +227,7 @@ export function buildShotCompositionTelemetry(params: {
     );
     blockers.push({
       objectId: object.id,
-      projectedArea: bounds.areaCoverage,
+      projectedArea,
       nearCamera: dist < 2.5,
     });
   }

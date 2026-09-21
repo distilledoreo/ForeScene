@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { LocationProject, Vec3 } from '../../domain/types';
 import { releaseImportedGeometry } from '../importedMesh';
-import { createObject3D } from '../sceneObjects';
+import { createResolvedObject3D } from '../sceneObjects';
+import { resolveSceneRelationships } from '../sceneRelationships';
 import { ensureSourceModelsForProject, releaseSourceModelInstance, isSharedSourceGeometry } from '../sourceModelRuntime';
 import {
   readWorldTriangle,
@@ -231,9 +232,10 @@ async function forEachProjectMesh(
   const objects = project.scene.objects.filter(
     (object) => object.visible && object.type !== 'sun_marker' && object.category !== 'helper',
   );
+  const relationshipResolution = resolveSceneRelationships(project);
   for (let objectIndex = 0; objectIndex < objects.length; objectIndex += 1) {
     const object = objects[objectIndex];
-    const root = createObject3D(object, false, 'light', project.assets);
+    const root = createResolvedObject3D(project, object, false, 'light', relationshipResolution);
     root.updateMatrixWorld(true);
     const meshes: THREE.Mesh[] = [];
     root.traverse((child) => {

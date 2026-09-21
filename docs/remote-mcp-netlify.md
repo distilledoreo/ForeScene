@@ -109,3 +109,8 @@ Restart/reload the MCP client after changing its configuration.
 - The relay is single-flight per session.
 - Rendered image bytes are not uploaded through the relay yet; `shot_render` returns metadata and browser-local artifact handles.
 - There is no account-level identity or OAuth pairing yet. Possession of the high-entropy session token is the authentication mechanism.
+
+
+## Semantic cutters
+
+Remote MCP clients receive the same effective geometry as the browser renderer. Doorways overlapping one compatible wall automatically cut a bounded portal opening; stairs automatically cut the nearest eligible upper floor/slab layer inside their bounded clearance volume. `scene_inspect` reports these relationships and distinguishes explained from unexplained intersections. `scene_validate` checks portal threshold support, ambiguous hosts, stair-clearance obstructions, duplicate support surfaces, and substantial unexplained solid overlaps.
