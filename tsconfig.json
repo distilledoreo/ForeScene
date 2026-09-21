@@ -33,7 +33,9 @@
     "e2e/**/*.ts",
     "vite.config.ts",
     "vitest.*.config.ts",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "netlify/**/*.ts",
+    "netlify/**/*.mts"
   ],
   "exclude": [
     "artifacts",
