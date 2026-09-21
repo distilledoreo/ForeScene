@@ -311,12 +311,18 @@ function applyCommand(
       return applyProjectUpdateInfo(ctx, command, diff);
     case 'object.create':
       return applyObjectCreate(ctx, command, refs, diff, path);
+    case 'object.createMany':
+      return applyObjectCreateMany(ctx, command, refs, diff, path);
     case 'object.update':
       return applyObjectUpdate(ctx, command, refs, diff, path);
+    case 'object.updateMany':
+      return applyObjectUpdateMany(ctx, command, refs, diff, path);
     case 'object.delete':
       return applyObjectDelete(ctx, command, refs, diff, path);
     case 'object.duplicate':
       return applyObjectDuplicate(ctx, command, refs, diff, path);
+    case 'object.duplicateMany':
+      return applyObjectDuplicateMany(ctx, command, refs, diff, path);
     case 'shot.create':
       return applyShotCreate(ctx, command, refs, diff, path);
     case 'shot.rename':
@@ -477,6 +483,29 @@ export function resolveAgentCreatePosition(
   return [position[0], position[1], position[2]];
 }
 
+function applyObjectCreateMany(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'object.createMany' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const warnings: AgentDiagnostic[] = [];
+  for (let index = 0; index < command.items.length; index += 1) {
+    const item = command.items[index]!;
+    const result = applyObjectCreate(
+      ctx,
+      { op: 'object.create', ...(item.ref ? { ref: item.ref } : {}), object: item.object },
+      refs,
+      diff,
+      `${path}.items[${index}]`,
+    );
+    warnings.push(...result.warnings);
+    if (!result.ok) return { ...result, warnings: [...warnings, ...result.warnings] };
+  }
+  return { ok: true, warnings };
+}
+
 function applyObjectUpdate(
   ctx: AgentPlanExecutionContext,
   command: Extract<ForeSceneAgentCommand, { op: 'object.update' }>,
@@ -553,6 +582,29 @@ function applyObjectUpdate(
     diff.objectsUpdated.push(next.id);
   }
   return { ok: true, warnings: [] };
+}
+
+function applyObjectUpdateMany(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'object.updateMany' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const warnings: AgentDiagnostic[] = [];
+  for (let index = 0; index < command.items.length; index += 1) {
+    const item = command.items[index]!;
+    const result = applyObjectUpdate(
+      ctx,
+      { op: 'object.update', object: item.object, updates: item.updates },
+      refs,
+      diff,
+      `${path}.items[${index}]`,
+    );
+    warnings.push(...result.warnings);
+    if (!result.ok) return { ...result, warnings: [...warnings, ...result.warnings] };
+  }
+  return { ok: true, warnings };
 }
 
 function applyObjectDelete(
@@ -647,6 +699,40 @@ function applyObjectDuplicate(
     };
   }
   return { ok: true, warnings: [] };
+}
+
+function applyObjectDuplicateMany(
+  ctx: AgentPlanExecutionContext,
+  command: Extract<ForeSceneAgentCommand, { op: 'object.duplicateMany' }>,
+  refs: Record<string, AgentEntityReference>,
+  diff: AgentPlanDiff,
+  path: string,
+): ApplyResult {
+  const warnings: AgentDiagnostic[] = [];
+  for (let index = 0; index < command.items.length; index += 1) {
+    const item = command.items[index]!;
+    const duplicate = applyObjectDuplicate(
+      ctx,
+      { op: 'object.duplicate', object: item.object, ...(item.ref ? { ref: item.ref } : {}) },
+      refs,
+      diff,
+      `${path}.items[${index}]`,
+    );
+    warnings.push(...duplicate.warnings);
+    if (!duplicate.ok) return { ...duplicate, warnings: [...warnings, ...duplicate.warnings] };
+    if (item.updates && item.ref) {
+      const update = applyObjectUpdate(
+        ctx,
+        { op: 'object.update', object: { ref: item.ref }, updates: item.updates },
+        refs,
+        diff,
+        `${path}.items[${index}].updates`,
+      );
+      warnings.push(...update.warnings);
+      if (!update.ok) return { ...update, warnings: [...warnings, ...update.warnings] };
+    }
+  }
+  return { ok: true, warnings };
 }
 
 function applyShotCreate(
