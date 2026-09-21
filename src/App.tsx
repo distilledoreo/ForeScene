@@ -21,6 +21,7 @@ import {
   Sun,
   Terminal,
   Upload,
+  Wifi,
 } from 'lucide-react';
 import type { Workspace } from './domain/types';
 import { isEffectivelyBlankProject } from './domain/blankProject';
@@ -35,7 +36,9 @@ import { useAgentControlStore } from './state/useAgentControlStore';
 import { useProjectStore } from './state/useProjectStore';
 import { useProjectSafetyStore } from './state/useProjectSafetyStore';
 import { useThemeStore } from './state/useThemeStore';
+import { useRemoteAgentStore } from './state/useRemoteAgentStore';
 import { useForeSceneAgentApi } from './hooks/useForeSceneAgentApi';
+import { useRemoteAgentBridge } from './hooks/useRemoteAgentBridge';
 import { useProjectLifecycle } from './hooks/useProjectLifecycle';
 import { ConfirmDialog } from './components/common/ConfirmDialog';
 import { ModeChooser } from './components/common/ModeChooser';
@@ -56,6 +59,7 @@ const HelpWorkspace = lazy(() => import('./components/workspaces/HelpWorkspace')
 const WorkflowGuidance = lazy(() => import('./components/common/WorkflowGuidance').then((m) => ({ default: m.WorkflowGuidance })));
 const ProjectSafetyDialog = lazy(() => import('./components/common/ProjectSafetyDialog').then((m) => ({ default: m.ProjectSafetyDialog })));
 const AgentConsoleDialog = lazy(() => import('./components/common/AgentConsoleDialog').then((m) => ({ default: m.AgentConsoleDialog })));
+const RemoteAgentConnectionDialog = lazy(() => import('./components/common/RemoteAgentConnectionDialog').then((m) => ({ default: m.RemoteAgentConnectionDialog })));
 
 const workspaceItems: Array<{ id: Workspace; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'build', label: 'Build', icon: Boxes },
@@ -85,6 +89,7 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectSafetyOpen, setProjectSafetyOpen] = useState(false);
   const [agentConsoleOpen, setAgentConsoleOpen] = useState(false);
+  const [remoteAgentOpen, setRemoteAgentOpen] = useState(false);
   /** Session flag: advanced users can dismiss the first-project launcher. */
   const [launcherDismissed, setLauncherDismissed] = useState(false);
   const [sampleLoading, setSampleLoading] = useState(false);
@@ -104,7 +109,10 @@ export default function App() {
   const criticalProjectWrite = useProjectSafetyStore((state) => state.criticalWrite);
   const agentControlMode = useAgentControlStore((state) => state.controlMode);
   const setAgentControlMode = useAgentControlStore((state) => state.setControlMode);
+  const remoteAgentConnection = useRemoteAgentStore((state) => state.connection);
+  const remoteAgentStatus = useRemoteAgentStore((state) => state.status);
   useForeSceneAgentApi();
+  useRemoteAgentBridge();
 
   const {
     fileRef,
@@ -133,6 +141,7 @@ export default function App() {
       setHelpOpen(false);
       setProjectSafetyOpen(false);
       setAgentConsoleOpen(false);
+      setRemoteAgentOpen(false);
     },
   });
 
@@ -481,6 +490,15 @@ export default function App() {
                         data-project-automated-previs
                       />
                       <ProjectMenuButton
+                        icon={<Wifi className="h-4 w-4" />}
+                        label="Remote MCP Connection"
+                        onClick={() => {
+                          setRemoteAgentOpen(true);
+                          setProjectMenuOpen(false);
+                        }}
+                        data-remote-agent-open
+                      />
+                      <ProjectMenuButton
                         icon={<Terminal className="h-4 w-4" />}
                         label="Agent Console"
                         onClick={() => {
@@ -555,6 +573,20 @@ export default function App() {
               className="pointer-events-auto flex shrink-0 items-center overflow-hidden rounded-2xl border border-subtle/80 bg-surface-overlay/80 shadow-card backdrop-blur-sm md:absolute md:right-7 md:top-3"
               data-header-actions
             >
+              {remoteAgentConnection && (
+                <button
+                  type="button"
+                  onClick={() => setRemoteAgentOpen(true)}
+                  className="flex h-11 items-center gap-2 border-r border-subtle/70 px-2 text-xs font-medium text-secondary hover:text-accent"
+                  title="Open Remote MCP Connection"
+                  data-remote-agent-badge={remoteAgentStatus}
+                >
+                  <Wifi className={`h-4 w-4 ${remoteAgentStatus === 'working' ? 'animate-pulse text-accent' : 'text-emerald-500'}`} aria-hidden />
+                  <span className="hidden lg:inline">
+                    {remoteAgentStatus === 'working' ? 'Agent working…' : 'MCP connected'}
+                  </span>
+                </button>
+              )}
               {agentControlMode === 'read-write' && (
                 <div
                   className="flex h-11 items-center gap-2 border-r border-subtle/70 px-2"
@@ -704,6 +736,15 @@ export default function App() {
           <AgentConsoleDialog
             open={agentConsoleOpen}
             onClose={() => setAgentConsoleOpen(false)}
+          />
+        </Suspense>
+      )}
+
+      {remoteAgentOpen && (
+        <Suspense fallback={null}>
+          <RemoteAgentConnectionDialog
+            open={remoteAgentOpen}
+            onClose={() => setRemoteAgentOpen(false)}
           />
         </Suspense>
       )}
