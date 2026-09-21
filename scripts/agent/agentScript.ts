@@ -758,7 +758,6 @@ function buildProgram(
               assemblyId,
               openingKind: opening.kind,
               openingOffset: opening.offset,
-              hostWallId: wall.id,
             }),
           });
           openingObjects.push(openingObject);
