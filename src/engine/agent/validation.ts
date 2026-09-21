@@ -422,6 +422,11 @@ function parseObjectCreate(
       stagingRole = objectRecord.stagingRole as StagingRole;
     }
   }
+  const metadata = readOptionalJsonObject(
+    objectRecord.metadata,
+    `${path}.object.metadata`,
+    errors,
+  );
 
   if (errors.some((item) => item.path?.startsWith(path))) {
     // Keep collecting other commands, but this command is invalid.
@@ -440,6 +445,7 @@ function parseObjectCreate(
   if (scale) command.object.scale = scale;
   if (dimensions) command.object.dimensions = dimensions;
   if (stagingRole) command.object.stagingRole = stagingRole;
+  if (metadata) command.object.metadata = metadata;
   return command;
 }
 
@@ -1512,6 +1518,7 @@ function parseObjectUpdates(
     'dimensions',
     'color',
     'secondaryColor',
+    'metadata',
   ]);
 
   for (const key of Object.keys(record)) {
@@ -1572,6 +1579,10 @@ function parseObjectUpdates(
     const secondaryColor = readOptionalString(record.secondaryColor, `${path}.secondaryColor`, errors, warnings);
     if (secondaryColor !== undefined) updates.secondaryColor = secondaryColor;
   }
+  if (record.metadata !== undefined) {
+    const metadata = readOptionalJsonObject(record.metadata, `${path}.metadata`, errors);
+    if (metadata) updates.metadata = metadata;
+  }
 
   if (Object.keys(updates).length === 0) {
     errors.push(agentError(
@@ -1582,6 +1593,41 @@ function parseObjectUpdates(
     return undefined;
   }
   return updates;
+}
+
+function readOptionalJsonObject(
+  raw: unknown,
+  path: string,
+  errors: AgentDiagnostic[],
+): Record<string, unknown> | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'metadata must be a JSON object when provided.',
+      { path },
+    ));
+    return undefined;
+  }
+  try {
+    const serialized = JSON.stringify(raw);
+    if (serialized === undefined || serialized.length > 16_384) {
+      errors.push(agentError(
+        AGENT_DIAGNOSTIC_CODES.invalidArgument,
+        'metadata must be JSON-safe and no larger than 16 KiB.',
+        { path },
+      ));
+      return undefined;
+    }
+    return JSON.parse(serialized) as Record<string, unknown>;
+  } catch {
+    errors.push(agentError(
+      AGENT_DIAGNOSTIC_CODES.invalidArgument,
+      'metadata must be JSON-safe.',
+      { path },
+    ));
+    return undefined;
+  }
 }
 
 function parseEntityTarget(
