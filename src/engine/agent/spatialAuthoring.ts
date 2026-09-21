@@ -263,10 +263,12 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
     const tag = architectureMetadata(object);
     const name = object.name.toLowerCase();
 
-    const likelyFloorName = /(?:^|\b)(floor|slab|deck|ceiling)(?:\b|$)/i.test(object.name);
+    const nameSuggestsHorizontalSurface = /(?:^|\b)(slab|deck|ceiling)(?:\b|$)/i.test(object.name)
+      || (object.type === 'floor' && /(?:^|\b)floor(?:\b|$)/i.test(object.name))
+      || (object.type === 'box' && /(?:^|\b)floor(?:\b|$)/i.test(object.name));
     const thinnestAxis = Math.min(bounds.size[0], bounds.size[1], bounds.size[2]);
     if (
-      likelyFloorName
+      nameSuggestsHorizontalSurface
       && bounds.size[1] > 1
       && thinnestAxis < 0.6
       && bounds.size[1] !== thinnestAxis
