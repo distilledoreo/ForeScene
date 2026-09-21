@@ -203,6 +203,32 @@ function sceneObjectTransformSignature(project: LocationProject): string {
   })));
 }
 
+function sceneRelationshipGeometrySignature(project: LocationProject): string {
+  return JSON.stringify(project.scene.objects
+    .filter((object) => {
+      if (object.type === 'doorway' || object.type === 'stairs' || object.type === 'wall' || object.type === 'floor') {
+        return true;
+      }
+      if (object.type !== 'box') return false;
+      const architecture = object.metadata?.architecture;
+      const semanticSlab = architecture && typeof architecture === 'object'
+        && !Array.isArray(architecture)
+        && (architecture as Record<string, unknown>).kind === 'slab';
+      const looksHorizontal = object.dimensions[1] <= 0.65
+        && /(?:^|\b)(floor|slab|ceiling|deck|platform)(?:\b|$)/i.test(object.name);
+      return Boolean(semanticSlab || looksHorizontal);
+    })
+    .map((object) => ({
+      id: object.id,
+      type: object.type,
+      name: object.name,
+      visible: object.visible,
+      transform: object.transform,
+      dimensions: object.dimensions,
+      architecture: object.metadata?.architecture,
+    })));
+}
+
 function landmarkStructureSignature(project: LocationProject): string {
   return JSON.stringify(project.landmarks.map((landmark) => ({
     id: landmark.id,
@@ -2053,6 +2079,10 @@ export function SceneViewport({
     () => sceneObjectTransformSignature(project),
     [project.scene.objects],
   );
+  const relationshipGeometryKey = useMemo(
+    () => sceneRelationshipGeometrySignature(project),
+    [project.scene.objects],
+  );
   const landmarkStructureKey = useMemo(
     () => landmarkStructureSignature(project),
     [project.landmarks],
@@ -2088,6 +2118,7 @@ export function SceneViewport({
   );
   const sceneStructureKey = useMemo(() => JSON.stringify({
     objects: objectStructureKey,
+    relationships: relationshipGeometryKey,
     landmarks: landmarkStructureKey,
     shotFrustums: shotFrustumStructureKey,
     selectedShotId,
@@ -2097,6 +2128,7 @@ export function SceneViewport({
   }), [
     landmarkStructureKey,
     objectStructureKey,
+    relationshipGeometryKey,
     originPlacementActive,
     selectedShotId,
     shotFrustumStructureKey,
