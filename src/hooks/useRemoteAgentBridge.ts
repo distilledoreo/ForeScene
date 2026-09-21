@@ -60,6 +60,34 @@ async function executeRemoteCommand(
       );
     }
 
+    case 'scene.capture': {
+      const { captureAgentAuthoringView } = await import('../engine/agent/authoringCapture');
+      const input = args as Record<string, unknown>;
+      let project = api.getProjectDocument();
+      if (input.plan && typeof input.plan === 'object' && !Array.isArray(input.plan)) {
+        const { prepareAgentPlan } = await import('../engine/agent/planCompiler');
+        const prepared = prepareAgentPlan(input.plan, {
+          project,
+          workspace: 'build',
+          selectedObjectIds: [],
+          selectedShotId: project.shots[0]?.id,
+          gridSnap: false,
+        });
+        if (!prepared.ok) {
+          throw new Error(
+            'Cannot capture invalid preview plan: '
+            + prepared.diagnostics.map((diagnostic) => diagnostic.message).join('; '),
+          );
+        }
+        project = prepared.prepared.nextProject;
+      }
+      const { plan: _plan, ...captureInput } = input;
+      return captureAgentAuthoringView(
+        project,
+        captureInput as unknown as Parameters<typeof captureAgentAuthoringView>[1],
+      );
+    }
+
     case 'shot.render': {
       const result = await api.renderShotFrame(args as unknown as Parameters<typeof api.renderShotFrame>[0]);
       const { pngDataUrl: _pngDataUrl, artifact, ...rest } = result;

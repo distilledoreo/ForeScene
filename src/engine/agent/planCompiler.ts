@@ -428,6 +428,9 @@ function applyObjectCreate(
   if (command.object.stagingRole) {
     object = { ...object, stagingRole: command.object.stagingRole };
   }
+  if (command.object.metadata) {
+    object = { ...object, metadata: structuredClone(command.object.metadata) };
+  }
 
   const transform = cloneTransform(object.transform);
   if (command.object.rotation) transform.rotation = [...command.object.rotation] as Vec3;
@@ -546,6 +549,9 @@ function applyObjectUpdate(
   if (typeof updates.color === 'string') next = { ...next, color: updates.color };
   if (typeof updates.secondaryColor === 'string') {
     next = { ...next, secondaryColor: updates.secondaryColor };
+  }
+  if (updates.metadata && typeof updates.metadata === 'object' && !Array.isArray(updates.metadata)) {
+    next = { ...next, metadata: structuredClone(updates.metadata as Record<string, unknown>) };
   }
   if (Array.isArray(updates.dimensions) && updates.dimensions.length === 3) {
     next = { ...next, dimensions: [...updates.dimensions] as Vec3 };

@@ -74,7 +74,7 @@ function buildProgram(
     "use strict";
     const __commands = [];
     let __expandedCount = 0;
-    const __counts = { object: 0, shot: 0, landmark: 0 };
+    const __counts = { object: 0, shot: 0, landmark: 0, level: 0, architecture: 0 };
     let __description;
     const __shadow = ${projectJson};
     const __templates = ${templatesJson};
@@ -222,6 +222,7 @@ function buildProgram(
         name: options.name ?? (__baseName(template.name) + ' ' + index),
         dimensions,
         ...(options.stagingRole ? { stagingRole: options.stagingRole } : {}),
+        ...(options.metadata ? { metadata: __clone(options.metadata) } : {}),
         transform: {
           position: __actualCreatePosition(type, dimensions, requestedPosition, scale),
           rotation: options.rotation ? [...options.rotation] : [...template.transform.rotation],
@@ -238,6 +239,9 @@ function buildProgram(
         if (updates[key] !== undefined) object[key] = __clone(updates[key]);
       }
       if (Array.isArray(updates.dimensions)) object.dimensions = [...updates.dimensions];
+      if (updates.metadata && typeof updates.metadata === 'object' && !Array.isArray(updates.metadata)) {
+        object.metadata = __clone(updates.metadata);
+      }
       if (updates.transform && typeof updates.transform === 'object') {
         object.transform = __clone(updates.transform);
       }
@@ -402,6 +406,20 @@ function buildProgram(
         const { ref: _ref, ...payload } = normalized;
         __emit({ op: 'object.create', ref: createdRef, object: { ...payload, type } });
         return __snapshot(object);
+      },
+      createCentered(type, options = {}) {
+        const template = __templates[type];
+        if (!template) throw new Error('Unsupported creatable object type: ' + type);
+        const dimensions = options.dimensions ? [...options.dimensions] : [...template.dimensions];
+        const scale = options.scale ? [...options.scale] : [...template.transform.scale];
+        const center = options.position ?? [0, 0, 0];
+        const height = dimensions[1] * scale[1];
+        const requestedPosition = type === 'floor'
+          ? [center[0], center[1] + height / 2, center[2]]
+          : __uprightTypes.has(type)
+            ? [center[0], center[1] - height / 2, center[2]]
+            : [...center];
+        return this.create(type, { ...options, position: requestedPosition });
       },
       createMany(type, entries) {
         __assertBulkCount(entries, 'scene.createMany');
@@ -573,6 +591,266 @@ function buildProgram(
           return { updates };
         });
         return this.duplicateMany(object, copies);
+      },
+    });
+
+    function __requireLevel(value) {
+      if (!value || typeof value !== 'object') throw new TypeError('Expected an architecture level descriptor.');
+      if (typeof value.id !== 'string' || typeof value.name !== 'string') throw new TypeError('Invalid architecture level descriptor.');
+      if (!Number.isFinite(value.elevation) || !Number.isFinite(value.height) || value.height <= 0) {
+        throw new TypeError('Architecture level elevation/height must be finite and height > 0.');
+      }
+      return value;
+    }
+
+    function __levelMetadata(level, extra = {}) {
+      return {
+        architecture: {
+          levelId: level.id,
+          levelName: level.name,
+          elevation: level.elevation,
+          levelHeight: level.height,
+          ...extra,
+        },
+      };
+    }
+
+    function __wallPoint(from, to, distanceAlong) {
+      const dx = to[0] - from[0];
+      const dz = to[1] - from[1];
+      const length = Math.hypot(dx, dz);
+      if (!(length > 0)) throw new Error('Wall endpoints must not be identical.');
+      const t = distanceAlong / length;
+      return [from[0] + dx * t, from[1] + dz * t];
+    }
+
+    function __wallSegment(level, from, to, bottomOffset, height, thickness, yaw, name, metadata) {
+      const dx = to[0] - from[0];
+      const dz = to[1] - from[1];
+      const length = Math.hypot(dx, dz);
+      if (length <= 0.01 || height <= 0.01) return undefined;
+      const segmentMetadata = __clone(metadata ?? {});
+      segmentMetadata.architecture = {
+        ...(segmentMetadata.architecture ?? {}),
+        baseOffset: bottomOffset,
+      };
+      return scene.create('wall', {
+        name,
+        position: [(from[0] + to[0]) / 2, level.elevation + bottomOffset, (from[1] + to[1]) / 2],
+        rotation: [0, yaw, 0],
+        dimensions: [length, height, thickness],
+        stagingRole: 'set',
+        metadata: segmentMetadata,
+      });
+    }
+
+    const architecture = __deepFreeze({
+      level(options = {}) {
+        const name = String(options.name ?? ('Level ' + (__counts.level + 1)));
+        const elevation = Number(options.elevation ?? 0);
+        const height = Number(options.height ?? 3);
+        if (!Number.isFinite(elevation) || !Number.isFinite(height) || height <= 0) {
+          throw new Error('architecture.level requires finite elevation and height > 0.');
+        }
+        __counts.level += 1;
+        return __snapshot({
+          id: String(options.id ?? ('level_' + __counts.level)),
+          name,
+          elevation,
+          height,
+        });
+      },
+
+      opening(options = {}) {
+        const kind = options.kind === 'window' ? 'window' : 'door';
+        const width = Number(options.width ?? (kind === 'door' ? 0.9 : 1.2));
+        const height = Number(options.height ?? (kind === 'door' ? 2.1 : 1.2));
+        const sillHeight = Number(options.sillHeight ?? (kind === 'window' ? 0.9 : 0));
+        const offset = Number(options.offset ?? 0);
+        if (!(width > 0) || !(height > 0) || sillHeight < 0 || !Number.isFinite(offset)) {
+          throw new Error('architecture.opening requires positive width/height, non-negative sillHeight, and finite offset.');
+        }
+        return __snapshot({ kind, width, height, sillHeight, offset, name: options.name });
+      },
+
+      slab(options = {}) {
+        const level = __requireLevel(options.level);
+        const width = Number(options.width);
+        const depth = Number(options.depth);
+        const thickness = Number(options.thickness ?? 0.2);
+        if (!(width > 0) || !(depth > 0) || !(thickness > 0)) {
+          throw new Error('architecture.slab requires positive width, depth, and thickness.');
+        }
+        const role = options.role === 'ceiling' ? 'ceiling' : 'floor';
+        const center = options.center ?? [0, 0];
+        const topY = role === 'ceiling' ? level.elevation + level.height : level.elevation;
+        const assemblyId = String(options.id ?? ('architecture_' + (++__counts.architecture)));
+        return scene.createCentered('box', {
+          name: options.name ?? (level.name + ' ' + (role === 'ceiling' ? 'ceiling slab' : 'floor slab')),
+          position: [Number(center[0] ?? 0), topY - thickness / 2, Number(center[1] ?? 0)],
+          dimensions: [width, thickness, depth],
+          stagingRole: 'set',
+          metadata: __levelMetadata(level, {
+            kind: 'slab',
+            slabRole: role,
+            assemblyId,
+          }),
+        });
+      },
+
+      wall(options = {}) {
+        const level = __requireLevel(options.level);
+        const from = options.from;
+        const to = options.to;
+        if (!Array.isArray(from) || from.length !== 2 || !Array.isArray(to) || to.length !== 2) {
+          throw new Error('architecture.wall requires from:[x,z] and to:[x,z].');
+        }
+        const start = [Number(from[0]), Number(from[1])];
+        const end = [Number(to[0]), Number(to[1])];
+        const dx = end[0] - start[0];
+        const dz = end[1] - start[1];
+        const length = Math.hypot(dx, dz);
+        if (!(length > 0.05)) throw new Error('architecture.wall endpoints must be at least 0.05 m apart.');
+        const wallHeight = Number(options.height ?? level.height);
+        const thickness = Number(options.thickness ?? 0.18);
+        if (!(wallHeight > 0) || !(thickness > 0)) throw new Error('architecture.wall height/thickness must be positive.');
+        const yaw = Math.atan2(-dz, dx) * 180 / Math.PI;
+        const assemblyId = String(options.id ?? ('architecture_' + (++__counts.architecture)));
+        const wallName = String(options.name ?? (level.name + ' wall'));
+        const openings = Array.isArray(options.openings) ? options.openings.map(__clone) : [];
+        openings.sort((a, b) => a.offset - b.offset);
+
+        let cursor = 0;
+        const segments = [];
+        for (let index = 0; index < openings.length; index += 1) {
+          const opening = openings[index];
+          const half = opening.width / 2;
+          const openStart = Math.max(0, opening.offset - half);
+          const openEnd = Math.min(length, opening.offset + half);
+          if (!(openEnd > openStart) || opening.offset < 0 || opening.offset > length) {
+            throw new Error('Wall opening offset/width must fall inside the wall length.');
+          }
+
+          if (openStart > cursor + 0.01) {
+            const a = __wallPoint(start, end, cursor);
+            const b = __wallPoint(start, end, openStart);
+            const segment = __wallSegment(
+              level, a, b, 0, wallHeight, thickness, yaw,
+              wallName + ' segment ' + (segments.length + 1),
+              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
+            );
+            if (segment) segments.push(segment);
+          }
+
+          const center = __wallPoint(start, end, opening.offset);
+          if (opening.sillHeight > 0.01) {
+            const a = __wallPoint(start, end, openStart);
+            const b = __wallPoint(start, end, openEnd);
+            const sill = __wallSegment(
+              level, a, b, 0, opening.sillHeight, thickness, yaw,
+              wallName + ' window sill',
+              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
+            );
+            if (sill) segments.push(sill);
+          }
+          const openingTop = opening.sillHeight + opening.height;
+          if (openingTop < wallHeight - 0.01) {
+            const a = __wallPoint(start, end, openStart);
+            const b = __wallPoint(start, end, openEnd);
+            const header = __wallSegment(
+              level, a, b, openingTop, wallHeight - openingTop, thickness, yaw,
+              wallName + ' opening header',
+              __levelMetadata(level, { kind: 'wall_segment', assemblyId }),
+            );
+            if (header) segments.push(header);
+          }
+
+          if (opening.kind === 'door') {
+            const doorway = scene.create('doorway', {
+              name: opening.name ?? (wallName + ' doorway'),
+              position: [center[0], level.elevation, center[1]],
+              rotation: [0, yaw, 0],
+              dimensions: [opening.width, opening.height, Math.max(thickness, 0.12)],
+              stagingRole: 'set',
+              metadata: __levelMetadata(level, {
+                kind: 'opening',
+                assemblyId,
+                hostWallId: assemblyId,
+                openingKind: 'door',
+                openingOffset: opening.offset,
+              }),
+            });
+            segments.push(doorway);
+          }
+
+          cursor = Math.max(cursor, openEnd);
+        }
+
+        if (cursor < length - 0.01) {
+          const a = __wallPoint(start, end, cursor);
+          const segment = __wallSegment(
+            level, a, end, 0, wallHeight, thickness, yaw,
+            wallName + (openings.length ? ' segment ' + (segments.length + 1) : ''),
+            __levelMetadata(level, {
+              kind: openings.length ? 'wall_segment' : 'wall',
+              assemblyId,
+            }),
+          );
+          if (segment) segments.push(segment);
+        }
+
+        return __snapshot({
+          kind: 'wall',
+          assemblyId,
+          level,
+          from: start,
+          to: end,
+          height: wallHeight,
+          thickness,
+          openings,
+          segments,
+        });
+      },
+
+      room(options = {}) {
+        const level = __requireLevel(options.level);
+        const boundary = options.boundary;
+        if (!Array.isArray(boundary) || boundary.length < 3) {
+          throw new Error('architecture.room requires a polygon boundary with at least three [x,z] points.');
+        }
+        const roomName = String(options.name ?? 'Room');
+        const openingsByEdge = options.openingsByEdge ?? {};
+        const walls = [];
+        for (let index = 0; index < boundary.length; index += 1) {
+          const from = boundary[index];
+          const to = boundary[(index + 1) % boundary.length];
+          walls.push(this.wall({
+            level,
+            name: roomName + ' wall ' + (index + 1),
+            from,
+            to,
+            thickness: options.thickness,
+            height: options.height,
+            openings: openingsByEdge[index] ?? openingsByEdge[String(index)] ?? [],
+          }));
+        }
+        return __snapshot({ kind: 'room', name: roomName, level, boundary: __clone(boundary), walls });
+      },
+
+      placeOnLevel(objectValue, levelValue, options = {}) {
+        const level = __requireLevel(levelValue);
+        const object = __resolve('object', objectValue);
+        const bounds = __bounds(object);
+        const gap = Number(options.gap ?? 0);
+        const position = [...object.transform.position];
+        if (options.x !== undefined) position[0] = Number(options.x);
+        if (options.z !== undefined) position[2] = Number(options.z);
+        position[1] += (level.elevation + gap - bounds.min[1]);
+        const metadata = {
+          ...__clone(object.metadata ?? {}),
+          ...__levelMetadata(level, { kind: 'level_member' }),
+        };
+        return __updateOne(objectValue, { position, metadata });
       },
     });
 
