@@ -175,6 +175,7 @@ const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> 
     notes: [
       'Scripts receive a read-only project snapshot plus scene/shots/landmarks/workspace/target/plan helpers.',
       'Normal JavaScript loops, functions, arrays, and Math are available. Filesystem, network, process, require/import, and dynamic code generation are not exposed.',
+      'This is a restricted local execution surface for generated/trusted agent code, not a hardened hostile-code or multi-tenant security boundary.',
       'The script never mutates ForeScene directly: it emits a standard Agent Plan that still passes preview, fingerprint validation, transaction, recovery, and undo.',
     ],
   },
