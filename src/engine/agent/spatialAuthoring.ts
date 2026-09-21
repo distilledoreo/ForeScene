@@ -197,8 +197,12 @@ function isLikelySupport(object: SceneObject, bounds: AgentWorldBounds): boolean
   if (tag?.kind === 'slab') return true;
   if (object.type === 'floor') return true;
   const name = object.name.toLowerCase();
+  if (
+    object.type === 'terrain_mass'
+    && /(?:ground|terrain|land|platform|deck)/i.test(name)
+  ) return true;
   return (
-    (name.includes('floor') || name.includes('slab') || name.includes('deck'))
+    /(?:floor|slab|deck|platform)/i.test(name)
     && bounds.size[1] <= 0.6
     && bounds.size[0] >= 1
     && bounds.size[2] >= 1
@@ -572,7 +576,8 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
       const cutTargets = new Set(clearanceRelationships.flatMap((relationship) => (
         relationship.targetId ? [relationship.targetId] : []
       )));
-      for (const candidate of structural) {
+      for (const candidate of objects) {
+        if (!INTERSECTION_SOLID_TYPES.has(candidate.type)) continue;
         if (candidate.id === object.id || cutTargets.has(candidate.id)) continue;
         const candidateBounds = boundsById.get(candidate.id);
         if (!candidateBounds || !intersects(clearance, candidateBounds)) continue;
