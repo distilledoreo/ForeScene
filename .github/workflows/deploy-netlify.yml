@@ -2,6 +2,11 @@ name: Manual Netlify deploy
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-netlify.yml
 
 permissions:
   contents: read
