@@ -22,6 +22,8 @@ export interface AgentArchitectureMetadata {
   hostWallId?: string;
   openingKind?: 'door' | 'window';
   openingOffset?: number;
+  /** Bottom offset above the owning level for segmented wall pieces such as headers. */
+  baseOffset?: number;
 }
 
 export interface AgentWorldBounds {
@@ -113,6 +115,9 @@ function architectureMetadata(object: SceneObject): AgentArchitectureMetadata | 
       : {}),
     ...(typeof record.openingOffset === 'number' && Number.isFinite(record.openingOffset)
       ? { openingOffset: record.openingOffset }
+      : {}),
+    ...(typeof record.baseOffset === 'number' && Number.isFinite(record.baseOffset)
+      ? { baseOffset: record.baseOffset }
       : {}),
   };
 }
@@ -315,12 +320,13 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
           });
         }
       } else if (tag.kind === 'wall' || tag.kind === 'wall_segment' || tag.kind === 'level_member') {
-        if (Math.abs(bounds.min[1] - expectedFloor) > 0.12) {
+        const expectedBottom = expectedFloor + (tag.baseOffset ?? 0);
+        if (Math.abs(bounds.min[1] - expectedBottom) > 0.12) {
           addIssue(issues, {
             code: 'level_misalignment',
             severity: 'error',
             objectIds: [object.id],
-            message: `"${object.name}" starts at Y=${bounds.min[1].toFixed(2)} m but its declared level starts at Y=${expectedFloor.toFixed(2)} m.`,
+            message: `"${object.name}" starts at Y=${bounds.min[1].toFixed(2)} m but its declared level placement expects Y=${expectedBottom.toFixed(2)} m.`,
             suggestion: 'Use architecture.wall(...) or architecture.placeOnLevel(...) instead of manually calculating Y.',
           });
         }
