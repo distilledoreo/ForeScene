@@ -1,6 +1,7 @@
 import { compileAgentScript } from '../../scripts/agent/agentScript.ts';
 import type { LocationProject } from '../../src/domain/types.ts';
 import type { AgentObjectQuery } from '../../src/engine/agent/protocol.ts';
+import { prepareAgentPlan } from '../../src/engine/agent/planCompiler.ts';
 import {
   AGENT_SPATIAL_AUTHORING_REFERENCE,
   inspectSceneSpatially,
@@ -69,7 +70,13 @@ const TOOL_DEFINITIONS = [
   {
     name: 'scene_validate',
     description: 'Run spatial/architectural preflight. Detect axis mistakes, story misalignment, unhosted openings, unsupported elevated content, and wall intrusions before applying/finalizing a build.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        plan: { type: 'object', description: 'Optional Agent Plan to validate hypothetically without applying it.' },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'scene_capture',
@@ -82,6 +89,7 @@ const TOOL_DEFINITIONS = [
         height: { type: 'number', minimum: 128, maximum: 1024 },
         levelId: { type: 'string' },
         padding: { type: 'number', minimum: 1.02, maximum: 3 },
+        plan: { type: 'object', description: 'Optional Agent Plan to render hypothetically without applying it.' },
       },
       additionalProperties: false,
     },
@@ -197,6 +205,28 @@ async function callTool(
         {},
         { timeoutMs: 18_000 },
       ) as LocationProject;
+      if (args.plan && typeof args.plan === 'object' && !Array.isArray(args.plan)) {
+        const prepared = prepareAgentPlan(args.plan, {
+          project,
+          workspace: 'build',
+          selectedObjectIds: [],
+          selectedShotId: project.shots[0]?.id,
+          gridSnap: false,
+        });
+        if (!prepared.ok) {
+          return {
+            ok: false,
+            planValid: false,
+            diagnostics: prepared.diagnostics,
+            warnings: prepared.warnings,
+          };
+        }
+        return {
+          ...validateSpatialAuthoring(prepared.prepared.nextProject),
+          planValid: true,
+          planSummary: prepared.prepared.summary,
+        };
+      }
       return validateSpatialAuthoring(project);
     }
 
@@ -219,8 +249,21 @@ async function callTool(
         { plan: compiled.plan },
         { timeoutMs: 22_000 },
       );
+      const prepared = prepareAgentPlan(compiled.plan, {
+        project,
+        workspace: 'build',
+        selectedObjectIds: [],
+        selectedShotId: project.shots[0]?.id,
+        gridSnap: false,
+      });
+      const spatialValidation = prepared.ok
+        ? validateSpatialAuthoring(prepared.prepared.nextProject)
+        : undefined;
       return {
-        ok: Boolean((preview as { ok?: boolean } | undefined)?.ok),
+        ok: Boolean((preview as { ok?: boolean } | undefined)?.ok) && prepared.ok,
+        readyToApply: Boolean((preview as { ok?: boolean } | undefined)?.ok)
+          && prepared.ok
+          && Boolean(spatialValidation?.ok),
         compiled: {
           sourceBytes: compiled.sourceBytes,
           commandCount: compiled.commandCount,
@@ -229,6 +272,8 @@ async function callTool(
         },
         plan: compiled.plan,
         preview,
+        spatialValidation,
+        ...(prepared.ok ? {} : { localPreparationDiagnostics: prepared.diagnostics }),
       };
     }
 
