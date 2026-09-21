@@ -169,7 +169,7 @@ function isEligibleHorizontalCutTarget(object: SceneObject): boolean {
   return /(?:^|\b)(floor|slab|ceiling|deck|platform)(?:\b|$)/i.test(object.name);
 }
 
-function stairClearanceLocalBounds(stairs: SceneObject): LocalBoxFragment {
+export function stairClearanceLocalBounds(stairs: SceneObject): LocalBoxFragment {
   const [w, h, d] = stairs.dimensions;
   const configured = Number(architectureRecord(stairs)?.clearanceAboveMeters);
   const clearanceAbove = Number.isFinite(configured) && configured > 0
@@ -180,6 +180,11 @@ function stairClearanceLocalBounds(stairs: SceneObject): LocalBoxFragment {
     min: [-w / 2, h / 2 - overlapBelowTop, -d / 2],
     max: [w / 2, h / 2 + clearanceAbove, d / 2],
   };
+}
+
+export function stairClearanceWorldAabb(stairs: SceneObject): { min: Vec3; max: Vec3 } {
+  const world = worldAabbFromCorners(transformedCorners(stairs, stairClearanceLocalBounds(stairs)));
+  return { min: cloneVec3(world.min), max: cloneVec3(world.max) };
 }
 
 function addCut(
