@@ -477,6 +477,8 @@ export type ForeSceneAgentCommand =
         scale?: [number, number, number];
         dimensions?: [number, number, number];
         stagingRole?: StagingRole;
+        /** JSON-safe semantic metadata used by higher-level authoring helpers. */
+        metadata?: Record<string, unknown>;
       };
     }
   | {
@@ -491,6 +493,7 @@ export type ForeSceneAgentCommand =
           scale?: [number, number, number];
           dimensions?: [number, number, number];
           stagingRole?: StagingRole;
+          metadata?: Record<string, unknown>;
         };
       }>;
     }
