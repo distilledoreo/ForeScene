@@ -61,7 +61,7 @@ async function executeRemoteCommand(
     }
 
     case 'shot.render': {
-      const result = await api.renderShotFrame(args as Parameters<typeof api.renderShotFrame>[0]);
+      const result = await api.renderShotFrame(args as unknown as Parameters<typeof api.renderShotFrame>[0]);
       const { pngDataUrl: _pngDataUrl, artifact, ...rest } = result;
       const safeArtifact = artifact
         ? Object.fromEntries(
