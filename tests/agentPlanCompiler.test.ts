@@ -94,6 +94,52 @@ describe('agent plan compiler preview', () => {
     expect(prepared.prepared.nextSelection.workspace).toBe('shots');
   });
 
+  it('executes bulk create, update, and duplicate commands through the normal compiler', () => {
+    const project = createDefaultProject();
+    const prepared = prepareAgentPlan({
+      version: 1,
+      commands: [
+        {
+          op: 'object.createMany',
+          items: [
+            { ref: 'a', object: { type: 'box', name: 'A', position: [0, 0, 0] } },
+            { ref: 'b', object: { type: 'box', name: 'B', position: [2, 0, 0] } },
+          ],
+        },
+        {
+          op: 'object.updateMany',
+          items: [
+            { object: { ref: 'a' }, updates: { visible: false } },
+            { object: { ref: 'b' }, updates: { position: [4, 1, 0] } },
+          ],
+        },
+        {
+          op: 'object.duplicateMany',
+          items: [
+            { object: { ref: 'a' }, ref: 'c', updates: { name: 'C', position: [8, 1, 0] } },
+            { object: { ref: 'b' }, ref: 'd', updates: { name: 'D', position: [10, 1, 0] } },
+          ],
+        },
+      ],
+    }, {
+      project,
+      workspace: 'build',
+      selectedObjectIds: [],
+      gridSnap: false,
+    });
+
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.prepared.diff.objectsCreated).toHaveLength(4);
+    expect(prepared.prepared.refs.c?.id).toBeTruthy();
+    expect(prepared.prepared.refs.d?.id).toBeTruthy();
+    const byName = new Map(prepared.prepared.nextProject.scene.objects.map((object) => [object.name, object]));
+    expect(byName.get('A')?.visible).toBe(false);
+    expect(byName.get('B')?.transform.position).toEqual([4, 1, 0]);
+    expect(byName.get('C')?.transform.position).toEqual([8, 1, 0]);
+    expect(byName.get('D')?.transform.position).toEqual([10, 1, 0]);
+  });
+
   it('returns ambiguous_target candidates and rejects the whole plan', () => {
     const project = createDefaultProject();
     const left = createSceneObject('box', 1);

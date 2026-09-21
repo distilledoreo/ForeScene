@@ -7,6 +7,8 @@ export const AGENT_PLAN_SCHEMA_VERSION = 1 as const;
 
 export const AGENT_PLAN_LIMITS = {
   maxCommands: 200,
+  maxBulkItems: 500,
+  maxExpandedCommands: 2000,
   maxTimelineCommandsPerPlan: 512,
   maxKeyframesPerShot: 64,
   maxRefLength: 64,
@@ -45,9 +47,12 @@ export const AGENT_WORKSPACES = ['build', 'reference', 'shots', 'export'] as con
 export const AGENT_EXECUTABLE_OPS = [
   'project.updateInfo',
   'object.create',
+  'object.createMany',
   'object.update',
+  'object.updateMany',
   'object.delete',
   'object.duplicate',
+  'object.duplicateMany',
   'shot.create',
   'shot.rename',
   'shot.updateDescription',

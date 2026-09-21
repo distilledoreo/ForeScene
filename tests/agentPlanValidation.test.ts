@@ -40,6 +40,39 @@ describe('agent plan validation', () => {
       .toBe('commands_limit');
   });
 
+  it('accepts bounded bulk object operations and rejects excessive expansion', () => {
+    const valid = parseForeSceneAgentPlan({
+      version: 1,
+      commands: [{
+        op: 'object.createMany',
+        items: [
+          { ref: 'a', object: { type: 'box', position: [0, 0, 0] } },
+          { ref: 'b', object: { type: 'column', position: [2, 0, 0] } },
+        ],
+      }, {
+        op: 'object.updateMany',
+        items: [
+          { object: { ref: 'a' }, updates: { visible: false } },
+          { object: { ref: 'b' }, updates: { position: [3, 1.5, 0] } },
+        ],
+      }],
+    });
+    expect(valid.errors).toEqual([]);
+    expect(valid.plan?.commands.map((command) => command.op)).toEqual(['object.createMany', 'object.updateMany']);
+
+    const bulkItems = Array.from({ length: AGENT_PLAN_LIMITS.maxBulkItems }, (_, index) => ({
+      object: { type: 'box', name: 'Box ' + index },
+    }));
+    const excessive = parseForeSceneAgentPlan({
+      version: 1,
+      commands: Array.from(
+        { length: Math.ceil(AGENT_PLAN_LIMITS.maxExpandedCommands / AGENT_PLAN_LIMITS.maxBulkItems) + 1 },
+        () => ({ op: 'object.createMany', items: bulkItems }),
+      ),
+    });
+    expect(excessive.errors.some((item) => item.code === 'expanded_commands_limit')).toBe(true);
+  });
+
   it('rejects non-finite positions and unknown enums', () => {
     const infinite = parseForeSceneAgentPlan({
       version: 1,

@@ -1150,6 +1150,7 @@ async function runAgentScript(options: {
         compiled: {
           sourceBytes: compiled.sourceBytes,
           commandCount: compiled.commandCount,
+          expandedCommandCount: compiled.expandedCommandCount,
           timeoutMs: compiled.timeoutMs,
         },
         plan: compiled.plan,
@@ -1167,6 +1168,7 @@ async function runAgentScript(options: {
         compiled: {
           sourceBytes: compiled.sourceBytes,
           commandCount: compiled.commandCount,
+          expandedCommandCount: compiled.expandedCommandCount,
           timeoutMs: compiled.timeoutMs,
         },
         plan: compiled.plan,
