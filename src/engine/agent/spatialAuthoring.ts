@@ -712,109 +712,6 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
     }
   }
 
-  // Stairs own a bounded clearance volume above their upper run. Eligible
-  // horizontal structure is cut automatically; unrelated geometry inside that
-  // volume is investigated rather than silently removed.
-  for (const stairs of objects.filter((object) => object.type === 'stairs')) {
-    const clearanceRaw = stairClearanceWorldAabb(stairs);
-    const clearance = worldBoundsFromMinMax(clearanceRaw.min, clearanceRaw.max);
-    const resolvedTargets = new Set(
-      relationshipForSource(resolution, stairs.id, 'stair_clearance')
-        .filter((relationship) => relationship.status === 'resolved' && relationship.targetId)
-        .map((relationship) => relationship.targetId!),
-    );
-    for (const other of objects) {
-      if (other.id === stairs.id || resolvedTargets.has(other.id)) continue;
-      if (other.type === 'human_dummy' || other.stagingRole === 'person') continue;
-      const otherBounds = boundsById.get(other.id)!;
-      if (!intersects(clearance, otherBounds)) continue;
-      const overlap = intersectionVolume(clearance, otherBounds);
-      const ratio = overlap / Math.min(objectVolume(clearance), objectVolume(otherBounds));
-      if (overlap < 0.01 || ratio < 0.08) continue;
-      addIssue(issues, {
-        code: 'stair_clearance_obstructed',
-        severity: 'warning',
-        objectIds: [stairs.id, other.id],
-        message: `Stair clearance for "${stairs.name}" is obstructed by "${other.name}". ForeScene only auto-cuts eligible horizontal floor/slab/ceiling structure.`,
-        suggestion: 'Move or redesign the obstructing geometry, or intentionally model the relationship instead of relying on automatic deletion.',
-      });
-    }
-  }
-
-  // Investigate substantial solid overlaps unless a semantic relationship,
-  // assembly membership, support contact, or ordinary wall junction explains
-  // them. This is intentionally domain-general rather than house-specific.
-  const spatialSolids = objects.filter((object) => (
-    object.type !== 'sun_marker'
-    && object.type !== 'human_dummy'
-    && object.type !== 'tree_blob'
-  ));
-  for (let i = 0; i < spatialSolids.length; i += 1) {
-    const a = spatialSolids[i]!;
-    const aBounds = boundsById.get(a.id)!;
-    for (let j = i + 1; j < spatialSolids.length; j += 1) {
-      const b = spatialSolids[j]!;
-      const bBounds = boundsById.get(b.id)!;
-      if (!intersects(aBounds, bBounds)) continue;
-
-      const overlap = intersectionVolume(aBounds, bBounds);
-      if (overlap <= 0.005) continue;
-      const overlapY = Math.max(
-        0,
-        Math.min(aBounds.max[1], bBounds.max[1]) - Math.max(aBounds.min[1], bBounds.min[1]),
-      );
-      if (overlapY <= 0.055) continue;
-
-      const relationReason = relationshipExplainsPair(resolution, a, b);
-      const assemblyA = architectureAssemblyId(a);
-      const assemblyB = architectureAssemblyId(b);
-      if (relationReason) continue;
-      if (assemblyA && assemblyB && assemblyA === assemblyB) continue;
-      if (expectedWallJunction(a, b, aBounds, bBounds, overlap)) continue;
-
-      const aVolume = objectVolume(aBounds);
-      const bVolume = objectVolume(bBounds);
-      const ratio = overlap / Math.min(aVolume, bVolume);
-      if (ratio < 0.12) continue;
-
-      const aSupport = isLikelySupport(a, aBounds);
-      const bSupport = isLikelySupport(b, bBounds);
-      if (aSupport && bSupport) {
-        const footprintOverlapX = Math.max(
-          0,
-          Math.min(aBounds.max[0], bBounds.max[0]) - Math.max(aBounds.min[0], bBounds.min[0]),
-        );
-        const footprintOverlapZ = Math.max(
-          0,
-          Math.min(aBounds.max[2], bBounds.max[2]) - Math.max(aBounds.min[2], bBounds.min[2]),
-        );
-        const overlapArea = footprintOverlapX * footprintOverlapZ;
-        const minArea = Math.min(
-          aBounds.size[0] * aBounds.size[2],
-          bBounds.size[0] * bBounds.size[2],
-        );
-        if (minArea > 0 && overlapArea / minArea >= 0.7) {
-          addIssue(issues, {
-            code: 'overlapping_support_surfaces',
-            severity: 'warning',
-            objectIds: [a.id, b.id],
-            message: `Support surfaces "${a.name}" and "${b.name}" substantially overlap in the same space.`,
-            suggestion: 'Confirm both surfaces are intentional; otherwise remove or resize the duplicate/overlapping floor, slab, deck, or platform.',
-          });
-          continue;
-        }
-      }
-
-      addIssue(issues, {
-        code: 'unexplained_intersection',
-        severity: 'warning',
-        objectIds: [a.id, b.id],
-        message: `"${a.name}" substantially intersects "${b.name}" with no semantic relationship explaining the overlap.`,
-        suggestion: 'Inspect the overlap. If intentional, express the relationship/assembly; otherwise move, resize, or cut the geometry.',
-      });
-    }
-  }
-
   const errorCount = issues.filter((issue) => issue.severity === 'error').length;
   const warningCount = issues.filter((issue) => issue.severity === 'warning').length;
   return {
@@ -872,8 +769,8 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
   scripting: {
     architecture: {
       level: 'architecture.level({name, elevation, height}) -> level descriptor',
-      opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> opening descriptor; does not mutate by itself',
-      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> wall assembly; legacy opening declarations remain supported, but a separately placed doorway can now cut a continuous compatible wall automatically',
+      opening: 'architecture.opening({kind:"door"|"window", offset, width, height, sillHeight?}) -> bounded opening descriptor; architecture.wall places an overlapping cutter object',
+      wall: 'architecture.wall({level, from:[x,z], to:[x,z], name?, thickness?, height?, openings?}) -> one continuous wall plus overlapping semantic opening cutters; no manual wall segmentation',
       slab: 'architecture.slab({level, name?, width, depth, thickness?, center?:[x,z], role?:"floor"|"ceiling"})',
       room: 'architecture.room({level, name, boundary:[[x,z],...], thickness?, height?, openingsByEdge?}) -> free-form polygon wall loop',
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',
