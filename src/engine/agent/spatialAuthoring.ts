@@ -94,6 +94,19 @@ const STRUCTURAL_TYPES = new Set<SceneObject['type']>([
   'arch',
 ]);
 
+const INTERSECTION_SOLID_TYPES = new Set<SceneObject['type']>([
+  'floor',
+  'wall',
+  'box',
+  'column',
+  'arch',
+  'doorway',
+  'stairs',
+  'terrain_mass',
+  'background_card',
+  'imported_model',
+]);
+
 function cloneVec3(value: Vec3): Vec3 {
   return [value[0], value[1], value[2]];
 }
@@ -617,6 +630,79 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
             suggestion: 'Move the object clear of the wall or revise the wall/opening layout.',
           });
         }
+      }
+    }
+  }
+
+  for (let i = 0; i < objects.length; i += 1) {
+    const a = objects[i]!;
+    const aBounds = boundsById.get(a.id)!;
+    for (let j = i + 1; j < objects.length; j += 1) {
+      const b = objects[j]!;
+      const bBounds = boundsById.get(b.id)!;
+      const overlap = intersectionVolume(aBounds, bBounds);
+      if (overlap <= 0.005) continue;
+
+      const relationReason = relationshipExplainsPair(resolution, a, b);
+      if (relationReason) continue;
+      const assemblyA = architectureAssemblyId(a);
+      const assemblyB = architectureAssemblyId(b);
+      if (assemblyA && assemblyB && assemblyA === assemblyB) continue;
+      if (expectedWallJunction(a, b, aBounds, bBounds, overlap)) continue;
+
+      const minVolume = Math.min(objectVolume(aBounds), objectVolume(bBounds));
+      const overlapRatio = overlap / Math.max(minVolume, 1e-8);
+      const aSupport = isLikelySupport(a, aBounds);
+      const bSupport = isLikelySupport(b, bBounds);
+
+      if (
+        aSupport
+        && bSupport
+        && overlapRatio >= 0.55
+        && Math.abs(aBounds.center[1] - bBounds.center[1]) <= 0.35
+      ) {
+        addIssue(issues, {
+          code: 'duplicate_support_overlap',
+          severity: 'warning',
+          objectIds: [a.id, b.id],
+          message: `Support surfaces "${a.name}" and "${b.name}" substantially overlap at nearly the same elevation.`,
+          suggestion: 'Check for duplicate/copanar floor, slab, deck, or platform geometry and remove or separate unintended duplicates.',
+        });
+        continue;
+      }
+
+      const stair = a.type === 'stairs' ? a : b.type === 'stairs' ? b : undefined;
+      const other = stair?.id === a.id ? b : stair ? a : undefined;
+      if (stair && other && wallLike(other) && overlapRatio >= 0.03) {
+        addIssue(issues, {
+          code: 'stair_wall_intrusion',
+          severity: 'warning',
+          objectIds: [stair.id, other.id],
+          message: `Stairs "${stair.name}" substantially intersect wall geometry "${other.name}".`,
+          suggestion: 'Investigate the stair run, landing, and wall placement; stair clearance only auto-cuts eligible horizontal floor/slab geometry.',
+        });
+        continue;
+      }
+
+      const aMovable = a.stagingRole === 'prop' || a.stagingRole === 'person' || a.type === 'human_dummy';
+      const bMovable = b.stagingRole === 'prop' || b.stagingRole === 'person' || b.type === 'human_dummy';
+      if ((aMovable && wallLike(b)) || (bMovable && wallLike(a))) {
+        // The more specific content_wall_intrusion check above owns this case.
+        continue;
+      }
+
+      if (
+        INTERSECTION_SOLID_TYPES.has(a.type)
+        && INTERSECTION_SOLID_TYPES.has(b.type)
+        && overlapRatio >= 0.18
+      ) {
+        addIssue(issues, {
+          code: 'unexplained_solid_intersection',
+          severity: 'info',
+          objectIds: [a.id, b.id],
+          message: `"${a.name}" and "${b.name}" substantially intersect with no declared host, cutter, assembly, support, or ordinary wall-junction relationship.`,
+          suggestion: 'Investigate whether the overlap is intentional. If it is, encode the relationship explicitly; otherwise move or resize the geometry.',
+        });
       }
     }
   }
