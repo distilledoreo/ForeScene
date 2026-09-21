@@ -484,6 +484,9 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
     }
 
     if (object.type === 'doorway') {
+      const portalRelationships = relationshipForSource(resolution, object.id, 'portal_host');
+      const resolvedPortal = portalRelationships.find((relationship) => relationship.status === 'resolved');
+      const ambiguousPortal = portalRelationships.find((relationship) => relationship.status === 'ambiguous');
       const nearWall = structural.some((wall) => {
         if (wall.id === object.id || (wall.type !== 'wall' && architectureMetadata(wall)?.kind !== 'wall_segment')) return false;
         const wallBounds = boundsById.get(wall.id)!;
@@ -493,14 +496,41 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
           && bounds.min[1] <= wallBounds.max[1]
           && bounds.max[1] >= wallBounds.min[1];
       });
-      if (!tag?.hostWallId && !nearWall) {
+      const legacyHosted = Boolean(tag?.hostWallId || nearWall);
+
+      if (ambiguousPortal) {
+        addIssue(issues, {
+          code: 'ambiguous_opening_host',
+          severity: 'warning',
+          objectIds: [object.id, ...(ambiguousPortal.candidateIds ?? [])],
+          message: `Doorway "${object.name}" overlaps multiple compatible walls, so ForeScene did not guess which wall to cut.`,
+          suggestion: 'Move/rotate the doorway so it overlaps one wall clearly, or persist an explicit hostWallId.',
+        });
+      } else if (!resolvedPortal && !legacyHosted) {
         addIssue(issues, {
           code: 'unhosted_opening',
           severity: 'warning',
           objectIds: [object.id],
-          message: `Doorway "${object.name}" is not associated with or adjacent to a wall.`,
-          suggestion: 'Use architecture.opening(...) inside architecture.wall(...) so the wall is segmented around a real opening.',
+          message: `Doorway "${object.name}" does not overlap a unique compatible wall, so no automatic wall opening was derived.`,
+          suggestion: 'Place the doorway so its bounded volume overlaps the intended wall. ForeScene will cut the opening automatically.',
         });
+      }
+
+      if (resolvedPortal || legacyHosted) {
+        const thresholdSupport = supportSideForPortal(object, bounds, supports, boundsById);
+        if (!thresholdSupport.positive || !thresholdSupport.negative) {
+          const missingSides = [
+            !thresholdSupport.positive ? 'one side' : undefined,
+            !thresholdSupport.negative ? 'the other side' : undefined,
+          ].filter(Boolean).join(' and ');
+          addIssue(issues, {
+            code: 'portal_missing_support',
+            severity: 'warning',
+            objectIds: [object.id],
+            message: `Doorway "${object.name}" has no walkable/supporting surface at ${missingSides} of its threshold.`,
+            suggestion: 'Provide floor, slab, deck, terrain, or another support surface at both sides of a normally traversable portal, or explicitly accept the intentional drop.',
+          });
+        }
       }
     }
 
