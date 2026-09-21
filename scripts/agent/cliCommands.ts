@@ -13,6 +13,7 @@ export const AGENT_CLI_COMMANDS = [
   'operations',
   'preview',
   'apply',
+  'script',
   'screenshot',
   'frame',
   'video',
@@ -164,6 +165,17 @@ const COMMAND_DESCRIPTIONS: Record<AgentCliCommand, AgentCliCommandDescription> 
     result: 'Atomic plan apply result: summary, affected ids, verified revision, and diagnostics.',
     notes: [
       '--expected-revision is compare-and-swap: the apply refuses with stale_revision when the live verified revision differs.',
+    ],
+  },
+  script: {
+    command: 'script', operation: 'project.script', usage: 'npm run agent:script -- --file <script.js> --profile <dir> [--write] [--output <plan.json>]', write: true,
+    required: ['--file <script.js>', '--profile <isolated-dir>'],
+    optional: [...COMMON_SESSION_FLAGS, '--write', '--output <compiled-plan.json>', '--expected-revision <revision-id>', '--script-timeout <ms>'],
+    result: 'Compiled Agent Plan plus preview diff; with --write, the same validated plan is atomically applied.',
+    notes: [
+      'Scripts receive a read-only project snapshot plus scene/shots/landmarks/workspace/target/plan helpers.',
+      'Normal JavaScript loops, functions, arrays, and Math are available. Filesystem, network, process, require/import, and dynamic code generation are not exposed.',
+      'The script never mutates ForeScene directly: it emits a standard Agent Plan that still passes preview, fingerprint validation, transaction, recovery, and undo.',
     ],
   },
   screenshot: {
