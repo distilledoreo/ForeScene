@@ -62,9 +62,29 @@ async function executeRemoteCommand(
 
     case 'scene.capture': {
       const { captureAgentAuthoringView } = await import('../engine/agent/authoringCapture');
+      const input = args as Record<string, unknown>;
+      let project = api.getProjectDocument();
+      if (input.plan && typeof input.plan === 'object' && !Array.isArray(input.plan)) {
+        const { prepareAgentPlan } = await import('../engine/agent/planCompiler');
+        const prepared = prepareAgentPlan(input.plan, {
+          project,
+          workspace: 'build',
+          selectedObjectIds: [],
+          selectedShotId: project.shots[0]?.id,
+          gridSnap: false,
+        });
+        if (!prepared.ok) {
+          throw new Error(
+            'Cannot capture invalid preview plan: '
+            + prepared.diagnostics.map((diagnostic) => diagnostic.message).join('; '),
+          );
+        }
+        project = prepared.prepared.nextProject;
+      }
+      const { plan: _plan, ...captureInput } = input;
       return captureAgentAuthoringView(
-        api.getProjectDocument(),
-        args as unknown as Parameters<typeof captureAgentAuthoringView>[1],
+        project,
+        captureInput as unknown as Parameters<typeof captureAgentAuthoringView>[1],
       );
     }
 
