@@ -480,12 +480,42 @@ export type ForeSceneAgentCommand =
       };
     }
   | {
+      op: 'object.createMany';
+      items: Array<{
+        ref?: string;
+        object: {
+          type: SceneObjectType;
+          name?: string;
+          position?: [number, number, number];
+          rotation?: [number, number, number];
+          scale?: [number, number, number];
+          dimensions?: [number, number, number];
+          stagingRole?: StagingRole;
+        };
+      }>;
+    }
+  | {
       op: 'object.update';
       object: AgentEntityTarget;
       updates: Record<string, unknown>;
     }
+  | {
+      op: 'object.updateMany';
+      items: Array<{
+        object: AgentEntityTarget;
+        updates: Record<string, unknown>;
+      }>;
+    }
   | { op: 'object.delete'; object: AgentEntityTarget }
   | { op: 'object.duplicate'; object: AgentEntityTarget; ref?: string }
+  | {
+      op: 'object.duplicateMany';
+      items: Array<{
+        object: AgentEntityTarget;
+        ref?: string;
+        updates?: Record<string, unknown>;
+      }>;
+    }
   | {
       op: 'shot.create';
       ref?: string;
