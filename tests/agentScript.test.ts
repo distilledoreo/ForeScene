@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultProject } from '../src/domain/defaults';
 import { AGENT_PLAN_LIMITS } from '../src/engine/agent/constants';
+import { previewAgentPlan } from '../src/engine/agent/planCompiler';
 import { compileAgentScript } from '../scripts/agent/agentScript';
 
 describe('agent scripting compiler', () => {
@@ -29,6 +30,30 @@ describe('agent scripting compiler', () => {
     });
     expect(result.plan.commands[6]).toEqual({ op: 'workspace.open', workspace: 'build' });
     expect(project).toEqual(before);
+  });
+
+  it('produces plans accepted by the existing plan compiler', () => {
+    const project = createDefaultProject();
+    const compiled = compileAgentScript(`
+      for (let i = 0; i < 4; i += 1) {
+        scene.create('column', {
+          name: 'Validated ' + i,
+          position: [i * 2, 0, 0],
+          dimensions: [0.5, 3, 0.5],
+        });
+      }
+    `, project);
+    const preview = previewAgentPlan(compiled.plan, {
+      project,
+      workspace: 'build',
+      selectedObjectIds: [],
+      selectedShotId: undefined,
+      activePanoId: undefined,
+      gridSnap: false,
+    });
+    expect(preview.ok).toBe(true);
+    expect(preview.summary?.commandCount).toBe(4);
+    expect(preview.diff?.objectsCreated).toHaveLength(4);
   });
 
   it('queries the read-only project snapshot and targets existing entities', () => {
