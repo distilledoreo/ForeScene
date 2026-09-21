@@ -551,6 +551,31 @@ export function validateSpatialAuthoring(project: LocationProject): AgentSpatial
       }
     }
 
+    if (object.type === 'stairs') {
+      const clearancePlain = stairClearanceWorldAabb(object);
+      const clearance = worldBoundsFromMinMax(clearancePlain.min, clearancePlain.max);
+      const clearanceRelationships = relationshipForSource(resolution, object.id, 'stair_clearance')
+        .filter((relationship) => relationship.status === 'resolved');
+      const cutTargets = new Set(clearanceRelationships.flatMap((relationship) => (
+        relationship.targetId ? [relationship.targetId] : []
+      )));
+      for (const candidate of structural) {
+        if (candidate.id === object.id || cutTargets.has(candidate.id)) continue;
+        const candidateBounds = boundsById.get(candidate.id);
+        if (!candidateBounds || !intersects(clearance, candidateBounds)) continue;
+        if (candidateBounds.max[1] < bounds.max[1] - 0.2) continue;
+        const overlap = intersectionVolume(clearance, candidateBounds);
+        if (overlap <= 0.01) continue;
+        addIssue(issues, {
+          code: 'stair_clearance_obstruction',
+          severity: 'warning',
+          objectIds: [object.id, candidate.id],
+          message: `Stair clearance above "${object.name}" intersects "${candidate.name}" and that object is not an automatically cut floor/slab target.`,
+          suggestion: 'Investigate the intersection: move the obstruction, resize/reorient the stairs, or model an intentional relationship explicitly.',
+        });
+      }
+    }
+
     const isMovableContent = (
       object.stagingRole === 'prop'
       || object.stagingRole === 'person'
