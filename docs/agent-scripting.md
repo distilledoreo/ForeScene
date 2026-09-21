@@ -44,8 +44,8 @@ Available globals:
 - `architecture`: semantic, non-template helpers for spatial construction.
   - `level({ id?, name, elevation, height })` declares a story coordinate frame.
   - `slab({ level, width, depth, thickness?, center?, role? })` creates a correctly oriented floor/ceiling slab.
-  - `opening({ kind, offset, width, height, sillHeight? })` declares a door/window opening.
-  - `wall({ level, from:[x,z], to:[x,z], openings? })` builds wall segments around openings instead of placing a doorway in front of solid geometry.
+  - `opening({ kind, offset, width, height, sillHeight? })` declares a bounded door/window opening.
+  - `wall({ level, from:[x,z], to:[x,z], openings? })` creates one continuous wall plus overlapping opening objects. The shared relationship resolver cuts the wall non-destructively; agents do not calculate wall segments around openings.
   - `room({ level, boundary:[[x,z],...], openingsByEdge? })` builds an arbitrary polygon wall loop; it does not choose a room shape for the agent.
   - `placeOnLevel(object, level, { x?, z?, gap? })` grounds content on a declared story.
 - `shots`: `list`, `find`, `findAll`, `require`, `create`, `rename`, `describe`, `camera`, `frameSubjects`, `stage`, `clearStaging`, `delete`.
@@ -130,7 +130,14 @@ ForeScene is **Y-up** and uses meters:
 
 For new agent-authored geometry, prefer `scene.createCentered(...)` when you want the supplied position to always mean the object's center. Raw `scene.create(...)` retains legacy primitive-specific placement semantics: floors treat Y as the requested top surface, upright primitives treat Y as bottom/floor contact, and ordinary boxes use center placement.
 
-For substantial architecture, prefer `architecture.level/slab/wall/opening/room` so story elevations and opening segmentation are deterministic.
+For substantial architecture, prefer `architecture.level/slab/wall/opening/room` so story elevations and relationships are deterministic.
+
+### Semantic cutters and relationships
+
+- **Doorway:** a doorway is visible portal/frame geometry plus a bounded wall cutter. Place it so the doorway volume overlaps one compatible wall. ForeScene derives the opening non-destructively. Ambiguous multi-wall overlaps are reported instead of guessed.
+- **Stairs:** stairs define a bounded clearance volume above the upper run. Eligible horizontal floor/slab/ceiling geometry inside that volume is cut automatically. ForeScene does **not** erase walls, props, or arbitrary geometry in the stair clearance; those overlaps are reported for review.
+- **Intersections:** substantial overlaps are classified by whether a host/cutter relationship, shared assembly, support contact, or normal wall junction explains them. Unexplained substantial overlaps are surfaced for investigation rather than blindly rejected.
+- Cutter effects follow the live transforms, so moving a doorway/stair or its host updates the effective geometry without destructive mesh edits.
 
 ### Spatial helpers
 

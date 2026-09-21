@@ -166,8 +166,22 @@ describe('spatial authoring', () => {
     expect(groundSlab?.dimensions).toEqual([10, 0.2, 8]);
     expect(groundSlab?.transform.position[1]).toBeCloseTo(-0.1, 6);
     expect(upperSlab?.transform.position[1]).toBeCloseTo(3.1, 6);
-    expect((door?.metadata?.architecture as Record<string, unknown> | undefined)?.hostWallId).toBeTruthy();
     expect(person?.transform.position[1]).toBeCloseTo(4.075, 6);
+
+    const frontDoorInspection = inspectSceneSpatially(next, { name: 'Front door', match: 'exact' })[0];
+    expect(frontDoorInspection?.relationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'portal_host',
+        status: 'resolved',
+        targetId: expect.any(String),
+      }),
+    ]));
+
+    const groundShellWalls = next.scene.objects.filter((object) => (
+      object.type === 'wall' && object.name.startsWith('Ground shell wall')
+    ));
+    expect(groundShellWalls).toHaveLength(4);
+    expect(groundShellWalls.some((object) => object.name.includes('segment'))).toBe(false);
 
     const report = validateSpatialAuthoring(next);
     expect(report.issues.some((issue) => issue.code === 'dimension_axis_mismatch')).toBe(false);

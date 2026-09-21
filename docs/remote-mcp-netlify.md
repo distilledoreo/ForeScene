@@ -40,7 +40,7 @@ Connections expire after eight hours. Tokens live only in session storage in the
 - `project_inspect` — project summary.
 - `scene_query` — compact structured object search.
 - `scene_inspect` — detailed transform/dimensions/world-bounds/support/intersection/architecture inspection.
-- `scene_validate` — spatial and architectural preflight; optionally accepts a proposed `plan` so it can validate the hypothetical result before apply.
+- `scene_validate` — spatial and architectural preflight; optionally accepts a proposed `plan` so it can validate the hypothetical result before apply. It also classifies automatic opening/stair relationships, doorway threshold support, stair-clearance obstructions, overlapping support surfaces, and substantial unexplained intersections.
 - `scene_capture` — isometric/top/front/back/left/right authoring image returned directly to the MCP client; optionally accepts a proposed `plan` to render the hypothetical result before apply.
 - `project_script` — compile a stateful ForeScene script server-side against the current browser project, then preview the resulting normal Agent Plan. Never applies.
 - `project_apply` — apply a previewed plan; available only to sessions created with editing enabled and only while browser Agent writes are enabled. It refuses plans that introduce new spatial-preflight errors unless `allowSpatialErrors: true` is explicitly supplied.
