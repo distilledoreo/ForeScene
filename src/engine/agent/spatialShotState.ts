@@ -20,6 +20,10 @@ import {
 import { sampleShotTimeline } from '../shotTimeline';
 import { selectionBounds } from '../buildSelection';
 import { objectWorldAabb } from '../previs/compositionTelemetry';
+import {
+  resolveSceneRelationships,
+  resolvedObjectWorldAabbs,
+} from '../sceneRelationships';
 import { AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 
 export interface ShotEffectiveState {
@@ -74,26 +78,38 @@ export function identifyFloorY(
   objects?: SceneObject[],
 ): number {
   const sourceObjects = objects ?? project.scene.objects;
-  const floors = sourceObjects.filter((object) => (
-    (object.type === 'floor' || object.type === 'terrain_mass')
-    && object.visible !== false
-  ));
+  const effectiveProject = objects
+    ? { ...project, scene: { ...project.scene, objects: sourceObjects } }
+    : project;
+  const resolution = resolveSceneRelationships(effectiveProject);
+  const floors = sourceObjects.filter((object) => {
+    if (object.visible === false) return false;
+    const architecture = object.metadata?.architecture;
+    const semanticSlab = architecture && typeof architecture === 'object'
+      && !Array.isArray(architecture)
+      && (architecture as Record<string, unknown>).kind === 'slab'
+      && (architecture as Record<string, unknown>).slabRole !== 'ceiling';
+    return object.type === 'floor' || object.type === 'terrain_mass' || semanticSlab;
+  });
   if (floors.length === 0) return 0;
 
   let bestTop = -Infinity;
   for (const floor of floors) {
-    const box = objectWorldAabb(floor);
-    const insideX = position[0] >= box.min[0] && position[0] <= box.max[0];
-    const insideZ = position[2] >= box.min[2] && position[2] <= box.max[2];
-    if (insideX && insideZ) {
-      bestTop = Math.max(bestTop, box.max[1]);
+    for (const box of resolvedObjectWorldAabbs(floor, resolution)) {
+      const insideX = position[0] >= box.min[0] && position[0] <= box.max[0];
+      const insideZ = position[2] >= box.min[2] && position[2] <= box.max[2];
+      if (insideX && insideZ) {
+        bestTop = Math.max(bestTop, box.max[1]);
+      }
     }
   }
   if (bestTop !== -Infinity) return bestTop;
 
-  // Fall back to the highest floor surface in the scene.
+  // Fall back to the highest remaining effective floor surface in the scene.
   for (const floor of floors) {
-    bestTop = Math.max(bestTop, objectWorldAabb(floor).max[1]);
+    for (const box of resolvedObjectWorldAabbs(floor, resolution)) {
+      bestTop = Math.max(bestTop, box.max[1]);
+    }
   }
   return Number.isFinite(bestTop) ? bestTop : 0;
 }
@@ -251,20 +267,22 @@ export function cameraIntersectsSolidGeometry(
   shot: Pick<Shot, 'objectOverrides' | 'camera'>,
 ): boolean {
   const resolved = resolveProjectForShot(project, shot);
+  const resolution = resolveSceneRelationships(resolved);
   const solids = resolved.scene.objects.filter((object) => (
-    ['wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass'].includes(object.type)
+    ['wall', 'box', 'column', 'arch', 'stairs', 'terrain_mass'].includes(object.type)
     && object.visible !== false
   ));
   const camera = shot.camera.position;
   for (const object of solids) {
-    const box = objectWorldAabb(object);
-    const margin = 0.05;
-    if (
-      camera[0] >= box.min[0] - margin && camera[0] <= box.max[0] + margin
-      && camera[1] >= box.min[1] - margin && camera[1] <= box.max[1] + margin
-      && camera[2] >= box.min[2] - margin && camera[2] <= box.max[2] + margin
-    ) {
-      return true;
+    for (const box of resolvedObjectWorldAabbs(object, resolution)) {
+      const margin = 0.05;
+      if (
+        camera[0] >= box.min[0] - margin && camera[0] <= box.max[0] + margin
+        && camera[1] >= box.min[1] - margin && camera[1] <= box.max[1] + margin
+        && camera[2] >= box.min[2] - margin && camera[2] <= box.max[2] + margin
+      ) {
+        return true;
+      }
     }
   }
   return false;
