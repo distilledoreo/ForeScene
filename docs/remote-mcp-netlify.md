@@ -36,12 +36,16 @@ Connections expire after eight hours. Tokens live only in session storage in the
 
 ## MCP tools
 
+- `agent_reference` — coordinate system, primitive placement semantics, architecture helpers, and recommended spatial workflow.
 - `project_inspect` — project summary.
-- `scene_query` — structured object search.
+- `scene_query` — compact structured object search.
+- `scene_inspect` — detailed transform/dimensions/world-bounds/support/intersection/architecture inspection.
+- `scene_validate` — spatial and architectural preflight.
+- `scene_capture` — isometric/top/front/back/left/right authoring image returned directly to the MCP client.
 - `project_script` — compile a stateful ForeScene script server-side against the current browser project, then preview the resulting normal Agent Plan. Never applies.
 - `project_apply` — apply a previewed plan; available only to sessions created with editing enabled and only while browser Agent writes are enabled.
 - `shot_render` — render a shot in-browser and return metadata/artifact handles. Large inline image bytes are intentionally not relayed.
-- `project_verify` — project health + visual preflight.
+- `project_verify` — project health + visual preflight + spatial-authoring validation.
 
 The endpoint implements the stateless 2025-11-25 Streamable HTTP request/response flow. Modern clients that probe the 2026 protocol can fall back to the legacy/stateless flow.
 
