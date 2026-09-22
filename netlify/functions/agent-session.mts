@@ -1,4 +1,9 @@
 import {
+  clearOAuthPairingCookie,
+  createOAuthPairing,
+  oauthPairingCookie,
+} from '../lib/oauthStore.ts';
+import {
   authenticateRemoteAgentRequest,
   createRemoteAgentSession,
   disconnectRemoteAgentSession,
@@ -16,6 +21,10 @@ export default async (req: Request) => {
       ...(typeof body.projectName === 'string' ? { projectName: body.projectName } : {}),
     });
     const origin = new URL(req.url).origin;
+    const pairing = await createOAuthPairing(
+      created.tokenHash,
+      created.session.expiresAt,
+    );
     return noStoreJson({
       ok: true,
       token: created.token,
@@ -23,14 +32,23 @@ export default async (req: Request) => {
       accessMode: created.session.accessMode,
       expiresAt: created.session.expiresAt,
       mcpUrl: `${origin}/mcp`,
-    }, { status: 201 });
+      oauthEnabled: true,
+    }, {
+      status: 201,
+      headers: {
+        'set-cookie': oauthPairingCookie(pairing.token, pairing.expiresAt),
+      },
+    });
   }
 
   if (req.method === 'DELETE') {
     const auth = await authenticateRemoteAgentRequest(req);
     if (!auth) return unauthorizedResponse();
     await disconnectRemoteAgentSession(auth.token);
-    return noStoreJson({ ok: true });
+    return noStoreJson(
+      { ok: true },
+      { headers: { 'set-cookie': clearOAuthPairingCookie() } },
+    );
   }
 
   return new Response('Method not allowed', { status: 405, headers: { allow: 'POST, DELETE' } });

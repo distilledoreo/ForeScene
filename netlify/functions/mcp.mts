@@ -8,11 +8,14 @@ import {
   validateSpatialAuthoring,
 } from '../../src/engine/agent/spatialAuthoring.ts';
 import {
-  authenticateRemoteAgentRequest,
+  authenticateOAuthMcpRequest,
+  FORESCENE_READ_SCOPE,
+  FORESCENE_WRITE_SCOPE,
+} from '../lib/oauthStore.ts';
+import {
   noStoreJson,
   RemoteAgentRelayError,
-  runRemoteBrowserCommand,
-  unauthorizedResponse,
+  runRemoteBrowserCommandBySessionHash,
 } from '../lib/remoteAgentStore.ts';
 
 type JsonRpcId = string | number | null;
@@ -173,8 +176,43 @@ function toolError(code: string, message: string) {
   };
 }
 
+function oauthUnauthorized(req: Request, scope = FORESCENE_READ_SCOPE): Response {
+  const origin = new URL(req.url).origin;
+  return Response.json(
+    {
+      error: 'invalid_token',
+      error_description: 'A valid ForeScene OAuth access token is required.',
+    },
+    {
+      status: 401,
+      headers: {
+        'www-authenticate': `Bearer realm="ForeScene Remote MCP", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
+        'cache-control': 'no-store',
+      },
+    },
+  );
+}
+
+function oauthInsufficientScope(req: Request, scope: string): Response {
+  const origin = new URL(req.url).origin;
+  const description = `Required scope: ${scope}`;
+  return Response.json(
+    {
+      error: 'insufficient_scope',
+      error_description: description,
+    },
+    {
+      status: 403,
+      headers: {
+        'www-authenticate': `Bearer error="insufficient_scope", error_description="${description}", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
+        'cache-control': 'no-store',
+      },
+    },
+  );
+}
+
 async function callTool(
-  token: string,
+  sessionHash: string,
   accessMode: 'read-only' | 'read-write',
   name: string,
   args: Record<string, unknown>,
@@ -184,14 +222,14 @@ async function callTool(
       return AGENT_SPATIAL_AUTHORING_REFERENCE;
 
     case 'project_inspect':
-      return runRemoteBrowserCommand(token, 'project.inspect', {}, { timeoutMs: 20_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'project.inspect', {}, { timeoutMs: 20_000 });
 
     case 'scene_query':
-      return runRemoteBrowserCommand(token, 'scene.query', { query: args }, { timeoutMs: 20_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'scene.query', { query: args }, { timeoutMs: 20_000 });
 
     case 'scene_inspect': {
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -200,8 +238,8 @@ async function callTool(
     }
 
     case 'scene_validate': {
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -232,20 +270,20 @@ async function callTool(
     }
 
     case 'scene_capture':
-      return runRemoteBrowserCommand(token, 'scene.capture', args, { timeoutMs: 35_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'scene.capture', args, { timeoutMs: 35_000 });
 
     case 'project_script': {
       const script = typeof args.script === 'string' ? args.script : '';
       if (!script.trim()) throw new RemoteAgentRelayError('invalid_argument', 'script is required.');
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
       ) as LocationProject;
       const compiled = compileAgentScript(script, project, { fileName: 'remote-mcp-script.js' });
-      const preview = await runRemoteBrowserCommand(
-        token,
+      const preview = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.preview_plan',
         { plan: compiled.plan },
         { timeoutMs: 22_000 },
@@ -286,8 +324,8 @@ async function callTool(
         throw new RemoteAgentRelayError('invalid_argument', 'plan must be an Agent Plan object.');
       }
 
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -332,8 +370,8 @@ async function callTool(
         };
       }
 
-      return runRemoteBrowserCommand(
-        token,
+      return runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.apply_plan',
         {
           plan: args.plan,
@@ -346,17 +384,17 @@ async function callTool(
     }
 
     case 'shot_render':
-      return runRemoteBrowserCommand(token, 'shot.render', args, { timeoutMs: 45_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'shot.render', args, { timeoutMs: 45_000 });
 
     case 'project_verify': {
-      const browserVerification = await runRemoteBrowserCommand(
-        token,
+      const browserVerification = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.verify',
         args,
         { timeoutMs: 45_000 },
       );
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -384,8 +422,11 @@ export default async (req: Request) => {
     });
   }
 
-  const auth = await authenticateRemoteAgentRequest(req);
-  if (!auth) return unauthorizedResponse();
+  const auth = await authenticateOAuthMcpRequest(req);
+  if (!auth) return oauthUnauthorized(req);
+  if (!auth.scopes.has(FORESCENE_READ_SCOPE)) {
+    return oauthUnauthorized(req, FORESCENE_READ_SCOPE);
+  }
 
   const message = await req.json().catch(() => undefined) as JsonRpcRequest | undefined;
   if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
@@ -413,7 +454,12 @@ export default async (req: Request) => {
   if (message.method === 'ping') return rpcResponse(id, {});
 
   if (message.method === 'tools/list') {
-    return rpcResponse(id, { tools: TOOL_DEFINITIONS });
+    const writeToolAvailable = auth.session.accessMode === 'read-write';
+    return rpcResponse(id, {
+      tools: writeToolAvailable
+        ? TOOL_DEFINITIONS
+        : TOOL_DEFINITIONS.filter((tool) => tool.name !== 'project_apply'),
+    });
   }
 
   if (message.method === 'tools/call') {
@@ -423,8 +469,16 @@ export default async (req: Request) => {
     const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
       ? args as Record<string, unknown>
       : {};
+    if (name === 'project_apply' && !auth.scopes.has(FORESCENE_WRITE_SCOPE)) {
+      return oauthInsufficientScope(req, FORESCENE_WRITE_SCOPE);
+    }
     try {
-      const result = await callTool(auth.token, auth.session.accessMode, name, toolArgs);
+      const result = await callTool(
+        auth.sessionHash,
+        auth.session.accessMode,
+        name,
+        toolArgs,
+      );
       if (
         name === 'scene_capture'
         && result

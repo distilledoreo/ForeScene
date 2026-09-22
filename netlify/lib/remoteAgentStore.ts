@@ -36,6 +36,7 @@ export interface RemoteAgentJobResult {
 
 export interface CreatedRemoteAgentSession {
   token: string;
+  tokenHash: string;
   session: RemoteAgentSession;
 }
 
@@ -79,8 +80,7 @@ function expired(session: RemoteAgentSession): boolean {
   return Date.parse(session.expiresAt) <= Date.now();
 }
 
-async function readSessionByToken(token: string): Promise<RemoteAgentSession | undefined> {
-  const hash = tokenHash(token);
+export async function readRemoteAgentSessionByHash(hash: string): Promise<RemoteAgentSession | undefined> {
   const data = await store().get(sessionKey(hash), { type: 'json', consistency: 'strong' }) as RemoteAgentSession | null;
   if (!data) return undefined;
   if (expired(data)) {
@@ -91,6 +91,10 @@ async function readSessionByToken(token: string): Promise<RemoteAgentSession | u
     return undefined;
   }
   return data;
+}
+
+async function readSessionByToken(token: string): Promise<RemoteAgentSession | undefined> {
+  return readRemoteAgentSessionByHash(tokenHash(token));
 }
 
 export async function createRemoteAgentSession(input: {
@@ -111,7 +115,7 @@ export async function createRemoteAgentSession(input: {
     ...(input.projectName ? { projectName: input.projectName } : {}),
   };
   await store().setJSON(sessionKey(hash), session, { onlyIfNew: true });
-  return { token, session };
+  return { token, tokenHash: hash, session };
 }
 
 export async function authenticateRemoteAgentRequest(
@@ -184,19 +188,19 @@ export async function completeRemoteAgentJob(
   await store().delete(pendingKey(hash));
 }
 
-export async function runRemoteBrowserCommand(
-  token: string,
+export async function runRemoteBrowserCommandBySessionHash(
+  sessionHash: string,
   tool: string,
   args: unknown,
   options: { timeoutMs?: number; requiresWrite?: boolean } = {},
 ): Promise<unknown> {
-  const session = await readSessionByToken(token);
+  const session = await readRemoteAgentSessionByHash(sessionHash);
   if (!session) throw new RemoteAgentRelayError('session_unavailable', 'ForeScene browser session is missing or expired.');
   if (options.requiresWrite && session.accessMode !== 'read-write') {
     throw new RemoteAgentRelayError('write_access_required', 'This remote session is read-only.');
   }
 
-  const hash = tokenHash(token);
+  const hash = sessionHash;
   const job: RemoteAgentJob = {
     version: 1,
     jobId: randomUUID(),
@@ -234,6 +238,15 @@ export async function runRemoteBrowserCommand(
   } finally {
     await store().delete(pendingKey(hash)).catch(() => undefined);
   }
+}
+
+export async function runRemoteBrowserCommand(
+  token: string,
+  tool: string,
+  args: unknown,
+  options: { timeoutMs?: number; requiresWrite?: boolean } = {},
+): Promise<unknown> {
+  return runRemoteBrowserCommandBySessionHash(tokenHash(token), tool, args, options);
 }
 
 export class RemoteAgentRelayError extends Error {
