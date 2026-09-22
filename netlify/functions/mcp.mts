@@ -176,6 +176,23 @@ function toolError(code: string, message: string) {
   };
 }
 
+function oauthUnauthorized(req: Request, scope = FORESCENE_READ_SCOPE): Response {
+  const origin = new URL(req.url).origin;
+  return Response.json(
+    {
+      error: 'invalid_token',
+      error_description: 'A valid ForeScene OAuth access token is required.',
+    },
+    {
+      status: 401,
+      headers: {
+        'www-authenticate': `Bearer realm="ForeScene Remote MCP", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
+        'cache-control': 'no-store',
+      },
+    },
+  );
+}
+
 async function callTool(
   sessionHash: string,
   accessMode: 'read-only' | 'read-write',
