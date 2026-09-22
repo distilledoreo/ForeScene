@@ -36,6 +36,7 @@ export interface RemoteAgentJobResult {
 
 export interface CreatedRemoteAgentSession {
   token: string;
+  tokenHash: string;
   session: RemoteAgentSession;
 }
 
@@ -114,7 +115,7 @@ export async function createRemoteAgentSession(input: {
     ...(input.projectName ? { projectName: input.projectName } : {}),
   };
   await store().setJSON(sessionKey(hash), session, { onlyIfNew: true });
-  return { token, session };
+  return { token, tokenHash: hash, session };
 }
 
 export async function authenticateRemoteAgentRequest(
