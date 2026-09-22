@@ -193,6 +193,24 @@ function oauthUnauthorized(req: Request, scope = FORESCENE_READ_SCOPE): Response
   );
 }
 
+function oauthInsufficientScope(req: Request, scope: string): Response {
+  const origin = new URL(req.url).origin;
+  const description = `Required scope: ${scope}`;
+  return Response.json(
+    {
+      error: 'insufficient_scope',
+      error_description: description,
+    },
+    {
+      status: 403,
+      headers: {
+        'www-authenticate': `Bearer error="insufficient_scope", error_description="${description}", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
+        'cache-control': 'no-store',
+      },
+    },
+  );
+}
+
 async function callTool(
   sessionHash: string,
   accessMode: 'read-only' | 'read-write',
@@ -436,10 +454,9 @@ export default async (req: Request) => {
   if (message.method === 'ping') return rpcResponse(id, {});
 
   if (message.method === 'tools/list') {
-    const canWrite = auth.scopes.has(FORESCENE_WRITE_SCOPE)
-      && auth.session.accessMode === 'read-write';
+    const writeToolAvailable = auth.session.accessMode === 'read-write';
     return rpcResponse(id, {
-      tools: canWrite
+      tools: writeToolAvailable
         ? TOOL_DEFINITIONS
         : TOOL_DEFINITIONS.filter((tool) => tool.name !== 'project_apply'),
     });
@@ -453,13 +470,7 @@ export default async (req: Request) => {
       ? args as Record<string, unknown>
       : {};
     if (name === 'project_apply' && !auth.scopes.has(FORESCENE_WRITE_SCOPE)) {
-      return rpcResponse(
-        id,
-        toolError(
-          'insufficient_scope',
-          'Reconnect ForeScene with editing enabled and authorize forescene:write before applying a plan.',
-        ),
-      );
+      return oauthInsufficientScope(req, FORESCENE_WRITE_SCOPE);
     }
     try {
       const result = await callTool(
