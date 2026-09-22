@@ -84,7 +84,7 @@ After the production deploy:
 The deployment workflow also runs the OAuth smoke test in Chromium. It clicks
 both **Cancel** and **Allow**, checks the callback state, exchanges the code with
 PKCE, and initializes MCP using an isolated read-only session with no project
-data. The callback is intercepted by the test and the session is disconnected
+data. The callback stays in a loopback test receiver and the session is disconnected
 afterward. To run it manually:
 
 ```sh

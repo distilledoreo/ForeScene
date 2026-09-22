@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 
 const base = (process.argv[2] || 'https://forescene.distilledlabs.org').replace(/\/$/, '');
 const resource = `${base}/mcp`;
-const redirectUri = 'https://oauth-smoke.invalid/callback';
+let redirectUri = 'https://oauth-smoke.invalid/callback';
 const useBrowser = process.argv.includes('--browser');
 
 function fail(message, extra) {
@@ -29,6 +30,26 @@ async function json(response, label) {
 
 let relayToken;
 let browser;
+let callbackServer;
+let receivedCallback;
+
+async function startCallbackServer() {
+  callbackServer = createServer((req, res) => {
+    const target = new URL(req.url, redirectUri);
+    if (req.method !== 'GET' || target.pathname !== '/callback') {
+      res.writeHead(404).end();
+      return;
+    }
+    receivedCallback = target;
+    res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
+    res.end('<h1>OAuth callback received</h1>');
+  });
+  await new Promise((resolve, reject) => {
+    callbackServer.once('error', reject);
+    callbackServer.listen(0, '127.0.0.1', resolve);
+  });
+  redirectUri = `http://127.0.0.1:${callbackServer.address().port}/callback`;
+}
 
 async function browserConsent(authorize, cookie) {
   const { chromium } = await import('@playwright/test');
@@ -44,23 +65,33 @@ async function browserConsent(authorize, cookie) {
     sameSite: 'Lax',
   }]);
   const page = await context.newPage();
-  // Capture only our disposable client's callback, without sending codes to a server.
-  // Chromium still enforces the consent document's CSP before reaching this route.
-  await page.route(`${redirectUri}**`, (route) => route.fulfill({
-    contentType: 'text/html',
-    body: '<h1>OAuth callback received</h1>',
-  }));
+  const diagnostics = { policy: '', postStatus: null, failedRequests: [] };
+  page.on('response', (response) => {
+    if (response.request().method() === 'POST' && new URL(response.url()).pathname === '/oauth/authorize') {
+      diagnostics.postStatus = response.status();
+    }
+  });
+  page.on('requestfailed', (request) => {
+    const url = new URL(request.url());
+    diagnostics.failedRequests.push({ url: url.origin + url.pathname, error: request.failure()?.errorText });
+  });
+  // Use a real loopback receiver: Playwright routes do not intercept the second
+  // request in a redirect chain. No callback code leaves this test runner.
   let callback;
   for (const decision of ['Cancel', 'Allow']) {
-    await page.goto(authorize.toString());
+    receivedCallback = undefined;
+    const consent = await page.goto(authorize.toString());
+    diagnostics.policy = consent.headers()['content-security-policy'];
     try {
       await page.getByRole('button', { name: decision, exact: true }).click();
       await page.waitForURL((url) => `${url.origin}${url.pathname}` === redirectUri, { timeout: 15_000 });
+      await page.getByRole('heading', { name: 'OAuth callback received', exact: true }).waitFor();
     } catch {
       // Do not print browser errors or URLs containing authorization codes.
-      fail(`${decision} did not reach the OAuth callback in Chromium; check consent form-action CSP.`);
+      fail(`${decision} did not reach the OAuth callback in Chromium.`, diagnostics);
     }
-    callback = new URL(page.url());
+    callback = receivedCallback;
+    if (!callback) fail(`${decision} callback was not received by the test server`);
     if (callback.searchParams.get('state') !== authorize.searchParams.get('state')) {
       fail(`${decision} callback state mismatch`);
     }
@@ -72,6 +103,7 @@ async function browserConsent(authorize, cookie) {
 }
 
 try {
+  if (useBrowser) await startCallbackServer();
   // This isolated read-only session has no paired ForeScene tab or project data.
   // Do not reuse a user's pairing cookie or relay token for this test.
   const sessionResponse = await fetch(`${base}/api/agent/session`, {
@@ -214,6 +246,7 @@ try {
   console.log(`ForeScene production OAuth smoke test passed${useBrowser ? ' (Chromium Allow + Cancel, PKCE, MCP initialize)' : ''}.`);
 } finally {
   await browser?.close().catch(() => undefined);
+  if (callbackServer) await new Promise((resolve) => callbackServer.close(resolve));
   if (relayToken) {
     await fetch(`${base}/api/agent/session`, {
       method: 'DELETE',

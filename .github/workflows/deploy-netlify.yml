@@ -1,5 +1,5 @@
 name: Manual Netlify deploy
-# Deployment trigger: Fix OAuth consent callback CSP and verify real browser clicks
+# Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
 
 on:
   workflow_dispatch:
