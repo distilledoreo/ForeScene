@@ -1,6 +1,7 @@
 import {
   FORESCENE_READ_SCOPE,
   FORESCENE_WRITE_SCOPE,
+  OFFLINE_ACCESS_SCOPE,
   issueOAuthAuthorizationCode,
   normalizeOAuthScopes,
   readOAuthClient,
@@ -195,6 +196,9 @@ export default async (req: Request) => {
       : '',
     scopes.includes(FORESCENE_WRITE_SCOPE)
       ? '<li><strong>Edit the project</strong><span>Apply an explicitly previewed ForeScene plan.</span></li>'
+      : '',
+    scopes.includes(OFFLINE_ACCESS_SCOPE)
+      ? '<li><strong>Keep the connection active</strong><span>Use rotating refresh tokens until this temporary ForeScene browser session expires.</span></li>'
       : '',
   ].filter(Boolean).join('');
 
