@@ -5,7 +5,7 @@ ForeScene can expose the project open in a browser tab to remote MCP clients wit
 ## Architecture
 
 ```text
-MCP client (Codex / Claude Code)
+MCP client (ChatGPT / Codex / Claude Code)
         |
         | Streamable HTTP-compatible JSON-RPC + OAuth access token
         v
@@ -72,12 +72,12 @@ netlify/lib/remoteAgentStore.ts
 netlify/lib/oauthStore.ts
 ```
 
-Netlify automatically discovers `netlify/functions/`. The functions use the site-scoped `forescene-agent-relay` Blob store with strong consistency.
+Netlify automatically discovers `netlify/functions/`. Relay state uses the site-scoped `forescene-agent-relay` Blob store and OAuth state uses `forescene-oauth`, both with strong consistency.
 
 After the production deploy:
 
 1. Open **Netlify > Deploys** and confirm the deploy succeeded.
-2. Open **Netlify > Functions** and confirm these functions are present: `mcp`, `agent-session`, `agent-poll`, `agent-result`.
+2. Open **Netlify > Functions** and confirm the relay and OAuth functions are present, including `mcp`, `agent-session`, `oauth-authorize`, `oauth-token`, and the two well-known discovery handlers.
 3. Open the deployed ForeScene site and connect from **Remote MCP Connection**.
 4. The displayed MCP URL should be `https://YOUR-DOMAIN/mcp`.
 
@@ -116,9 +116,10 @@ Scopes:
 ```text
 forescene:read
 forescene:write
+offline_access
 ```
 
-`project_apply` is advertised and accepted only when the OAuth grant contains `forescene:write` **and** the paired browser connection was created with **Allow editing**.
+Initial MCP authentication challenges for `forescene:read`. When the paired browser session permits editing, `project_apply` is discoverable; calling it without `forescene:write` returns an OAuth `403 insufficient_scope` challenge so compatible clients can perform scope step-up. The apply call succeeds only after write scope is granted **and** the paired browser connection is still in **Allow editing** mode.
 
 ## Security notes
 
