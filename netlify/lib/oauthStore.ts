@@ -72,7 +72,7 @@ export interface OAuthTokenSet {
   access_token: string;
   token_type: 'Bearer';
   expires_in: number;
-  refresh_token: string;
+  refresh_token?: string;
   scope: string;
 }
 
@@ -290,7 +290,6 @@ async function issueOAuthTokenSet(input: {
   }
 
   const accessToken = randomToken('fs_oauth_at_', 32);
-  const refreshToken = randomToken('fs_oauth_rt_', 32);
   const access: OAuthAccessGrant = {
     version: 1,
     clientId: input.clientId,
@@ -300,25 +299,33 @@ async function issueOAuthTokenSet(input: {
     createdAt: new Date(now).toISOString(),
     expiresAt: new Date(accessExpiresAtMs).toISOString(),
   };
-  const refresh: OAuthRefreshGrant = {
-    version: 1,
-    clientId: input.clientId,
-    sessionHash: input.sessionHash,
-    scopes: input.scopes,
-    resource: input.resource,
-    createdAt: new Date(now).toISOString(),
-    expiresAt: new Date(refreshExpiresAtMs).toISOString(),
-  };
-  await Promise.all([
+
+  const writes: Promise<unknown>[] = [
     store().setJSON(tokenKey('access', accessToken), access, { onlyIfNew: true }),
-    store().setJSON(tokenKey('refresh', refreshToken), refresh, { onlyIfNew: true }),
-  ]);
+  ];
+  let refreshToken: string | undefined;
+  if (input.scopes.includes(OFFLINE_ACCESS_SCOPE)) {
+    refreshToken = randomToken('fs_oauth_rt_', 32);
+    const refresh: OAuthRefreshGrant = {
+      version: 1,
+      clientId: input.clientId,
+      sessionHash: input.sessionHash,
+      scopes: input.scopes,
+      resource: input.resource,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(refreshExpiresAtMs).toISOString(),
+    };
+    writes.push(
+      store().setJSON(tokenKey('refresh', refreshToken), refresh, { onlyIfNew: true }),
+    );
+  }
+  await Promise.all(writes);
 
   return {
     access_token: accessToken,
     token_type: 'Bearer',
     expires_in: Math.max(1, Math.floor((accessExpiresAtMs - now) / 1000)),
-    refresh_token: refreshToken,
+    ...(refreshToken ? { refresh_token: refreshToken } : {}),
     scope: scopeString(input.scopes),
   };
 }
