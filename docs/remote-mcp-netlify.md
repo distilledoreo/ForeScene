@@ -81,6 +81,23 @@ After the production deploy:
 3. Open the deployed ForeScene site and connect from **Remote MCP Connection**.
 4. The displayed MCP URL should be `https://YOUR-DOMAIN/mcp`.
 
+The deployment workflow also runs the OAuth smoke test in Chromium. It clicks
+both **Cancel** and **Allow**, checks the callback state, exchanges the code with
+PKCE, and initializes MCP using an isolated read-only session with no project
+data. The callback is intercepted by the test and the session is disconnected
+afterward. To run it manually:
+
+```sh
+npx playwright install chromium
+node scripts/remote-mcp-oauth-smoke.mjs https://YOUR-DOMAIN --browser
+```
+
+The consent page's `form-action` CSP must include the validated callback origin:
+Chromium checks redirects after form submission, so a policy of only `'self'`
+leaves the consent page stuck even when an HTTP-only test sees a successful 302.
+Only the selected registered callback origin is allowed; invalid-request error
+pages retain the same-origin policy.
+
 ## ChatGPT / OAuth client setup
 
 ForeScene implements OAuth 2.1-style Authorization Code + PKCE for the remote MCP endpoint, including protected-resource discovery, authorization-server metadata, Dynamic Client Registration, and refresh-token rotation.
