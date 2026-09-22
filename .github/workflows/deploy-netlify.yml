@@ -1,5 +1,5 @@
 name: Manual Netlify deploy
-# Deployment trigger: Remote MCP OAuth callback hotfix
+# Deployment trigger: Remote MCP OAuth end-to-end verification
 
 on:
   workflow_dispatch:
@@ -58,3 +58,6 @@ jobs:
             --site "$NETLIFY_SITE_TARGET" \
             --auth "$NETLIFY_AUTH_TOKEN" \
             --message "ForeScene ${GITHUB_SHA}"
+
+      - name: Verify production OAuth flow
+        run: node scripts/remote-mcp-oauth-smoke.mjs https://forescene.distilledlabs.org
