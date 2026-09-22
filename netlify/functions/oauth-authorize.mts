@@ -101,7 +101,6 @@ function redirectWithError(
   target.searchParams.set('error', error);
   target.searchParams.set('error_description', description);
   if (request.state) target.searchParams.set('state', request.state);
-  target.searchParams.set('iss', new URL(request.resource).origin);
   return Response.redirect(target.toString(), 302);
 }
 
@@ -187,7 +186,6 @@ export default async (req: Request) => {
     const target = new URL(request.redirectUri);
     target.searchParams.set('code', code);
     if (request.state) target.searchParams.set('state', request.state);
-    target.searchParams.set('iss', origin);
     return Response.redirect(target.toString(), 302);
   }
 
