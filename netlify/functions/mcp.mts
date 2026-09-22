@@ -452,8 +452,22 @@ export default async (req: Request) => {
     const toolArgs = args && typeof args === 'object' && !Array.isArray(args)
       ? args as Record<string, unknown>
       : {};
+    if (name === 'project_apply' && !auth.scopes.has(FORESCENE_WRITE_SCOPE)) {
+      return rpcResponse(
+        id,
+        toolError(
+          'insufficient_scope',
+          'Reconnect ForeScene with editing enabled and authorize forescene:write before applying a plan.',
+        ),
+      );
+    }
     try {
-      const result = await callTool(auth.token, auth.session.accessMode, name, toolArgs);
+      const result = await callTool(
+        auth.sessionHash,
+        auth.session.accessMode,
+        name,
+        toolArgs,
+      );
       if (
         name === 'scene_capture'
         && result
