@@ -8,9 +8,11 @@ import {
 
 export const FORESCENE_READ_SCOPE = 'forescene:read' as const;
 export const FORESCENE_WRITE_SCOPE = 'forescene:write' as const;
+export const OFFLINE_ACCESS_SCOPE = 'offline_access' as const;
 export type ForeSceneOAuthScope =
   | typeof FORESCENE_READ_SCOPE
-  | typeof FORESCENE_WRITE_SCOPE;
+  | typeof FORESCENE_WRITE_SCOPE
+  | typeof OFFLINE_ACCESS_SCOPE;
 
 export interface OAuthClientRegistration {
   version: 1;
@@ -138,11 +140,13 @@ export function normalizeOAuthScopes(
   const requested = rawScope?.trim()
     ? [...new Set(rawScope.trim().split(/\s+/))]
     : accessMode === 'read-write'
-      ? [FORESCENE_READ_SCOPE, FORESCENE_WRITE_SCOPE]
-      : [FORESCENE_READ_SCOPE];
+      ? [FORESCENE_READ_SCOPE, FORESCENE_WRITE_SCOPE, OFFLINE_ACCESS_SCOPE]
+      : [FORESCENE_READ_SCOPE, OFFLINE_ACCESS_SCOPE];
 
   if (requested.some((scope) => (
-    scope !== FORESCENE_READ_SCOPE && scope !== FORESCENE_WRITE_SCOPE
+    scope !== FORESCENE_READ_SCOPE
+    && scope !== FORESCENE_WRITE_SCOPE
+    && scope !== OFFLINE_ACCESS_SCOPE
   ))) {
     return undefined;
   }
