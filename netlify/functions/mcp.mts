@@ -436,7 +436,13 @@ export default async (req: Request) => {
   if (message.method === 'ping') return rpcResponse(id, {});
 
   if (message.method === 'tools/list') {
-    return rpcResponse(id, { tools: TOOL_DEFINITIONS });
+    const canWrite = auth.scopes.has(FORESCENE_WRITE_SCOPE)
+      && auth.session.accessMode === 'read-write';
+    return rpcResponse(id, {
+      tools: canWrite
+        ? TOOL_DEFINITIONS
+        : TOOL_DEFINITIONS.filter((tool) => tool.name !== 'project_apply'),
+    });
   }
 
   if (message.method === 'tools/call') {
