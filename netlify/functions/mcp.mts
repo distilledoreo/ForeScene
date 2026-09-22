@@ -404,8 +404,11 @@ export default async (req: Request) => {
     });
   }
 
-  const auth = await authenticateRemoteAgentRequest(req);
-  if (!auth) return unauthorizedResponse();
+  const auth = await authenticateOAuthMcpRequest(req);
+  if (!auth) return oauthUnauthorized(req);
+  if (!auth.scopes.has(FORESCENE_READ_SCOPE)) {
+    return oauthUnauthorized(req, FORESCENE_READ_SCOPE);
+  }
 
   const message = await req.json().catch(() => undefined) as JsonRpcRequest | undefined;
   if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
