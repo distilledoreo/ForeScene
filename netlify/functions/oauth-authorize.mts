@@ -15,6 +15,7 @@ interface AuthorizationRequest {
   codeChallengeMethod: string;
   state?: string;
   scope?: string;
+  decision?: string;
   resource: string;
 }
 
@@ -85,6 +86,7 @@ async function parseRequest(req: Request): Promise<AuthorizationRequest | undefi
     codeChallengeMethod,
     ...(params.get('state') ? { state: params.get('state')! } : {}),
     ...(params.get('scope') ? { scope: params.get('scope')! } : {}),
+    ...(params.get('decision') ? { decision: params.get('decision')! } : {}),
     resource: params.get('resource') || `${origin}/mcp`,
   };
 }
@@ -166,8 +168,7 @@ export default async (req: Request) => {
   }
 
   if (req.method === 'POST') {
-    const body = new URLSearchParams(await req.clone().text());
-    if (body.get('decision') !== 'allow') {
+    if (request.decision !== 'allow') {
       return redirectWithError(
         request,
         'access_denied',
