@@ -146,13 +146,13 @@ export function normalizeOAuthScopes(
   ))) {
     return undefined;
   }
-  if (requested.includes(FORESCENE_WRITE_SCOPE) && accessMode !== 'read-write') {
-    return undefined;
+  const permitted = requested.filter(
+    (scope) => scope !== FORESCENE_WRITE_SCOPE || accessMode === 'read-write',
+  );
+  if (!permitted.includes(FORESCENE_READ_SCOPE)) {
+    permitted.unshift(FORESCENE_READ_SCOPE);
   }
-  if (!requested.includes(FORESCENE_READ_SCOPE)) {
-    requested.unshift(FORESCENE_READ_SCOPE);
-  }
-  return requested as ForeSceneOAuthScope[];
+  return permitted as ForeSceneOAuthScope[];
 }
 
 export async function registerOAuthClient(input: {
