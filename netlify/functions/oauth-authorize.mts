@@ -30,13 +30,20 @@ function htmlEscape(value: string): string {
   })[character] ?? character);
 }
 
-function htmlResponse(body: string, status = 200): Response {
+function htmlResponse(body: string, status = 200, redirectUri?: string): Response {
+  // Chromium applies form-action to the POST's redirect as well as its action.
+  // Allow only the validated client's callback origin; keep errors same-origin.
+  // Do not interpolate paths, queries, credentials, or CSP delimiters into a policy.
+  const callbackOrigin = redirectUri ? new URL(redirectUri).origin : undefined;
+  const formAction = callbackOrigin && /^https?:\/\/[a-z0-9.:[\]-]+$/i.test(callbackOrigin)
+    ? `'self' ${callbackOrigin}`
+    : "'self'";
   return new Response(body, {
     status,
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
       'referrer-policy': 'no-referrer',
       'x-frame-options': 'DENY',
     },
@@ -260,7 +267,7 @@ export default async (req: Request) => {
   <div class="note">Disconnecting the Remote MCP Connection in ForeScene immediately makes this authorization unusable.</div>
 </main>
 </body>
-</html>`);
+</html>`, 200, request.redirectUri);
 };
 
 export const config = {
