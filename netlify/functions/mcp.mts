@@ -177,7 +177,7 @@ function toolError(code: string, message: string) {
 }
 
 async function callTool(
-  token: string,
+  sessionHash: string,
   accessMode: 'read-only' | 'read-write',
   name: string,
   args: Record<string, unknown>,
@@ -187,14 +187,14 @@ async function callTool(
       return AGENT_SPATIAL_AUTHORING_REFERENCE;
 
     case 'project_inspect':
-      return runRemoteBrowserCommand(token, 'project.inspect', {}, { timeoutMs: 20_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'project.inspect', {}, { timeoutMs: 20_000 });
 
     case 'scene_query':
-      return runRemoteBrowserCommand(token, 'scene.query', { query: args }, { timeoutMs: 20_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'scene.query', { query: args }, { timeoutMs: 20_000 });
 
     case 'scene_inspect': {
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -203,8 +203,8 @@ async function callTool(
     }
 
     case 'scene_validate': {
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -235,20 +235,20 @@ async function callTool(
     }
 
     case 'scene_capture':
-      return runRemoteBrowserCommand(token, 'scene.capture', args, { timeoutMs: 35_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'scene.capture', args, { timeoutMs: 35_000 });
 
     case 'project_script': {
       const script = typeof args.script === 'string' ? args.script : '';
       if (!script.trim()) throw new RemoteAgentRelayError('invalid_argument', 'script is required.');
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
       ) as LocationProject;
       const compiled = compileAgentScript(script, project, { fileName: 'remote-mcp-script.js' });
-      const preview = await runRemoteBrowserCommand(
-        token,
+      const preview = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.preview_plan',
         { plan: compiled.plan },
         { timeoutMs: 22_000 },
@@ -289,8 +289,8 @@ async function callTool(
         throw new RemoteAgentRelayError('invalid_argument', 'plan must be an Agent Plan object.');
       }
 
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
@@ -335,8 +335,8 @@ async function callTool(
         };
       }
 
-      return runRemoteBrowserCommand(
-        token,
+      return runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.apply_plan',
         {
           plan: args.plan,
@@ -349,17 +349,17 @@ async function callTool(
     }
 
     case 'shot_render':
-      return runRemoteBrowserCommand(token, 'shot.render', args, { timeoutMs: 45_000 });
+      return runRemoteBrowserCommandBySessionHash(sessionHash, 'shot.render', args, { timeoutMs: 45_000 });
 
     case 'project_verify': {
-      const browserVerification = await runRemoteBrowserCommand(
-        token,
+      const browserVerification = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.verify',
         args,
         { timeoutMs: 45_000 },
       );
-      const project = await runRemoteBrowserCommand(
-        token,
+      const project = await runRemoteBrowserCommandBySessionHash(
+        sessionHash,
         'project.document',
         {},
         { timeoutMs: 18_000 },
