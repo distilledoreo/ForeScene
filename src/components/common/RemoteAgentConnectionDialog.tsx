@@ -28,7 +28,7 @@ export function RemoteAgentConnectionDialog({
     return [
       'ForeScene Remote MCP',
       `URL: ${connection.mcpUrl}`,
-      `Authorization: Bearer ${connection.token}`,
+      'Authentication: OAuth 2.1 Authorization Code + PKCE',
     ].join('\n');
   }, [connection]);
 
@@ -147,12 +147,11 @@ export function RemoteAgentConnectionDialog({
               value={connection.mcpUrl}
               onCopy={() => void copy(connection.mcpUrl, 'MCP URL')}
             />
-            <ConnectionField
-              label="Bearer token"
-              value={connection.token}
-              secret
-              onCopy={() => void copy(connection.token, 'Bearer token')}
-            />
+            <div className="rounded-xl border border-subtle bg-surface-overlay/50 px-3 py-2 text-xs leading-relaxed text-secondary">
+              Add the MCP URL to an OAuth-capable client such as ChatGPT. The client will
+              redirect back to ForeScene for approval; the internal browser relay token is
+              never shared with the MCP client.
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <button
