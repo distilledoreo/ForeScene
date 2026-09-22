@@ -7,7 +7,7 @@ ForeScene can expose the project open in a browser tab to remote MCP clients wit
 ```text
 MCP client (Codex / Claude Code)
         |
-        | Streamable HTTP-compatible JSON-RPC + Bearer token
+        | Streamable HTTP-compatible JSON-RPC + OAuth access token
         v
 Netlify /mcp Function
         |
@@ -28,11 +28,13 @@ Open **Menu > Remote MCP Connection**.
 
 1. Choose **Read only** or **Allow editing**.
 2. Click **Connect**.
-3. Copy the MCP URL and bearer token.
-4. Keep the ForeScene tab open while using the agent.
-5. Click **Disconnect** when finished.
+3. Copy the MCP URL.
+4. Add that URL to an OAuth-capable MCP client such as ChatGPT.
+5. When the client redirects to ForeScene, review the requested access and click **Allow**.
+6. Keep the ForeScene tab open while using the agent.
+7. Click **Disconnect** when finished.
 
-Connections expire after eight hours. Tokens live only in session storage in the paired browser tab.
+Connections expire after eight hours. The raw `fs_mcp_...` relay credential remains internal to the paired browser tab; OAuth clients receive separate short-lived access and refresh tokens bound to that relay session.
 
 ## MCP tools
 
@@ -51,7 +53,7 @@ The endpoint implements the stateless 2025-11-25 Streamable HTTP request/respons
 
 ## Netlify deployment
 
-No database, OAuth provider, WebSocket service, or environment variable is required for the MVP.
+No external database, OAuth provider, WebSocket service, or environment variable is required. Relay and OAuth state use site-scoped Netlify Blobs with strong consistency.
 
 The repository includes:
 
@@ -60,7 +62,14 @@ netlify/functions/mcp.mts
 netlify/functions/agent-session.mts
 netlify/functions/agent-poll.mts
 netlify/functions/agent-result.mts
+netlify/functions/oauth-protected-resource.mts
+netlify/functions/oauth-protected-resource-mcp.mts
+netlify/functions/oauth-authorization-server.mts
+netlify/functions/oauth-register.mts
+netlify/functions/oauth-authorize.mts
+netlify/functions/oauth-token.mts
 netlify/lib/remoteAgentStore.ts
+netlify/lib/oauthStore.ts
 ```
 
 Netlify automatically discovers `netlify/functions/`. The functions use the site-scoped `forescene-agent-relay` Blob store with strong consistency.
@@ -72,30 +81,50 @@ After the production deploy:
 3. Open the deployed ForeScene site and connect from **Remote MCP Connection**.
 4. The displayed MCP URL should be `https://YOUR-DOMAIN/mcp`.
 
-## Codex example
+## ChatGPT / OAuth client setup
 
-Put the copied token in an environment variable rather than committing it:
+ForeScene implements OAuth 2.1-style Authorization Code + PKCE for the remote MCP endpoint, including protected-resource discovery, authorization-server metadata, Dynamic Client Registration, and refresh-token rotation.
 
-```bash
-export FORESCENE_MCP_TOKEN='fs_mcp_...'
+For ChatGPT:
+
+1. Enable **Remote MCP Connection** in the ForeScene tab first.
+2. In ChatGPT's custom MCP/app setup, use `https://YOUR-DOMAIN/mcp`.
+3. ChatGPT discovers ForeScene's OAuth metadata and registers as a public client.
+4. The browser is redirected to `/oauth/authorize`.
+5. ForeScene shows the currently paired project and requested read/write permissions.
+6. After approval, ChatGPT exchanges the one-time authorization code at `/oauth/token` using PKCE.
+7. Subsequent MCP calls use a short-lived OAuth access token. Refresh tokens are rotated and cannot outlive the paired ForeScene browser session.
+
+Discovery endpoints:
+
+```text
+/.well-known/oauth-protected-resource
+/.well-known/oauth-protected-resource/mcp
+/.well-known/oauth-authorization-server
 ```
 
-Then add to `~/.codex/config.toml`:
+OAuth endpoints:
 
-```toml
-[mcp_servers.forescene]
-url = "https://YOUR-DOMAIN/mcp"
-bearer_token_env_var = "FORESCENE_MCP_TOKEN"
-tool_timeout_sec = 50
-enabled = true
+```text
+/oauth/register
+/oauth/authorize
+/oauth/token
 ```
 
-Restart/reload the MCP client after changing its configuration.
+Scopes:
+
+```text
+forescene:read
+forescene:write
+```
+
+`project_apply` is advertised and accepted only when the OAuth grant contains `forescene:write` **and** the paired browser connection was created with **Allow editing**.
 
 ## Security notes
 
-- Treat the bearer token like a password for the currently paired tab.
-- Do not paste the token into source control, issue trackers, or screenshots.
+- The internal `fs_mcp_...` relay credential is not displayed to MCP clients and should never leave the paired ForeScene tab.
+- OAuth authorization codes are single-use and PKCE S256 is required.
+- Access tokens are short-lived; refresh tokens rotate and are capped by the relay session expiry.
 - Read-write is separately gated by both the relay session and ForeScene's existing browser Agent control mode.
 - `project_script` remains preview-first. It returns the generated plan; mutation requires a separate `project_apply`.
 - Disconnect invalidates the server-side session and demotes browser Agent control to read-only.
@@ -108,7 +137,7 @@ Restart/reload the MCP client after changing its configuration.
 - Polling is used instead of WebSockets, so the browser generates light request traffic while connected.
 - The relay is single-flight per session.
 - Rendered image bytes are not uploaded through the relay yet; `shot_render` returns metadata and browser-local artifact handles.
-- There is no account-level identity or OAuth pairing yet. Possession of the high-entropy session token is the authentication mechanism.
+- OAuth authorization is browser-session pairing rather than account identity: the most recently paired ForeScene session in that browser is the session presented on the consent screen.
 
 
 ## Semantic cutters
