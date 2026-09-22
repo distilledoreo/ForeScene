@@ -419,6 +419,8 @@ export async function authenticateOAuthMcpRequest(
     await store().delete(key);
     return undefined;
   }
+  const requestResource = `${new URL(req.url).origin}/mcp`;
+  if (grant.resource !== requestResource) return undefined;
 
   const session = await readRemoteAgentSessionByHash(grant.sessionHash);
   if (!session) return undefined;
