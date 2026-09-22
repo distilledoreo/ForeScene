@@ -8,11 +8,14 @@ import {
   validateSpatialAuthoring,
 } from '../../src/engine/agent/spatialAuthoring.ts';
 import {
-  authenticateRemoteAgentRequest,
+  authenticateOAuthMcpRequest,
+  FORESCENE_READ_SCOPE,
+  FORESCENE_WRITE_SCOPE,
+} from '../lib/oauthStore.ts';
+import {
   noStoreJson,
   RemoteAgentRelayError,
-  runRemoteBrowserCommand,
-  unauthorizedResponse,
+  runRemoteBrowserCommandBySessionHash,
 } from '../lib/remoteAgentStore.ts';
 
 type JsonRpcId = string | number | null;
