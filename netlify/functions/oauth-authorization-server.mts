@@ -22,7 +22,6 @@ export default async (req: Request) => {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     resource_indicators_supported: true,
-    authorization_response_iss_parameter_supported: true,
     token_endpoint_auth_methods_supported: ['none'],
     scopes_supported: [FORESCENE_READ_SCOPE, FORESCENE_WRITE_SCOPE, OFFLINE_ACCESS_SCOPE],
   }, {
