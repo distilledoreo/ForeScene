@@ -1,5 +1,5 @@
 name: Manual Netlify deploy
-# Deployment trigger: Remote MCP OAuth rollout
+# Deployment trigger: Remote MCP OAuth callback hotfix
 
 on:
   workflow_dispatch:
