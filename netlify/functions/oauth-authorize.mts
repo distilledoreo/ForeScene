@@ -161,9 +161,7 @@ export default async (req: Request) => {
     return redirectWithError(
       request,
       'invalid_scope',
-      pairing.session.accessMode === 'read-only'
-        ? 'This ForeScene tab is connected read-only. Reconnect with editing enabled to authorize write access.'
-        : 'The requested OAuth scope is not supported.',
+      'The requested OAuth scope is not supported.',
     );
   }
 
