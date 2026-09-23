@@ -100,6 +100,7 @@ export const complexSetBlueprint: SetBlueprint = {
       type: 'doorway',
       position: [-3, 0, -4.85],
       dimensions: [1.4, 2.4, 0.3],
+      hostWallKey: 'wall_back',
     },
     {
       key: 'person_scale',
@@ -230,6 +231,7 @@ export const trainStationBlueprint: SetBlueprint = {
       type: 'doorway',
       position: [-2.5, 0, -3.9],
       dimensions: [1.2, 2.4, 0.25],
+      hostWallKey: 'wall_back',
     },
     {
       key: 'door_b',
@@ -237,6 +239,7 @@ export const trainStationBlueprint: SetBlueprint = {
       type: 'doorway',
       position: [2.5, 0, -3.9],
       dimensions: [1.2, 2.4, 0.25],
+      hostWallKey: 'wall_back',
     },
     {
       key: 'col_1',

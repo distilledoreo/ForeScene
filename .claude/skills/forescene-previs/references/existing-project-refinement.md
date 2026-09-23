@@ -56,7 +56,7 @@ Populate the `preservedIds` arrays from the original document, not from guessed 
 1. Retain the full original document snapshot beside the preflight (or in the run record) so transforms, camera data, staging, and timeline state can be compared.
 2. Identify the smallest affected shot set. Do not recompile all shots to replace one asset.
 3. Analyze/import an asset incrementally, preview the staging plan, then apply it with explicit write access.
-4. In rapid-previs, run 3–4 shots while capabilities are unproven, then 6–8 shots after the canary. In production-integrity, work in 3–5-shot batches; render and visually review every affected shot before moving on.
+4. In rapid-previs, use a small batch while relevant capabilities are unproven, then coherent batches often around 6–8 shots. In production-integrity, use the declared gate and typically 3–5 shots. Render and visually review affected outputs before continuing.
 5. Save and reopen once per rapid-previs batch, then render one frame per shot and one contact sheet. Do not reopen per shot.
 6. Rerender only outputs affected by the changed object, camera, staging, or timeline. A failed rapid-previs shot is quarantined rather than blocking unrelated shots.
 

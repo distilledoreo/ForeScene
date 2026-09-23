@@ -279,6 +279,39 @@ describe('previs production manifest', () => {
 });
 
 describe('previs compilers', () => {
+  it('keeps elevated blocking positions in camera framing and staged object centers', () => {
+    const parsed = parsePrevisProductionManifest({
+      version: 1,
+      project: { name: 'Upper level', aspectRatio: '16:9' },
+      locations: [{ id: 'room', name: 'Room', template: 'interior_room' }],
+      cast: [{ id: 'actor', name: 'Actor', type: 'human_dummy', height: 1.75 }],
+      props: [{ id: 'crate', name: 'Crate', primitive: 'box', dimensions: [1, 1, 1] }],
+      shots: [{
+        id: 'upper', shotNumber: '010', name: 'Upper level', description: 'Actor beside crate.',
+        locationId: 'room', subjects: ['actor'],
+        camera: { template: 'medium', subjects: ['actor'] },
+        requirements: { visibleProps: ['crate'] },
+        blocking: [
+          { subject: 'actor', placement: { type: 'location_slot', slot: 'center' } },
+          { subject: 'crate', placement: { type: 'location_slot', slot: 'left' } },
+        ],
+      }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const manifest = parsed.manifest!;
+    const context = compileProduction(manifest).context;
+    context.locationAnchors.room = { center: [0, 3, 0], left: [-2, 3, 0] };
+
+    const batch = compileShotList(manifest, context)[0]!;
+    const stagedHeights = batch.plan.commands
+      .flatMap((command) => command.op === 'shot.stageObject' && command.visible === true
+        ? [command.transform?.position?.[1]]
+        : []);
+    expect(stagedHeights).toContain(3.875);
+    expect(stagedHeights).toContain(3.5);
+    expect(batch.shotResults['010']?.camera?.target[1]).toBeGreaterThan(3);
+  });
+
   it('compiles two locations into separate zones with anchors', () => {
     const parsed = parsePrevisProductionManifest(loadExample('music-video-graybox.json'));
     expect(parsed.manifest).toBeTruthy();
@@ -614,6 +647,20 @@ describe('previs compilers', () => {
 });
 
 describe('blocking and camera solvers', () => {
+  it('preserves anchor elevation through slot and relative blocking', () => {
+    const results = solveBlockingBatch([
+      { subject: 'actor', placement: { type: 'location_slot', slot: 'center' } },
+      { subject: 'partner', placement: { type: 'relative', anchor: 'actor', relation: 'beside' } },
+      { subject: 'between', placement: { type: 'relative', anchor: 'center', secondaryAnchor: 'landing', relation: 'between' } },
+    ], {
+      anchors: { center: [0, 3, 0], landing: [4, 5, 0] },
+      subjects: {},
+    });
+    expect(results.actor.position[1]).toBe(3);
+    expect(results.partner.position[1]).toBe(3);
+    expect(results.between.position[1]).toBe(4);
+  });
+
   it('places relative and faces another subject', () => {
     const results = solveBlockingBatch([
       {

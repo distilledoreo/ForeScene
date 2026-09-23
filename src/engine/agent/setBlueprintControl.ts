@@ -8,7 +8,7 @@ import { useAgentControlStore } from '../../state/useAgentControlStore';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useAppModeStore } from '../../state/useAppModeStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
-import { agentError, writeAccessRequiredDiagnostic } from './diagnostics';
+import { agentError, agentInfo, agentWarning, writeAccessRequiredDiagnostic } from './diagnostics';
 import type { AgentProjectPackageOpenResult, AgentSetBlueprintApplyInput } from './protocol';
 import { markAgentProjectSource } from './projectImportControl';
 import { deriveOperationOk, deriveOperationStatus } from './renderResult';
@@ -19,14 +19,20 @@ export function validateAgentSetBlueprint(input: { blueprint: unknown }) {
     if (parsed.errors.length > 0 || !parsed.blueprint) {
       return {
         ok: false,
-        diagnostics: parsed.errors.map((item) => agentError(item.code, item.message)),
+        diagnostics: parsed.errors.map((item) => agentError(item.code, item.message, { path: item.path })),
       };
     }
     const compiled = compileSetBlueprint(parsed.blueprint);
     return {
-      ok: true,
+      ok: compiled.spatialErrors.length === 0,
       objectCount: compiled.project.scene.objects.length,
-      diagnostics: compiled.warnings.map((warning) => agentError(warning.code, warning.message)),
+      diagnostics: [
+        ...compiled.spatialErrors.map((error) => agentError(error.code, error.message, { path: error.path })),
+        ...[...parsed.warnings, ...compiled.warnings].map((warning) => (
+          agentWarning(warning.code, warning.message, { path: warning.path })
+        )),
+        ...compiled.spatialNotes.map((note) => agentInfo(note.code, note.message, { path: note.path })),
+      ],
     };
   } catch (error) {
     return {

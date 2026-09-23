@@ -3,12 +3,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createDefaultProject } from '../src/domain/defaults';
+import { createDefaultProject, createSceneObject } from '../src/domain/defaults';
 import type { LocationProject, SceneObject, Shot, Transform, Vec3 } from '../src/domain/types';
 import {
   buildRepairPlan,
   buildSubjectBoundsForRepair,
   solidBlockersForRepair,
+  objectWorldAabb,
   solveShotCamera,
   type PrevisShotDefinition,
 } from '../src/engine/previs';
@@ -255,5 +256,51 @@ describe('repair scene state — shot overrides', () => {
 
     const blockers = solidBlockersForRepair({ project, shot: shotHidden });
     expect(blockers.find((b) => b.id === 'wall-1')).toBeUndefined();
+  });
+
+  it('uses rotated world bounds for repair subjects and blockers', () => {
+    const project = createDefaultProject() as LocationProject;
+    const actor = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    actor.transform.rotation = [0, 0, 25];
+    const wall = createSceneObject('wall');
+    wall.transform.position = [2, 1.25, 0];
+    wall.transform.rotation = [0, 45, 0];
+    wall.dimensions = [4, 2.5, 0.2];
+    project.scene.objects = [actor, wall];
+    const shot = makeShot({ camera: project.shots[0]!.camera });
+    const subject = buildSubjectBoundsForRepair({
+      project,
+      shot,
+      definition: otsDefinition,
+      subjectNames: { alex: 'Alex' },
+    }).find((candidate) => candidate.id === 'alex')!;
+    expect(subject.min[1]).toBeCloseTo(objectWorldAabb(actor).min[1]);
+    expect(subject.position[1]).toBeCloseTo(subject.min[1]);
+
+    const blocker = solidBlockersForRepair({ project, shot }).find((candidate) => candidate.id === wall.id)!;
+    const actual = objectWorldAabb(wall);
+    expect(blocker.min[0]).toBeCloseTo(actual.min[0]);
+    expect(blocker.max[2]).toBeCloseTo(actual.max[2]);
+  });
+
+  it('uses hosted doorway cuts as open space during camera repair', () => {
+    const project = createDefaultProject() as LocationProject;
+    const wall = createSceneObject('wall');
+    wall.transform.position = [0, 1.5, 0];
+    wall.dimensions = [6, 3, 0.2];
+    const doorway = createSceneObject('doorway');
+    doorway.transform.position = [0, 1.05, 0];
+    doorway.dimensions = [1, 2.1, 0.3];
+    project.scene.objects = [wall, doorway];
+    const shot = makeShot({ camera: project.shots[0]!.camera });
+
+    const blockers = solidBlockersForRepair({ project, shot });
+    expect(blockers.some((blocker) => blocker.id === doorway.id)).toBe(false);
+    expect(blockers.filter((blocker) => blocker.id === wall.id).length).toBeGreaterThan(1);
+    expect(blockers.some((blocker) => (
+      blocker.min[0] < 0 && blocker.max[0] > 0
+      && blocker.min[1] < 1 && blocker.max[1] > 1
+      && blocker.min[2] < 0 && blocker.max[2] > 0
+    ))).toBe(false);
   });
 });

@@ -299,16 +299,17 @@ export function describeSceneObjectComposition(params: {
   const width = params.frameWidth ?? params.shot.exportSettings.width ?? 1280;
   const height = params.frameHeight ?? params.shot.exportSettings.height ?? 720;
   const resolved = resolveProjectForShot(params.project, params.shot);
+  const relationshipResolution = resolveSceneRelationships(resolved);
   const matrices = buildCameraMatrices(params.shot.camera, width, height);
   const solidBlockersAll = resolved.scene.objects
     .filter((candidate) => (
       SOLID_TYPES.has(candidate.type)
       && candidate.visible !== false
     ))
-    .map((candidate) => {
-      const box = objectWorldAabb(candidate);
-      return { objectId: candidate.id, min: box.min, max: box.max };
-    });
+    .flatMap((candidate) => (
+      resolvedObjectWorldAabbs(candidate, relationshipResolution)
+        .map((box) => ({ objectId: candidate.id, min: box.min, max: box.max }))
+    ));
   return describeSubject(
     params.object,
     matrices,

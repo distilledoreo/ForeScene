@@ -70,7 +70,6 @@ export function resolveBlockingPosition(
     position = separateOnGround(position, otherPos, minSpacing);
   }
 
-  position = [position[0], 0, position[2]];
   return { position, warnings };
 }
 
@@ -146,7 +145,7 @@ function resolvePlacement(
     }
     return [
       (anchorPos[0] + secondary[0]) / 2,
-      0,
+      (anchorPos[1] + secondary[1]) / 2,
       (anchorPos[2] + secondary[2]) / 2,
     ];
   }

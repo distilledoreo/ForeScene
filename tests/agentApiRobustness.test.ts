@@ -144,7 +144,7 @@ describe('agent API robustness', () => {
     hiddenFloor.dimensions = [10, 0.1, 10];
     hiddenFloor.transform.position = [0, 5, 0];
 
-    const actor = createSceneObject('human_dummy', 1, [0, 1, 0]);
+    const actor = createSceneObject('human_dummy', 1, [0, 5.925, 0]);
     const project: LocationProject = {
       ...createDefaultProject(),
       scene: {
@@ -161,11 +161,11 @@ describe('agent API robustness', () => {
     };
     project.shots = [shot];
 
-    const baseFloorY = identifyFloorY(project, actor.transform.position);
+    const baseFloorY = identifyFloorY(project, [0, 5.05, 0]);
     const effectiveObjects = project.scene.objects.map((object) => (
       object.id === hiddenFloor.id ? { ...object, visible: false } : object
     ));
-    const effectiveFloorY = identifyFloorY(project, actor.transform.position, effectiveObjects);
+    const effectiveFloorY = identifyFloorY(project, [0, 5.05, 0], effectiveObjects);
     expect(baseFloorY).toBeGreaterThan(4);
     expect(effectiveFloorY).toBeLessThan(1);
   });

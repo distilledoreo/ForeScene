@@ -3,7 +3,7 @@
  * screen-space projection scoring (not height/distance approximations alone).
  */
 
-import type { CameraData, Vec3 } from '../../domain/types';
+import type { CameraData, Transform, Vec3 } from '../../domain/types';
 import type {
   PrevisCameraAngle,
   PrevisCameraTemplate,
@@ -36,6 +36,9 @@ import {
 
 export interface SubjectBounds {
   id: string;
+  /** Resolved scene object backing a single-object repair subject. */
+  sourceObjectId?: string;
+  sourceTransform?: Transform;
   /** Axis-aligned world bounds. */
   min: Vec3;
   max: Vec3;

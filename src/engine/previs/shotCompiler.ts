@@ -209,7 +209,7 @@ function compileSingleShot(
   }> = {};
   for (const subjectId of shot.subjects) {
     const center = anchors.center ?? zoneOrigin;
-    subjectPositions[subjectId] = [center[0], 0, center[2]];
+    subjectPositions[subjectId] = [...center] as Vec3;
   }
 
   const blockingResults = solveBlockingBatch(shot.blocking ?? defaultBlocking(shot, anchors), {
@@ -226,7 +226,7 @@ function compileSingleShot(
   for (const subjectId of new Set([...shot.subjects, ...shot.camera.subjects])) {
     if (!subjectPositions[subjectId]) {
       const center = anchors.center ?? zoneOrigin;
-      subjectPositions[subjectId] = [center[0], 0, center[2]];
+      subjectPositions[subjectId] = [...center] as Vec3;
     }
   }
 
@@ -269,9 +269,9 @@ function compileSingleShot(
       return [subjectBoundsFromPlacement({
         id,
         // Imported-model blocking positions are floor contacts. Keep camera
-        // bounds aligned with the grounded transform emitted below instead of
-        // inheriting landmark marker height (commonly 1.2m).
-        position: [position[0], 0, position[2]],
+        // bounds aligned with the grounded transform emitted below, including
+        // upper-level elevation rather than landmark marker height.
+        position,
         width: assetDimensions[0],
         height: assetDimensions[1],
         depth: assetDimensions[2],
@@ -488,11 +488,11 @@ function compileSingleShot(
       ?? (!options.presenceProject?.workflow.production ? blocking?.posePreset : undefined);
 
     if (isParticipant) {
-      const position = subjectPositions[character.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
+      const position = subjectPositions[character.id] ?? zoneOrigin;
       const rotation = blocking?.rotation ?? [0, 0, 0];
       const height = character.height ?? 1.75;
       const transform = {
-        position: [position[0], height / 2, position[2]] as Vec3,
+        position: [position[0], position[1] + height / 2, position[2]] as Vec3,
         rotation: [...rotation] as Vec3,
         scale: [1, 1, 1] as Vec3,
       };
@@ -529,10 +529,10 @@ function compileSingleShot(
       continue;
     }
     if (inShot) {
-      const position = subjectPositions[prop.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
+      const position = subjectPositions[prop.id] ?? zoneOrigin;
       const dims = prop.dimensions ?? defaultPropDimensions(prop.primitive);
       const transform = {
-        position: [position[0], dims[1] / 2, position[2]] as Vec3,
+        position: [position[0], position[1] + dims[1] / 2, position[2]] as Vec3,
         rotation: [...(blocking?.rotation ?? [0, 0, 0])] as Vec3,
         scale: [1, 1, 1] as Vec3,
       };
@@ -566,9 +566,9 @@ function compileSingleShot(
     const blocking = blockingResults[asset.id];
     const assetDimensions = manifestAssetDimensions(manifest, context, options.presenceProject, asset.id);
     if (inShot) {
-      const position = subjectPositions[asset.id] ?? [zoneOrigin[0], 0, zoneOrigin[2]];
+      const position = subjectPositions[asset.id] ?? zoneOrigin;
       const transform = {
-        position: [position[0], assetDimensions ? assetDimensions[1] / 2 : 0, position[2]] as Vec3,
+        position: [position[0], position[1] + (assetDimensions ? assetDimensions[1] / 2 : 0), position[2]] as Vec3,
         rotation: [...(blocking?.rotation ?? [0, 0, 0])] as Vec3,
         scale: [1, 1, 1] as Vec3,
       };

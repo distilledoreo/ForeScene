@@ -201,7 +201,8 @@ function buildProgram(
       return String(templateName).replace(/\s+1$/, '');
     }
 
-    function __actualCreatePosition(type, dimensions, requested, scale) {
+    function __actualCreatePosition(type, dimensions, requested, scale, positionMode) {
+      if (positionMode === 'center') return [...requested];
       const height = dimensions[1] * scale[1];
       if (type === 'floor') return [requested[0], requested[1] - height / 2, requested[2]];
       if (__uprightTypes.has(type)) return [requested[0], requested[1] + height / 2, requested[2]];
@@ -224,7 +225,7 @@ function buildProgram(
         ...(options.stagingRole ? { stagingRole: options.stagingRole } : {}),
         ...(options.metadata ? { metadata: __clone(options.metadata) } : {}),
         transform: {
-          position: __actualCreatePosition(type, dimensions, requestedPosition, scale),
+          position: __actualCreatePosition(type, dimensions, requestedPosition, scale, options.positionMode),
           rotation: options.rotation ? [...options.rotation] : [...template.transform.rotation],
           scale,
         },
@@ -408,18 +409,11 @@ function buildProgram(
         return __snapshot(object);
       },
       createCentered(type, options = {}) {
-        const template = __templates[type];
-        if (!template) throw new Error('Unsupported creatable object type: ' + type);
-        const dimensions = options.dimensions ? [...options.dimensions] : [...template.dimensions];
-        const scale = options.scale ? [...options.scale] : [...template.transform.scale];
-        const center = options.position ?? [0, 0, 0];
-        const height = dimensions[1] * scale[1];
-        const requestedPosition = type === 'floor'
-          ? [center[0], center[1] + height / 2, center[2]]
-          : __uprightTypes.has(type)
-            ? [center[0], center[1] - height / 2, center[2]]
-            : [...center];
-        return this.create(type, { ...options, position: requestedPosition });
+        return this.create(type, {
+          ...options,
+          position: options.position ?? [0, 0, 0],
+          positionMode: 'center',
+        });
       },
       createMany(type, entries) {
         __assertBulkCount(entries, 'scene.createMany');

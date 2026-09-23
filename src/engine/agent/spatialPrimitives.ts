@@ -64,7 +64,7 @@ import {
   getShotEffectiveState,
   identifyFloorY,
   groundObjectPositionOnFloor,
-  uprightFloorPositionForObject,
+  objectFloorContactPosition,
 } from './spatialShotState';
 
 const COMPOSITION_TEMPLATES: Record<string, PrevisCameraTemplate> = {
@@ -143,12 +143,11 @@ async function commitProjectMutation(
 
 function toSubjectBounds(object: SceneObject): SubjectBounds {
   const box = objectWorldAabb(object);
-  const floorY = identifyFloorY(useProjectStore.getState().project, object.transform.position);
   return {
     id: object.id,
     min: box.min,
     max: box.max,
-    position: uprightFloorPositionForObject(object, floorY),
+    position: objectFloorContactPosition(object),
     yawRadians: (object.transform.rotation[1] * Math.PI) / 180,
   };
 }
@@ -275,7 +274,7 @@ export async function snapAgentObjectToFloor(
     };
   }
 
-  const floorY = identifyFloorY(project, object.transform.position, state?.objects);
+  const floorY = identifyFloorY(project, objectFloorContactPosition(object), state?.objects);
   const nextPosition = groundObjectPositionOnFloor(object, floorY);
   const commit = await commitProjectMutation('Snap object to floor (shot staging)', (current) => (
     applyShotStagingTransform(current, shotResolved.id, object.id, { position: nextPosition })

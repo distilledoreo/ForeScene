@@ -7,12 +7,14 @@
 
 import type { LocationProject, Shot, Vec3 } from '../../domain/types';
 import { resolveProjectForShot } from '../shotSceneState';
-import { subjectBoundsFromPlacement, type SubjectBounds } from './cameraSolver';
+import { resolveSceneRelationships, resolvedObjectWorldAabbs } from '../sceneRelationships';
+import { objectWorldAabb } from './compositionTelemetry';
+import type { SubjectBounds } from './cameraSolver';
 import type { PrevisShotDefinition } from './manifest';
 import { getProductionConfiguration } from './productionConfiguration';
 
 const SOLID_TYPES = new Set([
-  'wall', 'box', 'column', 'arch', 'doorway', 'stairs', 'terrain_mass', 'background_card',
+  'wall', 'box', 'column', 'arch', 'stairs', 'terrain_mass', 'background_card',
 ]);
 
 export interface RepairBlockerAabb {
@@ -64,17 +66,7 @@ export function buildSubjectBoundsForRepair(params: {
     if (visibleObjects.length === 0) continue;
 
     if (visibleObjects.length > 1) {
-      const boxes = visibleObjects.map((object) => {
-        const half: Vec3 = [
-          object.dimensions[0] * object.transform.scale[0] / 2,
-          object.dimensions[1] * object.transform.scale[1] / 2,
-          object.dimensions[2] * object.transform.scale[2] / 2,
-        ];
-        return {
-          min: object.transform.position.map((value, index) => value - half[index]!) as Vec3,
-          max: object.transform.position.map((value, index) => value + half[index]!) as Vec3,
-        };
-      });
+      const boxes = visibleObjects.map(objectWorldAabb);
       const min: Vec3 = [0, 1, 2].map((axis) => Math.min(...boxes.map((box) => box.min[axis]!))) as Vec3;
       const max: Vec3 = [0, 1, 2].map((axis) => Math.max(...boxes.map((box) => box.max[axis]!))) as Vec3;
       bounds.push({
@@ -89,22 +81,18 @@ export function buildSubjectBoundsForRepair(params: {
 
     const object = visibleObjects[0]!;
 
-    // Effective visibility already merged by resolveProjectForShot.
-    const height = object.dimensions[1] * object.transform.scale[1];
-    const width = object.dimensions[0] * object.transform.scale[0];
-    const depth = object.dimensions[2] * object.transform.scale[2];
-    // Staged humans use center Y = height/2; convert to floor contact for bounds.
-    const floorY = object.transform.position[1] - height / 2;
+    const box = objectWorldAabb(object);
     const yaw = object.transform.rotation[1] * (Math.PI / 180);
-    bounds.push(subjectBoundsFromPlacement({
+    bounds.push({
       id,
-      position: [object.transform.position[0], floorY, object.transform.position[2]],
-      height,
-      width,
-      depth,
+      sourceObjectId: object.id,
+      sourceTransform: object.transform,
+      min: box.min,
+      max: box.max,
+      position: [(box.min[0] + box.max[0]) / 2, box.min[1], (box.min[2] + box.max[2]) / 2],
       yawRadians: yaw,
       requireCompleteAssembly: binding?.kind === 'group',
-    }));
+    });
   }
   return bounds;
 }
@@ -117,19 +105,14 @@ export function solidBlockersForRepair(params: {
   shot: Shot;
 }): RepairBlockerAabb[] {
   const resolved = resolveProjectForShot(params.project, params.shot);
+  const relationships = resolveSceneRelationships(resolved);
   const blockers: RepairBlockerAabb[] = [];
   for (const object of resolved.scene.objects) {
     if (!SOLID_TYPES.has(object.type)) continue;
     if (object.visible === false) continue;
-    const hx = (object.dimensions[0] * object.transform.scale[0]) / 2;
-    const hy = (object.dimensions[1] * object.transform.scale[1]) / 2;
-    const hz = (object.dimensions[2] * object.transform.scale[2]) / 2;
-    const c = object.transform.position;
-    blockers.push({
-      id: object.id,
-      min: [c[0] - hx, c[1] - hy, c[2] - hz],
-      max: [c[0] + hx, c[1] + hy, c[2] + hz],
-    });
+    for (const box of resolvedObjectWorldAabbs(object, relationships)) {
+      blockers.push({ id: object.id, min: box.min, max: box.max });
+    }
   }
   return blockers;
 }

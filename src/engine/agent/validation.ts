@@ -380,6 +380,25 @@ function parseObjectCreate(
 
   const name = readOptionalString(objectRecord.name, `${path}.object.name`, errors, warnings);
   const position = readOptionalVec3(objectRecord.position, `${path}.object.position`, errors, true);
+  let positionMode: 'center' | 'legacy' | undefined;
+  if (objectRecord.positionMode !== undefined) {
+    if (objectRecord.positionMode !== 'center' && objectRecord.positionMode !== 'legacy') {
+      errors.push(agentError(
+        'position_mode',
+        'object.positionMode must be "center" or "legacy".',
+        { path: `${path}.object.positionMode` },
+      ));
+    } else {
+      positionMode = objectRecord.positionMode;
+    }
+  }
+  if (positionMode && !position) {
+    errors.push(agentError(
+      'position_mode_requires_position',
+      'object.position is required when positionMode is supplied.',
+      { path: `${path}.object.position` },
+    ));
+  }
   const rotation = readOptionalVec3(objectRecord.rotation, `${path}.object.rotation`, errors, false);
   const scale = readOptionalVec3(objectRecord.scale, `${path}.object.scale`, errors, false);
   if (scale) {
@@ -441,6 +460,7 @@ function parseObjectCreate(
   if (ref !== undefined) command.ref = ref;
   if (name !== undefined) command.object.name = name;
   if (position) command.object.position = position;
+  if (positionMode) command.object.positionMode = positionMode;
   if (rotation) command.object.rotation = rotation;
   if (scale) command.object.scale = scale;
   if (dimensions) command.object.dimensions = dimensions;

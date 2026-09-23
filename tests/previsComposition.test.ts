@@ -14,6 +14,7 @@ import {
   buildRepairPlan,
   buildSubjectBoundsForRepair,
   buildShotCompositionTelemetry,
+  describeSceneObjectComposition,
   createInitialRunState,
   cropHeightFraction,
   estimateHeadTopYAfterHeadroomRepair,
@@ -120,6 +121,89 @@ function definition(partial: Partial<PrevisShotDefinition> & Pick<PrevisShotDefi
     shotNumber: partial.shotNumber,
   };
 }
+
+describe('frame grounding across stories', () => {
+  it('accepts an actor on an upper slab and reports a floating actor relative to that slab', () => {
+    const project = createDefaultProject() as LocationProject;
+    const lower = project.scene.objects.find((object) => object.type === 'floor')!;
+    lower.dimensions = [8, 0.2, 8];
+    lower.transform.position = [0, -0.1, 0];
+    const upper: SceneObject = {
+      ...lower,
+      id: 'upper-floor',
+      transform: { ...lower.transform, position: [0, 2.9, 0] },
+    };
+    const actor = makeHuman('alex-id', 'Alex', [0, 0, 0]);
+    actor.transform.position = [0, 3.875, 0];
+    project.scene.objects = [lower, upper, actor];
+    const shot = makeShot(makeCamera({ position: [0, 4.5, 5], target: [0, 4, 0] }));
+    project.shots = [shot];
+    const shotDefinition = definition({
+      shotNumber: shot.shotNumber,
+      subjects: ['alex'],
+      camera: { template: 'full', subjects: ['alex'] },
+      requirements: { visibleSubjects: ['alex'] },
+    });
+    const telemetry = buildShotCompositionTelemetry({
+      project, shot, definition: shotDefinition, subjectNames: { alex: 'Alex' },
+    });
+    const validate = () => validateShotFrame({
+      project, shot, definition: shotDefinition, frameExists: true, frameByteSize: 4096,
+      subjectNames: { alex: 'Alex' }, telemetry,
+    });
+
+    expect(validate().issues.some((issue) => issue.code === 'character_underground')).toBe(false);
+    actor.transform.position = [0, 4.675, 0];
+    actor.transform.rotation = [0, 20, 0];
+    actor.transform.scale = [1, 1.1, 1];
+    const floating = validate();
+    const grounding = floating.issues.find((issue) => issue.code === 'character_underground');
+    expect(grounding).toBeTruthy();
+    const subjects = buildSubjectBoundsForRepair({
+      project, shot, definition: shotDefinition, subjectNames: { alex: 'Alex' },
+    });
+    const repair = buildRepairPlan({
+      shotTarget: { id: shot.id }, camera: shot.camera, issues: [grounding!], subjects,
+    });
+    const stage = repair?.commands.find((command) => command.op === 'shot.stageObject');
+    expect(stage?.op).toBe('shot.stageObject');
+    if (stage?.op === 'shot.stageObject') {
+      expect(stage.object).toEqual({ id: actor.id });
+      expect(stage.transform?.position[1]).toBeCloseTo(4.675 - Number(grounding?.measured?.clearanceMeters));
+      expect(stage.transform?.rotation).toEqual(actor.transform.rotation);
+      expect(stage.transform?.scale).toEqual(actor.transform.scale);
+    }
+  });
+});
+
+describe('per-object composition through hosted openings', () => {
+  it('matches full-shot visibility when an actor is seen through a doorway', () => {
+    const project = createDefaultProject() as LocationProject;
+    const wall = project.scene.objects.find((object) => object.type === 'wall')!;
+    wall.transform.position = [0, 1.5, 0];
+    wall.dimensions = [6, 3, 0.2];
+    const doorway: SceneObject = {
+      ...wall,
+      id: 'opening', name: 'Opening', type: 'doorway',
+      dimensions: [1, 2.1, 0.3],
+      transform: { ...wall.transform, position: [0, 1.05, 0] },
+    };
+    const actor = makeHuman('actor', 'Actor', [0, 0, -2]);
+    project.scene.objects = [wall, doorway, actor];
+    const shot = makeShot(makeCamera({ position: [0, 1.5, 3], target: [0, 1, -2] }));
+    project.shots = [shot];
+    const shotDefinition = definition({
+      shotNumber: shot.shotNumber,
+      subjects: ['actor'],
+      camera: { template: 'full', subjects: ['actor'] },
+    });
+
+    const full = buildShotCompositionTelemetry({ project, shot, definition: shotDefinition });
+    const single = describeSceneObjectComposition({ project, shot, object: actor });
+    expect(full.subjects.actor?.occlusionRatio ?? 0).toBeLessThan(0.2);
+    expect(single.occlusionRatio).toBeCloseTo(full.subjects.actor?.occlusionRatio ?? 0);
+  });
+});
 
 describe('render pixel stats', () => {
   it('rejects empty and flat buffers', () => {

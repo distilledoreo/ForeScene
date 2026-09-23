@@ -147,6 +147,11 @@ Built-in templates (MVP):
 
 Each location is placed in a separate zone origin: `[index * 100, 0, 0]`.
 Templates generate named anchors (`center`, `entrance`, `exit`, …).
+Blocking anchors use world coordinates at floor contact. Prepared locations may
+place anchors on upper levels; shot staging keeps that Y elevation and adds
+half the subject height when storing its object center.
+When anchors are inferred from named landmarks in an existing project, their
+marker height is projected onto the supporting floor.
 
 ## Pose presets
 

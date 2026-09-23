@@ -1,5 +1,6 @@
 import {
   BlueprintDiagnostic,
+  SET_BLUEPRINT_LEGACY_SCHEMA_VERSION,
   SET_BLUEPRINT_LIMITS,
   SET_BLUEPRINT_OBJECT_TYPES,
   SET_BLUEPRINT_SCHEMA_VERSION,
@@ -34,10 +35,13 @@ export function parseSetBlueprint(input: unknown): SetBlueprintParseResult {
   }
 
   const schemaVersion = root.schemaVersion;
-  if (schemaVersion !== SET_BLUEPRINT_SCHEMA_VERSION) {
+  if (
+    schemaVersion !== SET_BLUEPRINT_LEGACY_SCHEMA_VERSION
+    && schemaVersion !== SET_BLUEPRINT_SCHEMA_VERSION
+  ) {
     errors.push({
       code: 'schema_version',
-      message: `schemaVersion must be ${SET_BLUEPRINT_SCHEMA_VERSION}.`,
+      message: `schemaVersion must be ${SET_BLUEPRINT_SCHEMA_VERSION} (current) or ${SET_BLUEPRINT_LEGACY_SCHEMA_VERSION} (legacy).`,
       path: 'schemaVersion',
     });
   }
@@ -82,11 +86,27 @@ export function parseSetBlueprint(input: unknown): SetBlueprintParseResult {
 
   const objectKeys = new Set<string>();
   const objects: SetBlueprintObject[] = [];
+  const hostedDoorways: Array<{ object: SetBlueprintObject; index: number }> = [];
   if (Array.isArray(root.objects)) {
     root.objects.forEach((raw, index) => {
       const parsed = parseObject(raw, index, objectKeys, errors, warnings);
-      if (parsed) objects.push(parsed);
+      if (parsed) {
+        objects.push(parsed);
+        if (parsed.hostWallKey) hostedDoorways.push({ object: parsed, index });
+      }
     });
+  }
+  const objectByKey = new Map(objects.map((object) => [object.key, object]));
+  for (const { object, index } of hostedDoorways) {
+    const host = objectByKey.get(object.hostWallKey!);
+    if (!host || host.type !== 'wall') {
+      errors.push({
+        code: 'host_wall_key',
+        message: `Doorway "${object.key}" hostWallKey must name a wall in this blueprint.`,
+        path: `objects[${index}].hostWallKey`,
+        key: object.key,
+      });
+    }
   }
 
   const landmarks: SetBlueprintLandmark[] = [];
@@ -120,12 +140,16 @@ export function parseSetBlueprint(input: unknown): SetBlueprintParseResult {
     return { errors, warnings };
   }
 
-  if (!name || units !== 'meters' || schemaVersion !== SET_BLUEPRINT_SCHEMA_VERSION) {
+  if (
+    !name || units !== 'meters'
+    || (schemaVersion !== SET_BLUEPRINT_LEGACY_SCHEMA_VERSION
+      && schemaVersion !== SET_BLUEPRINT_SCHEMA_VERSION)
+  ) {
     return { errors, warnings };
   }
 
   const blueprint: SetBlueprint = {
-    schemaVersion: SET_BLUEPRINT_SCHEMA_VERSION,
+    schemaVersion,
     name,
     units: 'meters',
     objects,
@@ -385,6 +409,43 @@ function parseObject(
   const dimensions = readDimensions(record.dimensions, `${path}.dimensions`, errors, key);
   const stagingRole = readStagingRole(record.stagingRole, `${path}.stagingRole`, errors, key);
   const surface = parseSurface(record.surface, `${path}.surface`, errors, key);
+  const hostWallKey = record.hostWallKey === undefined
+    ? undefined
+    : readNonemptyString(record.hostWallKey, `${path}.hostWallKey`, errors, key);
+  if (record.hostWallKey !== undefined && type && type !== 'doorway') {
+    errors.push({
+      code: 'host_wall_type',
+      message: 'hostWallKey is only valid on doorway objects.',
+      path: `${path}.hostWallKey`,
+      key,
+    });
+  }
+  let clearanceAboveMeters: number | undefined;
+  if (record.clearanceAboveMeters !== undefined) {
+    if (type && type !== 'stairs') {
+      errors.push({
+        code: 'stair_clearance_type',
+        message: 'clearanceAboveMeters is only valid on stairs objects.',
+        path: `${path}.clearanceAboveMeters`,
+        key,
+      });
+    }
+    if (
+      typeof record.clearanceAboveMeters !== 'number'
+      || !Number.isFinite(record.clearanceAboveMeters)
+      || record.clearanceAboveMeters < SET_BLUEPRINT_LIMITS.minStairClearanceMeters
+      || record.clearanceAboveMeters > SET_BLUEPRINT_LIMITS.maxStairClearanceMeters
+    ) {
+      errors.push({
+        code: 'stair_clearance_range',
+        message: `clearanceAboveMeters must be between ${SET_BLUEPRINT_LIMITS.minStairClearanceMeters} and ${SET_BLUEPRINT_LIMITS.maxStairClearanceMeters} meters.`,
+        path: `${path}.clearanceAboveMeters`,
+        key,
+      });
+    } else {
+      clearanceAboveMeters = record.clearanceAboveMeters;
+    }
+  }
 
   if (!key || !name || !type || !position || !dimensions) return undefined;
 
@@ -399,6 +460,10 @@ function parseObject(
   if (scale) object.scale = scale;
   if (stagingRole) object.stagingRole = stagingRole;
   if (surface) object.surface = surface;
+  if (hostWallKey && type === 'doorway') object.hostWallKey = hostWallKey;
+  if (clearanceAboveMeters !== undefined && type === 'stairs') {
+    object.clearanceAboveMeters = clearanceAboveMeters;
+  }
   return object;
 }
 
@@ -599,7 +664,7 @@ function readObjectType(
   if (value === 'imported_model') {
     errors.push({
       code: 'imported_model_forbidden',
-      message: 'imported_model is not allowed in SetBlueprint v1 (no mesh asset can be manufactured).',
+      message: 'imported_model is not allowed in SetBlueprint (no mesh asset can be manufactured).',
       path,
       key,
     });

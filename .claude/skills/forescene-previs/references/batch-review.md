@@ -2,18 +2,16 @@
 
 ## Rapid-previs batch rule
 
-Rapid-previs is the default for rough, communicative, editable spatial references. After the three-part canary passes, use **6–8 shots** per batch. During capability discovery, use 3–4 shots. A failed shot is quarantined and does not block unrelated shots.
+Use coherent batches, often 6–8 shots once required capabilities work. A genuine blocker does not prevent unrelated shots from progressing, but remains uncovered.
 
-For each rapid-previs batch:
+1. Apply the selected staging, camera, timeline, or asset changes through previewed operations.
+2. Save/reopen at the batch checkpoint, not after every shot.
+3. Render one canonical frame per still; render temporal samples and video where motion carries intent.
+4. Inspect the contact sheet and individual frames needed to judge subject role, framing, action, contact, and progression.
+5. Repair the actual cause, rerender affected outputs, and record the fresh visual result.
+6. Continue the authorized task. Pause for a human only at user-requested checkpoints, explicit product approval gates, or unresolved decisions that materially change the brief.
 
-1. Apply only the selected staging and camera changes using existing bindings.
-2. Apply all batch mutations before the single save/reopen check; do not reopen per shot.
-3. Render one canonical review frame per shot.
-4. Generate one contact sheet and inspect suspicious individual frames.
-5. Apply only camera-only shot-size cleanup for obviously over-wide frames, then regenerate the contact sheet.
-6. Stop for human review. Do not package, author motion, or run an autonomous creative repair loop.
-
-Accept a rough but communicative frame as `accepted` or `accepted_asset_limited`. Quarantine only `needs_revision` and `blocked_capability` shots. A passing command, file existence, or numeric validation alone does not approve a batch.
+Style approval does not approve every future frame. Record agent and human reviews distinctly. Rough proxies may be `accepted_asset_limited` when the action reads; missing core action is `needs_revision` or `blocked_capability`. A command success, file, or numeric validation cannot approve a shot.
 
 ## Production-integrity batch rule
 

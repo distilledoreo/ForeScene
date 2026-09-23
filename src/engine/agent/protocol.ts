@@ -473,6 +473,8 @@ export type ForeSceneAgentCommand =
         type: SceneObjectType;
         name?: string;
         position?: [number, number, number];
+        /** center uses stored object-center coordinates; omitted/legacy uses primitive-specific placement. */
+        positionMode?: 'center' | 'legacy';
         rotation?: [number, number, number];
         scale?: [number, number, number];
         dimensions?: [number, number, number];
@@ -489,6 +491,7 @@ export type ForeSceneAgentCommand =
           type: SceneObjectType;
           name?: string;
           position?: [number, number, number];
+          positionMode?: 'center' | 'legacy';
           rotation?: [number, number, number];
           scale?: [number, number, number];
           dimensions?: [number, number, number];

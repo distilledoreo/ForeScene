@@ -1,8 +1,6 @@
 # Visual acceptance is authoritative
 
-Human review remains authoritative for rough previs. Objective validation proves
-state and render health; it does not decide whether a frame communicates the
-shot.
+The user’s brief and explicit review decisions remain authoritative. The agent must visually inspect outputs during authorized autonomous work; record agent review separately from human approval. Objective validation proves state and render health, not whether a frame communicates the shot.
 
 ## Required visual checks
 

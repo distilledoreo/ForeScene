@@ -24,3 +24,5 @@ playwright-report/
 /tunnel-client.exe
 /ui-revamp/Continuity Stage.mp4
 
+# Local Netlify folder
+.netlify/

@@ -436,7 +436,9 @@ function applyObjectCreate(
   if (command.object.rotation) transform.rotation = [...command.object.rotation] as Vec3;
   if (command.object.scale) transform.scale = [...command.object.scale] as Vec3;
   if (command.object.position) {
-    transform.position = resolveAgentCreatePosition(object, command.object.position, transform.scale);
+    transform.position = command.object.positionMode === 'center'
+      ? [...command.object.position] as Vec3
+      : resolveAgentCreatePosition(object, command.object.position, transform.scale);
   }
   object = { ...object, transform };
 

@@ -3,6 +3,7 @@ import { DEFAULT_CAMERA_HEIGHT_METERS } from '../src/domain/defaults';
 import { compileSetBlueprint } from '../src/engine/setBlueprintCompiler';
 import { parseProject, serializeProject } from '../src/engine/projectIO';
 import { parseSetBlueprint } from '../src/engine/setBlueprintValidation';
+import { resolveSceneRelationships, resolvedLocalBoxFragments } from '../src/engine/sceneRelationships';
 import {
   complexSetBlueprint,
   minimalSetBlueprint,
@@ -33,6 +34,92 @@ describe('compileSetBlueprint', () => {
     const wall = compiled.project.scene.objects.find((object) => object.name === 'Back Wall');
     expect(wall).toBeDefined();
     expect(wall!.transform.position[1]).toBeCloseTo(3.2 / 2);
+  });
+
+  it('uses uniform center coordinates for every v2 primitive', () => {
+    const compiled = compileSetBlueprint({
+      ...minimalSetBlueprint,
+      schemaVersion: 2,
+      objects: [
+        { key: 'floor', name: 'Ground Floor', type: 'floor', position: [0, -0.1, 0], dimensions: [8, 0.2, 8] },
+        { key: 'wall', name: 'Wall', type: 'wall', position: [0, 1.5, -4], dimensions: [8, 3, 0.2] },
+        { key: 'person', name: 'Person', type: 'human_dummy', position: [1, 0.875, 1], dimensions: [0.55, 1.75, 0.55] },
+        { key: 'box', name: 'Box', type: 'box', position: [2, 0.5, 2], dimensions: [1, 1, 1] },
+      ],
+    });
+    expect(compiled.project.scene.objects.map((object) => object.transform.position)).toEqual([
+      [0, -0.1, 0], [0, 1.5, -4], [1, 0.875, 1], [2, 0.5, 2],
+    ]);
+    expect(compiled.spatialErrors).toEqual([]);
+  });
+
+  it('uses object Y elevations for upper floors and upright objects, and cuts stair clearance', () => {
+    const compiled = compileSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'upper', name: 'Upper Floor', type: 'floor', position: [0, 3, 0], dimensions: [8, 0.2, 8] },
+        { key: 'upper_wall', name: 'Upper Wall', type: 'wall', position: [0, 3, -4], dimensions: [8, 3, 0.2] },
+        { key: 'stairs', name: 'Stairs', type: 'stairs', position: [0, 0, 0], dimensions: [2, 3, 3], clearanceAboveMeters: 2.5 },
+      ],
+    });
+    const [upper, wall, stairs] = compiled.project.scene.objects;
+    expect(upper.transform.position[1]).toBeCloseTo(2.9);
+    expect(wall.transform.position[1]).toBeCloseTo(4.5);
+    expect(stairs.transform.position[1]).toBeCloseTo(1.5);
+    expect(stairs.metadata?.architecture).toEqual({ kind: 'level_member', clearanceAboveMeters: 2.5 });
+    expect(compiled.spatialRelationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'stair_clearance', sourceId: stairs.id, targetId: upper.id, status: 'resolved' }),
+    ]));
+    expect(resolvedLocalBoxFragments(upper, resolveSceneRelationships(compiled.project)).length).toBeGreaterThan(1);
+  });
+
+  it('resolves a doorway host key to one wall and keeps the other wall intact', () => {
+    const compiled = compileSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'door', name: 'Door', type: 'doorway', position: [0, 0, 0], dimensions: [1, 2.1, 0.3], hostWallKey: 'wall_a' },
+        { key: 'wall_a', name: 'Wall A', type: 'wall', position: [0, 0, 0], dimensions: [6, 3, 0.2] },
+        { key: 'wall_b', name: 'Wall B', type: 'wall', position: [0, 0, 0.05], dimensions: [6, 3, 0.2] },
+      ],
+    });
+    const [door, wallA, wallB] = compiled.project.scene.objects;
+    expect(door.metadata?.architecture).toEqual({
+      kind: 'opening', openingKind: 'door', hostWallId: wallA.id,
+    });
+    expect(compiled.spatialRelationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'portal_host', sourceId: door.id, targetId: wallA.id, status: 'resolved' }),
+    ]));
+    const resolution = resolveSceneRelationships(compiled.project);
+    expect(resolvedLocalBoxFragments(wallA, resolution).length).toBeGreaterThan(1);
+    expect(resolvedLocalBoxFragments(wallB, resolution)).toHaveLength(1);
+  });
+
+  it('reports unresolved cutter relationships and bounds rotated objects correctly', () => {
+    const compiled = compileSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'door', name: 'Unhosted Door', type: 'doorway', position: [10, 0, 0], dimensions: [1, 2, 0.3] },
+        { key: 'stairs', name: 'Stairs', type: 'stairs', position: [0, 0, 0], dimensions: [2, 2, 3] },
+        { key: 'rotated', name: 'Rotated Box', type: 'box', position: [0, 0, 0], rotation: [0, 90, 0], dimensions: [4, 1, 1] },
+      ],
+    });
+    expect(compiled.warnings.map((warning) => warning.code)).toEqual(expect.arrayContaining([
+      'doorway_unhosted', 'stair_clearance_unhosted',
+    ]));
+    expect(compiled.bounds.min[2]).toBeLessThanOrEqual(-2);
+    expect(compiled.bounds.max[2]).toBeGreaterThanOrEqual(2);
+  });
+
+  it('surfaces spatial authoring errors before a generated project can be applied', () => {
+    const compiled = compileSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'slab', name: 'Upper Floor Slab', type: 'floor', position: [0, 3, 0], dimensions: [8, 3, 0.2] },
+      ],
+    });
+    expect(compiled.spatialErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'dimension_axis_mismatch', path: 'objects[0]', key: 'slab' }),
+    ]));
   });
 
   it('sets human_dummy staging role to person and architecture to set', () => {

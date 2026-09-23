@@ -325,17 +325,21 @@ export function buildRepairPlan(params: {
       break;
     }
     case 'character_underground': {
-      const target = primaryIssue.subject ? params.subjectTargets?.[primaryIssue.subject] : undefined;
-      const pos = primaryIssue.subject ? params.subjectPositions?.[primaryIssue.subject] : undefined;
-      if (target && pos) {
+      const subject = params.subjects?.find((candidate) => candidate.id === primaryIssue.subject);
+      const target = primaryIssue.subject
+        ? params.subjectTargets?.[primaryIssue.subject] ?? (subject?.sourceObjectId ? { id: subject.sourceObjectId } : undefined)
+        : undefined;
+      const transform = subject?.sourceTransform;
+      const clearance = primaryIssue.measured?.clearanceMeters;
+      if (target && transform && typeof clearance === 'number' && Number.isFinite(clearance)) {
         commands.push({
           op: 'shot.stageObject',
           shot: params.shotTarget,
           object: target,
           transform: {
-            position: [pos[0], Math.abs(pos[1]) < 0.01 ? 0.875 : pos[1], pos[2]],
-            rotation: [0, 0, 0],
-            scale: [1, 1, 1],
+            position: [transform.position[0], transform.position[1] - clearance, transform.position[2]],
+            rotation: [...transform.rotation],
+            scale: [...transform.scale],
           },
           visible: true,
         });

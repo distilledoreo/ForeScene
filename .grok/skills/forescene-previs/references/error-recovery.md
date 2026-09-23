@@ -36,7 +36,7 @@ Call `npm run agent:plan-exports` after changing export settings. If a required 
 
 Read the batch review and correct the actual visual cause: subject selection, asset variant, replacement-object staging, camera, timeline, required scene element, or output pass. Let ForeScene’s numeric repair system handle only the mechanical framing issue after the creative selection is correct.
 
-Do not advance to the next batch until every shot in the current batch passes a fresh visual review. If the frame is visually unusable despite a passing `validation.json`, the shot remains failed.
+In rapid-previs, repair demonstrated failures and continue independent shots when a genuine blocker remains; do not count blocked shots as coverage. In production-integrity, honor the declared batch gate before advancing. If a frame is visually unusable despite a passing `validation.json`, it remains failed.
 
 ## Hung CLI operation
 

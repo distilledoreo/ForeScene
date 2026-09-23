@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultProject } from '../src/domain/defaults';
 import { BUILD_HISTORY_COALESCE_MS } from '../src/engine/buildHistory';
-import { createPlacedSceneObject, duplicateSceneObject, snapBuildPoint } from '../src/engine/sandbox';
+import * as THREE from 'three';
+import { createPlacedSceneObject, duplicateSceneObject, getGroundPlacementPosition, resolveStampPoint, snapBuildPoint } from '../src/engine/sandbox';
+import { selectionBounds } from '../src/engine/buildSelection';
 import { useProjectStore } from '../src/state/useProjectStore';
 
 describe('sandbox build interactions', () => {
@@ -20,6 +22,28 @@ describe('sandbox build interactions', () => {
 
     expect(wall.name).toBe('Wall 3');
     expect(wall.transform.position).toEqual([2, 1.5, -1]);
+  });
+
+  it('stamps objects on an upper horizontal surface using its world elevation', () => {
+    const scene = new THREE.Scene();
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(8, 0.2, 8));
+    floor.position.y = 2.9;
+    floor.updateMatrixWorld(true);
+    scene.add(floor);
+    const raycaster = new THREE.Raycaster(new THREE.Vector3(0, 8, 0), new THREE.Vector3(0, -1, 0));
+    const point = resolveStampPoint(raycaster, { snapToGrid: true, scene, surfaceElevation: true });
+    expect(point?.[1]).toBeCloseTo(3);
+    const wall = createPlacedSceneObject({ type: 'wall', index: 1, point: point!, snapToGrid: true });
+    expect(wall.transform.position[1]).toBeCloseTo(4.5);
+    expect(resolveStampPoint(raycaster, { snapToGrid: true, scene })?.[1]).toBe(0);
+  });
+
+  it('plants a tilted, scaled object by its transformed bottom face', () => {
+    const box = createPlacedSceneObject({ type: 'box', index: 1, point: [0, 0, 0], snapToGrid: false });
+    box.transform.rotation = [35, 20, 15];
+    box.transform.scale = [1.2, 1.5, 0.8];
+    box.transform.position = getGroundPlacementPosition(box, [2, 3, -1], false);
+    expect(selectionBounds([box]).min.y).toBeCloseTo(3);
   });
 
   it('duplicates objects with a new identity and an unlocked visible copy', () => {

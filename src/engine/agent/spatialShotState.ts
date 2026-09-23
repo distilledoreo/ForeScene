@@ -24,7 +24,6 @@ import {
   resolveSceneRelationships,
   resolvedObjectWorldAabbs,
 } from '../sceneRelationships';
-import { AGENT_UPRIGHT_OBJECT_TYPES } from './constants';
 
 export interface ShotEffectiveState {
   shot: Shot;
@@ -93,25 +92,24 @@ export function identifyFloorY(
   });
   if (floors.length === 0) return 0;
 
-  let bestTop = -Infinity;
+  const localTops: number[] = [];
+  const allTops: number[] = [];
   for (const floor of floors) {
     for (const box of resolvedObjectWorldAabbs(floor, resolution)) {
+      allTops.push(box.max[1]);
       const insideX = position[0] >= box.min[0] && position[0] <= box.max[0];
       const insideZ = position[2] >= box.min[2] && position[2] <= box.max[2];
       if (insideX && insideZ) {
-        bestTop = Math.max(bestTop, box.max[1]);
+        localTops.push(box.max[1]);
       }
     }
   }
-  if (bestTop !== -Infinity) return bestTop;
-
-  // Fall back to the highest remaining effective floor surface in the scene.
-  for (const floor of floors) {
-    for (const box of resolvedObjectWorldAabbs(floor, resolution)) {
-      bestTop = Math.max(bestTop, box.max[1]);
-    }
-  }
-  return Number.isFinite(bestTop) ? bestTop : 0;
+  const tops = localTops.length > 0 ? localTops : allTops;
+  // Use the nearest level at or just above the contact point. This prevents
+  // an upper story at the same X/Z from stealing a lower-story subject.
+  const reachable = tops.filter((top) => top <= position[1] + 0.35);
+  if (reachable.length > 0) return Math.max(...reachable);
+  return tops.length > 0 ? Math.min(...tops) : 0;
 }
 
 export function effectiveObjectWorldAabb(object: SceneObject): { min: Vec3; max: Vec3 } {
@@ -135,16 +133,13 @@ export function groundObjectPositionOnFloor(
   ];
 }
 
-export function uprightFloorPositionForObject(
-  object: SceneObject,
-  floorY: number,
-): Vec3 {
-  const height = object.dimensions[1] * object.transform.scale[1];
-  const halfHeight = AGENT_UPRIGHT_OBJECT_TYPES.has(object.type) ? height / 2 : 0;
+/** Camera subjects use the actual transformed AABB bottom as their floor contact. */
+export function objectFloorContactPosition(object: SceneObject): Vec3 {
+  const bounds = effectiveObjectWorldAabb(object);
   return [
-    object.transform.position[0],
-    floorY + halfHeight,
-    object.transform.position[2],
+    (bounds.min[0] + bounds.max[0]) / 2,
+    bounds.min[1],
+    (bounds.min[2] + bounds.max[2]) / 2,
   ];
 }
 

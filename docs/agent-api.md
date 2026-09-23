@@ -64,16 +64,22 @@ CLI launches always clear a stale localStorage write seed unless `--persist-writ
 
 ## Model import
 
-`importModel({ file, mode })` uses the shared model conversion and local-recovery
-commit path behind **Import 3D scene**. It creates texture-free graybox geometry,
-registers its binary payloads, and adds the resulting objects in the same protected
-project mutation. Importing the same file bytes again (matching stored `contentHash`)
-reuses the existing model asset and imported object instead of creating duplicates;
-the result includes `reused: true` when binding is reused. It requires `read-write`
-access. Heavy geometry returns a
-structured `requiresConsent` result until its caller sends the explicit
-`allow-heavy-model-imports` token; extreme imports also require the literal
-`IMPORT` confirmation.
+`importModel({ file, mode, preservation, resources })` uses the shared protected
+model import and local-recovery commit path. Source preservation is now the
+default: self-contained original bytes, or a deterministic bundle of selected
+companion files, are retained with hierarchy, supported materials/textures, and
+source-node bindings. Separate selections reference the shared source asset.
+Use `preservation: "graybox"` only for explicit legacy conversion. Reimporting
+matching source content reuses the existing asset/selections; inspect the returned
+IDs and `reused` result rather than creating duplicates.
+
+CLI: `agent:import-model -- --file <model> --preservation preserve --mode separate
+--resource <companion> --profile <dir> --write` (`--resource` is repeatable).
+Read [source-preserving-import.md](./source-preserving-import.md) for supported
+formats, appearance overrides, resource handling, and limitations. Preserved
+animation clips do not add an animation-editing interface; humanoid semantic
+posing still uses the dedicated character importer. Heavy/extreme import consent
+and safety limits remain in force.
 
 `getShotDocument({ id })` returns a structured copy of the requested `Shot`,
 including `objectOverrides` and `cameraKeyframes`. Use it when a workflow must
@@ -209,7 +215,7 @@ All spatial primitives are **shot-scoped** — they read shot-effective transfor
 
 `environmentObjectIds` explicitly identifies set dressing without hiding it or disabling its occlusion. Unknown environment IDs fail. Required `subjectIds` are always checked, including IDs also listed as environment. These selections are read-only and apply to each selected shot; use separate calls when shots have different required subjects. Persisted production-location bindings remain supported.
 
-Ground clearance measures the bottom of the transformed object bounds relative to the identified floor. A centered 1 m tall box at Y=0 is half buried, even if it looks seated against a panorama. Use `shot.stageObject` with center Y=0.5 for a level floor at Y=0, or API `snapObjectToFloor` for rotated/scaled bounds. `object.create.position` has its documented floor-placement conversion; `shot.stageObject.transform.position` is the stored transform, not a foot position. Reinspect after correction and save/reopen to verify persistence. Intentional wide framing may retain a coverage warning; do not change grounding or suppress required subjects to clear that warning.
+Ground clearance measures the bottom of the transformed object bounds relative to the identified floor. A centered 1 m tall box at Y=0 is half buried, even if it looks seated against a panorama. Use `shot.stageObject` with center Y=0.5 for a level floor at Y=0, or API `snapObjectToFloor` for rotated/scaled bounds. `object.create.position` defaults to legacy primitive-specific placement; set `object.positionMode: "center"` to supply the stored object center directly. `shot.stageObject.transform.position` is always the stored transform, not a foot position. Reinspect after correction and save/reopen to verify persistence. Intentional wide framing may retain a coverage warning; do not change grounding or suppress required subjects to clear that warning.
 
 `ok` is true only when `gateStatus === "passed"`. A warning or failure is never a fully passed visual gate. `composeAgentValidationEvidence` / `recordRunValidation` use `gateStatus` (not just `!item.ok`) so a warning cannot be reported as `gates.visualPreflight: "passed"`.
 

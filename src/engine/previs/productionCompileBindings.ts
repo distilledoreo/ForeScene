@@ -6,6 +6,7 @@ import type { LocationProject, Vec3 } from '../../domain/types';
 import type { PrevisProductionManifestV1 } from './manifest';
 import { resolveProductionBindingObjectIds } from './productionConfiguration';
 import { deriveDynamicObjectUniverse } from './shotPresence';
+import { identifyFloorY } from '../agent/spatialShotState';
 
 export type ProductionCompileEntityBinding =
   | { kind: 'object'; objectId: string }
@@ -55,12 +56,28 @@ export function inferExistingProjectLocationBindings(
         });
       })
       .map((object) => object.id);
+    const locationObjects = project.scene.objects.filter((object) => objectIds.includes(object.id));
+    const hasFloorGeometry = locationObjects.some((object) => {
+      if (object.visible === false) return false;
+      const architecture = object.metadata?.architecture;
+      const slab = architecture && typeof architecture === 'object'
+        && !Array.isArray(architecture)
+        && (architecture as Record<string, unknown>).kind === 'slab'
+        && (architecture as Record<string, unknown>).slabRole !== 'ceiling';
+      return object.type === 'floor' || object.type === 'terrain_mass' || slab;
+    });
     const anchors = Object.fromEntries(
       landmarks
         .filter((candidate) => candidate.key.startsWith(entry.prefix))
         .map((candidate) => [
           candidate.key.slice(entry.prefix.length),
-          [...candidate.landmark.position] as Vec3,
+          hasFloorGeometry
+            ? [
+                candidate.landmark.position[0],
+                identifyFloorY(project, candidate.landmark.position, locationObjects),
+                candidate.landmark.position[2],
+              ] as Vec3
+            : [...candidate.landmark.position] as Vec3,
         ]),
     );
     if (objectIds.length === 0 || !anchors.center) continue;

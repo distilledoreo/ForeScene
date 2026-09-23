@@ -21,6 +21,7 @@ import {
   getEffectiveObject,
   getShotEffectiveState,
   identifyFloorY,
+  objectFloorContactPosition,
   signedGroundClearanceMeters,
 } from './spatialShotState';
 import {
@@ -97,7 +98,7 @@ function buildSubjectDiagnostic(
     shot: shotForInspect,
     object,
   });
-  const floorY = identifyFloorY(project, object.transform.position, effectiveObjects);
+  const floorY = identifyFloorY(project, objectFloorContactPosition(object), effectiveObjects);
   return {
     objectId: object.id,
     screenCoverage: entry.bounds.areaCoverage,
@@ -146,7 +147,7 @@ function buildProductionGroupDiagnostic(
     shot: shotForInspect,
     object: aggregate,
   });
-  const floorY = identifyFloorY(project, members[0]!.transform.position, effectiveObjects);
+  const floorY = identifyFloorY(project, [center.x, union.min.y, center.z], effectiveObjects);
   const groundClearanceMeters = Math.min(
     ...members.map((object) => signedGroundClearanceMeters(object, floorY)),
   );

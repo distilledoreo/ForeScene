@@ -41,8 +41,21 @@ export function getGroundPlacementPosition(
   snapToGrid: boolean,
 ): Vec3 {
   const snapped = snapBuildPoint(point, snapToGrid);
-  const groundY = object.dimensions[1] / 2;
-  return [snapped[0], groundY, snapped[2]];
+  const [rx, ry, rz] = object.transform.rotation.map((degrees) => degrees * Math.PI / 180);
+  const cx = Math.cos(rx);
+  const sx = Math.sin(rx);
+  const cy = Math.cos(ry);
+  const sy = Math.sin(ry);
+  const cz = Math.cos(rz);
+  const sz = Math.sin(rz);
+  const halfX = Math.abs(object.dimensions[0] * object.transform.scale[0]) / 2;
+  const halfY = Math.abs(object.dimensions[1] * object.transform.scale[1]) / 2;
+  const halfZ = Math.abs(object.dimensions[2] * object.transform.scale[2]) / 2;
+  // Y row of the Euler XYZ rotation matrix, applied to the local half-extents.
+  const halfHeight = Math.abs(cx * sz + sx * sy * cz) * halfX
+    + Math.abs(cx * cz - sx * sy * sz) * halfY
+    + Math.abs(sx * cy) * halfZ;
+  return [snapped[0], snapped[1] + halfHeight, snapped[2]];
 }
 
 export function duplicateSceneObject(

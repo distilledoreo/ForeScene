@@ -1,6 +1,6 @@
 # Motion authoring
 
-`PrevisShotDefinition.motion` is the native temporal authoring path in `PrevisProductionManifestV1`. It is for camera, timing, blocking, visibility, transforms, and coarse pose intent. It is not a final animation system.
+`PrevisShotDefinition.motion` is the manifest temporal authoring path in `PrevisProductionManifestV1`. Existing projects can use shot/keyframe Agent Plan operations directly without recompiling a manifest. It is for camera, timing, blocking, visibility, transforms, and coarse pose intent. It is not a final animation system.
 
 ## Shape
 
@@ -57,7 +57,7 @@ Supported fields are:
 
 ## Coordinates
 
-The existing compiler owns initial geometry and framing. Do not invent coordinates before compilation. Use this sequence:
+For manifest-authored shots, use the compiler’s geometry as the initial frame of reference. For custom script-authored sets, use the inspected coordinate/scale plan. Derive motion conservatively from that established state:
 
 1. Let ForeScene compile the initial shot from semantic location, blocking, and camera templates.
 2. Inspect the compiled project or sample the shot timeline.
@@ -70,3 +70,9 @@ This permits the world-space camera and transform values the motion API exposes 
 ## Review
 
 For each motion shot, render and inspect `t = 0`, `t = duration / 2`, and `t = duration` with `agent:frame`. Check framing, continuity, subject visibility, blocking, and whether the MP4 duration approximately matches the manifest. A control video is timing/blocking guidance for unsupported performance shots, not evidence of finished acting.
+
+## Preserve existing keyframe identity
+
+For timing/camera edits on an existing shot, prefer `shot.keyframe.update` targeting the original keyframe ID. `shot.timeline.replace` rebuilds the timeline and can generate new IDs even when supplied entries contain old IDs; reserve it for deliberate replacement and record the mapping. Verify identities and times after save/reopen rather than inferring preservation from preview success.
+
+Keep supplied audio and authoritative timing as the editorial reference. Diagnostic move durations are not song timing. Conform actual motion to cue-based windows, document provisional cuts, and round cumulative film boundaries at the delivery frame rate instead of accumulating per-shot rounding drift.

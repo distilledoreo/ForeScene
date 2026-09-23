@@ -2,7 +2,7 @@
 
 ## Select a profile before rendering
 
-Ask for the required output profile before rendering. If the request clearly requires AI control, multipass handoff, clean plates, character isolation, projected reference, or depth, state that `ai-control-full` is inferred. Do not silently render clay-only output.
+Infer the output profile from the requested deliverable and state that choice. Ask only when the required passes are materially unclear. If the request requires AI control, multipass handoff, clean plates, character isolation, projected reference, or depth, use the appropriate profile (often `ai-control-full`). A rough clay previs request does not require an unrequested multipass matrix. Do not silently narrow required output to clay-only.
 
 | Profile | Use when | Required evidence |
 | --- | --- | --- |

@@ -69,7 +69,7 @@ for (let i = 0; i < count; i += 1) {
   scene.create('column', {
     name: `Column ${i + 1}`,
     position: [Math.sin(angle) * radius, 0, Math.cos(angle) * radius],
-    rotation: [0, angle, 0],
+    rotation: [0, angle * 180 / Math.PI, 0],
     dimensions: [0.7, 5, 0.7],
   });
 }
@@ -128,7 +128,7 @@ ForeScene is **Y-up** and uses meters:
 - dimensions: `[width along X, height along Y, depth along Z]`
 - rotation: Euler `[x, y, z]` in **degrees**
 
-For new agent-authored geometry, prefer `scene.createCentered(...)` when you want the supplied position to always mean the object's center. Raw `scene.create(...)` retains legacy primitive-specific placement semantics: floors treat Y as the requested top surface, upright primitives treat Y as bottom/floor contact, and ordinary boxes use center placement.
+For new agent-authored geometry, prefer `scene.createCentered(...)` when you want the supplied position to always mean the object's center. It emits `object.create` with `positionMode: "center"`; direct Agent plans may set the same field. Raw `scene.create(...)` retains legacy primitive-specific placement semantics: floors treat Y as the requested top surface, upright primitives treat Y as bottom/floor contact, and ordinary boxes use center placement.
 
 For substantial architecture, prefer `architecture.level/slab/wall/opening/room` so story elevations and relationships are deterministic.
 

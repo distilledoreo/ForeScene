@@ -99,11 +99,13 @@ export function SetGenerationDialog({
     setBlueprint(next);
     setCompiled(result);
     setWarnings([...nextWarnings, ...result.warnings]);
-    setDiagnostics([]);
+    setDiagnostics(result.spatialErrors);
     setStep('review');
     setStatus({
-      tone: 'success',
-      message: `Validated “${next.name}” with ${next.objects.length} objects. Review before applying.`,
+      tone: result.spatialErrors.length > 0 ? 'error' : 'success',
+      message: result.spatialErrors.length > 0
+        ? `“${next.name}” has ${result.spatialErrors.length} spatial error(s). Correct the JSON before applying.`
+        : `Validated “${next.name}” with ${next.objects.length} objects. Review before applying.`,
     });
   };
 
@@ -254,6 +256,13 @@ export function SetGenerationDialog({
       depth: compiled.bounds.max[2] - compiled.bounds.min[2],
     }
     : undefined;
+  const hostedDoorways = compiled?.spatialRelationships.filter((relationship) => (
+    relationship.kind === 'portal_host' && relationship.status === 'resolved'
+  )).length ?? 0;
+  const doorwayCount = objectCounts.find(([type]) => type === 'doorway')?.[1] ?? 0;
+  const stairCutLayers = compiled?.spatialRelationships.filter((relationship) => (
+    relationship.kind === 'stair_clearance' && relationship.status === 'resolved'
+  )).length ?? 0;
 
   return (
     <Modal
@@ -276,7 +285,7 @@ export function SetGenerationDialog({
             type="button"
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
             onClick={() => void applyCompiled()}
-            disabled={busy || !compiled}
+            disabled={busy || !compiled || compiled.spatialErrors.length > 0}
             data-set-generation-apply
           >
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
@@ -402,7 +411,7 @@ export function SetGenerationDialog({
                   <TextArea
                     value={pasteText}
                     onChange={(event) => setPasteText(event.target.value)}
-                    placeholder='{ "schemaVersion": 1, "name": "…", "units": "meters", "objects": [ … ] }'
+                    placeholder='{ "schemaVersion": 2, "name": "…", "units": "meters", "objects": [ … ] }'
                     rows={12}
                     className="font-mono text-xs"
                     data-set-generation-paste-input
@@ -430,7 +439,7 @@ export function SetGenerationDialog({
               {blueprint.description ? <p className="mt-1 text-xs leading-relaxed">{blueprint.description}</p> : null}
               <p className="mt-2 text-xs text-muted">
                 The generated set opens as a new project. The current project is saved as a recovery point.
-                No AI output is trusted until it passes validation.
+                Doorways and stair clearances are checked against the compiled scene before applying.
               </p>
             </div>
 
@@ -446,6 +455,12 @@ export function SetGenerationDialog({
               <SummaryStat
                 label="Pano origin"
                 value={`[${compiled.project.scene.panoOrigin.map((n) => n.toFixed(2)).join(', ')}]`}
+              />
+              <SummaryStat label="Hosted doorways" value={`${hostedDoorways} / ${doorwayCount}`} />
+              <SummaryStat label="Stair cut layers" value={String(stairCutLayers)} />
+              <SummaryStat
+                label="Object coordinates"
+                value={blueprint.schemaVersion === 2 ? 'Centers (v2)' : 'Legacy placement (v1)'}
               />
             </div>
 
@@ -478,6 +493,19 @@ export function SetGenerationDialog({
                   {warnings.map((warning) => (
                     <li key={`${warning.code}-${warning.path ?? warning.key ?? warning.message}`}>
                       {formatDiagnostic(warning)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {compiled.spatialNotes.length > 0 && (
+              <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-sm text-secondary">
+                <p className="mb-1 font-semibold text-primary">Spatial notes</p>
+                <ul className="space-y-1">
+                  {compiled.spatialNotes.map((note) => (
+                    <li key={`${note.code}-${note.path ?? note.key ?? note.message}`}>
+                      {formatDiagnostic(note)}
                     </li>
                   ))}
                 </ul>

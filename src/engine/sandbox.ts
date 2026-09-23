@@ -17,14 +17,20 @@ export function resolveStampPoint(
   options: {
     snapToGrid: boolean;
     scene?: THREE.Scene | null;
+    /** Build stamp mode can place on an upper horizontal surface. */
+    surfaceElevation?: boolean;
   },
 ): Vec3 | undefined {
   if (options.scene) {
     const hits = raycaster.intersectObjects(options.scene.children, true);
     for (const hit of hits) {
       if (!isStampSurfaceHit(hit)) continue;
-      const snapped = snapBuildPoint([hit.point.x, 0, hit.point.z], options.snapToGrid);
-      return [snapped[0], 0, snapped[2]];
+      const snapped = snapBuildPoint([
+        hit.point.x,
+        options.surfaceElevation ? hit.point.y : 0,
+        hit.point.z,
+      ], options.snapToGrid);
+      return snapped;
     }
   }
 

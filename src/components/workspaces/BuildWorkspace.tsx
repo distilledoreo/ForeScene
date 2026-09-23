@@ -2067,20 +2067,20 @@ function PrecisionControls({
           </div>
         </Field>
       )}
-      <Field label="Position">
+      <Field label="Position" hint="Object center in world coordinates (meters).">
         <Vec3Input
           value={object.transform.position}
           onChange={(position) => onChange({ transform: { ...object.transform, position } }, 'coalesce')}
         />
       </Field>
-      <Field label="Rotation">
+      <Field label="Rotation" hint="Euler angles in degrees.">
         <Vec3Input
           value={object.transform.rotation}
           step={1}
           onChange={(rotation) => onChange({ transform: { ...object.transform, rotation } }, 'coalesce')}
         />
       </Field>
-      <Field label="Dimensions">
+      <Field label="Dimensions" hint="Width (X), height (Y), depth (Z) in meters.">
         <Vec3Input value={object.dimensions} onChange={(dimensions) => onChange({ dimensions }, 'coalesce')} />
       </Field>
     </div>

@@ -1,48 +1,23 @@
-# Rapid Previs
+# Rapid previs
 
-Rapid-previs is the default quality mode for rough, communicative, editable
-frames used as spatial control references.
+Use rapid-previs for rough, communicative, editable still or motion references. Preserve the requested deliverable: a full sequence/film request includes its required motion, timing, assembly, and exports, not just a first still batch.
 
 ## Core loop
 
-```text
-Inspect once
-→ verify the unique working project
-→ resolve bindings and capabilities once
-→ run the three-part canary
-→ author 6–8 shots
-→ save and reopen once
-→ render one frame per shot and one contact sheet
-→ apply camera-only shot-size cleanup
-→ human accepts or rejects
-→ revise rejected shots only
-```
+Inspect the working project and resolve bindings once. Check only capabilities the sequence requires, reusing valid evidence for the same assets/render path. Author a coherent batch, save/reopen at a meaningful checkpoint, render canonical evidence, inspect it against the shot intent, repair demonstrated failures, and continue through the authorized scope.
 
-Use 3–4 shots while capabilities are unproven. After the canary passes, use
-6–8 shots per batch. Apply all batch writes before the single reopen check and
-do not reopen per shot.
+Six to eight shots is a useful working batch size; it is not a fixed API limit or a mandatory approval boundary. Use smaller batches when capabilities are unproven or interaction is complex. Never overlap live writes.
 
 ## Acceptance
 
-Objective validation checks project/shot identity, character variant,
-closed-world presence, location/panorama, required pose telemetry, missing
-assets, nonblank render, persistence, and gross cropping. Human review decides
-whether the frame communicates the shot.
+Verify project/shot identity, required cast and props, location/panorama when used, pose application when required, missing assets, nonblank render, persistence, framing, and intended action/contact. Inspect the images; numeric checks do not decide whether the shot communicates its intent. Motion needs start/mid/end samples and an opened or sampled actual video.
 
-Use these categories:
+Use `accepted`, `accepted_asset_limited`, `needs_revision`, or `blocked_capability`. Record who reviewed the evidence. Do not label an agent review as human approval. A user-approved rough proxy may pass if its subject role/action reads; an absent core action may not.
 
-- `accepted`
-- `accepted_asset_limited`
-- `needs_revision`
-- `blocked_capability`
+Human review is required when the user asks for that checkpoint, a product gate explicitly requires it, or an unresolved creative choice would materially change the requested intent. Otherwise, the agent performs visual review and continues; do not repeatedly ask for an already approved style or authorized work.
 
-Quarantine failed or blocked shots instead of blocking unrelated shots. Do not
-run broad autonomous repair. Preserve the capability map, batch persistence
-record, frame directory, contact sheet, and concise blockers.
+## Repairs and evidence
 
-## Framing cleanup
+Correct the demonstrated cause. Use camera-only changes for framing problems; repair pose, contact, visibility, or staging when those cause the failure. Fix shared causes once and rerender affected outputs. Keep genuine blockers uncovered while continuing independent work. Do not substitute a broad blind repair loop or a fixed retry count for review.
 
-Compare the achieved frame with the original shot-list Framing field. Apply
-camera-only corrections to obviously over-wide or over-tight frames, regenerate
-the contact sheet, and stop for human review. Do not restage, rebind, rerig, or
-perform autonomous creative repair during this pass.
+Retain a compact capability/binding map, preservation/reopen evidence, canonical frames, a contact sheet, required motion, and concise defects/limitations. Add detailed diagnostics only for failures that need them. Complete the requested deliverables only after all required coverage passes.

@@ -1171,7 +1171,7 @@ export function SceneViewport({
         sceneRef.current,
         snapToGridRef.current,
         true,
-        { preserveCamera },
+        { preserveCamera, surfaceElevation: Boolean(placementTypeRef.current) },
       );
       if (!pointer) return;
       const floorPoint = pointer.floorPoint;
@@ -1284,7 +1284,7 @@ export function SceneViewport({
             sceneRef.current,
             snapToGridRef.current,
             needsFloorPoint,
-            { preserveCamera: Boolean(shotFramingRef.current) },
+            { preserveCamera: Boolean(shotFramingRef.current), surfaceElevation: Boolean(placementTypeRef.current) },
           )
         : undefined;
       if (placementTypeRef.current && pointer?.floorPoint) {
@@ -1515,7 +1515,7 @@ export function SceneViewport({
         sceneRef.current,
         snapToGridRef.current,
         true,
-        { preserveCamera: Boolean(shotFramingRef.current) },
+        { preserveCamera: Boolean(shotFramingRef.current), surfaceElevation: Boolean(placementTypeRef.current) },
       );
       const { onPlaceObject, onSelectObject } = callbacksRef.current;
       if (drag.kind === 'place') {
@@ -2639,7 +2639,7 @@ function getPointerState(
   scene: THREE.Scene | null,
   snapToGrid: boolean,
   resolveFloorPoint = true,
-  options: { preserveCamera?: boolean } = {},
+  options: { preserveCamera?: boolean; surfaceElevation?: boolean } = {},
 ) {
   if (!camera) return undefined;
   // Shot framing / staging already poses the live camera. Re-applying orbit here
@@ -2659,9 +2659,10 @@ function getPointerState(
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(pointer, camera);
   const floorPoint = resolveFloorPoint
-    ? resolveStampPoint(raycaster, {
+      ? resolveStampPoint(raycaster, {
         snapToGrid,
         scene,
+        surfaceElevation: options.surfaceElevation,
       })
     : undefined;
   return {

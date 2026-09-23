@@ -9,8 +9,10 @@ import {
   buildShotCompositionTelemetry,
   isLandmarkInFrame,
   landmarkScreenY,
+  objectWorldAabb,
   type ShotCompositionTelemetry,
 } from './compositionTelemetry';
+import { identifyFloorY } from '../agent/spatialShotState';
 import { templateFramingBands } from './framingProfiles';
 import { otsPrimaryCropCoverage } from './cameraSolver';
 import { getShotPresenceContract, verifyShotPresence } from './shotPresence';
@@ -251,16 +253,23 @@ export function validateShotFrame(input: ValidateShotFrameInput): FrameValidatio
       continue;
     }
 
-    // Feet grounding (center Y ≈ height/2 for staged humans).
+    // Compare transformed feet with the supporting level, including upper stories.
     const object = findSubjectObject(resolved, subjectId, definition, input.subjectNames);
     if (object?.type === 'human_dummy') {
-      const height = object.dimensions[1] * object.transform.scale[1];
-      const feetY = object.transform.position[1] - height / 2;
-      if (Math.abs(feetY) > 0.35) {
+      const bounds = objectWorldAabb(object);
+      const footPosition: Vec3 = [
+        (bounds.min[0] + bounds.max[0]) / 2,
+        bounds.min[1],
+        (bounds.min[2] + bounds.max[2]) / 2,
+      ];
+      const floorY = identifyFloorY(resolved, footPosition);
+      const clearance = footPosition[1] - floorY;
+      if (Math.abs(clearance) > 0.35) {
         issues.push({
           code: 'character_underground',
-          message: `Subject "${subjectId}" feet are ${feetY.toFixed(2)}m from ground.`,
+          message: `Subject "${subjectId}" feet are ${clearance.toFixed(2)}m from the supporting floor.`,
           subject: subjectId,
+          measured: { clearanceMeters: clearance, floorY },
         });
       }
     }

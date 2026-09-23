@@ -152,8 +152,8 @@ describe('production compile group bindings', () => {
     expect(locationBindings.armory?.objectIds).toEqual([armory.id]);
     expect(Object.values(locationBindings).flatMap((binding) => binding.objectIds)).not.toContain(lockedGlobalGround.id);
     expect(compiled.locations.plan.commands).toEqual([]);
-    expect(compiled.context.locationOrigins.ruins).toEqual([0, 1.2, 0]);
-    expect(compiled.context.locationAnchors.ruins?.platform).toEqual([0, 1.2, -4]);
+    expect(compiled.context.locationOrigins.ruins?.[1]).toBeCloseTo(0.04);
+    expect(compiled.context.locationAnchors.ruins?.platform?.[1]).toBeCloseTo(0.04);
   });
 
   it('keeps a resumed multipart subject visible when its imported members are parked in an inactive location', () => {

@@ -21,6 +21,21 @@ describe('parseSetBlueprint', () => {
     expect(frozen).toEqual(minimalSetBlueprint);
   });
 
+  it('preserves current center-coordinate and legacy schema versions', () => {
+    const current = parseSetBlueprint({
+      ...minimalSetBlueprint,
+      schemaVersion: 2,
+      objects: [{ ...minimalSetBlueprint.objects[0], position: [0, -0.04, 0] }],
+    });
+    expect(current.errors).toEqual([]);
+    expect(current.blueprint?.schemaVersion).toBe(2);
+    expect(current.blueprint?.objects[0].position).toEqual([0, -0.04, 0]);
+
+    const legacy = parseSetBlueprint(minimalSetBlueprint);
+    expect(legacy.errors).toEqual([]);
+    expect(legacy.blueprint?.schemaVersion).toBe(1);
+  });
+
   it('parses a valid complex blueprint', () => {
     const result = parseSetBlueprint(complexSetBlueprint);
     expect(result.errors).toEqual([]);
@@ -88,6 +103,36 @@ describe('parseSetBlueprint', () => {
       ],
     });
     expect(result.errors.some((error) => error.code === 'landmark_link')).toBe(true);
+  });
+
+  it('accepts forward wall references and bounded stair clearance', () => {
+    const result = parseSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'door', name: 'Door', type: 'doorway', position: [0, 0, 0], dimensions: [1, 2, 0.3], hostWallKey: 'wall' },
+        { key: 'stairs', name: 'Stairs', type: 'stairs', position: [0, 0, 2], dimensions: [2, 3, 3], clearanceAboveMeters: 2.6 },
+        { key: 'wall', name: 'Wall', type: 'wall', position: [0, 0, 0], dimensions: [6, 3, 0.2] },
+      ],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.blueprint?.objects[0].hostWallKey).toBe('wall');
+    expect(result.blueprint?.objects[1].clearanceAboveMeters).toBe(2.6);
+  });
+
+  it('rejects invalid cutter fields and host references', () => {
+    const result = parseSetBlueprint({
+      ...minimalSetBlueprint,
+      objects: [
+        { key: 'door', name: 'Door', type: 'doorway', position: [0, 0, 0], dimensions: [1, 2, 0.3], hostWallKey: 'box' },
+        { key: 'box', name: 'Box', type: 'box', position: [0, 0, 0], dimensions: [1, 1, 1], clearanceAboveMeters: 2 },
+        { key: 'stairs', name: 'Stairs', type: 'stairs', position: [0, 0, 2], dimensions: [2, 3, 3], clearanceAboveMeters: 7 },
+        { key: 'wall', name: 'Wall', type: 'wall', position: [0, 0, 0], dimensions: [6, 3, 0.2], hostWallKey: 'wall' },
+      ],
+    });
+    expect(result.blueprint).toBeUndefined();
+    expect(result.errors.map((error) => error.code)).toEqual(expect.arrayContaining([
+      'host_wall_key', 'host_wall_type', 'stair_clearance_type', 'stair_clearance_range',
+    ]));
   });
 
   it('rejects NaN and infinite values', () => {

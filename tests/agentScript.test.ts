@@ -56,6 +56,29 @@ describe('agent scripting compiler', () => {
     expect(preview.diff?.objectsCreated).toHaveLength(4);
   });
 
+  it('emits center positions directly for scene.createCentered', () => {
+    const project = createDefaultProject();
+    const compiled = compileAgentScript(`
+      const floor = scene.createCentered('floor', {
+        name: 'Centered Floor', position: [0, -0.1, 0], dimensions: [8, 0.2, 8],
+      });
+      const person = scene.createCentered('human_dummy', {
+        name: 'Centered Person', position: [1, 0.875, 0], dimensions: [0.55, 1.75, 0.55],
+      });
+      if (floor.transform.position[1] !== -0.1 || person.transform.position[1] !== 0.875) {
+        throw new Error('center positions changed in the script shadow scene');
+      }
+    `, project);
+    expect(compiled.plan.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ object: expect.objectContaining({ name: 'Centered Floor', positionMode: 'center', position: [0, -0.1, 0] }) }),
+      expect.objectContaining({ object: expect.objectContaining({ name: 'Centered Person', positionMode: 'center', position: [1, 0.875, 0] }) }),
+    ]));
+    const preview = previewAgentPlan(compiled.plan, {
+      project, workspace: 'build', selectedObjectIds: [],
+    });
+    expect(preview.ok).toBe(true);
+  });
+
   it('queries the read-only project snapshot and targets existing entities', () => {
     const project = createDefaultProject();
     const known = project.scene.objects[0];

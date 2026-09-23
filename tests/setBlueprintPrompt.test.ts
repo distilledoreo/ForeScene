@@ -18,7 +18,13 @@ describe('set blueprint prompt contract', () => {
       expect(schema).toContain(type);
     }
     expect(prompt).toContain('JSON only');
+    expect(prompt).toContain('schemaVersion must be 2');
+    expect(schema).toContain('center of every object');
     expect(prompt).toContain('imported_model');
+    expect(schema).toContain('hostWallKey');
+    expect(schema).toContain('clearanceAboveMeters');
+    expect(prompt).toContain('cuts that wall automatically');
+    expect(prompt).toContain('upper floor/slab');
     expect(prompt).toMatch(/Do not escape brackets, underscores/i);
     expect(prompt).not.toMatch(/```/);
   });
@@ -28,7 +34,7 @@ describe('set blueprint prompt contract', () => {
     for (const type of SET_BLUEPRINT_OBJECT_TYPES) {
       expect(prompt.includes(type)).toBe(true);
       const parsed = parseSetBlueprint({
-        schemaVersion: 1,
+        schemaVersion: 2,
         name: 'Probe',
         units: 'meters',
         objects: [

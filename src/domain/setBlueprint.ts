@@ -1,7 +1,11 @@
 import type { Euler, StagingRole, Vec3 } from './types';
 
-/** Blueprint schema version supported by the parser and compiler. */
-export const SET_BLUEPRINT_SCHEMA_VERSION = 1 as const;
+/** Current authoring version. Version 1 remains readable for existing blueprints. */
+export const SET_BLUEPRINT_SCHEMA_VERSION = 2 as const;
+export const SET_BLUEPRINT_LEGACY_SCHEMA_VERSION = 1 as const;
+export type SetBlueprintSchemaVersion =
+  | typeof SET_BLUEPRINT_LEGACY_SCHEMA_VERSION
+  | typeof SET_BLUEPRINT_SCHEMA_VERSION;
 
 /**
  * Primitive types an AI may emit in a SetBlueprint.
@@ -40,6 +44,9 @@ export const SET_BLUEPRINT_LIMITS = {
   /** Scale components outside this range produce warnings, not hard errors. */
   extremeScaleMin: 0.05,
   extremeScaleMax: 20,
+  /** Stair clearance accepted by the scene relationship resolver (meters). */
+  minStairClearanceMeters: 0.1,
+  maxStairClearanceMeters: 6,
 } as const;
 
 /**
@@ -48,7 +55,7 @@ export const SET_BLUEPRINT_LIMITS = {
  * product/schema versions that belong to the compiled ForeScene project.
  */
 export interface SetBlueprint {
-  schemaVersion: typeof SET_BLUEPRINT_SCHEMA_VERSION;
+  schemaVersion: SetBlueprintSchemaVersion;
   name: string;
   description?: string;
   units: 'meters';
@@ -63,10 +70,15 @@ export interface SetBlueprintObject {
   key: string;
   name: string;
   type: SetBlueprintObjectType;
+  /** Object center in v2; legacy primitive-specific placement point in v1. */
   position: Vec3;
   rotation?: Euler;
   scale?: Vec3;
   dimensions: Vec3;
+  /** Doorway only: key of the wall to cut when several walls overlap. */
+  hostWallKey?: string;
+  /** Stairs only: headroom above the top landing (defaults to 2.1 m). */
+  clearanceAboveMeters?: number;
   stagingRole?: StagingRole;
   surface?: {
     style: SetBlueprintSurfaceStyle;

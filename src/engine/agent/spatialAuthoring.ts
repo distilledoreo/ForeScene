@@ -776,7 +776,8 @@ export const AGENT_SPATIAL_AUTHORING_REFERENCE = {
       placeOnLevel: 'architecture.placeOnLevel(object, level, {x?, z?, gap?}) -> moves object bottom to level elevation',
     },
     creation: [
-      'scene.createCentered(type, {position:[centerX,centerY,centerZ], dimensions,...}) gives uniform CENTER semantics across primitive types',
+      'scene.createCentered(type, {position:[centerX,centerY,centerZ], dimensions,...}) gives uniform CENTER semantics across primitive types and emits object.create with positionMode:"center"',
+      'Direct Agent plans may set object.positionMode:"center" and object.position:[centerX,centerY,centerZ] on an object.create command; omitted positionMode keeps legacy placement',
       'scene.create(...) remains available for legacy primitive-specific placement semantics',
     ],
     spatial: [

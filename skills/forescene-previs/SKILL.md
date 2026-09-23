@@ -1,6 +1,6 @@
 ---
 name: forescene-previs
-description: Operate a ForeScene project as rapid rough previs by default, or as production-integrity refinement/export when explicitly requested. Use for autonomous still or motion previs without editing ForeScene source.
+description: Create, refine, render, and verify editable ForeScene still or motion previs through the Agent CLI or connected MCP. Use stateful scripts for substantial spatial authoring; preserve existing projects and do not edit application source during production operation.
 ---
 
 # ForeScene Previs Skill
@@ -17,9 +17,13 @@ Use this skill when an automation harness must drive a **hosted or local ForeSce
 
 The output is an editable ForeScene project and an evidence-backed handoff package. ForeScene control videos communicate camera, timing, blocking, and silhouette intent; they are not final AI video and do not replace performance animation.
 
-## Canonical CLI surface
+## Choose the supported control surface
 
-The Agent CLI is the public automation surface. **Before authoring**, query capabilities. Do not inspect ForeScene source or call `window.foreScene` to discover whether an operation exists.
+Use the Agent CLI or connected ForeScene MCP according to the task. The CLI supports local project files, imports, timelines, videos, and package exports. MCP operates the project in the paired browser tab and adds compact spatial inspection, hypothetical-plan validation, and authoring captures. A local CLI profile and the paired MCP tab are separate project sessions; verify identity and saved state when moving between them. Never assume an edit in one updated the other.
+
+For substantial spatial work, read [spatial-authoring.md](references/spatial-authoring.md). Prefer the stateful scripting layer for repeated geometry and coherent layouts; ordinary Agent Plans remain suitable for small shot/camera/timeline changes. Use existing primitives independently; a manifest or orchestration runner is not required for ordinary authoring.
+
+**Before CLI authoring**, query capabilities. Use `agent:describe` and the public docs for syntax instead of probing application internals or calling `window.foreScene`. With MCP, discover its available tools and read `agent_reference` before substantial construction.
 
 ```bash
 npm run agent:capabilities
@@ -77,31 +81,31 @@ The skill owns production interpretation, visual judgment, repair strategy, and 
 
 Choose a quality mode before writing. **Rapid-previs is the default** for rough, communicative, editable frames used as spatial control references. Choose **production-integrity** only when the user requests final packages, client approvals, motion deliverables, or high-value approval evidence.
 
-| Mode | Default use | Review standard | Batch size after canary |
+| Mode | Default use | Review standard | Typical batch size |
 | --- | --- | --- | --- |
-| **rapid-previs** | Rough still previs and spatial control references | Objective checks plus human visual review; asset-limited but communicative frames may pass | 6–8 shots |
+| **rapid-previs** | Rough still previs and spatial control references | Objective checks plus visual review; asset-limited but communicative frames may pass | 6–8 shots |
 | **production-integrity** | Final packages, client approvals, motion deliverables, or high-value projects | Full preservation, artifact, diagnostic, and approval evidence | 3–5 shots |
 
 ## Rapid-previs workflow
 
-Use this mode unless the user explicitly selects production-integrity. Keep the loop short and stop for human review:
+Use this mode unless the request calls for production-integrity. A request to complete a sequence or film authorizes iterative authoring, visual review, and routine repairs within that scope. Batch sizes below are working defaults, not approval boundaries. Pause for a human only when the user requests checkpoints, a product gate explicitly requires their approval, or a missing decision materially changes scope or intent. Style acceptance is not evidence that every shot passes; keep reviewing actual outputs and label the reviewer accurately.
 
 ```text
 Inspect once
 → verify the unique working project
 → resolve bindings and capabilities once
-→ run the three-part canary
-→ author 6–8 shots
+→ check the capabilities needed by the sequence
+→ author a coherent batch (often 6–8 shots)
 → save and reopen once
 → render one frame per shot and one contact sheet
-→ apply camera-only shot-size cleanup
-→ human accepts or rejects
-→ revise rejected shots only
+→ visually review against shot intent
+→ repair affected shots and re-review
+→ continue through the authorized scope
 ```
 
 ### Rapid-previs preflight
 
-Before the canary, inspect and cache one small capability map containing:
+Before authoring, inspect and cache a small map of the relevant capabilities and bindings:
 
 - Semantic entity bindings and character variants.
 - `.fsrig` source/package availability and rig-first pose capability.
@@ -111,24 +115,24 @@ Before the canary, inspect and cache one small capability map containing:
 
 Do not rediscover these facts per shot. A missing binding or transform-only limitation is an asset limitation to record once, not a reason to invent a duplicate entity.
 
-### Mandatory three-part canary
+### Capability checks
 
-Run exactly these practical visual checks before full authoring:
+Use small practical checks for the capabilities the sequence actually needs. Reuse valid, version-bound evidence already obtained with the same assets/render path; do not rerun a fixed canary per batch. Useful checks are:
 
 1. **Humanoid framing:** one close-up or full-body character frame aimed with `.fsrig` landmarks.
 2. **Saved-rig posing:** one visibly non-neutral pose that is confirmed in the rendered frame and survives reopening.
 3. **Multi-subject staging:** two subjects with deliberate foreground/background overlap.
 
-The canary must expose panorama persistence, project recovery, imported-rig telemetry, anatomical bounds, saved-pose rendering, and transform-only creature limitations. A canary failure blocks only the capability-dependent work; unrelated transform-only shots may continue when their frames remain communicative.
+Check panorama persistence only when using panoramas, saved-rig posing only when using imported rigs, and creature limitations only where relevant. Primitive/segmented characters do not require an absent `.fsrig`; verify their actual poses and contacts in the render. Save/reopen meaningful new asset or authoring paths. A failed capability blocks dependent work, not unrelated communicative shots.
 
 ### Rapid-previs authoring
 
-1. Treat the original shot list, continuity rules, and human review as authoritative. AI-generated semantic notes are optional cached interpretation and remain advisory until verified against the live project. Do not create a contract compiler or deterministic contract executor for ordinary rapid-previs.
+1. Treat the original shot list, continuity rules, and human review as authoritative. AI-generated semantic notes are optional cached interpretation and remain advisory until verified against the live project. Do not build a second contract compiler for ordinary rapid-previs; use ForeScene scripts or plans directly.
 2. Use existing bindings and locations. Never create duplicate cast, creature, prop, or panorama entities when an existing binding resolves.
 3. Stage the physical action or subject relationship before adjusting the camera. For interaction shots, establish contact/overlap first. For action or weapon-led shots, use action-first staging. For readable humanoid shots, use the validated landmark framing pattern.
 4. Apply all selected batch mutations, save, and reopen once for the batch. Do not reopen per shot.
-5. Render one canonical review frame per shot and one contact sheet. Do not package, export final deliverables, or begin motion authoring unless separately requested.
-6. Quarantine a failed or blocked shot and continue unrelated shots in the batch. Do not run a broad blind repair loop.
+5. Render one canonical review frame per shot and one contact sheet. Include motion, assembly, and exports when required by the user’s requested deliverable; do not turn a full motion-previs task into a still-only handoff. Avoid unrequested pass matrices or final-asset polish.
+6. Repair the demonstrated cause of a failed shot and rerender affected outputs. A genuine asset/capability blocker may be quarantined while unrelated work continues; keep it uncovered. Avoid broad blind repair loops.
 
 ### Rig-first pose and bounds
 
@@ -167,17 +171,9 @@ Use these acceptance categories:
 - **Needs revision** — objective state is valid but the frame does not communicate the shot.
 - **Blocked by capability** — the required asset, binding, pose, or render path is unavailable.
 
-### Fast framing cleanup
+### Focused repair
 
-After each rapid-previs batch:
-
-1. Render all new frames.
-2. Compare achieved framing with the original shot-size field.
-3. Apply camera-only corrections to obviously over-wide or over-tight frames.
-4. Regenerate the contact sheet.
-5. Stop for human review.
-
-Do not restage, rebind, re-rig, or perform autonomous creative repair during this cleanup pass. Revise only explicitly rejected shots afterward.
+Compare rendered framing with the original shot-size field. Use camera-only corrections when framing is the cause. When pose, contact, visibility, or staging causes the failure, repair that cause within the authorized shot intent instead of moving the camera to conceal it. Fix shared causes once, rerender the affected outputs, and inspect the new evidence. Continue after review; do not request the same style or task authorization again.
 
 ### Rapid-previs reporting
 
@@ -227,8 +223,8 @@ Before any write, inspect the live project and select one quality mode and one o
 
 For existing-project refinement, complete the required preflight **before any write**:
 
-1. Run `npm run agent:inspect -- --document` and retain the returned project document IDs.
-2. Write `artifacts/previs/preflight/project-preservation.json` with the project identity, counts, preservation choices, planned replacements, and every retained ID.
+1. Inspect the project and retain its identity, affected scope, and required preserved IDs; use `agent:inspect -- --document` when full state is needed.
+2. In rapid-previs, retain a compact binding map and locked-shot fingerprints. In production-integrity, write the full `artifacts/previs/preflight/project-preservation.json` and original document described in the linked reference.
 3. Confirm `resetAuthorized` is `false`; only a user’s explicit reconstruction request can make it `true`.
 4. Preview every mutation plan before applying it. Preserve the original shot, panorama, retained environment-object, camera, and timeline IDs.
 5. After all work, write and pass the final preservation check before claiming delivery.
@@ -264,8 +260,8 @@ Retain the classification in the working notes or review records. Do not silentl
 Use this only after selecting **Greenfield**:
 
 1. Read the complete screenplay or shot list; extract locations, cast, props, continuity constraints, and exact shot numbering.
-2. Create and validate the `PrevisProductionManifestV1` using supported templates. Add `shots[].motion` with valid `durationSeconds`, ordered `keyframes`, and `renderControlVideo: true` only where temporal communication is necessary; follow [motion-authoring.md](references/motion-authoring.md).
-3. Run the authorized initial orchestration:
+2. For a manifest-based production, create and validate `PrevisProductionManifestV1` using supported templates. For a custom set/shot layout, use the stateful scripting workflow instead; a manifest is not a prerequisite. In a manifest, add `shots[].motion` with valid `durationSeconds`, ordered `keyframes`, and `renderControlVideo: true` only where temporal communication is necessary; follow [motion-authoring.md](references/motion-authoring.md).
+3. For the manifest path, run the authorized initial orchestration:
 
 ```bash
 npm run agent:previs -- \
@@ -291,7 +287,7 @@ Do not interpret this command’s successful start or returned artifacts as
 approval. Stop at each blocking gate and retain the canary and still-layout
 review records.
 
-4. In rapid-previs mode, work in 6–8-shot batches after the three-part canary. In production-integrity mode, work in gated 3–5-shot batches, not as one unattended run. Inspect each batch before continuing.
+4. In rapid-previs mode, use coherent batches sized to the sequence and inspect them before continuing. In production-integrity mode, honor the declared gates and use manageable batches, typically 3–5 shots.
 5. Configure and verify the output profile before package rendering, then validate every requested artifact and review record.
 
 ## Existing-project refinement workflow
@@ -299,11 +295,11 @@ review records.
 Use this for any live project with valuable work:
 
 1. Complete the preservation preflight; retain the original document snapshot and all required IDs.
-2. Determine the affected shots and whether the request is Stage B asset refinement or export-only. Do not create replacement locations/shots for work that already exists.
+2. Determine the affected shots and whether the request is Stage B asset refinement or export-only. Reuse valuable locations/shots and their identities; create missing shot-specific coverage when the brief requires it. Do not reset or silently replace existing work.
 3. Import one saved-rig character variant or real nonhumanoid model at a time. Use a read-only analysis first and an explicit write only for the import.
 4. Map the imported asset to the affected existing shot IDs. Apply staging, camera, or timeline repairs through small Agent plans; preview the plan before applying it.
 5. Replace each nonhumanoid proxy using [nonhumanoid-models.md](references/nonhumanoid-models.md), retaining a nonzero refinement log and before/after review evidence.
-6. Process 6–8 shots at a time in rapid-previs mode, or 3–5 shots at a time in production-integrity mode, under [batch-review.md](references/batch-review.md). In rapid-previs mode, quarantine a failed shot instead of blocking unrelated work; in production-integrity mode, a failed shot blocks the next batch.
+6. Process coherent batches (often 6–8 shots in rapid-previs, or 3–5 in production-integrity), under [batch-review.md](references/batch-review.md). In rapid-previs mode, quarantine a failed shot instead of blocking unrelated work; in production-integrity mode, a failed shot blocks the next batch.
 7. Rerender only affected outputs, verify their timestamps/revision against the latest scene change, then run the final preservation check.
 
 Never add `--reset-project` to this workflow without the user’s explicit reconstruction authorization and a new preflight that records `resetAuthorized: true`.
@@ -334,45 +330,13 @@ See [deliverables.md](references/deliverables.md) for the output matrix, expecte
 
 ## Batch review and visual acceptance
 
-Use the selected quality mode. Rapid-previs uses **6–8 shots** after the canary, one save/reopen per batch, one frame per shot, one contact sheet, and human review. Production-integrity uses **3–5 shots**, complete evidence, and a gated approval record. A successful command or `validation.json` does not authorize approval. Use [batch-review.md](references/batch-review.md).
+Use the selected quality mode. Rapid-previs typically uses **6–8 shots** per coherent batch, a save/reopen check, one canonical frame per still shot, a contact sheet, and visual review. Motion shots additionally need temporal evidence. Production-integrity uses **3–5 shots**, complete evidence, and a gated approval record. A successful command or `validation.json` does not authorize approval. Use [batch-review.md](references/batch-review.md).
 
-Visual QA is authoritative: compare the final frame with the shot description, make sure the intended subjects/framing/scene elements/replacement assets are present, and open or sample every MP4. Empty rooms, irrelevant fragments, and proxies standing in for final assets fail automatically. If visual evidence conflicts with `validation.json`, mark the shot failed. Full criteria: [visual-acceptance.md](references/visual-acceptance.md).
+Visual QA is authoritative: compare the final frame with the shot description, make sure the intended subjects/framing/scene elements/replacement assets are present, and open or sample every MP4. Empty rooms, irrelevant fragments, and missing required subjects fail. A proxy fails when a final replacement asset was required; user-approved rough proxies may pass when the subject role and action read. If visual evidence conflicts with `validation.json`, mark the shot failed. Full criteria: [visual-acceptance.md](references/visual-acceptance.md).
 
 ## Command inventory
 
-These commands are available in the ForeScene checkout:
-
-```bash
-npm run agent:capabilities
-npm run agent:inspect
-npm run agent:open
-npm run agent:save
-npm run agent:cancel
-npm run agent:operations
-npm run agent:analyze-character
-npm run agent:import-character
-npm run agent:import-model
-npm run agent:import-panorama
-npm run agent:shot-panorama
-npm run agent:replace-proxy
-npm run agent:render-passes
-npm run agent:plan-exports
-npm run agent:verify-package
-npm run agent:preview
-npm run agent:apply
-npm run agent:screenshot
-npm run agent:frame
-npm run agent:video
-npm run agent:verify
-npm run agent:visual-preflight
-npm run agent:asset-contract
-npm run agent:run
-npm run agent:previs
-npm run agent:production
-npm run agent:render-stills
-npm run agent:contact-sheet
-npm run agent:package
-```
+Use `npm run agent:capabilities` for the current inventory and `npm run agent:describe -- --command <name>` for each command’s supported flags. Prefer bounded JSON envelopes to repeated full-document dumps. The main paths are `inspect/open/save`, `script/preview/apply`, `import-model/import-character/import-panorama`, `frame/video/contact-sheet`, and `plan-exports/package/verify-package`.
 
 Use `agent:frame` for clean clay, projected, or depth samples (`--mode clay|projected|depth`) and `agent:video` for a direct shot render with the same mode flag. Both accept exactly one `--shot` (or a single `--shots` value) and reject extra ids before the browser opens. `agent:shot-panorama -- --shot <id-or-number> --pano <id|null> --write` links or durably unlinks a shot panorama. `agent:open -- --file <package.fsp> --write` loads an existing project; `agent:save -- --output <package.fsp> --write` writes a verified backup. `agent:cancel -- --operation <id>` stops a long-running CLI process without killing Chromium. Heavy commands emit `[agent-op]` heartbeats on stderr every 5 seconds. `agent:inspect -- --document` returns the full project document for preservation IDs. `agent:verify` and `agent:visual-preflight` accept optional `--shot`/`--shots`: omitted selection validates every shot (or skips the visual gate on an empty project); an explicit selection that matches nothing fails, and unmatched ids appear in the JSON result. `agent:asset-contract` accepts one optional `--shot` (API `shotId`); omit the flag for the whole project. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
 
@@ -427,33 +391,21 @@ decision separately.
 
 For every motion shot, render and inspect `t = 0`, `t = duration / 2`, and `t = duration`; open or sample the MP4 itself. Confirm the MP4 exists, is nonempty, matches the shot/pass identity, and is newer than the relevant scene change.
 
-## Agent CLI primitives
+## Execution discipline
 
-Useful documented CLI commands when inspecting a live session:
-
-- `npm run agent:capabilities` — boolean map; if `true`, do not inspect source for that operation.
-- `npm run agent:inspect -- --document` — read-only project snapshot for preservation IDs.
-- `npm run agent:open -- --file <package.fsp> --write` / `npm run agent:save -- --output <package.fsp> --write`.
-- `npm run agent:plan-exports` — package plan that must be checked before rendering.
-- `npm run agent:frame -- --shot <id> --mode clay --output <png>` — clean PNG and pixel stats.
-- `npm run agent:verify` — idle/busy plus visual and health gates; not proof that a frame is visually ready.
-- `npm run agent:cancel` / `npm run agent:operations` — stop or list CLI operations without killing Chromium.
-- `npm run agent:world-preview -- --shots <ids> --output <request.json>` — emit backend-neutral semantic/camera priors without invoking external inference.
-- `npm run agent:world-mock -- --shots <ids> --output <result.json>` — exercise the generative-world contract deterministically; mock output is schema evidence only.
-- `npm run agent:world-depth -- --shot <id> --time <seconds> --resolution <WIDTHxHEIGHT> --output <depth.npy>` — render a clean-plate, top-left row-major NumPy float32 camera-Z prior in metres; zero means no geometry.
-
-Wait for idle before starting another package, graybox, character-import, or video operation. Never overlap Agent writes. Parse stdout envelopes; do not scrape stderr for success.
+Use an isolated `--profile` for file-backed production work. Preview mutations, then apply the reviewed plan with a fresh `--expected-revision` where available. Wait for idle before the next write, import, video, or package operation. Parse the stdout envelope and inspect per-shot failures; stderr heartbeats are progress, not success. Cancel a hung CLI operation with `agent:cancel`, not by killing Chromium.
 
 ## Rules
 
 - Cast entries may use `type: "human_dummy"` or `type: "imported_character"`. Imported entries declare a local `source` and `rigMode` (for example `preserve-existing`); `agent:previs` resolves the source, analyzes it, imports it, and records the live object under `cast.<id>` before compiling shots. See [imported-characters.md](references/imported-characters.md).
-- Use the closest supported location, camera, and pose templates. Do not invent coordinates before compilation; derive conservative relative changes from the inspected project.
+- Choose semantic templates when useful, or use stateful spatial scripting for a custom layout. Establish a consistent coordinate/scale plan from the reference materials for new construction; derive existing-project edits from inspected geometry. Do not force a custom set into an unrelated template.
 - Let ForeScene repair numeric distance, headroom, recentering, OTS shoulder side, and related geometry only after the creative selection is correct. Numeric validation never overrides a visual failure.
 - Never use `debug/*-ui.png` as production-frame evidence.
 - Derive final claims from verified artifact and review records only. See [error-recovery.md](references/error-recovery.md) for the required honest summary.
 
 ## References
 
+- [spatial-authoring.md](references/spatial-authoring.md) — CLI/MCP choice, coordinates, stateful scripts, and spatial review.
 - [rapid-previs.md](references/rapid-previs.md)
 - [production-integrity.md](references/production-integrity.md)
 - [existing-project-refinement.md](references/existing-project-refinement.md)

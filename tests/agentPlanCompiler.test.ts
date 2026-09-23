@@ -223,6 +223,41 @@ describe('agent plan compiler preview', () => {
     floor.dimensions = [12, 0.08, 12];
     expect(resolveAgentCreatePosition(floor, [0, 0, 0])).toEqual([0, -0.04, 0]);
   });
+
+  it('accepts explicit center positions while preserving legacy create placement', () => {
+    const project = createDefaultProject();
+    const result = prepareAgentPlan({
+      version: 1,
+      commands: [
+        { op: 'object.create', ref: 'centerFloor', object: { type: 'floor', positionMode: 'center', position: [0, -0.1, 0], dimensions: [8, 0.2, 8] } },
+        { op: 'object.create', ref: 'centerPerson', object: { type: 'human_dummy', positionMode: 'center', position: [1, 0.875, 0], dimensions: [0.55, 1.75, 0.55] } },
+        { op: 'object.create', ref: 'legacyPerson', object: { type: 'human_dummy', position: [2, 0, 0], dimensions: [0.55, 1.75, 0.55] } },
+      ],
+    }, { project, workspace: 'build', selectedObjectIds: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const created = result.prepared.nextProject.scene.objects;
+    expect(created.find((object) => object.id === result.prepared.refs.centerFloor?.id)?.transform.position).toEqual([0, -0.1, 0]);
+    expect(created.find((object) => object.id === result.prepared.refs.centerPerson?.id)?.transform.position).toEqual([1, 0.875, 0]);
+    expect(created.find((object) => object.id === result.prepared.refs.legacyPerson?.id)?.transform.position).toEqual([2, 0.875, 0]);
+  });
+
+  it('rejects an unsupported position mode and a mode without a position', () => {
+    const project = createDefaultProject();
+    const unsupported = prepareAgentPlan({
+      version: 1,
+      commands: [{ op: 'object.create', object: { type: 'box', position: [0, 0, 0], positionMode: 'feet' as never } }],
+    }, { project, workspace: 'build', selectedObjectIds: [] });
+    expect(unsupported.ok).toBe(false);
+    if (!unsupported.ok) expect(unsupported.diagnostics.some((item) => item.code === 'position_mode')).toBe(true);
+
+    const missingPosition = prepareAgentPlan({
+      version: 1,
+      commands: [{ op: 'object.create', object: { type: 'floor', positionMode: 'center' } }],
+    }, { project, workspace: 'build', selectedObjectIds: [] });
+    expect(missingPosition.ok).toBe(false);
+    if (!missingPosition.ok) expect(missingPosition.diagnostics.some((item) => item.code === 'position_mode_requires_position')).toBe(true);
+  });
 });
 
 describe('browser API previewPlan', () => {
