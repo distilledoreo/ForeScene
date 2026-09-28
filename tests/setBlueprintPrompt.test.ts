@@ -23,6 +23,10 @@ describe('set blueprint prompt contract', () => {
     expect(prompt).toContain('imported_model');
     expect(schema).toContain('hostWallKey');
     expect(schema).toContain('clearanceAboveMeters');
+    expect(schema).toContain('surface: optional object');
+    expect(schema).toContain('style: REQUIRED when surface is provided');
+    expect(prompt).toContain('Do not invent enum values');
+    expect(prompt).toContain('surface.style is a rendering mode, not a material name');
     expect(prompt).toContain('cuts that wall automatically');
     expect(prompt).toContain('upper floor/slab');
     expect(prompt).toMatch(/Do not escape brackets, underscores/i);
