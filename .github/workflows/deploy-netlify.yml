@@ -1,5 +1,6 @@
 name: Manual Netlify deploy
 # Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
+# Manual production deploy trigger for current main
 
 on:
   workflow_dispatch:
