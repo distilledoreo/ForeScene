@@ -38,6 +38,7 @@ import {
   stripEphemeralKeyframePreviewUris,
 } from './schemaMigrations';
 import {
+  assetStatusIsMissing,
   markProjectAssetUnavailable,
   type ProjectOpenResult,
   type ProjectOpenWarning,
@@ -108,7 +109,7 @@ function portableStorageKey(asset: ProjectAsset): string | undefined {
 function migratePortableInlineProjectAssets(project: LocationProject): Map<string, Blob> {
   const migrated = new Map<string, Blob>();
   for (const asset of Object.values(project.assets.assets)) {
-    if (!isRasterOrVideoAsset(asset) || !asset.uri.startsWith('data:')) continue;
+    if (!isRasterOrVideoAsset(asset) || assetStatusIsMissing(asset) || !asset.uri.startsWith('data:')) continue;
     const storageKey = storageKeyForAsset(project, asset);
     const blob = dataUrlToBlob(asset.uri);
     migrated.set(storageKey, blob);
@@ -122,7 +123,7 @@ function migratePortableInlineProjectAssets(project: LocationProject): Map<strin
 async function hydrateProjectAssetUris(project: LocationProject): Promise<LocationProject> {
   const writes: Array<{ key: string; blob: Blob }> = [];
   for (const asset of Object.values(project.assets.assets)) {
-    if (!isRasterOrVideoAsset(asset)) continue;
+    if (!isRasterOrVideoAsset(asset) || assetStatusIsMissing(asset)) continue;
     if (asset.uri.startsWith('data:')) {
       const storageKey = storageKeyForAsset(project, asset);
       writes.push({ key: storageKey, blob: dataUrlToBlob(asset.uri) });
@@ -409,7 +410,7 @@ export async function createProjectPackage(project: LocationProject): Promise<Bl
   }
   const binaryAssets = Object.values(portable.assets.assets).filter((asset) => asset.type === 'model' && asset.resolutionStatus !== 'missing' && asset.resolutionStatus !== 'corrupt' && asset.resolutionStatus !== 'unsupported' && asset.uri.startsWith(MODEL_ASSET_URI_PREFIX));
   const storedProjectAssets = Object.values(portable.assets.assets)
-    .filter((asset) => isRasterOrVideoAsset(asset) && portableStorageKey(asset));
+    .filter((asset) => isRasterOrVideoAsset(asset) && !assetStatusIsMissing(asset) && portableStorageKey(asset));
   // Always emit a ZIP `.fsp` package — even asset-free projects — so downloads use one extension.
   const zip = new JSZip();
   const integrity: ProjectPackageIntegrity = { version: 1, entries: {} };
@@ -516,6 +517,7 @@ async function inspectProjectFile(file: File, options: { tolerateAssetFailures?:
   if (!isProjectBackupFileName(file.name)) {
     const project = parseProject(await file.text());
     for (const asset of Object.values(project.assets.assets)) {
+      if (assetStatusIsMissing(asset)) continue;
       if (isRasterOrVideoAsset(asset) && asset.uri.startsWith('data:')) {
         assertNonEmptyBinary(asset.name, dataUrlToBlob(asset.uri).size);
         continue;
@@ -574,7 +576,7 @@ async function inspectProjectFile(file: File, options: { tolerateAssetFailures?:
     }
   }
   const projectAssetWrites: Array<{ key: string; blob: Blob }> = [];
-  for (const asset of Object.values(project.assets.assets).filter((candidate) => isRasterOrVideoAsset(candidate) && portableStorageKey(candidate))) {
+  for (const asset of Object.values(project.assets.assets).filter((candidate) => isRasterOrVideoAsset(candidate) && !assetStatusIsMissing(candidate) && portableStorageKey(candidate))) {
     const key = portableStorageKey(asset);
     if (!key) continue;
     const path = `project-assets/${encodeURIComponent(key)}.bin`;
@@ -621,7 +623,7 @@ export async function validateProjectPackage(blob: Blob): Promise<void> {
       await validatePackagedBinary(asset.name, key, path, await entry.async('arraybuffer'), integrity);
       continue;
     }
-    if (isRasterOrVideoAsset(asset) && portableStorageKey(asset)) {
+    if (isRasterOrVideoAsset(asset) && !assetStatusIsMissing(asset) && portableStorageKey(asset)) {
       const key = portableStorageKey(asset);
       if (!key) throw new Error(`Project package is missing binary asset ${asset.name}.`);
       const path = `project-assets/${encodeURIComponent(key)}.bin`;
@@ -639,7 +641,7 @@ export async function readProjectFileWithWarnings(file: File): Promise<ProjectOp
     // Inline legacy JSON is copied under a fresh import namespace so it cannot
     // overwrite a currently open project with the same ids.
     for (const asset of Object.values(contents.project.assets.assets)) {
-      if (!isRasterOrVideoAsset(asset) || !asset.uri.startsWith('data:')) continue;
+      if (!isRasterOrVideoAsset(asset) || assetStatusIsMissing(asset) || !asset.uri.startsWith('data:')) continue;
       asset.storageKey = importedPayloadKey(contents.project.id, importNamespace, 'asset', asset.id);
     }
     return { project: hydrateProjectRuntimeAssets(await hydrateProjectAssetUris(contents.project)), warnings: contents.warnings };

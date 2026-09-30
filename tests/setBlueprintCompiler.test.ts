@@ -17,6 +17,27 @@ describe('compileSetBlueprint', () => {
     expect(Object.keys(compiled.objectIdByBlueprintKey)).toHaveLength(complexSetBlueprint.objects.length);
   });
 
+  it('preserves prototype-named keys through host and landmark resolution', () => {
+    const parsed = parseSetBlueprint({
+      schemaVersion: 2, name: 'Arbitrary keys', units: 'meters',
+      objects: [
+        { key: '__proto__', name: 'Chosen wall', type: 'wall', position: [0, 1.5, 0], dimensions: [6, 3, 0.2] },
+        { key: 'constructor', name: 'Other wall', type: 'wall', position: [0, 1.5, 0.05], dimensions: [6, 3, 0.2] },
+        { key: 'toString', name: 'Door', type: 'doorway', position: [0, 1, 0], dimensions: [1, 2, 0.3], hostWallKey: '__proto__' },
+      ],
+      landmarks: [{ key: 'entrance', displayName: 'Entrance', linkedObjectKey: '__proto__' }],
+    });
+    expect(parsed.errors).toEqual([]);
+    const compiled = compileSetBlueprint(parsed.blueprint!);
+    const [wall, otherWall, door] = compiled.project.scene.objects;
+    expect(Object.keys(compiled.objectIdByBlueprintKey)).toEqual(['__proto__', 'constructor', 'toString']);
+    expect(compiled.objectIdByBlueprintKey.__proto__).toBe(wall.id);
+    expect(compiled.project.landmarks[0].linkedObjectId).toBe(wall.id);
+    expect(compiled.spatialRelationships).toContainEqual(expect.objectContaining({ sourceId: door.id, targetId: wall.id, status: 'resolved' }));
+    expect(resolveSceneRelationships(compiled.project).cutsByHostId.has(otherWall.id)).toBe(false);
+    expect(compiled.warnings.some((warning) => warning.code === 'host_wall_missing')).toBe(false);
+  });
+
   it('preserves dimensions and applies transform defaults', () => {
     const compiled = compileSetBlueprint(minimalSetBlueprint);
     const floor = compiled.project.scene.objects[0];

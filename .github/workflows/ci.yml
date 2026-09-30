@@ -124,7 +124,7 @@ jobs:
           if matches '^(src/components/|src/index\.css|e2e/.*visual|e2e/.*screenshot|playwright\.config)'; then
             visual=true
           fi
-          if matches '^(src/engine/(projected|depth|render|occlusion|sceneObjects|human)|tests/browser/|tests/fixtures/(projected|occlusion))'; then
+          if matches '^(src/engine/(projected|depth|render|occlusion|sceneObjects|sceneRelationships|objectKeyframes|human)|tests/browser/|tests/fixtures/(projected|occlusion))'; then
             renderer=true
           fi
 

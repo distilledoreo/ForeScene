@@ -148,7 +148,11 @@ function doorWallCompatible(doorway: SceneObject, wall: SceneObject): boolean {
   const overlapX = Math.min(host.max[0], doorProjected.max.x) - Math.max(host.min[0], doorProjected.min.x);
   const overlapY = Math.min(host.max[1], doorProjected.max.y) - Math.max(host.min[1], doorProjected.min.y);
   const overlapZ = Math.min(host.max[2], doorProjected.max.z) - Math.max(host.min[2], doorProjected.min.z);
-  return overlapX > 0.12 && overlapY > 0.3 && overlapZ > Math.min(0.04, wall.dimensions[2] * 0.25);
+  // Compatibility tolerances are physical distances, not host-local units.
+  const [scaleX, scaleY, scaleZ] = wall.transform.scale.map(Math.abs);
+  return overlapX * scaleX > 0.12
+    && overlapY * scaleY > 0.3
+    && overlapZ * scaleZ > Math.min(0.04, wall.dimensions[2] * scaleZ * 0.25);
 }
 
 function architectureRecord(object: SceneObject): Record<string, unknown> | undefined {
@@ -175,10 +179,13 @@ export function stairClearanceLocalBounds(stairs: SceneObject): LocalBoxFragment
   const clearanceAbove = Number.isFinite(configured) && configured > 0
     ? Math.min(6, configured)
     : DEFAULT_STAIR_CLEARANCE_ABOVE_METERS;
-  const overlapBelowTop = Math.min(0.18, Math.max(0.06, h * 0.08));
+  // Convert meter-based margins back to local units so resizing the stairs
+  // changes their height without resizing the required headroom.
+  const verticalScale = Math.max(EPSILON, Math.abs(stairs.transform.scale[1]));
+  const overlapBelowTop = Math.min(0.18, Math.max(0.06, h * verticalScale * 0.08)) / verticalScale;
   return {
     min: [-w / 2, h / 2 - overlapBelowTop, -d / 2],
-    max: [w / 2, h / 2 + clearanceAbove, d / 2],
+    max: [w / 2, h / 2 + clearanceAbove / verticalScale, d / 2],
   };
 }
 
@@ -206,7 +213,9 @@ export function resolveSceneRelationships(project: LocationProject): SceneRelati
   for (const doorway of visible.filter((object) => object.type === 'doorway')) {
     const requestedHost = architectureRecord(doorway)?.hostWallId;
     let candidates = walls.filter((wall) => doorWallCompatible(doorway, wall));
-    if (typeof requestedHost === 'string' && walls.some((wall) => wall.id === requestedHost)) {
+    // An explicit binding must never silently migrate when its host is hidden
+    // or deleted. Only unbound doorways use automatic host discovery.
+    if (typeof requestedHost === 'string') {
       candidates = candidates.filter((wall) => wall.id === requestedHost);
     }
 

@@ -32,7 +32,10 @@ describe('canonical ForeScene skill distribution', () => {
     expect(skill).toContain('rapid-previs');
     expect(skill).toContain('production-integrity');
     expect(skill).toContain('6–8 shots');
-    expect(skill).toContain('three-part canary');
+    expect(skill).toContain('capabilities the sequence actually needs');
+    expect(skill).toContain('Reuse valid, version-bound evidence');
+    expect(skill).toContain('do not rerun a fixed canary per batch');
+    expect(skill).toContain('A failed capability blocks dependent work');
     expect(skill).not.toContain('Grok Build');
     expect(skill).not.toContain('.grok/');
     expect(statSync(path.join(canonicalRoot, 'references', 'rapid-previs.md')).isFile()).toBe(true);

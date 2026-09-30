@@ -70,14 +70,13 @@ export function snapshotStageableObjectOverrides(
   return snapshot;
 }
 
-/** True when start/end keyframes carry explicit object snapshots to animate. */
+/** True when any keyframe in a camera move carries an explicit object snapshot. */
 export function cameraKeyframesHaveObjectAnimation(
   keyframes: readonly CameraKeyframe[] = [],
 ): boolean {
   const sorted = getSortedCameraKeyframes(keyframes);
   if (sorted.length < 2) return false;
-  return sorted[0].objectOverrides !== undefined
-    || sorted[sorted.length - 1].objectOverrides !== undefined;
+  return sorted.some((keyframe) => keyframe.objectOverrides !== undefined);
 }
 
 /**

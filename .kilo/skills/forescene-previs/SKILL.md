@@ -340,7 +340,15 @@ Use `npm run agent:capabilities` for the current inventory and `npm run agent:de
 
 Use `agent:frame` for clean clay, projected, or depth samples (`--mode clay|projected|depth`) and `agent:video` for a direct shot render with the same mode flag. Both accept exactly one `--shot` (or a single `--shots` value) and reject extra ids before the browser opens. `agent:shot-panorama -- --shot <id-or-number> --pano <id|null> --write` links or durably unlinks a shot panorama. `agent:open -- --file <package.fsp> --write` loads an existing project; `agent:save -- --output <package.fsp> --write` writes a verified backup. `agent:cancel -- --operation <id>` stops a long-running CLI process without killing Chromium. Heavy commands emit `[agent-op]` heartbeats on stderr every 5 seconds. `agent:inspect -- --document` returns the full project document for preservation IDs. `agent:verify` and `agent:visual-preflight` accept optional `--shot`/`--shots`: omitted selection validates every shot (or skips the visual gate on an empty project); an explicit selection that matches nothing fails, and unmatched ids appear in the JSON result. `agent:asset-contract` accepts one optional `--shot` (API `shotId`); omit the flag for the whole project. `agent:previs` is a Greenfield manifest orchestration command; it is not the default replacement path for an existing project.
 
-The commands above remain independently available primitives.
+The commands above remain independently available primitives. For asset refinement and delivery, discover these standalone commands directly with `agent:describe` before supplying their required flags:
+
+- `npm run agent:import-model` — import a source-preserving model, or explicitly request graybox conversion.
+- `npm run agent:replace-proxy` — replace a proxy in selected shots and retain the replacement report and review evidence.
+- `npm run agent:render-passes` — render a six-pass review matrix when the selected deliverable requires it.
+- `npm run agent:plan-exports` — write the selected shots’ deliverables plan before packaging.
+- `npm run agent:verify-package` — verify the produced ZIP against that saved plan.
+
+These are command names, not complete invocations; use the discovered required file, shot, profile, output, and write flags. None requires `agent:refine`.
 
 Optional advanced runner (not a primitive):
 
