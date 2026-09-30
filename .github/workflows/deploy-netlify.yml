@@ -1,6 +1,6 @@
 name: Manual Netlify deploy
 # Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
-# Production deploy trigger: SetBlueprint surface prompt fix
+# Production deploy trigger: ForeScene integrity audit merge 4aceb2e95cb0b3e5176cdf77fedb069b589cef75
 
 on:
   workflow_dispatch:
