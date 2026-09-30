@@ -19,6 +19,7 @@ on:
       - 'src/engine/renderers.ts'
       - 'examples/previs/**'
       - 'tests/previs*.ts'
+      - 'e2e/previs-dialogue.spec.ts'
       - 'e2e/previs-imported-character.spec.ts'
       - 'e2e/previs-saved-rig-character.spec.ts'
       - 'e2e/production-rapid-review.spec.ts'
@@ -46,7 +47,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx vitest run tests/previsProduction.test.ts tests/previsComposition.test.ts tests/previsReset.test.ts tests/productionRun.test.ts
+      - run: npx vitest run tests/previsCameraAngleContract.test.ts tests/previsProduction.test.ts tests/previsComposition.test.ts tests/previsReset.test.ts tests/productionRun.test.ts
 
   previs-smoke:
     name: Four-shot previs smoke
@@ -105,6 +106,10 @@ jobs:
           done
           # Strong geometric / validation gates
           npx tsx scripts/agent/assertPrevisSmoke.ts --dir artifacts/previs-smoke
+      - name: Verify manifest update refreshes only the edited shot
+        run: npx playwright test e2e/previs-dialogue.spec.ts --project=desktop-chromium --workers=1
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4173
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -118,6 +123,8 @@ jobs:
             artifacts/previs-smoke/shots/**
             artifacts/previs-smoke/debug/**
             artifacts/previs-smoke/logs/**
+            test-results/
+            playwright-report/
           retention-days: 14
       - name: Stop preview server
         if: always()

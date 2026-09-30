@@ -1240,6 +1240,10 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       locationBindings,
       presenceProject: preparedProject,
     });
+    for (const diagnostic of compiled.diagnostics) {
+      if (diagnostic.severity !== 'warning') continue;
+      process.stderr.write(`[previs] warning ${diagnostic.code}${diagnostic.entityId ? ` (${diagnostic.entityId})` : ''}: ${diagnostic.message}\n`);
+    }
     await writeJson(path.join(outputDir, 'logs', 'compile.json'), {
       ok: compiled.ok,
       diagnostics: compiled.diagnostics,
@@ -2683,6 +2687,7 @@ export async function runPrevisCli(options: PrevisCliOptions): Promise<PrevisCli
       manifestHash,
       runStatePath,
       phase: 'complete',
+      diagnostics: compiled.diagnostics,
       timing,
       sourceRevisionId,
       resultRevisionId,

@@ -154,6 +154,8 @@ test.describe('@heavy autonomous previs dialogue fixture', () => {
         profileDir,
       });
       expect(updated.ok, updated.error ?? 'update-manifest run failed').toBe(true);
+      const compileReport = JSON.parse(await readFile(path.join(outputDir, 'logs', 'compile.json'), 'utf8'));
+      expect(updated.diagnostics).toEqual(compileReport.diagnostics);
 
       const liveAfterUpdate = await listLiveShots({ url, profileDir });
       expect(liveAfterUpdate).toHaveLength(4);

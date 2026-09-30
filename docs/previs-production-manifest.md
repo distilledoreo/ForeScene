@@ -393,6 +393,18 @@ requires rollback.
 
 - `two_shot` requires ≥2 `camera.subjects`
 - `over_the_shoulder` requires `camera.foregroundSubject`
+- On `over_the_shoulder`, explicit `camera.angle` selects an azimuth relative to
+  the primary subject's facing (or the primary-to-foreground axis if facing is absent).
+- On `two_shot`, explicit angles orbit the first broadside normal of the ordered
+  `camera.subjects` pair: `front` is that broadside, `rear` its opposite,
+  `three_quarter` requests 45°, and `profile` requests 90°. Either lateral side
+  is allowed for three-quarter/profile views.
+- Both dedicated solvers prioritize usable shoulder/two-subject composition over
+  an impossible angle. If blocking or geometry constrains the view, they choose
+  a feasible, angle-directed candidate and report the angular deviation
+  in compile diagnostics and CLI output. Change blocking when the exact angle is essential.
+- Omitting `angle` preserves the legacy composition search. Generic templates
+  retain their existing world-axis angle convention.
 
 Shot numbers from the manifest are preserved exactly (`shotNumber` / `productionShotId`).
 
