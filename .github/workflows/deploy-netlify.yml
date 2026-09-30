@@ -1,6 +1,6 @@
 name: Manual Netlify deploy
 # Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
-# Production deploy trigger: MCP response and script fingerprint fixes 0a96c7bfddb3c21fa92b5b73cf533f8314be42ea
+# Production deploy trigger: MCP OAuth scope compatibility 4de91baa11599f85184f3ed71a113f8d9acb8384
 
 on:
   workflow_dispatch:
