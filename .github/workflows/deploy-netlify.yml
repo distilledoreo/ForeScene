@@ -1,6 +1,6 @@
 name: Manual Netlify deploy
 # Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
-# Production deploy trigger: ForeScene integrity audit merge 4aceb2e95cb0b3e5176cdf77fedb069b589cef75
+# Production deploy trigger: Camera angle behavior merge e71e1d260b7ea5ca09e0a9ac7b99275a0c2b4e4b
 
 on:
   workflow_dispatch:
