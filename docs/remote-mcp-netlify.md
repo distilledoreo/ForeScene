@@ -148,7 +148,27 @@ forescene:write
 offline_access
 ```
 
-Initial MCP authentication challenges for `forescene:read`. When the paired browser session permits editing, `project_apply` is discoverable; calling it without `forescene:write` returns an OAuth `403 insufficient_scope` challenge so compatible clients can perform scope step-up. The apply call succeeds only after write scope is granted **and** the paired browser connection is still in **Allow editing** mode.
+Initial MCP authentication challenges for `forescene:read`. Tool descriptors publish
+per-tool OAuth `securitySchemes` (also mirrored in `_meta.securitySchemes`): read
+tools need `forescene:read`, while `project_apply` needs both read and write.
+When the paired browser session permits editing, `project_apply` remains
+discoverable so the client can request step-up consent. Calling it without write
+scope returns HTTP `403` with a `WWW-Authenticate` challenge and a JSON-RPC tool
+error carrying the same challenge in `_meta["mcp/www_authenticate"]`. The challenge
+includes both required scopes; no browser command is dispatched.
+
+The browser panel's **read-write** label describes the relay session, not the
+client's OAuth grant. An explicit read-only OAuth request stays read-only even
+when the browser allows editing, and token refresh cannot add permissions.
+Write access requires a new authorization request that includes `forescene:write`;
+the consent page must show **Edit the project**, and the user must choose **Allow**.
+The apply call succeeds only after write scope is granted **and** the paired
+browser connection is still in **Allow editing** mode. These server contracts do
+not prove that every client surfaces the step-up UI; verify that consent flow in
+the actual client after refreshing its tool metadata.
+
+See [OpenAI's authentication UI contract](https://developers.openai.com/plugins/build/auth#triggering-authentication-ui)
+and [MCP scope challenge handling](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#scope-challenge-handling).
 
 ## Security notes
 

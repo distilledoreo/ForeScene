@@ -199,20 +199,25 @@ function oauthUnauthorized(req: Request, scope = FORESCENE_READ_SCOPE): Response
   );
 }
 
-function oauthInsufficientScope(req: Request, scope: string): Response {
+function oauthInsufficientScope(req: Request, id: JsonRpcId, scopes: string[]): Response {
   const origin = new URL(req.url).origin;
-  const description = `Required scope: ${scope}`;
-  return Response.json(
+  const scope = scopes.join(' ');
+  const description = `Required scopes: ${scope}. Reauthorize ForeScene and consent to Edit the project.`;
+  const challenge = `Bearer error="insufficient_scope", error_description="${description}", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`;
+  // Preserve the MCP/OAuth HTTP 403 challenge while also publishing the
+  // tool-level challenge used by OpenAI clients. Neither signal grants access.
+  return noStoreJson(
     {
-      error: 'insufficient_scope',
-      error_description: description,
+      jsonrpc: '2.0',
+      id,
+      result: {
+        ...toolError('insufficient_scope', description),
+        _meta: { 'mcp/www_authenticate': [challenge] },
+      },
     },
     {
       status: 403,
-      headers: {
-        'www-authenticate': `Bearer error="insufficient_scope", error_description="${description}", resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
-        'cache-control': 'no-store',
-      },
+      headers: { 'www-authenticate': challenge },
     },
   );
 }
@@ -461,10 +466,24 @@ export default async (req: Request) => {
 
   if (message.method === 'tools/list') {
     const writeToolAvailable = auth.session.accessMode === 'read-write';
+    const availableTools = writeToolAvailable
+      ? TOOL_DEFINITIONS
+      : TOOL_DEFINITIONS.filter((tool) => tool.name !== 'project_apply');
     return rpcResponse(id, {
-      tools: writeToolAvailable
-        ? TOOL_DEFINITIONS
-        : TOOL_DEFINITIONS.filter((tool) => tool.name !== 'project_apply'),
+      tools: availableTools.map((tool) => {
+        const securitySchemes = [{
+          type: 'oauth2',
+          scopes: tool.name === 'project_apply'
+            ? [FORESCENE_READ_SCOPE, FORESCENE_WRITE_SCOPE]
+            : [FORESCENE_READ_SCOPE],
+        }];
+        return {
+          ...tool,
+          securitySchemes,
+          // Compatibility mirror for clients that only read descriptor _meta.
+          _meta: { securitySchemes },
+        };
+      }),
     });
   }
 
@@ -476,7 +495,7 @@ export default async (req: Request) => {
       ? args as Record<string, unknown>
       : {};
     if (name === 'project_apply' && !auth.scopes.has(FORESCENE_WRITE_SCOPE)) {
-      return oauthInsufficientScope(req, FORESCENE_WRITE_SCOPE);
+      return oauthInsufficientScope(req, id, [FORESCENE_READ_SCOPE, FORESCENE_WRITE_SCOPE]);
     }
     try {
       const result = await callTool(

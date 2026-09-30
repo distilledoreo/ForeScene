@@ -22,6 +22,13 @@ describe('ForeScene MCP OAuth scopes', () => {
     ]);
   });
 
+  it('does not silently add write scope to an explicit read-only OAuth request', () => {
+    expect(normalizeOAuthScopes(
+      `${FORESCENE_READ_SCOPE} ${OFFLINE_ACCESS_SCOPE}`,
+      'read-write',
+    )).toEqual([FORESCENE_READ_SCOPE, OFFLINE_ACCESS_SCOPE]);
+  });
+
   it('downscopes requested writes when the browser relay is read-only', () => {
     expect(normalizeOAuthScopes(
       `${FORESCENE_READ_SCOPE} ${FORESCENE_WRITE_SCOPE} ${OFFLINE_ACCESS_SCOPE}`,
