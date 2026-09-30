@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultProject } from '../src/domain/defaults';
 import { AGENT_PLAN_LIMITS } from '../src/engine/agent/constants';
 import { previewAgentPlan } from '../src/engine/agent/planCompiler';
+import { projectFingerprint } from '../src/engine/agent/planDiff';
 import { compileAgentScript } from '../scripts/agent/agentScript';
 
 describe('agent scripting compiler', () => {
@@ -54,6 +55,55 @@ describe('agent scripting compiler', () => {
     expect(preview.ok).toBe(true);
     expect(preview.summary?.commandCount).toBe(4);
     expect(preview.diff?.objectsCreated).toHaveLength(4);
+  });
+
+  it('accepts a script compiled from a JSON-relayed document against the unchanged live project', () => {
+    const project = createDefaultProject();
+    project.scene.objects[0]!.color = undefined;
+    const samples: unknown[] = [undefined];
+    samples.length = 2; // Include a sparse hole as well as an undefined entry.
+    project.shots[0]!.metadata = { optional: undefined, nested: { optional: undefined }, samples };
+    const before = structuredClone(project);
+    // project.document crosses a JSON relay before project_script compiles it;
+    // project.preview_plan fingerprints the original in-memory browser document.
+    const transported = JSON.parse(JSON.stringify(project));
+    const compiled = compileAgentScript("plan.command({ op: 'shot.select', shot: { id: project.shots[0].id } });", transported);
+    const preview = previewAgentPlan(compiled.plan, {
+      project,
+      workspace: 'build',
+      selectedObjectIds: [],
+    });
+
+    expect(compiled.plan.expectedFingerprint).toBe(projectFingerprint(project));
+    expect(preview.ok).toBe(true);
+    expect(preview.fingerprint).toBe(compiled.plan.expectedFingerprint);
+    expect(project).toEqual(before);
+  });
+
+  it('keeps authored null properties distinct from absent optional properties', () => {
+    const project = createDefaultProject();
+    project.shots[0]!.metadata = { optional: undefined };
+    const fingerprint = projectFingerprint(project);
+    project.shots[0]!.metadata.optional = null;
+
+    expect(projectFingerprint(project)).not.toBe(fingerprint);
+    delete project.shots[0]!.metadata.optional;
+    expect(projectFingerprint(project)).toBe(fingerprint);
+  });
+
+  it('still rejects authored edits after a script is compiled from a JSON-relayed document', () => {
+    const project = createDefaultProject();
+    const compiled = compileAgentScript("plan.command({ op: 'shot.select', shot: { id: project.shots[0].id } });", JSON.parse(JSON.stringify(project)));
+    project.shots[0]!.camera.fovDegrees += 1;
+    const preview = previewAgentPlan(compiled.plan, {
+      project,
+      workspace: 'build',
+      selectedObjectIds: [],
+    });
+
+    expect(preview.ok).toBe(false);
+    expect(preview.diagnostics[0]?.code).toBe('stale_revision');
+    expect(preview.fingerprint).not.toBe(compiled.plan.expectedFingerprint);
   });
 
   it('emits center positions directly for scene.createCentered', () => {

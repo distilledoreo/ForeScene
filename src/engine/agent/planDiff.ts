@@ -12,11 +12,15 @@ export interface AgentSelectionState {
 }
 
 function stableSerialize(value: unknown): string {
-  if (value === undefined) return 'undefined';
+  // JSON turns undefined array entries (including sparse holes) into null.
+  if (value === undefined) return 'null';
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? String(value);
-  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (Array.isArray(value)) return `[${Array.from(value, stableSerialize).join(',')}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+  // Optional properties are often explicitly undefined in the live browser
+  // document. JSON relay transport omits them, so absent and undefined object
+  // properties must fingerprint identically across the script/preview boundary.
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
 }
 
 function fingerprintHash(value: string): string {

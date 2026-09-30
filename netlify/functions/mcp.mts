@@ -162,9 +162,15 @@ function rpcError(id: JsonRpcId, code: number, message: string, data?: unknown, 
 }
 
 function toolResult(value: unknown) {
+  // MCP structuredContent must be a JSON object. Scene queries/inspections
+  // return arrays internally; wrap those (and other non-object values) without
+  // changing the shape of existing object results.
+  const structuredContent = value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : { result: value ?? null };
   return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-    structuredContent: value,
+    content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
+    structuredContent,
   };
 }
 
