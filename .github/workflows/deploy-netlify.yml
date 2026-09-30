@@ -1,6 +1,6 @@
 name: Manual Netlify deploy
 # Deployment trigger: Verify OAuth callbacks using an isolated loopback receiver
-# Production deploy trigger: Camera angle behavior merge e71e1d260b7ea5ca09e0a9ac7b99275a0c2b4e4b
+# Production deploy trigger: MCP response and script fingerprint fixes 0a96c7bfddb3c21fa92b5b73cf533f8314be42ea
 
 on:
   workflow_dispatch:
