@@ -77,12 +77,19 @@ describe('ForeScene previs skill contract', () => {
       'motion-authoring.md',
       'MP4 exists',
       '--update-manifest',
-      'Do not invent coordinates before compilation',
       't = duration / 2',
     ]) {
       expect(skill, `missing skill contract phrase: ${phrase}`).toContain(phrase);
     }
     expect(skill).not.toContain('equivalent browser API');
+  });
+
+  it('supports custom spatial authoring without requiring manifest compilation', () => {
+    expect(skill).toContain('stateful scripting workflow instead; a manifest is not a prerequisite');
+    expect(skill).toContain('Establish a consistent coordinate/scale plan from the reference materials for new construction');
+    expect(skill).toContain('derive existing-project edits from inspected geometry');
+    expect(skill).toContain('references/spatial-authoring.md');
+    expect(skill).not.toContain('Do not invent coordinates before compilation');
   });
 
   it('defaults an existing project to non-destructive refinement and captures preservation evidence', () => {

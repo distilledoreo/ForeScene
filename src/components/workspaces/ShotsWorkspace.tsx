@@ -59,6 +59,7 @@ import type { VideoResolutionPresetId } from '../../engine/videoPresets';
 import { VIDEO_RESOLUTION_PRESETS } from '../../engine/videoPresets';
 import { getCameraMoveReferenceFrames } from '../../engine/cameraKeyframes';
 import { isShotFramingAccepted } from '../../engine/workflow';
+import { createShotDuplicationPatch } from '../../engine/shotDuplication';
 import { getPanoMatchQuality, resolveShotLinkedPano } from '../../engine/sync';
 import { useProjectStore } from '../../state/useProjectStore';
 import { useProjectSafetyStore } from '../../state/useProjectSafetyStore';
@@ -967,24 +968,7 @@ export function ShotsWorkspace() {
   const duplicateSelectedShot = useCallback(() => {
     if (!selectedShot) return;
     const newShot = addCamera();
-    updateShot(newShot.id, {
-      camera: {
-        ...selectedShot.camera,
-        position: [...selectedShot.camera.position] as CameraData['position'],
-        target: [...selectedShot.camera.target] as CameraData['target'],
-      },
-      description: selectedShot.description,
-      landmarkIds: [...selectedShot.landmarkIds],
-      exportSettings: { ...selectedShot.exportSettings },
-      cameraKeyframes: selectedShot.cameraKeyframes.map((keyframe) => ({
-        ...keyframe,
-        camera: {
-          ...keyframe.camera,
-          position: [...keyframe.camera.position] as CameraData['position'],
-          target: [...keyframe.camera.target] as CameraData['target'],
-        },
-      })),
-    });
+    updateShot(newShot.id, createShotDuplicationPatch(selectedShot));
   }, [addCamera, selectedShot, updateShot]);
 
   const openLinkedPanoIn360 = useCallback(() => {

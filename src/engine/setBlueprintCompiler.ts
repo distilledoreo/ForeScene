@@ -93,7 +93,8 @@ export function compileSetBlueprint(
     projectedStyle: { ...defaultProjectedStyleSettings },
   };
 
-  const objectIdByBlueprintKey: Record<string, string> = {};
+  // Blueprint keys are arbitrary strings, including JavaScript prototype names.
+  const objectIdByBlueprintKey: Record<string, string> = Object.create(null);
   const typeCounts = new Map<SetBlueprintObjectType, number>();
   const objects: SceneObject[] = blueprint.objects.map((entry) => {
     const count = (typeCounts.get(entry.type) ?? 0) + 1;

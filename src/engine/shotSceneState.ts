@@ -220,28 +220,27 @@ export function resolveProjectForShot(
 
 /**
  * Resolve a shot scene for camera-move export with object animation.
- * Includes any object visible at start or end so visibility can snap mid-move.
+ * Includes any object visible at any keyframe so visibility can snap mid-move.
  */
 export function resolveProjectForAnimatedCameraMove(
   project: LocationProject,
-  shot: Pick<Shot, 'objectOverrides' | 'cameraKeyframes'>,
+  shot: Pick<Shot, 'objectOverrides' | 'cameraKeyframes'> & Partial<Pick<Shot, 'linkedPanoId'>>,
   options: ResolveShotSceneOptions = {},
 ): LocationProject {
   const sorted = [...(shot.cameraKeyframes ?? [])].sort((a, b) => a.timeSeconds - b.timeSeconds);
-  const startOverrides = sorted[0]?.objectOverrides;
-  const endOverrides = sorted[sorted.length - 1]?.objectOverrides;
   const fallback = shot.objectOverrides ?? {};
   // Explicit snapshots (including {}) win; only legacy undefined falls back.
-  const start = startOverrides !== undefined ? startOverrides : fallback;
-  const end = endOverrides !== undefined ? endOverrides : fallback;
+  const snapshots = sorted.length > 0
+    ? sorted.map((keyframe) => keyframe.objectOverrides ?? fallback)
+    : [fallback];
+  const start = snapshots[0];
+  const end = snapshots[snapshots.length - 1];
 
   const objects = project.scene.objects.map((object) => {
     const stagingRole = getSceneObjectStagingRole(object);
     const startOverride = start[object.id];
     const endOverride = end[object.id];
-    const startVisible = startOverride?.visible ?? object.visible;
-    const endVisible = endOverride?.visible ?? object.visible;
-    const requestedVisible = startVisible || endVisible;
+    const requestedVisible = snapshots.some((snapshot) => snapshot[object.id]?.visible ?? object.visible);
     return {
       ...object,
       stagingRole,
@@ -254,7 +253,7 @@ export function resolveProjectForAnimatedCameraMove(
   });
 
   return {
-    ...project,
+    ...resolveProjectForShot(project, shot, options),
     scene: {
       ...project.scene,
       objects,

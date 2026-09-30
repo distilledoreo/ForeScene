@@ -13,6 +13,28 @@ import { updateShotObjectOverrides } from '../src/engine/shotSceneState';
 import { createShotPackageManifest } from '../src/engine/exportManifest';
 
 describe('object keyframes', () => {
+  it('animates an interior snapshot even when both endpoint keyframes are legacy captures', () => {
+    const project = createDefaultProject();
+    const shot = project.shots[0];
+    const prop = createSceneObject('box', 1);
+    prop.stagingRole = 'prop';
+    prop.transform.position = [0, 0.5, 0];
+    const keyframes = [
+      { id: 'start', label: 'Start', timeSeconds: 0, camera: structuredClone(shot.camera) },
+      { id: 'middle', label: 'Middle', timeSeconds: 1, camera: structuredClone(shot.camera), objectOverrides: {
+        [prop.id]: { transform: { ...structuredClone(prop.transform), position: [4, 0.5, 0] as [number, number, number] } },
+      } },
+      { id: 'end', label: 'End', timeSeconds: 2, camera: structuredClone(shot.camera) },
+    ];
+    expect(cameraKeyframesHaveObjectAnimation(keyframes)).toBe(true);
+    expect(interpolateObjectOverrides(keyframes, 1, {}, [prop])[prop.id].transform?.position).toEqual([4, 0.5, 0]);
+    expect(interpolateObjectOverrides(keyframes, 0.5, {}, [prop])[prop.id].transform?.position[0]).toBeCloseTo(2);
+    expect(interpolateObjectOverrides(keyframes, 1.5, {}, [prop])[prop.id].transform?.position[0]).toBeCloseTo(2);
+    expect(cameraKeyframesHaveObjectAnimation([keyframes[0], keyframes[2]])).toBe(false);
+    expect(cameraKeyframesHaveObjectAnimation([keyframes[1]])).toBe(false);
+    expect(cameraKeyframesHaveObjectAnimation([{ ...keyframes[0] }, { ...keyframes[1], objectOverrides: {} }, keyframes[2]])).toBe(true);
+  });
+
   it('snapshots absolute stageable poses for camera keyframes', () => {
     const project = createDefaultProject();
     const shot = project.shots[0];
