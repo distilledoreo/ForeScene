@@ -108,6 +108,19 @@ const FRAME_H = 720;
 
 export function solveShotCamera(input: CameraSolveInput): CameraSolveResult {
   const template = input.shot.camera.template;
+  if (input.shot.camera.angle && (template === 'over_the_shoulder' || template === 'two_shot')) {
+    // Scoring aggregates all subject projections; stable iteration also prevents
+    // floating-point ties from swapping the chosen side when bounds arrive in a
+    // different order. Preserve the historical order for omitted-angle solves.
+    const declaredOrder = new Map(input.shot.camera.subjects.map((id, index) => [id, index]));
+    input = {
+      ...input,
+      subjects: [...input.subjects].sort((a, b) => {
+        const rank = (declaredOrder.get(a.id) ?? declaredOrder.size) - (declaredOrder.get(b.id) ?? declaredOrder.size);
+        return rank || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      }),
+    };
+  }
   if (template === 'over_the_shoulder') {
     return solveOverTheShoulder(input);
   }
@@ -279,7 +292,9 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
   const frameWidth = input.frameWidth ?? FRAME_W;
   const frameHeight = input.frameHeight ?? Math.round(frameWidth / input.aspectRatio);
   const subjectIds = new Set(input.shot.camera.subjects);
-  let primary = input.subjects.filter((subject) => subjectIds.has(subject.id));
+  let primary = input.shot.camera.angle
+    ? input.shot.camera.subjects.flatMap((id) => input.subjects.filter((subject) => subject.id === id))
+    : input.subjects.filter((subject) => subjectIds.has(subject.id));
   if (primary.length < 2) {
     primary = [...input.subjects].slice(0, 2);
   }
@@ -301,6 +316,14 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
     [dz / len, -dx / len],
   ];
 
+  // Pair-local front is the first broadside normal of the ordered actor line.
+  // Explicit angles orbit that normal; omission retains the legacy two-sided search.
+  const requestedAngle = input.shot.camera.angle;
+  const referenceYaw = Math.atan2(perps[0][0], perps[0][1]);
+  const cameraDirections = requestedAngle
+    ? angleSearchDirections(referenceYaw, requestedAngle)
+    : perps;
+
   const heightA = Math.max(0.4, a.max[1] - a.min[1]);
   const heightB = Math.max(0.4, b.max[1] - b.min[1]);
   const subjectHeight = Math.max(heightA, heightB);
@@ -320,6 +343,10 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
   }));
 
   const lensOptions = uniqueLenses(lensClass, template);
+  // Oblique pair views need more stand-off to retain comparable actor scale.
+  // A longer lens restores useful screen occupancy at that larger distance.
+  const obliqueAngle = requestedAngle === 'profile' || requestedAngle === 'three_quarter';
+  if (obliqueAngle && !lensOptions.includes('long')) lensOptions.push('long');
   let bestHard: ScoredCandidate | undefined;
   let bestAny: ScoredCandidate | undefined;
 
@@ -328,8 +355,8 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
 
   for (const lens of lensOptions) {
     const fov = verticalFovForLens(lens, input.aspectRatio);
-    for (const [px, pz] of perps) {
-      for (let distScale = 0.75; distScale <= 1.85; distScale += 0.08) {
+    for (const [px, pz] of cameraDirections) {
+      for (let distScale = 0.75; distScale <= (obliqueAngle ? 3.05 : 1.85); distScale += 0.08) {
         const distance = baseDist * distScale;
         // Slight lateral bias keeps both subjects off the exact center line.
         for (const lateral of [0, 0.12, -0.12]) {
@@ -388,6 +415,13 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
             scored = { ...scored, hardPass: false, score: scored.score - 200 };
           }
 
+          scored = {
+            ...scored,
+            score: scored.score - cameraAnglePenalty(camera.position, midXZ, referenceYaw, requestedAngle),
+          };
+          if (input.repair?.avoidCamera && tooCloseToCamera(
+            camera.position, input.repair.avoidCamera, input.repair.minCameraDistanceFromAvoid ?? 0.35,
+          )) continue;
           if (!bestAny || scored.score > bestAny.score) {
             bestAny = { ...scored, camera };
           }
@@ -405,7 +439,10 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
       a,
       b,
       midXZ,
-      perps,
+      perps: cameraDirections,
+      requestedAngle,
+      referenceYaw,
+      repair: input.repair,
       subjectHeight,
       balanceAimY,
       fovDegrees: verticalFovForLens(lensClass, input.aspectRatio),
@@ -437,6 +474,7 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
     };
   }
 
+  reportConstrainedAngle(best.camera.position, midXZ, referenceYaw, requestedAngle, warnings, notes);
   let hideBlockerIds: string[] | undefined;
   if (best.wallBlocked && best.blockingWallIds?.length) {
     hideBlockerIds = best.blockingWallIds;
@@ -450,6 +488,7 @@ function solveTwoShot(input: CameraSolveInput): CameraSolveResult {
     measuredCoverage: best.primaryHeightCoverage,
     hideBlockerIds,
     notes: notes.length > 0 ? notes : undefined,
+    hardPass: best.hardPass,
   };
 }
 
@@ -468,6 +507,9 @@ function forceBalancedTwoShotCamera(params: {
   b: SubjectBounds;
   midXZ: Vec3;
   perps: Array<[number, number]>;
+  requestedAngle?: PrevisCameraAngle;
+  referenceYaw: number;
+  repair?: CameraSolveRepairProfile;
   subjectHeight: number;
   balanceAimY: number;
   fovDegrees: number;
@@ -489,6 +531,9 @@ function forceBalancedTwoShotCamera(params: {
         params.midXZ[2] + pz * distance,
       ];
       if (isInsideAny(position, params.blockerBoxes)) continue;
+      if (params.repair?.avoidCamera && tooCloseToCamera(
+        position, params.repair.avoidCamera, params.repair.minCameraDistanceFromAvoid ?? 0.35,
+      )) continue;
       let target: Vec3 = [params.midXZ[0], params.balanceAimY, params.midXZ[2]];
       let camera = makeCamera(position, target, params.fovDegrees, params.aspectRatio);
       let scored = scoreCandidate({
@@ -527,6 +572,10 @@ function forceBalancedTwoShotCamera(params: {
       }
       if (twoShotAreaRatio(scored, params.a.id, params.b.id) > 2.4) continue;
       if (!scored.hardPass) continue;
+      scored = {
+        ...scored,
+        score: scored.score - cameraAnglePenalty(camera.position, params.midXZ, params.referenceYaw, params.requestedAngle),
+      };
       if (!best || scored.score > best.score) {
         best = { ...scored, camera };
       }
@@ -615,7 +664,9 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
   const frameHeight = input.frameHeight ?? Math.round(frameWidth / input.aspectRatio);
 
   const subjectIds = new Set(input.shot.camera.subjects);
-  let primary = input.subjects.filter((subject) => subjectIds.has(subject.id));
+  let primary = input.shot.camera.angle
+    ? input.shot.camera.subjects.flatMap((id) => input.subjects.filter((subject) => subject.id === id))
+    : input.subjects.filter((subject) => subjectIds.has(subject.id));
   if (primary.length === 0) {
     primary = [...input.subjects];
     warnings.push('OTS: no primary subjects matched.');
@@ -634,6 +685,11 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     return solveGenericWithOtsBias(input, warnings);
   }
 
+  const requestedAngle = input.shot.camera.angle;
+  // Actor-local yaw: zero is the primary's front (+Z before actor rotation).
+  // With no authored facing, use the primary-to-foreground dialogue axis.
+  const referenceYaw = primarySubject.yawRadians
+    ?? yawToward(primarySubject.position, foreground.position);
   const fgHeight = Math.max(0.4, foreground.max[1] - foreground.min[1]);
   const primHeight = Math.max(0.4, primarySubject.max[1] - primarySubject.min[1]);
   const fgYaw = foreground.yawRadians
@@ -643,7 +699,9 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     position: foreground.position,
     height: fgHeight,
     width: foreground.max[0] - foreground.min[0],
-    yawRadians: fgYaw,
+    // shoulderWorldPoints uses the opposite yaw sign for its lateral axis.
+    // Correct explicit-angle local geometry without changing legacy omission.
+    yawRadians: requestedAngle ? -fgYaw : fgYaw,
   });
 
   // Aim at primary upper torso/chest so primary head lands near Y 0.10–0.22.
@@ -666,7 +724,9 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
   const minBack = repair?.minBack ?? 0.3;
   const minOut = repair?.minOut ?? 0.25;
   const backValues = [0.3, 0.5, 0.7, 0.9, 1.2].filter((v) => v + 1e-6 >= minBack);
-  const outValues = [0.25, 0.45, 0.65, 0.85, 1.1].filter((v) => v + 1e-6 >= minOut);
+  const outValues = (requestedAngle
+    ? [0.25, 0.45, 0.65, 0.85, 1.1, 1.6, 2.2, 3.0]
+    : [0.25, 0.45, 0.65, 0.85, 1.1]).filter((v) => v + 1e-6 >= minOut);
   // Always keep at least the farthest samples if filters empty.
   if (backValues.length === 0) backValues.push(1.2);
   if (outValues.length === 0) outValues.push(1.1);
@@ -683,7 +743,7 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     const backX = awayFromPrimary[0] / awayLen;
     const backZ = awayFromPrimary[2] / awayLen;
     const outX = side === 'left' ? -Math.cos(fgYaw) : Math.cos(fgYaw);
-    const outZ = side === 'left' ? -Math.sin(fgYaw) : Math.sin(fgYaw);
+    const outZ = (side === 'left' ? -Math.sin(fgYaw) : Math.sin(fgYaw)) * (requestedAngle ? -1 : 1);
 
     // Farther back/out so only head/shoulder edge remains visible.
     for (const back of backValues) {
@@ -748,7 +808,7 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
       const hard = otsHardAccept(scored, primarySubject.id, foreground.id, repair);
       const fg = scored.subjectScores[foreground.id];
       const prim = scored.subjectScores[primarySubject.id];
-      let score = scored.score;
+      let score = scored.score - cameraAnglePenalty(camera.position, primarySubject.position, referenceYaw, requestedAngle);
 
       const headY = prim?.landmarks?.headTop?.y;
       if (headY !== undefined) {
@@ -796,6 +856,8 @@ function solveOverTheShoulder(input: CameraSolveInput): CameraSolveResult {
     warnings.push('OTS solver found no candidates; falling back.');
     return solveGenericWithOtsBias(input, warnings);
   }
+
+  reportConstrainedAngle(best.camera.position, primarySubject.position, referenceYaw, requestedAngle, warnings, notes);
 
   // Reapply OTS framing profile after hard selection: fix residual headroom via aim.
   if (best.hardPass) {
@@ -1052,6 +1114,49 @@ function buildCandidates(params: {
   }
 
   return candidates;
+}
+
+/** Explicit dedicated-template angles are local to the subject / pair, not world axes. */
+function angleRadians(angle: PrevisCameraAngle): number {
+  return ({ front: 0, three_quarter: 45, profile: 90, rear: 180 }[angle] * Math.PI) / 180;
+}
+
+function angularDistance(a: number, b: number): number {
+  return Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+}
+
+function cameraAngleError(position: Vec3, origin: Vec3, referenceYaw: number, angle: PrevisCameraAngle): number {
+  const yaw = yawToward(origin, position) - referenceYaw;
+  const desired = angleRadians(angle);
+  // Profile and three-quarter admit either side, as in generic template angles.
+  return Math.min(angularDistance(yaw, desired), angularDistance(yaw, -desired));
+}
+
+function cameraAnglePenalty(position: Vec3, origin: Vec3, referenceYaw: number, angle?: PrevisCameraAngle): number {
+  // Hard framing acceptance is selected separately and always wins. Within its
+  // feasible set, strongly prefer the requested orientation over cosmetic score.
+  return angle ? cameraAngleError(position, origin, referenceYaw, angle) * 250 : 0;
+}
+
+function angleSearchDirections(referenceYaw: number, angle: PrevisCameraAngle): Array<[number, number]> {
+  const requested = angleRadians(angle);
+  const offsets = [requested, -requested];
+  // Include broadside and progressively oblique alternatives when the literal
+  // request puts one actor behind the other. This never relaxes hard framing.
+  for (let degrees = 0; degrees < 360; degrees += 10) offsets.push(degrees * Math.PI / 180);
+  return [...new Set(offsets)].map((offset) => [Math.sin(referenceYaw + offset), Math.cos(referenceYaw + offset)]);
+}
+
+function reportConstrainedAngle(
+  position: Vec3, origin: Vec3, referenceYaw: number, angle: PrevisCameraAngle | undefined,
+  warnings: string[], notes: string[],
+): void {
+  if (!angle) return;
+  const errorDegrees = cameraAngleError(position, origin, referenceYaw, angle) * 180 / Math.PI;
+  if (errorDegrees > 15) {
+    warnings.push(`Requested ${angle} angle constrained by template composition (${Math.round(errorDegrees)}° from requested orientation).`);
+    notes.push('camera_angle_constrained');
+  }
 }
 
 function yawOffsetsForAngle(angle: PrevisCameraAngle): number[] {

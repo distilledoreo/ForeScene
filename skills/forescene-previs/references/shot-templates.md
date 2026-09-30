@@ -18,6 +18,12 @@
 | `overhead` | Top-down. | Controlled orbit or layout reveal. |
 
 Angles: `front`, `three_quarter`, `profile`, `rear`.
+For OTS, explicit angles reference the primary subject's facing (or the primary-to-foreground axis).
+For two-shot, they reference the first broadside normal of the ordered camera-subject pair.
+Three-quarter requests 45°, profile 90°, and rear 180°; either lateral side is allowed.
+Framing constraints still win: if the requested view is infeasible, compile diagnostics and
+CLI output report the angular deviation. Reblock when the exact angle matters.
+Omitting the angle keeps legacy composition selection. Generic templates retain world-axis angles.
 
 Lens classes: `wide`, `normal`, `long`.
 
