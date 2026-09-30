@@ -51,6 +51,18 @@ Connections expire after eight hours. The raw `fs_mcp_...` relay credential rema
 
 The endpoint implements the stateless 2025-11-25 Streamable HTTP request/response flow. Modern clients that probe the 2026 protocol can fall back to the legacy/stateless flow.
 
+Tool `structuredContent` is always a JSON object. Array results from `scene_query`
+and `scene_inspect` are returned as `{ "result": [...] }`, including
+`{ "result": [] }` when nothing matches. Other non-object results use the same
+`result` wrapper; existing object-shaped results retain their original fields.
+Successful JSON results are also serialized in the first text content block.
+`scene_capture` additionally returns an image content block when image data is available.
+
+Script concurrency fingerprints use JSON-equivalent project state so optional
+`undefined` fields cannot make a relayed document appear stale. After deploying
+a fingerprint change, reload the paired browser tab and re-preview existing plans
+so the browser and function use the same fingerprint implementation.
+
 ## Netlify deployment
 
 No external database, OAuth provider, WebSocket service, or environment variable is required. Relay and OAuth state use site-scoped Netlify Blobs with strong consistency.
