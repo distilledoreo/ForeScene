@@ -43,24 +43,58 @@ function register(uri: string) {
   });
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  register(redirectUri);
+function pair(accessMode: 'read-only' | 'read-write' = 'read-only') {
   vi.mocked(resolveOAuthPairing).mockResolvedValue({
     sessionHash: 'test-session-hash',
     session: {
       version: 1,
       sessionId: 'test-session',
       projectName: 'Test project',
-      accessMode: 'read-only',
+      accessMode,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  register(redirectUri);
+  pair();
   vi.mocked(issueOAuthAuthorizationCode).mockResolvedValue('test-code');
 });
 
 describe('OAuth consent navigation', () => {
+  it('shows a write-scope request and issues its code only after explicit Allow', async () => {
+    pair('read-write');
+    const scope = 'forescene:read forescene:write';
+    const consent = await authorize(request({ scope }));
+    expect(consent.status).toBe(200);
+    expect(await consent.text()).toContain('<strong>Edit the project</strong>');
+    expect(issueOAuthAuthorizationCode).not.toHaveBeenCalled();
+
+    await authorize(request({ scope, decision: 'deny' }, 'POST'));
+    expect(issueOAuthAuthorizationCode).not.toHaveBeenCalled();
+
+    await authorize(request({ scope, decision: 'allow' }, 'POST'));
+    expect(issueOAuthAuthorizationCode).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      scopes: ['forescene:read', 'forescene:write'],
+      sessionHash: 'test-session-hash',
+    }));
+  });
+
+  it('does not advertise or grant writes for an explicit read request on an editable browser', async () => {
+    pair('read-write');
+    const scope = 'forescene:read';
+    const consent = await authorize(request({ scope }));
+    expect(await consent.text()).not.toContain('<strong>Edit the project</strong>');
+
+    await authorize(request({ scope, decision: 'allow' }, 'POST'));
+    expect(issueOAuthAuthorizationCode).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      scopes: ['forescene:read'],
+    }));
+  });
+
   it('permits the selected registered callback origin while preserving other CSP protections', async () => {
     const response = await authorize(request());
     expect(response.status).toBe(200);
